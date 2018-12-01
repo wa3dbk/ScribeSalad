@@ -1,4 +1,5 @@
-# AnansiPot
+# AnansiPot <img align="left" width="40" height="40" src="img/KcnegBEni.jpeg"> 
+
 In absence of searchable transcripts, many interesting YouTube videos, podcasts, lectures and talks are hard to explore, quote and summarize. **AnansiPot** is an open data project regrouping over 800 YouTube video transcripts : The Joe Rogan Experience, The Rubin Report, Jordan B. Peterson lectures and more. This project is a first step towards making great content more available and inspiring speakers, storytellers, interviewers and scientists better heard. 
 
 
