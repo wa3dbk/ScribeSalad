@@ -5,6 +5,7 @@ In absence of searchable transcripts, many interesting YouTube videos, podcasts,
 
 ## Why this name, AnansiPot ? 
 <img align="left" width="125,36px" height="190px"  src="img/potOfWisdom.jpg">  Anansi is a West African folktale character. He often takes the shape of a spider and is considered to be the spirit of all knowledge of stories.
+
 From https://mythology.net : 
 > "Anansi is the King of Stories, the trickster, the joke maker, and the teacher of those who would follow these traditions. Anansi can be summoned by those with a gift for stories, either to listen to a well-told tale or to help someone who is talented but just beginning to become a master storyteller. [..] He had a pot containing all the wisdom of the world, and every day Anansi would look in the pot and learn some new and wondrous thing."
 
