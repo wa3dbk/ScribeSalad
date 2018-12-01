@@ -14,7 +14,7 @@ From https://mythology.net :
 ## Transcription quality 
 These transcriptions are generated automatically using a high-accuracy large-vocabulary continuous speech recognition system (~90% of accuracy in clean conditions : no background noise, no heavy accents and good quality audio). 
 
-## Files names and formats 
+## Filenames and formats 
 The transcripts identified using the corresponding YouTube videos IDs and each one is available in three formats : text, vtt (Text Tracks Format) and srt (SubRip Subtitle Format).
 
 ## Terms of use 
