@@ -3,6 +3,8 @@
 In absence of searchable transcripts, many interesting YouTube videos, podcasts, lectures and talks are hard to explore, quote and summarize. **AnansiPot** is an open data project regrouping over 800 YouTube video transcripts discussing social and political issues, psychology, history and scientific topics ranging from biology, mathematics to artificial intelligence : The Joe Rogan Experience, The Rubin Report, Jordan B. Peterson talks, Lex Fridman lectures and more. This project is a first step towards making great content more available and inspiring speakers, storytellers, interviewers and scientists better heard. 
 
 
+## [ :mag: &nbsp; Explore transcripts ](transcripts/en/#original-transcripts)
+
 ## Why this name, AnansiPot ? 
 <img align="left" width="125,36px" height="190px"  src="img/potOfWisdom.jpg">  Anansi is a West African folktale character. He often takes the shape of a spider and is considered to be the spirit of all knowledge of stories.
 
