@@ -4,11 +4,14 @@
 | **Title** |  | |  |  |
 |:----------:|:---:|:---:|:---:|:---------------:|
 | Joe Rogan Experience #1208 - Jordan Peterson | [txt](./txt/vIeFt88Hm8s.txt) | [vtt](./vtt/vIeFt88Hm8s.vtt) | [srt](./srt/vIeFt88Hm8s.srt) | [YouTube video](http://youtu.be/vIeFt88Hm8s) |
+| Joe Rogan Experience #1207 - Jeff Ross & Dave Attell | [txt](./txt/TLZgdmGN2JQ.txt) | [vtt](./vtt/TLZgdmGN2JQ.vtt) | [srt](./srt/TLZgdmGN2JQ.srt) | [YouTube video](http://youtu.be/TLZgdmGN2JQ) |
 | Joe Rogan Experience #1206 - Mike Ward & Pantelis | [txt](./txt/QTW5cDxnjAg.txt) | [vtt](./vtt/QTW5cDxnjAg.vtt) | [srt](./srt/QTW5cDxnjAg.srt) | [YouTube video](http://youtu.be/QTW5cDxnjAg) |
 | Joe Rogan Experience #1205 - Jake "The Snake" Roberts & Tony Hinchcliffe | [txt](./txt/9DxeMowxDTU.txt) | [vtt](./vtt/9DxeMowxDTU.vtt) | [srt](./srt/9DxeMowxDTU.srt) | [YouTube video](http://youtu.be/9DxeMowxDTU) |
 | Joe Rogan Experience #1204 - Steven Rinella | [txt](./txt/j7r7E0DNjaw.txt) | [vtt](./vtt/j7r7E0DNjaw.vtt) | [srt](./srt/j7r7E0DNjaw.srt) | [YouTube video](http://youtu.be/j7r7E0DNjaw) |
 | Joe Rogan Experience #1203 - Eric Weinstein | [txt](./txt/X9JLij1obHY.txt) | [vtt](./vtt/X9JLij1obHY.vtt) | [srt](./srt/X9JLij1obHY.srt) | [YouTube video](http://youtu.be/X9JLij1obHY) |
+| Joe Rogan Experience #1202 - Fred Morin & David McMillan | [txt](./txt/lzujdxJxLIQ.txt) | [vtt](./vtt/lzujdxJxLIQ.vtt) | [srt](./srt/lzujdxJxLIQ.srt) | [YouTube video](http://youtu.be/lzujdxJxLIQ) |
 | Joe Rogan Experience #1201 - William von Hippel | [txt](./txt/7Dtv8ibI1vk.txt) | [vtt](./vtt/7Dtv8ibI1vk.vtt) | [srt](./srt/7Dtv8ibI1vk.srt) | [YouTube video](http://youtu.be/7Dtv8ibI1vk) |
+| Joe Rogan Experience #1199 - Tom Segura & Sean Anders | [txt](./txt/tingHmTUNqI.txt) | [vtt](./vtt/tingHmTUNqI.vtt) | [srt](./srt/tingHmTUNqI.srt) | [YouTube video](http://youtu.be/tingHmTUNqI) |
 | Joe Rogan Experience #1198 - Derren Brown | [txt](./txt/n_tpWrv76Q8.txt) | [vtt](./vtt/n_tpWrv76Q8.vtt) | [srt](./srt/n_tpWrv76Q8.srt) | [YouTube video](http://youtu.be/n_tpWrv76Q8) |
 | Joe Rogan Experience #1197 - Michael Malice | [txt](./txt/lTSsAXNKl7I.txt) | [vtt](./vtt/lTSsAXNKl7I.vtt) | [srt](./srt/lTSsAXNKl7I.srt) | [YouTube video](http://youtu.be/lTSsAXNKl7I) |
 | Joe Rogan Experience #1188 - Lex Fridman | [txt](./txt/j5FOumrXyww.txt) | [vtt](./vtt/j5FOumrXyww.vtt) | [srt](./srt/j5FOumrXyww.srt) | [YouTube video](http://youtu.be/j5FOumrXyww) |
