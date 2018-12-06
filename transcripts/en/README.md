@@ -473,6 +473,9 @@ YouTube channels :
 
 | **Title** |  | |  |  |
 |:----------:|:---:|:---:|:---:|:---------------:|
+| Joe Rogan Experience #1211 - Dr. Ben Goertzel | [txt](./en/Joe_Rogan_Experience/txt/-qfB8clUIaY.txt) | [vtt](./en/Joe_Rogan_Experience/vtt/-qfB8clUIaY.vtt) | [srt](./en/Joe_Rogan_Experience/srt/-qfB8clUIaY.srt) | [YouTube video](http://youtu.be/-qfB8clUIaY) |
+| Joe Rogan Experience #1210 - Tom Papa | [txt](./en/Joe_Rogan_Experience/txt/lIUV5GBEo2M.txt) | [vtt](./en/Joe_Rogan_Experience/vtt/lIUV5GBEo2M.vtt) | [srt](./en/Joe_Rogan_Experience/srt/lIUV5GBEo2M.srt) | [YouTube video](http://youtu.be/lIUV5GBEo2M) |
+| Joe Rogan Experience #1209 - Anthony Cumia | [txt](./en/Joe_Rogan_Experience/txt/suSqW0qW6nU.txt) | [vtt](./en/Joe_Rogan_Experience/vtt/suSqW0qW6nU.vtt) | [srt](./en/Joe_Rogan_Experience/srt/suSqW0qW6nU.srt) | [YouTube video](http://youtu.be/suSqW0qW6nU) |
 | Joe Rogan Experience #1208 - Jordan Peterson | [txt](./en/Joe_Rogan_Experience/txt/vIeFt88Hm8s.txt) | [vtt](./en/Joe_Rogan_Experience/vtt/vIeFt88Hm8s.vtt) | [srt](./en/Joe_Rogan_Experience/srt/vIeFt88Hm8s.srt) | [YouTube video](http://youtu.be/vIeFt88Hm8s) |
 | Joe Rogan Experience #1207 - Jeff Ross & Dave Attell | [txt](./en/Joe_Rogan_Experience/txt/TLZgdmGN2JQ.txt) | [vtt](./en/Joe_Rogan_Experience/vtt/TLZgdmGN2JQ.vtt) | [srt](./en/Joe_Rogan_Experience/srt/TLZgdmGN2JQ.srt) | [YouTube video](http://youtu.be/TLZgdmGN2JQ) |
 | Joe Rogan Experience #1206 - Mike Ward & Pantelis | [txt](./en/Joe_Rogan_Experience/txt/QTW5cDxnjAg.txt) | [vtt](./en/Joe_Rogan_Experience/vtt/QTW5cDxnjAg.vtt) | [srt](./en/Joe_Rogan_Experience/srt/QTW5cDxnjAg.srt) | [YouTube video](http://youtu.be/QTW5cDxnjAg) |
