@@ -3,6 +3,9 @@
 
 | **Title** |  | |  |  |
 |:----------:|:---:|:---:|:---:|:---------------:|
+| Joe Rogan Experience #1211 - Dr. Ben Goertzel | [txt](./txt/-qfB8clUIaY.txt) | [vtt](./vtt/-qfB8clUIaY.vtt) | [srt](./srt/-qfB8clUIaY.srt) | [YouTube video](http://youtu.be/-qfB8clUIaY) |
+| Joe Rogan Experience #1210 - Tom Papa | [txt](./txt/lIUV5GBEo2M.txt) | [vtt](./vtt/lIUV5GBEo2M.vtt) | [srt](./srt/lIUV5GBEo2M.srt) | [YouTube video](http://youtu.be/lIUV5GBEo2M) |
+| Joe Rogan Experience #1209 - Anthony Cumia | [txt](./txt/suSqW0qW6nU.txt) | [vtt](./vtt/suSqW0qW6nU.vtt) | [srt](./srt/suSqW0qW6nU.srt) | [YouTube video](http://youtu.be/suSqW0qW6nU) |
 | Joe Rogan Experience #1208 - Jordan Peterson | [txt](./txt/vIeFt88Hm8s.txt) | [vtt](./vtt/vIeFt88Hm8s.vtt) | [srt](./srt/vIeFt88Hm8s.srt) | [YouTube video](http://youtu.be/vIeFt88Hm8s) |
 | Joe Rogan Experience #1207 - Jeff Ross & Dave Attell | [txt](./txt/TLZgdmGN2JQ.txt) | [vtt](./vtt/TLZgdmGN2JQ.vtt) | [srt](./srt/TLZgdmGN2JQ.srt) | [YouTube video](http://youtu.be/TLZgdmGN2JQ) |
 | Joe Rogan Experience #1206 - Mike Ward & Pantelis | [txt](./txt/QTW5cDxnjAg.txt) | [vtt](./vtt/QTW5cDxnjAg.vtt) | [srt](./srt/QTW5cDxnjAg.srt) | [YouTube video](http://youtu.be/QTW5cDxnjAg) |
