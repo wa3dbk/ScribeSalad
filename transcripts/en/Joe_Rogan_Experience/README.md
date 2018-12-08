@@ -17,6 +17,10 @@
 | Joe Rogan Experience #1199 - Tom Segura & Sean Anders | [txt](./txt/tingHmTUNqI.txt) | [vtt](./vtt/tingHmTUNqI.vtt) | [srt](./srt/tingHmTUNqI.srt) | [YouTube video](http://youtu.be/tingHmTUNqI) |
 | Joe Rogan Experience #1198 - Derren Brown | [txt](./txt/n_tpWrv76Q8.txt) | [vtt](./vtt/n_tpWrv76Q8.vtt) | [srt](./srt/n_tpWrv76Q8.srt) | [YouTube video](http://youtu.be/n_tpWrv76Q8) |
 | Joe Rogan Experience #1197 - Michael Malice | [txt](./txt/lTSsAXNKl7I.txt) | [vtt](./vtt/lTSsAXNKl7I.vtt) | [srt](./srt/lTSsAXNKl7I.srt) | [YouTube video](http://youtu.be/lTSsAXNKl7I) |
+| Joe Rogan Experience #1196 - Dale Earnhardt Jr. | [txt](./txt/_BTNmNpoAro.txt) | [vtt](./vtt/_BTNmNpoAro.vtt) | [srt](./srt/_BTNmNpoAro.srt) | [YouTube video](http://youtu.be/_BTNmNpoAro) |
+| Joe Rogan Experience #1193 - Shane Dorian | [txt](./txt/N8roQPPTe4Q.txt) | [vtt](./vtt/N8roQPPTe4Q.vtt) | [srt](./srt/N8roQPPTe4Q.srt) | [YouTube video](http://youtu.be/N8roQPPTe4Q) |
+| Joe Rogan Experience #1192 - Tony Hinchcliffe | [txt](./txt/mq-MEgcv5Zs.txt) | [vtt](./vtt/mq-MEgcv5Zs.vtt) | [srt](./srt/mq-MEgcv5Zs.srt) | [YouTube video](http://youtu.be/mq-MEgcv5Zs) |
+| Joe Rogan Experience #1189 - Alex Honnold | [txt](./txt/2OhHkBmbb5Y.txt) | [vtt](./vtt/2OhHkBmbb5Y.vtt) | [srt](./srt/2OhHkBmbb5Y.srt) | [YouTube video](http://youtu.be/2OhHkBmbb5Y) |
 | Joe Rogan Experience #1188 - Lex Fridman | [txt](./txt/j5FOumrXyww.txt) | [vtt](./vtt/j5FOumrXyww.vtt) | [srt](./srt/j5FOumrXyww.srt) | [YouTube video](http://youtu.be/j5FOumrXyww) |
 | Joe Rogan Experience #1177 - Sober October 2 | [txt](./txt/Z-XkTegWKPE.txt) | [vtt](./vtt/Z-XkTegWKPE.vtt) | [srt](./srt/Z-XkTegWKPE.srt) | [YouTube video](http://youtu.be/Z-XkTegWKPE) |
 | Joe Rogan Experience #1175 - Chris Kresser & Dr. Joel Kahn | [txt](./txt/ULtqCBimr6U.txt) | [vtt](./vtt/ULtqCBimr6U.vtt) | [srt](./srt/ULtqCBimr6U.srt) | [YouTube video](http://youtu.be/ULtqCBimr6U) |
