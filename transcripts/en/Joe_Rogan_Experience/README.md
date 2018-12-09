@@ -1,6 +1,8 @@
 
 # Joe Rogan Experience 
 
+Joe Rogan Experience (JRE) transcripts
+
 | **Title** |  | |  |  |
 |:----------:|:---:|:---:|:---:|:---------------:|
 | Joe Rogan Experience #1211 - Dr. Ben Goertzel | [txt](./txt/-qfB8clUIaY.txt) | [vtt](./vtt/-qfB8clUIaY.vtt) | [srt](./srt/-qfB8clUIaY.srt) | [YouTube video](http://youtu.be/-qfB8clUIaY) |
