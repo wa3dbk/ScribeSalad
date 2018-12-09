@@ -23,9 +23,21 @@
 | Joe Rogan Experience #1193 - Shane Dorian | [txt](./txt/N8roQPPTe4Q.txt) | [vtt](./vtt/N8roQPPTe4Q.vtt) | [srt](./srt/N8roQPPTe4Q.srt) | [YouTube video](http://youtu.be/N8roQPPTe4Q) |
 | Joe Rogan Experience #1192 - Tony Hinchcliffe | [txt](./txt/mq-MEgcv5Zs.txt) | [vtt](./vtt/mq-MEgcv5Zs.vtt) | [srt](./srt/mq-MEgcv5Zs.srt) | [YouTube video](http://youtu.be/mq-MEgcv5Zs) |
 | Joe Rogan Experience #1191 - Peter Boghossian & James Lindsay | [txt](./txt/AZZNvT1vaJg.txt) | [vtt](./vtt/AZZNvT1vaJg.vtt) | [srt](./srt/AZZNvT1vaJg.srt) | [YouTube video](http://youtu.be/AZZNvT1vaJg) |
+| Joe Rogan Experience #1190 - Joey Diaz | [txt](./txt/NCkAC5OcJMI.txt) | [vtt](./vtt/NCkAC5OcJMI.vtt) | [srt](./srt/NCkAC5OcJMI.srt) | [YouTube video](http://youtu.be/NCkAC5OcJMI) |
 | Joe Rogan Experience #1189 - Alex Honnold | [txt](./txt/2OhHkBmbb5Y.txt) | [vtt](./vtt/2OhHkBmbb5Y.vtt) | [srt](./srt/2OhHkBmbb5Y.srt) | [YouTube video](http://youtu.be/2OhHkBmbb5Y) |
 | Joe Rogan Experience #1188 - Lex Fridman | [txt](./txt/j5FOumrXyww.txt) | [vtt](./vtt/j5FOumrXyww.vtt) | [srt](./srt/j5FOumrXyww.srt) | [YouTube video](http://youtu.be/j5FOumrXyww) |
+| Joe Rogan Experience #1187 - Kyle Kulinski | [txt](./txt/tbNjZDAM-tE.txt) | [vtt](./vtt/tbNjZDAM-tE.vtt) | [srt](./srt/tbNjZDAM-tE.srt) | [YouTube video](http://youtu.be/tbNjZDAM-tE) |
+| Joe Rogan Experience #1186 - Marques Brownlee | [txt](./txt/QSGaMUBC4Mc.txt) | [vtt](./vtt/QSGaMUBC4Mc.vtt) | [srt](./srt/QSGaMUBC4Mc.srt) | [YouTube video](http://youtu.be/QSGaMUBC4Mc) |
+| Joe Rogan Experience #1185 - Kelly Slater | [txt](./txt/H3qI3RWgNok.txt) | [vtt](./vtt/H3qI3RWgNok.vtt) | [srt](./srt/H3qI3RWgNok.srt) | [YouTube video](http://youtu.be/H3qI3RWgNok) |
+| Joe Rogan Experience #1184 - Roseanne Barr | [txt](./txt/wTAfy_nzJiw.txt) | [vtt](./vtt/wTAfy_nzJiw.vtt) | [srt](./srt/wTAfy_nzJiw.srt) | [YouTube video](http://youtu.be/wTAfy_nzJiw) |
+| Joe Rogan Experience #1183 - Andrew Santino | [txt](./txt/hsI3iUF3V38.txt) | [vtt](./vtt/hsI3iUF3V38.vtt) | [srt](./srt/hsI3iUF3V38.srt) | [YouTube video](http://youtu.be/hsI3iUF3V38) |
+| Joe Rogan Experience #1182 - Nick Kroll | [txt](./txt/IEKvPzZLq7A.txt) | [vtt](./vtt/IEKvPzZLq7A.vtt) | [srt](./srt/IEKvPzZLq7A.srt) | [YouTube video](http://youtu.be/IEKvPzZLq7A) |
+| Joe Rogan Experience #1181 - John Dudley | [txt](./txt/4FX71oBDVvY.txt) | [vtt](./vtt/4FX71oBDVvY.vtt) | [srt](./srt/4FX71oBDVvY.srt) | [YouTube video](http://youtu.be/4FX71oBDVvY) |
+| Joe Rogan Experience #1180 - Everlast | [txt](./txt/KJKL0fzlnYk.txt) | [vtt](./vtt/KJKL0fzlnYk.vtt) | [srt](./srt/KJKL0fzlnYk.srt) | [YouTube video](http://youtu.be/KJKL0fzlnYk) |
+| Joe Rogan Experience #1179 - Nikki Glaser | [txt](./txt/JyTGcgOYQxE.txt) | [vtt](./vtt/JyTGcgOYQxE.vtt) | [srt](./srt/JyTGcgOYQxE.srt) | [YouTube video](http://youtu.be/JyTGcgOYQxE) |
+| Joe Rogan Experience #1178 - Dr. Rhonda Patrick | [txt](./txt/9M8X_bs_fzI.txt) | [vtt](./vtt/9M8X_bs_fzI.vtt) | [srt](./srt/9M8X_bs_fzI.srt) | [YouTube video](http://youtu.be/9M8X_bs_fzI) |
 | Joe Rogan Experience #1177 - Sober October 2 | [txt](./txt/Z-XkTegWKPE.txt) | [vtt](./vtt/Z-XkTegWKPE.vtt) | [srt](./srt/Z-XkTegWKPE.srt) | [YouTube video](http://youtu.be/Z-XkTegWKPE) |
+| Joe Rogan Experience #1176 - Dom D'Agostino & Layne Norton | [txt](./txt/u93oh9kC-rU.txt) | [vtt](./vtt/u93oh9kC-rU.vtt) | [srt](./srt/u93oh9kC-rU.srt) | [YouTube video](http://youtu.be/u93oh9kC-rU) |
 | Joe Rogan Experience #1175 - Chris Kresser & Dr. Joel Kahn | [txt](./txt/ULtqCBimr6U.txt) | [vtt](./vtt/ULtqCBimr6U.vtt) | [srt](./srt/ULtqCBimr6U.srt) | [YouTube video](http://youtu.be/ULtqCBimr6U) |
 | Joe Rogan Experience #1169 - Elon Musk | [txt](./txt/ycPr5-27vSI.txt) | [vtt](./vtt/ycPr5-27vSI.vtt) | [srt](./srt/ycPr5-27vSI.srt) | [YouTube video](http://youtu.be/ycPr5-27vSI) |
 | Joe Rogan Experience #1160 - Bert Kreischer | [txt](./txt/XBi1M3bcPfM.txt) | [vtt](./vtt/XBi1M3bcPfM.vtt) | [srt](./srt/XBi1M3bcPfM.srt) | [YouTube video](http://youtu.be/XBi1M3bcPfM) |
@@ -78,6 +90,11 @@
 | Joe Rogan Experience #1030 - Joey Diaz | [txt](./txt/kRtwWV32f0k.txt) | [vtt](./vtt/kRtwWV32f0k.vtt) | [srt](./srt/kRtwWV32f0k.srt) | [YouTube video](http://youtu.be/kRtwWV32f0k) |
 | Joe Rogan Experience #1028 - Adam Greentree | [txt](./txt/1uvKczCPQok.txt) | [vtt](./vtt/1uvKczCPQok.vtt) | [srt](./srt/1uvKczCPQok.srt) | [YouTube video](http://youtu.be/1uvKczCPQok) |
 | Joe Rogan Experience #1027 - Courtney Dauwalter | [txt](./txt/V8DfjXnIk6c.txt) | [vtt](./vtt/V8DfjXnIk6c.vtt) | [srt](./srt/V8DfjXnIk6c.srt) | [YouTube video](http://youtu.be/V8DfjXnIk6c) |
+| Joe Rogan Experience #1026 - Brian Redban | [txt](./txt/cTdE-vlbm58.txt) | [vtt](./vtt/cTdE-vlbm58.vtt) | [srt](./srt/cTdE-vlbm58.srt) | [YouTube video](http://youtu.be/cTdE-vlbm58) |
+| Joe Rogan Experience #1025 - Greg Fitzsimmons | [txt](./txt/ca30mO_8NDY.txt) | [vtt](./vtt/ca30mO_8NDY.vtt) | [srt](./srt/ca30mO_8NDY.srt) | [YouTube video](http://youtu.be/ca30mO_8NDY) |
+| Joe Rogan Experience #1024 - Bert Kreischer | [txt](./txt/ELUCUFQp1_k.txt) | [vtt](./vtt/ELUCUFQp1_k.vtt) | [srt](./srt/ELUCUFQp1_k.srt) | [YouTube video](http://youtu.be/ELUCUFQp1_k) |
+| Joe Rogan Experience #1023 - Christina P | [txt](./txt/K1XrqZsV0-Y.txt) | [vtt](./vtt/K1XrqZsV0-Y.vtt) | [srt](./srt/K1XrqZsV0-Y.srt) | [YouTube video](http://youtu.be/K1XrqZsV0-Y) |
+| Joe Rogan Experience #1022 - Eric Weinstein | [txt](./txt/lMzjEaNFbAk.txt) | [vtt](./vtt/lMzjEaNFbAk.vtt) | [srt](./srt/lMzjEaNFbAk.srt) | [YouTube video](http://youtu.be/lMzjEaNFbAk) |
 | Joe Rogan Experience #1021 - Russell Brand | [txt](./txt/iZPH6r_ZDvM.txt) | [vtt](./vtt/iZPH6r_ZDvM.vtt) | [srt](./srt/iZPH6r_ZDvM.srt) | [YouTube video](http://youtu.be/iZPH6r_ZDvM) |
 | Joe Rogan Experience #1006 - Jordan Peterson & Bret Weinstein | [txt](./txt/6G59zsjM2UI.txt) | [vtt](./vtt/6G59zsjM2UI.vtt) | [srt](./srt/6G59zsjM2UI.srt) | [YouTube video](http://youtu.be/6G59zsjM2UI) |
 | Joe Rogan Experience #1003 - Sean Carroll | [txt](./txt/hHMSvSqCDKc.txt) | [vtt](./vtt/hHMSvSqCDKc.vtt) | [srt](./srt/hHMSvSqCDKc.srt) | [YouTube video](http://youtu.be/hHMSvSqCDKc) |
@@ -326,3 +343,4 @@
 | Joe Rogan Experience #3 - Ari Shaffir, Brian Redban | [txt](./txt/tJyzTzXBM8I.txt) | [vtt](./vtt/tJyzTzXBM8I.vtt) | [srt](./srt/tJyzTzXBM8I.srt) | [YouTube video](http://youtu.be/tJyzTzXBM8I) |
 | Joe Rogan Experience #2 - Brian Redban | [txt](./txt/Psu4JK_M7V8.txt) | [vtt](./vtt/Psu4JK_M7V8.vtt) | [srt](./srt/Psu4JK_M7V8.srt) | [YouTube video](http://youtu.be/Psu4JK_M7V8) |
 | Joe Rogan Experience #1 - Brian Redban | [txt](./txt/ZWBCnvOuXK8.txt) | [vtt](./vtt/ZWBCnvOuXK8.vtt) | [srt](./srt/ZWBCnvOuXK8.srt) | [YouTube video](http://youtu.be/ZWBCnvOuXK8) |
+| Ari & Joe Go On A Hike | [txt](./txt/2kL9I7sRwF8.txt) | [vtt](./vtt/2kL9I7sRwF8.vtt) | [srt](./srt/2kL9I7sRwF8.srt) | [YouTube video](http://youtu.be/2kL9I7sRwF8) |
