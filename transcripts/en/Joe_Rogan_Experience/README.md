@@ -5,6 +5,7 @@ Joe Rogan Experience (JRE) transcripts
 
 | **Title** |  | |  |  |
 |:----------:|:---:|:---:|:---:|:---------------:|
+| Joe Rogan Experience #1212 - David Goggins | [txt](./txt/BvWB7B8tXK8.txt) | [vtt](./vtt/BvWB7B8tXK8.vtt) | [srt](./srt/BvWB7B8tXK8.srt) | [YouTube video](http://youtu.be/BvWB7B8tXK8) |
 | Joe Rogan Experience #1211 - Dr. Ben Goertzel | [txt](./txt/-qfB8clUIaY.txt) | [vtt](./vtt/-qfB8clUIaY.vtt) | [srt](./srt/-qfB8clUIaY.srt) | [YouTube video](http://youtu.be/-qfB8clUIaY) |
 | Joe Rogan Experience #1210 - Tom Papa | [txt](./txt/lIUV5GBEo2M.txt) | [vtt](./vtt/lIUV5GBEo2M.vtt) | [srt](./srt/lIUV5GBEo2M.srt) | [YouTube video](http://youtu.be/lIUV5GBEo2M) |
 | Joe Rogan Experience #1209 - Anthony Cumia | [txt](./txt/suSqW0qW6nU.txt) | [vtt](./vtt/suSqW0qW6nU.vtt) | [srt](./srt/suSqW0qW6nU.srt) | [YouTube video](http://youtu.be/suSqW0qW6nU) |
@@ -132,9 +133,20 @@ Joe Rogan Experience (JRE) transcripts
 | Joe Rogan Experience #922 - Philip DeFranco | [txt](./txt/1WlB_S6r3sQ.txt) | [vtt](./vtt/1WlB_S6r3sQ.vtt) | [srt](./srt/1WlB_S6r3sQ.srt) | [YouTube video](http://youtu.be/1WlB_S6r3sQ) |
 | Joe Rogan Experience #919 - Neil deGrasse Tyson | [txt](./txt/PhHtBqsGAoA.txt) | [vtt](./vtt/PhHtBqsGAoA.vtt) | [srt](./srt/PhHtBqsGAoA.srt) | [YouTube video](http://youtu.be/PhHtBqsGAoA) |
 | Joe Rogan Experience #917 - Steven Crowder | [txt](./txt/LKSTg9CgQq8.txt) | [vtt](./vtt/LKSTg9CgQq8.vtt) | [srt](./srt/LKSTg9CgQq8.srt) | [YouTube video](http://youtu.be/LKSTg9CgQq8) |
+| Joe Rogan Experience #916 - Fight Recap | [txt](./txt/-81h4-sYIbk.txt) | [vtt](./vtt/-81h4-sYIbk.vtt) | [srt](./srt/-81h4-sYIbk.srt) | [YouTube video](http://youtu.be/-81h4-sYIbk) |
+| Joe Rogan Experience #915 - Nick DiPaolo | [txt](./txt/Rmkb6mmmvGg.txt) | [vtt](./vtt/Rmkb6mmmvGg.vtt) | [srt](./srt/Rmkb6mmmvGg.srt) | [YouTube video](http://youtu.be/Rmkb6mmmvGg) |
+| Joe Rogan Experience #914 - Ryan Callaghan & Kenton Carruth | [txt](./txt/ssx1Ev5SF9Y.txt) | [vtt](./vtt/ssx1Ev5SF9Y.vtt) | [srt](./srt/ssx1Ev5SF9Y.srt) | [YouTube video](http://youtu.be/ssx1Ev5SF9Y) |
+| Joe Rogan Experience #913 - Christopher Ryan | [txt](./txt/_vCN5cYf2q0.txt) | [vtt](./vtt/_vCN5cYf2q0.vtt) | [srt](./srt/_vCN5cYf2q0.srt) | [YouTube video](http://youtu.be/_vCN5cYf2q0) |
+| Joe Rogan Experience #912 - Pete Holmes | [txt](./txt/baSNHz4uiX4.txt) | [vtt](./vtt/baSNHz4uiX4.vtt) | [srt](./srt/baSNHz4uiX4.srt) | [YouTube video](http://youtu.be/baSNHz4uiX4) |
+| Joe Rogan Experience #911 - Alex Jones & Eddie Bravo | [txt](./txt/UZPCp8SPfOM.txt) | [vtt](./vtt/UZPCp8SPfOM.vtt) | [srt](./srt/UZPCp8SPfOM.srt) | [YouTube video](http://youtu.be/UZPCp8SPfOM) |
+| Joe Rogan Experience #910 - Gary Vaynerchuk | [txt](./txt/OLHdzLpMg-s.txt) | [vtt](./vtt/OLHdzLpMg-s.vtt) | [srt](./srt/OLHdzLpMg-s.srt) | [YouTube video](http://youtu.be/OLHdzLpMg-s) |
 | Joe Rogan Experience #909 - Bill Burr | [txt](./txt/b9GWqfNlWHI.txt) | [vtt](./vtt/b9GWqfNlWHI.vtt) | [srt](./srt/b9GWqfNlWHI.srt) | [YouTube video](http://youtu.be/b9GWqfNlWHI) |
 | Joe Rogan Experience #908 - Leah Remini | [txt](./txt/AJ0-VeWMr-A.txt) | [vtt](./vtt/AJ0-VeWMr-A.vtt) | [srt](./srt/AJ0-VeWMr-A.srt) | [YouTube video](http://youtu.be/AJ0-VeWMr-A) |
+| Joe Rogan Experience #907 - Mike Baker | [txt](./txt/LUfe_p-cHqk.txt) | [vtt](./vtt/LUfe_p-cHqk.vtt) | [srt](./srt/LUfe_p-cHqk.srt) | [YouTube video](http://youtu.be/LUfe_p-cHqk) |
+| Joe Rogan Experience #906 - Henry Rollins | [txt](./txt/ruN9DY6Oaw4.txt) | [vtt](./vtt/ruN9DY6Oaw4.vtt) | [srt](./srt/ruN9DY6Oaw4.srt) | [YouTube video](http://youtu.be/ruN9DY6Oaw4) |
+| Joe Rogan Experience #905 - Shane Smith | [txt](./txt/4lAv_JQtF-8.txt) | [vtt](./vtt/4lAv_JQtF-8.vtt) | [srt](./srt/4lAv_JQtF-8.srt) | [YouTube video](http://youtu.be/4lAv_JQtF-8) |
 | Joe Rogan Experience #904 - Gary Taubes | [txt](./txt/q0ffswUVoxA.txt) | [vtt](./vtt/q0ffswUVoxA.vtt) | [srt](./srt/q0ffswUVoxA.srt) | [YouTube video](http://youtu.be/q0ffswUVoxA) |
+| Joe Rogan Experience #903 - Tony Hinchcliffe & Brian Redban | [txt](./txt/p6amtf1-UgY.txt) | [vtt](./vtt/p6amtf1-UgY.vtt) | [srt](./srt/p6amtf1-UgY.srt) | [YouTube video](http://youtu.be/p6amtf1-UgY) |
 | Joe Rogan Experience #901 - Dr. Rhonda Patrick | [txt](./txt/uxM_CLsvieE.txt) | [vtt](./vtt/uxM_CLsvieE.vtt) | [srt](./srt/uxM_CLsvieE.srt) | [YouTube video](http://youtu.be/uxM_CLsvieE) |
 | Joe Rogan Experience #900 - Joseph Valtellini | [txt](./txt/UlNvTTfUJ1A.txt) | [vtt](./vtt/UlNvTTfUJ1A.vtt) | [srt](./srt/UlNvTTfUJ1A.srt) | [YouTube video](http://youtu.be/UlNvTTfUJ1A) |
 | Joe Rogan Experience #899 - Bryan Callen | [txt](./txt/aZ3IVET8b_M.txt) | [vtt](./vtt/aZ3IVET8b_M.vtt) | [srt](./srt/aZ3IVET8b_M.srt) | [YouTube video](http://youtu.be/aZ3IVET8b_M) |
