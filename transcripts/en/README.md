@@ -2,7 +2,8 @@
 
 
 YouTube channels : 
-- [Joe Rogan Experience](#joe-rogan-experience-top) 
+- [Joe Rogan Experience (JRE)](#joe-rogan-experience-top) 
+- [Joe Rogan MMA Show](#joe-rogan-mma-show)
 - [Lex Fridman](#lex-fridman-top) 
 - [AI lectures and talks](#ai-lectures-and-talks-top)
 - [Jordan B. Peterson](#jordan-b-peterson-top)
@@ -841,6 +842,18 @@ YouTube channels :
 | Joe Rogan Experience #1 - Brian Redban | [txt](./en/Joe_Rogan_Experience/txt/ZWBCnvOuXK8.txt) | [vtt](./en/Joe_Rogan_Experience/vtt/ZWBCnvOuXK8.vtt) | [srt](./en/Joe_Rogan_Experience/srt/ZWBCnvOuXK8.srt) | [YouTube video](http://youtu.be/ZWBCnvOuXK8) |
 | Ari & Joe Go On A Hike | [txt](./en/Joe_Rogan_Experience/txt/2kL9I7sRwF8.txt) | [vtt](./en/Joe_Rogan_Experience/vtt/2kL9I7sRwF8.vtt) | [srt](./en/Joe_Rogan_Experience/srt/2kL9I7sRwF8.srt) | [YouTube video](http://youtu.be/2kL9I7sRwF8) |
 
+
+## Joe Rogan MMA Show [:top:](#original-transcripts)
+
+| **Title** |  | |  |  |
+|:----------:|:---:|:---:|:---:|:---------------:|
+| JRE MMA Show #34 with Josh Barnett | [txt](./en/Joe_Rogan_Experience/txt/tk1cQEBEWLg.txt) | [vtt](./en/Joe_Rogan_Experience/vtt/tk1cQEBEWLg.vtt) | [srt](./en/Joe_Rogan_Experience/srt/tk1cQEBEWLg.srt) | [YouTube video](http://youtu.be/tk1cQEBEWLg) |
+|JRE MMA Show #31 with Daniel Straus & Joe Schilling | [txt](./en/Joe_Rogan_Experience/txt/lCR0Je9J4to.txt) | [vtt](./en/Joe_Rogan_Experience/vtt/lCR0Je9J4to.vtt) | [srt](./en/Joe_Rogan_Experience/srt/lCR0Je9J4to.srt) | [YouTube video](http://youtu.be/lCR0Je9J4to) |
+| JRE MMA Show #29 with Cat Zingano | [txt](./en/Joe_Rogan_Experience/txt/kUa8UOkL4Mo.txt) | [vtt](./en/Joe_Rogan_Experience/vtt/kUa8UOkL4Mo.vtt) | [srt](./en/Joe_Rogan_Experience/srt/kUa8UOkL4Mo.srt) | [YouTube video](http://youtu.be/kUa8UOkL4Mo) |
+| JRE MMA Show #27 with Robin Black | [txt](./en/Joe_Rogan_Experience/txt/VoYLwjHSQAo.txt) | [vtt](./en/Joe_Rogan_Experience/vtt/VoYLwjHSQAo.vtt) | [srt](./en/Joe_Rogan_Experience/srt/VoYLwjHSQAo.srt) | [YouTube video](http://youtu.be/VoYLwjHSQAo) |
+| JRE MMA Show #21 with Brendan Schaub | [txt](./en/Joe_Rogan_Experience/txt/SsR9ohalUp0.txt) | [vtt](./en/Joe_Rogan_Experience/vtt/SsR9ohalUp0.vtt) | [srt](./en/Joe_Rogan_Experience/srt/SsR9ohalUp0.srt) | [YouTube video](http://youtu.be/SsR9ohalUp0) |
+| JRE MMA Show #12 with Ben Askren | [txt](./en/Joe_Rogan_Experience/txt/Ec4OKbrCl3I.txt) | [vtt](./en/Joe_Rogan_Experience/vtt/Ec4OKbrCl3I.vtt) | [srt](./en/Joe_Rogan_Experience/srt/Ec4OKbrCl3I.srt) | [YouTube video](http://youtu.be/Ec4OKbrCl3I) |
+| JRE MMA Show #11 with John Danaher | [txt](./en/Joe_Rogan_Experience/txt/qkBXzkD6tis.txt) | [vtt](./en/Joe_Rogan_Experience/vtt/qkBXzkD6tis.vtt) | [srt](./en/Joe_Rogan_Experience/srt/qkBXzkD6tis.srt) | [YouTube video](http://youtu.be/qkBXzkD6tis) |
 
 ## Rubin Report [:top:](#original-transcripts)
 
