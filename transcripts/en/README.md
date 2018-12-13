@@ -1,4 +1,4 @@
-# Original transcripts (english)
+# Original transcripts
 
 
 YouTube channels : 
