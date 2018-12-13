@@ -3,7 +3,7 @@
 
 YouTube channels : 
 - [Joe Rogan Experience (JRE)](#joe-rogan-experience-top) 
-- [Joe Rogan MMA Show](#joe-rogan-mma-show)
+- [Joe Rogan MMA Show](#joe-rogan-mma-show-top)
 - [Lex Fridman](#lex-fridman-top) 
 - [AI lectures and talks](#ai-lectures-and-talks-top)
 - [Jordan B. Peterson](#jordan-b-peterson-top)
