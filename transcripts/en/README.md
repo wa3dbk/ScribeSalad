@@ -853,7 +853,7 @@ YouTube channels :
 | JRE MMA Show #27 with Robin Black | [txt](./en/Joe_Rogan_MMA_Show/txt/VoYLwjHSQAo.txt) | [vtt](./en/Joe_Rogan_MMA_Show/vtt/VoYLwjHSQAo.vtt) | [srt](./en/Joe_Rogan_MMA_Show/srt/VoYLwjHSQAo.srt) | [YouTube video](http://youtu.be/VoYLwjHSQAo) |
 | JRE MMA Show #21 with Brendan Schaub | [txt](./en/Joe_Rogan_MMA_Show/txt/SsR9ohalUp0.txt) | [vtt](./en/Joe_Rogan_MMA_Show/vtt/SsR9ohalUp0.vtt) | [srt](./en/Joe_Rogan_MMA_Show/srt/SsR9ohalUp0.srt) | [YouTube video](http://youtu.be/SsR9ohalUp0) |
 | JRE MMA Show #12 with Ben Askren | [txt](./en/Joe_Rogan_MMA_Show/txt/Ec4OKbrCl3I.txt) | [vtt](./en/Joe_Rogan_MMA_Show/vtt/Ec4OKbrCl3I.vtt) | [srt](./en/Joe_Rogan_MMA_Show/srt/Ec4OKbrCl3I.srt) | [YouTube video](http://youtu.be/Ec4OKbrCl3I) |
-| JRE MMA Show #11 with John Danaher | [txt](./en/Joe_Rogan_MMA_Show/txt/qkBXzkD6tis.txt) | [vtt](./en/Joe_Rogan_MMA_Show/vtt/qkBXzkD6tis.vtt) | [srt](./en/Joe_Rogan_MMA_Show/srt/qkBXzkD6tis.srt) | [YouTube video](http://youtu.be/qkBXzkD6tis) |
+| JRE MMA Show #11 with John Danaher | [txt](./Joe_Rogan_MMA_Show/txt/qkBXzkD6tis.txt) | [vtt](./Joe_Rogan_MMA_Show/vtt/qkBXzkD6tis.vtt) | [srt](./Joe_Rogan_MMA_Show/srt/qkBXzkD6tis.srt) | [YouTube video](http://youtu.be/qkBXzkD6tis) |
 
 ## Rubin Report [:top:](#original-transcripts)
 
