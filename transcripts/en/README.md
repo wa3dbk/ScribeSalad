@@ -474,6 +474,12 @@ YouTube channels :
 
 | **Title** |  | |  |  |
 |:----------:|:---:|:---:|:---:|:---------------:|
+
+| Joe Rogan Experience #1218 - Gad Saad | [txt](./Joe_Rogan_Experience/txt/Igc_1TPfK9Y.txt) | [vtt](./Joe_Rogan_Experience/vtt/Igc_1TPfK9Y.vtt) | [srt](./Joe_Rogan_Experience/srt/Igc_1TPfK9Y.srt) | [YouTube video](http://youtu.be/Igc_1TPfK9Y) |
+| Joe Rogan Experience #1217 - Nimesh Patel | [txt](./Joe_Rogan_Experience/txt/1cZYXScrJyU.txt) | [vtt](./Joe_Rogan_Experience/vtt/1cZYXScrJyU.vtt) | [srt](./Joe_Rogan_Experience/srt/1cZYXScrJyU.srt) | [YouTube video](http://youtu.be/1cZYXScrJyU) |
+| Joe Rogan Experience #1215 - Ben O'Brien | [txt](./Joe_Rogan_Experience/txt/tAithqQBFdQ.txt) | [vtt](./Joe_Rogan_Experience/vtt/tAithqQBFdQ.vtt) | [srt](./Joe_Rogan_Experience/srt/tAithqQBFdQ.srt) | [YouTube video](http://youtu.be/tAithqQBFdQ) |
+| Joe Rogan Experience #1214 - Lawrence Lessig | [txt](./Joe_Rogan_Experience/txt/Igc_1TPfK9Y.txt) | [vtt](./Joe_Rogan_Experience/vtt/Igc_1TPfK9Y.vtt) | [srt](./Joe_Rogan_Experience/srt/Igc_1TPfK9Y.srt) | [YouTube video](http://youtu.be/Igc_1TPfK9Y) |
+| Joe Rogan Experience #1213 - Dr. Andrew Weil | [txt](./Joe_Rogan_Experience/txt/WjYYdMNUXF8.txt) | [vtt](./Joe_Rogan_Experience/vtt/WjYYdMNUXF8.vtt) | [srt](./Joe_Rogan_Experience/srt/WjYYdMNUXF8.srt) | [YouTube video](http://youtu.be/WjYYdMNUXF8) |
 | Joe Rogan Experience #1212 - David Goggins | [txt](./Joe_Rogan_Experience/txt/BvWB7B8tXK8.txt) | [vtt](./Joe_Rogan_Experience/vtt/BvWB7B8tXK8.vtt) | [srt](./Joe_Rogan_Experience/srt/BvWB7B8tXK8.srt) | [YouTube video](http://youtu.be/BvWB7B8tXK8) |
 | Joe Rogan Experience #1211 - Dr. Ben Goertzel | [txt](./Joe_Rogan_Experience/txt/-qfB8clUIaY.txt) | [vtt](./Joe_Rogan_Experience/vtt/-qfB8clUIaY.vtt) | [srt](./Joe_Rogan_Experience/srt/-qfB8clUIaY.srt) | [YouTube video](http://youtu.be/-qfB8clUIaY) |
 | Joe Rogan Experience #1210 - Tom Papa | [txt](./Joe_Rogan_Experience/txt/lIUV5GBEo2M.txt) | [vtt](./Joe_Rogan_Experience/vtt/lIUV5GBEo2M.vtt) | [srt](./Joe_Rogan_Experience/srt/lIUV5GBEo2M.srt) | [YouTube video](http://youtu.be/lIUV5GBEo2M) |
