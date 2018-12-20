@@ -5,6 +5,11 @@ Joe Rogan Experience (JRE) transcripts
 
 | **Title** |  | |  |  |
 |:----------:|:---:|:---:|:---:|:---------------:|
+| Joe Rogan Experience #1218 - Gad Saad | [txt](./txt/Igc_1TPfK9Y.txt) | [vtt](./vtt/Igc_1TPfK9Y.vtt) | [srt](./srt/Igc_1TPfK9Y.srt) | [YouTube video](http://youtu.be/Igc_1TPfK9Y) |
+| Joe Rogan Experience #1217 - Nimesh Patel | [txt](./txt/1cZYXScrJyU.txt) | [vtt](./vtt/1cZYXScrJyU.vtt) | [srt](./srt/1cZYXScrJyU.srt) | [YouTube video](http://youtu.be/1cZYXScrJyU) |
+| Joe Rogan Experience #1215 - Ben O'Brien | [txt](./txt/tAithqQBFdQ.txt) | [vtt](./vtt/tAithqQBFdQ.vtt) | [srt](./srt/tAithqQBFdQ.srt) | [YouTube video](http://youtu.be/tAithqQBFdQ) |
+| Joe Rogan Experience #1214 - Lawrence Lessig | [txt](./txt/Igc_1TPfK9Y.txt) | [vtt](./vtt/Igc_1TPfK9Y.vtt) | [srt](./srt/Igc_1TPfK9Y.srt) | [YouTube video](http://youtu.be/Igc_1TPfK9Y) |
+| Joe Rogan Experience #1213 - Dr. Andrew Weil | [txt](./txt/WjYYdMNUXF8.txt) | [vtt](./vtt/WjYYdMNUXF8.vtt) | [srt](./srt/WjYYdMNUXF8.srt) | [YouTube video](http://youtu.be/WjYYdMNUXF8) |
 | Joe Rogan Experience #1212 - David Goggins | [txt](./txt/BvWB7B8tXK8.txt) | [vtt](./vtt/BvWB7B8tXK8.vtt) | [srt](./srt/BvWB7B8tXK8.srt) | [YouTube video](http://youtu.be/BvWB7B8tXK8) |
 | Joe Rogan Experience #1211 - Dr. Ben Goertzel | [txt](./txt/-qfB8clUIaY.txt) | [vtt](./vtt/-qfB8clUIaY.vtt) | [srt](./srt/-qfB8clUIaY.srt) | [YouTube video](http://youtu.be/-qfB8clUIaY) |
 | Joe Rogan Experience #1210 - Tom Papa | [txt](./txt/lIUV5GBEo2M.txt) | [vtt](./vtt/lIUV5GBEo2M.vtt) | [srt](./srt/lIUV5GBEo2M.srt) | [YouTube video](http://youtu.be/lIUV5GBEo2M) |
