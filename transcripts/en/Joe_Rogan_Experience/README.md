@@ -23,6 +23,7 @@ Joe Rogan Experience (JRE) transcripts
 | Joe Rogan Experience #1203 - Eric Weinstein | [txt](./txt/X9JLij1obHY.txt) | [vtt](./vtt/X9JLij1obHY.vtt) | [srt](./srt/X9JLij1obHY.srt) | [YouTube video](http://youtu.be/X9JLij1obHY) |
 | Joe Rogan Experience #1202 - Fred Morin & David McMillan | [txt](./txt/lzujdxJxLIQ.txt) | [vtt](./vtt/lzujdxJxLIQ.vtt) | [srt](./srt/lzujdxJxLIQ.srt) | [YouTube video](http://youtu.be/lzujdxJxLIQ) |
 | Joe Rogan Experience #1201 - William von Hippel | [txt](./txt/7Dtv8ibI1vk.txt) | [vtt](./vtt/7Dtv8ibI1vk.vtt) | [srt](./srt/7Dtv8ibI1vk.srt) | [YouTube video](http://youtu.be/7Dtv8ibI1vk) |
+| Joe Rogan Experience #1200 - Ross Edgley | [txt](./txt/68azjW5Hhok.txt) | [vtt](./vtt/68azjW5Hhok.vtt) | [srt](./srt/68azjW5Hhok.srt) | [YouTube video](http://youtu.be/68azjW5Hhok) |
 | Joe Rogan Experience #1199 - Tom Segura & Sean Anders | [txt](./txt/tingHmTUNqI.txt) | [vtt](./vtt/tingHmTUNqI.vtt) | [srt](./srt/tingHmTUNqI.srt) | [YouTube video](http://youtu.be/tingHmTUNqI) |
 | Joe Rogan Experience #1198 - Derren Brown | [txt](./txt/n_tpWrv76Q8.txt) | [vtt](./vtt/n_tpWrv76Q8.vtt) | [srt](./srt/n_tpWrv76Q8.srt) | [YouTube video](http://youtu.be/n_tpWrv76Q8) |
 | Joe Rogan Experience #1197 - Michael Malice | [txt](./txt/lTSsAXNKl7I.txt) | [vtt](./vtt/lTSsAXNKl7I.vtt) | [srt](./srt/lTSsAXNKl7I.srt) | [YouTube video](http://youtu.be/lTSsAXNKl7I) |
