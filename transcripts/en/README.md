@@ -11,7 +11,7 @@ YouTube channels :
   - 2016 Personality and Its Transformations
   - The Psychological Significance of the Biblical Stories
   - 2017 Maps of Meaning : The Architecture of Belief (University of Toronto)
-- [Jordan Peterson Clips][#jordan-peterson-clips-top]
+- [Jordan Peterson Clips](#jordan-peterson-clips-top)
 - [Bite-sized Philosophy](#bite-sized-philosophy-top)
 - [Dan carlin](#dan-carlin-top)
 - [The Rubin Report](#the-rubin-report-top)
