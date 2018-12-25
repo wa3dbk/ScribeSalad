@@ -4,6 +4,7 @@ Lex Fridman transcripts
 
 | **Title** |  | |  |  |
 |:----------:|:---:|:---:|:---:|:---------------:|
+| MIT AI: Godel Machines, Meta-Learning, and LSTMs (Juergen Schmidhuber) | [txt](./txt/3FIo6evmweo.txt) | [vtt](./vtt/3FIo6evmweo.vtt) | [srt](./srt/3FIo6evmweo.srt) | [YouTube video](http://youtu.be/3FIo6evmweo) |
 | MIT AGI: Artificial General Intelligence | [txt](./txt/-GV_A9Js2nM.txt) | [vtt](./vtt/-GV_A9Js2nM.vtt) | [srt](./srt/-GV_A9Js2nM.srt) | [YouTube video](http://youtu.be/-GV_A9Js2nM) |
 | MIT AGI: Building machines that see, learn, and think like people (Josh Tenenbaum) | [txt](./txt/7ROelYvo8f0.txt) | [vtt](./vtt/7ROelYvo8f0.vtt) | [srt](./srt/7ROelYvo8f0.srt) | [YouTube video](http://youtu.be/7ROelYvo8f0) |
 | MIT AGI: Computational Universe (Stephen Wolfram) | [txt](./txt/P7kX7BuHSFI.txt) | [vtt](./vtt/P7kX7BuHSFI.vtt) | [srt](./srt/P7kX7BuHSFI.srt) | [YouTube video](http://youtu.be/P7kX7BuHSFI) |
