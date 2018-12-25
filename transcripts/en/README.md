@@ -14,6 +14,8 @@ YouTube channels :
 - [Bite-sized Philosophy](#bite-sized-philosophy-top)
 - [Dan carlin](#dan-carlin-top)
 - [The Rubin Report](#the-rubin-report-top)
+- [LangFocus](#langfocus)
+
 
 ## Lex Fridman [:top:](#original-transcripts)
 
@@ -969,4 +971,133 @@ YouTube channels :
 | Alex Epstein and Dave Rubin Discuss the Climate Change Debate (Full Interview) | [txt](./Rubin_Report/txt/yJmL9hRrpIQ.txt) | [vtt](./Rubin_Report/vtt/yJmL9hRrpIQ.vtt) | [srt](./Rubin_Report/srt/yJmL9hRrpIQ.srt) | [YouTube video](http://youtu.be/yJmL9hRrpIQ) |
 | Sam Harris and Dave Rubin Talk Religion, Politics, Free Speech (Full Interview) | [txt](./Rubin_Report/txt/zQqxlzHJrU0.txt) | [vtt](./Rubin_Report/vtt/zQqxlzHJrU0.vtt) | [srt](./Rubin_Report/srt/zQqxlzHJrU0.srt) | [YouTube video](http://youtu.be/zQqxlzHJrU0) |
 | Michael Ian Black and Dave Rubin Talk Hillary, Trump, and Black Lives Matter (Full Interview) | [txt](./Rubin_Report/txt/zR7_oDoBr0A.txt) | [vtt](./Rubin_Report/vtt/zR7_oDoBr0A.vtt) | [srt](./Rubin_Report/srt/zR7_oDoBr0A.srt) | [YouTube video](http://youtu.be/zR7_oDoBr0A) |
+
+
+## LangFocus [:top:](#original-transcripts)
+
+| **Title** |  | |  |  |
+|:----------:|:---:|:---:|:---:|:---------------:|
+| Romanian: The Forgotten Romance Language | [txt](./Lang_Focus/txt/1xVkRh7mEe0.txt) | [vtt](./Lang_Focus/vtt/1xVkRh7mEe0.vtt) | [srt](./Lang_Focus/srt/1xVkRh7mEe0.srt) | [YouTube video](http://youtu.be/1xVkRh7mEe0) |
+| Is English Really a Germanic Language? | [txt](./Lang_Focus/txt/2OynrY8JCDM.txt) | [vtt](./Lang_Focus/vtt/2OynrY8JCDM.vtt) | [srt](./Lang_Focus/srt/2OynrY8JCDM.srt) | [YouTube video](http://youtu.be/2OynrY8JCDM) |
+| How to Speak Multiple Languages Without Mixing Them Up | [txt](./Lang_Focus/txt/3PPveTB9Iik.txt) | [vtt](./Lang_Focus/vtt/3PPveTB9Iik.vtt) | [srt](./Lang_Focus/srt/3PPveTB9Iik.srt) | [YouTube video](http://youtu.be/3PPveTB9Iik) |
+| Amharic - A Semitic language of Ethiopia | [txt](./Lang_Focus/txt/4jjEawqaMkE.txt) | [vtt](./Lang_Focus/vtt/4jjEawqaMkE.vtt) | [srt](./Lang_Focus/srt/4jjEawqaMkE.srt) | [YouTube video](http://youtu.be/4jjEawqaMkE) |
+| THE GREAT LANGUAGE GAME | [txt](./Lang_Focus/txt/5-QSGHZCQW8.txt) | [vtt](./Lang_Focus/vtt/5-QSGHZCQW8.vtt) | [srt](./Lang_Focus/srt/5-QSGHZCQW8.srt) | [YouTube video](http://youtu.be/5-QSGHZCQW8) |
+| Filipino - The National Language of the Philippines (Tagalog) | [txt](./Lang_Focus/txt/6dBREc8ePuk.txt) | [vtt](./Lang_Focus/vtt/6dBREc8ePuk.vtt) | [srt](./Lang_Focus/srt/6dBREc8ePuk.srt) | [YouTube video](http://youtu.be/6dBREc8ePuk) |
+| The Romance Languages and What Makes Them Amazing | [txt](./Lang_Focus/txt/6o140Ni6yiM.txt) | [vtt](./Lang_Focus/vtt/6o140Ni6yiM.vtt) | [srt](./Lang_Focus/srt/6o140Ni6yiM.srt) | [YouTube video](http://youtu.be/6o140Ni6yiM) |
+| Hebrew - An Ancient Language Revived | [txt](./Lang_Focus/txt/70jb2c8Qtsk.txt) | [vtt](./Lang_Focus/vtt/70jb2c8Qtsk.vtt) | [srt](./Lang_Focus/srt/70jb2c8Qtsk.srt) | [YouTube video](http://youtu.be/70jb2c8Qtsk) |
+| The Malay Language (Bahasa Melayu) | [txt](./Lang_Focus/txt/70nxZpblKws.txt) | [vtt](./Lang_Focus/vtt/70nxZpblKws.vtt) | [srt](./Lang_Focus/srt/70nxZpblKws.srt) | [YouTube video](http://youtu.be/70nxZpblKws) |
+| The Indonesian Language (Bahasa Indonesia) | [txt](./Lang_Focus/txt/749dhnXdYXQ.txt) | [vtt](./Lang_Focus/vtt/749dhnXdYXQ.vtt) | [srt](./Lang_Focus/srt/749dhnXdYXQ.srt) | [YouTube video](http://youtu.be/749dhnXdYXQ) |
+| How I Make a Langfocus Video! (Patreon Milestone) | [txt](./Lang_Focus/txt/775-3_nd_-U.txt) | [vtt](./Lang_Focus/vtt/775-3_nd_-U.vtt) | [srt](./Lang_Focus/srt/775-3_nd_-U.srt) | [YouTube video](http://youtu.be/775-3_nd_-U) |
+| CODE-SWITCHING: Jumping Between 2 Different Languages | [txt](./Lang_Focus/txt/7Na4UvRIhu4.txt) | [vtt](./Lang_Focus/vtt/7Na4UvRIhu4.vtt) | [srt](./Lang_Focus/srt/7Na4UvRIhu4.srt) | [YouTube video](http://youtu.be/7Na4UvRIhu4) |
+| Languages of Switzerland - A Polyglot Paradise? | [txt](./Lang_Focus/txt/7p8GgX_hWyA.txt) | [vtt](./Lang_Focus/vtt/7p8GgX_hWyA.vtt) | [srt](./Lang_Focus/srt/7p8GgX_hWyA.srt) | [YouTube video](http://youtu.be/7p8GgX_hWyA) |
+| How Similar are Spanish and Portuguese? (UPDATED!!) | [txt](./Lang_Focus/txt/82FgZEOn89k.txt) | [vtt](./Lang_Focus/vtt/82FgZEOn89k.vtt) | [srt](./Lang_Focus/srt/82FgZEOn89k.srt) | [YouTube video](http://youtu.be/82FgZEOn89k) |
+| Haitian Creole - The World's Most Widely Spoken Creole Language | [txt](./Lang_Focus/txt/8IuQCyIdePE.txt) | [vtt](./Lang_Focus/vtt/8IuQCyIdePE.vtt) | [srt](./Lang_Focus/srt/8IuQCyIdePE.srt) | [YouTube video](http://youtu.be/8IuQCyIdePE) |
+| The Scots Language (or Dialect?!) | [txt](./Lang_Focus/txt/8X5zX3yVoiQ.txt) | [vtt](./Lang_Focus/vtt/8X5zX3yVoiQ.vtt) | [srt](./Lang_Focus/srt/8X5zX3yVoiQ.srt) | [YouTube video](http://youtu.be/8X5zX3yVoiQ) |
+| The Arabic Language and What Makes it So Damn INTERESTING | [txt](./Lang_Focus/txt/8y45owm80MM.txt) | [vtt](./Lang_Focus/vtt/8y45owm80MM.vtt) | [srt](./Lang_Focus/srt/8y45owm80MM.srt) | [YouTube video](http://youtu.be/8y45owm80MM) |
+| Languages Without Verb Tenses?! | [txt](./Lang_Focus/txt/9XqdvarsGMU.txt) | [vtt](./Lang_Focus/vtt/9XqdvarsGMU.vtt) | [srt](./Lang_Focus/srt/9XqdvarsGMU.srt) | [YouTube video](http://youtu.be/9XqdvarsGMU) |
+| The North Germanic Languages of the Nordic Nations | [txt](./Lang_Focus/txt/9YeiV9jOs-U.txt) | [vtt](./Lang_Focus/vtt/9YeiV9jOs-U.vtt) | [srt](./Lang_Focus/srt/9YeiV9jOs-U.srt) | [YouTube video](http://youtu.be/9YeiV9jOs-U) |
+| How Similar Are Hebrew and Arabic? | [txt](./Lang_Focus/txt/9YjRuTp-nD0.txt) | [vtt](./Lang_Focus/vtt/9YjRuTp-nD0.vtt) | [srt](./Lang_Focus/srt/9YjRuTp-nD0.srt) | [YouTube video](http://youtu.be/9YjRuTp-nD0) |
+| How Similar Are Québec French and Metropolitan French? | [txt](./Lang_Focus/txt/A9rh3lqdtT0.txt) | [vtt](./Lang_Focus/vtt/A9rh3lqdtT0.vtt) | [srt](./Lang_Focus/srt/A9rh3lqdtT0.srt) | [YouTube video](http://youtu.be/A9rh3lqdtT0) |
+| Tok Pisin: The English-Based Creole of Papua New Guinea | [txt](./Lang_Focus/txt/ASrI_Zlm5F8.txt) | [vtt](./Lang_Focus/vtt/ASrI_Zlm5F8.vtt) | [srt](./Lang_Focus/srt/ASrI_Zlm5F8.srt) | [YouTube video](http://youtu.be/ASrI_Zlm5F8) |
+| How Similar are German and Dutch? | [txt](./Lang_Focus/txt/AWVKzdyWRps.txt) | [vtt](./Lang_Focus/vtt/AWVKzdyWRps.vtt) | [srt](./Lang_Focus/srt/AWVKzdyWRps.srt) | [YouTube video](http://youtu.be/AWVKzdyWRps) |
+| Should I Learn the Formal Language or Informal Language? | [txt](./Lang_Focus/txt/AZnZjsQhAFk.txt) | [vtt](./Lang_Focus/vtt/AZnZjsQhAFk.vtt) | [srt](./Lang_Focus/srt/AZnZjsQhAFk.srt) | [YouTube video](http://youtu.be/AZnZjsQhAFk) |
+| Review of "Teach Yourself Arabic" From the Famed "Teach Yourself" Series | [txt](./Lang_Focus/txt/Aj6VCxsfpec.txt) | [vtt](./Lang_Focus/vtt/Aj6VCxsfpec.vtt) | [srt](./Lang_Focus/srt/Aj6VCxsfpec.srt) | [YouTube video](http://youtu.be/Aj6VCxsfpec) |
+| Duolingo is the Devil! The Undeniable Truth | [txt](./Lang_Focus/txt/BbmXSR_QiP8.txt) | [vtt](./Lang_Focus/vtt/BbmXSR_QiP8.vtt) | [srt](./Lang_Focus/srt/BbmXSR_QiP8.srt) | [YouTube video](http://youtu.be/BbmXSR_QiP8) |
+| The Maltese Language: An Arabic Descendant | [txt](./Lang_Focus/txt/C7VdeHdBn-g.txt) | [vtt](./Lang_Focus/vtt/C7VdeHdBn-g.vtt) | [srt](./Lang_Focus/srt/C7VdeHdBn-g.srt) | [YouTube video](http://youtu.be/C7VdeHdBn-g) |
+| Chavacano: The Spanish-based Creole of The Philippines | [txt](./Lang_Focus/txt/CuLmlHo7Wrk.txt) | [vtt](./Lang_Focus/vtt/CuLmlHo7Wrk.vtt) | [srt](./Lang_Focus/srt/CuLmlHo7Wrk.srt) | [YouTube video](http://youtu.be/CuLmlHo7Wrk) |
+| The Finnish Language | [txt](./Lang_Focus/txt/D-uWYvlyeBc.txt) | [vtt](./Lang_Focus/vtt/D-uWYvlyeBc.vtt) | [srt](./Lang_Focus/srt/D-uWYvlyeBc.srt) | [YouTube video](http://youtu.be/D-uWYvlyeBc) |
+| Languages of Singapore | [txt](./Lang_Focus/txt/Di_tr0q_G4k.txt) | [vtt](./Lang_Focus/vtt/Di_tr0q_G4k.vtt) | [srt](./Lang_Focus/srt/Di_tr0q_G4k.srt) | [YouTube video](http://youtu.be/Di_tr0q_G4k) |
+| Toki Pona: "The Language of Good" | [txt](./Lang_Focus/txt/E4y7tf3VJAM.txt) | [vtt](./Lang_Focus/vtt/E4y7tf3VJAM.vtt) | [srt](./Lang_Focus/srt/E4y7tf3VJAM.srt) | [YouTube video](http://youtu.be/E4y7tf3VJAM) |
+| How Did Greek Influence English? | [txt](./Lang_Focus/txt/EH3lD-L85Is.txt) | [vtt](./Lang_Focus/vtt/EH3lD-L85Is.vtt) | [srt](./Lang_Focus/srt/EH3lD-L85Is.srt) | [YouTube video](http://youtu.be/EH3lD-L85Is) |
+| Mystery Languages 3 - Can You Guess These Languages? (PLEASE READ THE DESCRIPTION) | [txt](./Lang_Focus/txt/ExST4W_MRJA.txt) | [vtt](./Lang_Focus/vtt/ExST4W_MRJA.vtt) | [srt](./Lang_Focus/srt/ExST4W_MRJA.srt) | [YouTube video](http://youtu.be/ExST4W_MRJA) |
+| (Edge #2) The Huge Importance of Phonology in Learning a Language | [txt](./Lang_Focus/txt/FJbVQjX7ijQ.txt) | [vtt](./Lang_Focus/vtt/FJbVQjX7ijQ.vtt) | [srt](./Lang_Focus/srt/FJbVQjX7ijQ.srt) | [YouTube video](http://youtu.be/FJbVQjX7ijQ) |
+| Mystery Languages 6: Viewer Edition! | [txt](./Lang_Focus/txt/FS7CqlRQm3Q.txt) | [vtt](./Lang_Focus/vtt/FS7CqlRQm3Q.vtt) | [srt](./Lang_Focus/srt/FS7CqlRQm3Q.srt) | [YouTube video](http://youtu.be/FS7CqlRQm3Q) |
+| VERLAN - French Backwards Slang | [txt](./Lang_Focus/txt/FSeEPxLKHNM.txt) | [vtt](./Lang_Focus/vtt/FSeEPxLKHNM.vtt) | [srt](./Lang_Focus/srt/FSeEPxLKHNM.srt) | [YouTube video](http://youtu.be/FSeEPxLKHNM) |
+| What Country Has the Most Languages Spoken? | [txt](./Lang_Focus/txt/GHdqoOW_0iw.txt) | [vtt](./Lang_Focus/vtt/GHdqoOW_0iw.vtt) | [srt](./Lang_Focus/srt/GHdqoOW_0iw.srt) | [YouTube video](http://youtu.be/GHdqoOW_0iw) |
+| Anglish - What if English Were 100% Germanic? | [txt](./Lang_Focus/txt/IIo-17SIkws.txt) | [vtt](./Lang_Focus/vtt/IIo-17SIkws.vtt) | [srt](./Lang_Focus/srt/IIo-17SIkws.srt) | [YouTube video](http://youtu.be/IIo-17SIkws) |
+| How Similar are Japanese and Korean? | [txt](./Lang_Focus/txt/JB2ZCa2arqA.txt) | [vtt](./Lang_Focus/vtt/JB2ZCa2arqA.vtt) | [srt](./Lang_Focus/srt/JB2ZCa2arqA.srt) | [YouTube video](http://youtu.be/JB2ZCa2arqA) |
+| The German Language | [txt](./Lang_Focus/txt/K3IImGiiY1Q.txt) | [vtt](./Lang_Focus/vtt/K3IImGiiY1Q.vtt) | [srt](./Lang_Focus/srt/K3IImGiiY1Q.srt) | [YouTube video](http://youtu.be/K3IImGiiY1Q) |
+| Michel Thomas Method Review | [txt](./Lang_Focus/txt/K9zYvjqkxDk.txt) | [vtt](./Lang_Focus/vtt/K9zYvjqkxDk.vtt) | [srt](./Lang_Focus/srt/K9zYvjqkxDk.srt) | [YouTube video](http://youtu.be/K9zYvjqkxDk) |
+| Can Adults Learn Languages The Same Way That Kids Do? | [txt](./Lang_Focus/txt/KGGwZI9PCaY.txt) | [vtt](./Lang_Focus/vtt/KGGwZI9PCaY.vtt) | [srt](./Lang_Focus/srt/KGGwZI9PCaY.srt) | [YouTube video](http://youtu.be/KGGwZI9PCaY) |
+| What is Diglossia? | [txt](./Lang_Focus/txt/KL9ku7c7UTs.txt) | [vtt](./Lang_Focus/vtt/KL9ku7c7UTs.vtt) | [srt](./Lang_Focus/srt/KL9ku7c7UTs.srt) | [YouTube video](http://youtu.be/KL9ku7c7UTs) |
+| Quechua - The Living Language of the Incas | [txt](./Lang_Focus/txt/KlXj28dXPAU.txt) | [vtt](./Lang_Focus/vtt/KlXj28dXPAU.vtt) | [srt](./Lang_Focus/srt/KlXj28dXPAU.srt) | [YouTube video](http://youtu.be/KlXj28dXPAU) |
+| Languages of South Africa | [txt](./Lang_Focus/txt/LU6dL9FMeIU.txt) | [vtt](./Lang_Focus/vtt/LU6dL9FMeIU.vtt) | [srt](./Lang_Focus/srt/LU6dL9FMeIU.srt) | [YouTube video](http://youtu.be/LU6dL9FMeIU) |
+| ESPERANTO TO BECOME OFFICIAL E.U. LANGUAGE (April Fool's) | [txt](./Lang_Focus/txt/LWX3tts6NyI.txt) | [vtt](./Lang_Focus/vtt/LWX3tts6NyI.vtt) | [srt](./Lang_Focus/srt/LWX3tts6NyI.srt) | [YouTube video](http://youtu.be/LWX3tts6NyI) |
+| Cockney Rhyming Slang | [txt](./Lang_Focus/txt/La7Tg5e547g.txt) | [vtt](./Lang_Focus/vtt/La7Tg5e547g.vtt) | [srt](./Lang_Focus/srt/La7Tg5e547g.srt) | [YouTube video](http://youtu.be/La7Tg5e547g) |
+| Mini-Polyglots! What You Can Learn From an 8 Year Old Bedouin Girl | [txt](./Lang_Focus/txt/LrHWKSI9OqY.txt) | [vtt](./Lang_Focus/vtt/LrHWKSI9OqY.vtt) | [srt](./Lang_Focus/srt/LrHWKSI9OqY.srt) | [YouTube video](http://youtu.be/LrHWKSI9OqY) |
+| Mystery Languages 4 - Can you guess them all? | [txt](./Lang_Focus/txt/MSb24QW-sY4.txt) | [vtt](./Lang_Focus/vtt/MSb24QW-sY4.vtt) | [srt](./Lang_Focus/srt/MSb24QW-sY4.srt) | [YouTube video](http://youtu.be/MSb24QW-sY4) |
+| The 10 Most Widely Spoken Languages in the World | [txt](./Lang_Focus/txt/NG3r5N6ES3M.txt) | [vtt](./Lang_Focus/vtt/NG3r5N6ES3M.vtt) | [srt](./Lang_Focus/srt/NG3r5N6ES3M.srt) | [YouTube video](http://youtu.be/NG3r5N6ES3M) |
+| The Spanish Language and What Makes it The Coolest | [txt](./Lang_Focus/txt/NSfCDdTtBn0.txt) | [vtt](./Lang_Focus/vtt/NSfCDdTtBn0.vtt) | [srt](./Lang_Focus/srt/NSfCDdTtBn0.srt) | [YouTube video](http://youtu.be/NSfCDdTtBn0) |
+| How Are British English and American English Different? | [txt](./Lang_Focus/txt/NdJQdt3xkFQ.txt) | [vtt](./Lang_Focus/vtt/NdJQdt3xkFQ.vtt) | [srt](./Lang_Focus/srt/NdJQdt3xkFQ.srt) | [YouTube video](http://youtu.be/NdJQdt3xkFQ) |
+| The Portuguese Language and What Makes it Intriguing | [txt](./Lang_Focus/txt/Nur6WwpmyBo.txt) | [vtt](./Lang_Focus/vtt/Nur6WwpmyBo.vtt) | [srt](./Lang_Focus/srt/Nur6WwpmyBo.srt) | [YouTube video](http://youtu.be/Nur6WwpmyBo) |
+| The Greek Language | [txt](./Lang_Focus/txt/OIB5SKG3no0.txt) | [vtt](./Lang_Focus/vtt/OIB5SKG3no0.vtt) | [srt](./Lang_Focus/srt/OIB5SKG3no0.srt) | [YouTube video](http://youtu.be/OIB5SKG3no0) |
+| (Edge #4): Why and How to Improve Your FOCUS When Learning a Language | [txt](./Lang_Focus/txt/OS7gicR2yxM.txt) | [vtt](./Lang_Focus/vtt/OS7gicR2yxM.vtt) | [srt](./Lang_Focus/srt/OS7gicR2yxM.srt) | [YouTube video](http://youtu.be/OS7gicR2yxM) |
+| The Slavic Languages and What Makes Them a FAMILY | [txt](./Lang_Focus/txt/PfpEPjfB12g.txt) | [vtt](./Lang_Focus/vtt/PfpEPjfB12g.vtt) | [srt](./Lang_Focus/srt/PfpEPjfB12g.srt) | [YouTube video](http://youtu.be/PfpEPjfB12g) |
+| Why Does Portuguese Sound Like Russian?! (or Polish) | [txt](./Lang_Focus/txt/Pik2R46xobA.txt) | [vtt](./Lang_Focus/vtt/Pik2R46xobA.vtt) | [srt](./Lang_Focus/srt/Pik2R46xobA.srt) | [YouTube video](http://youtu.be/Pik2R46xobA) |
+| Chinese - The Sinitic Languages | [txt](./Lang_Focus/txt/QY0AMmLuiqk.txt) | [vtt](./Lang_Focus/vtt/QY0AMmLuiqk.vtt) | [srt](./Lang_Focus/srt/QY0AMmLuiqk.srt) | [YouTube video](http://youtu.be/QY0AMmLuiqk) |
+| The Swahili Language | [txt](./Lang_Focus/txt/Q_9QfBSbw8g.txt) | [vtt](./Lang_Focus/vtt/Q_9QfBSbw8g.vtt) | [srt](./Lang_Focus/srt/Q_9QfBSbw8g.srt) | [YouTube video](http://youtu.be/Q_9QfBSbw8g) |
+| What's the Easiest Language to Learn? | [txt](./Lang_Focus/txt/QaEZ5_hfEc4.txt) | [vtt](./Lang_Focus/vtt/QaEZ5_hfEc4.vtt) | [srt](./Lang_Focus/srt/QaEZ5_hfEc4.srt) | [YouTube video](http://youtu.be/QaEZ5_hfEc4) |
+| Mystery Languages 5: Guess These Languages! | [txt](./Lang_Focus/txt/RHrYvShbKU8.txt) | [vtt](./Lang_Focus/vtt/RHrYvShbKU8.vtt) | [srt](./Lang_Focus/srt/RHrYvShbKU8.srt) | [YouTube video](http://youtu.be/RHrYvShbKU8) |
+| Mystery Languages - Can You Guess What They Are? | [txt](./Lang_Focus/txt/RSR9eO_ilfI.txt) | [vtt](./Lang_Focus/vtt/RSR9eO_ilfI.vtt) | [srt](./Lang_Focus/srt/RSR9eO_ilfI.srt) | [YouTube video](http://youtu.be/RSR9eO_ilfI) |
+| Mystery Languages 2 - Can You Identify These Languages? | [txt](./Lang_Focus/txt/RiBdurVIo0Q.txt) | [vtt](./Lang_Focus/vtt/RiBdurVIo0Q.vtt) | [srt](./Lang_Focus/srt/RiBdurVIo0Q.srt) | [YouTube video](http://youtu.be/RiBdurVIo0Q) |
+| Basque - A Language of Mystery | [txt](./Lang_Focus/txt/S1l9oDiSiEQ.txt) | [vtt](./Lang_Focus/vtt/S1l9oDiSiEQ.vtt) | [srt](./Lang_Focus/srt/S1l9oDiSiEQ.srt) | [YouTube video](http://youtu.be/S1l9oDiSiEQ) |
+| The Complexity of Kanji | [txt](./Lang_Focus/txt/SX3h9irApwg.txt) | [vtt](./Lang_Focus/vtt/SX3h9irApwg.vtt) | [srt](./Lang_Focus/srt/SX3h9irApwg.srt) | [YouTube video](http://youtu.be/SX3h9irApwg) |
+| The Indo-European Connection | [txt](./Lang_Focus/txt/SqK7XXvfiXs.txt) | [vtt](./Lang_Focus/vtt/SqK7XXvfiXs.vtt) | [srt](./Lang_Focus/srt/SqK7XXvfiXs.srt) | [YouTube video](http://youtu.be/SqK7XXvfiXs) |
+| MEMRISE REVIEW - Does Memrise Suck? | [txt](./Lang_Focus/txt/SxpoDqSdQrs.txt) | [vtt](./Lang_Focus/vtt/SxpoDqSdQrs.vtt) | [srt](./Lang_Focus/srt/SxpoDqSdQrs.srt) | [YouTube video](http://youtu.be/SxpoDqSdQrs) |
+| La langue française: The French Language | [txt](./Lang_Focus/txt/Tfxf4pV-zJg.txt) | [vtt](./Lang_Focus/vtt/Tfxf4pV-zJg.vtt) | [srt](./Lang_Focus/srt/Tfxf4pV-zJg.srt) | [YouTube video](http://youtu.be/Tfxf4pV-zJg) |
+| The Catalan Language | [txt](./Lang_Focus/txt/Tobv2lu2exI.txt) | [vtt](./Lang_Focus/vtt/Tobv2lu2exI.vtt) | [srt](./Lang_Focus/srt/Tobv2lu2exI.srt) | [YouTube video](http://youtu.be/Tobv2lu2exI) |
+| The Kurdish Language | [txt](./Lang_Focus/txt/UFbUp8916_o.txt) | [vtt](./Lang_Focus/vtt/UFbUp8916_o.vtt) | [srt](./Lang_Focus/srt/UFbUp8916_o.srt) | [YouTube video](http://youtu.be/UFbUp8916_o) |
+| The Hungarian Language: Magyar nyelv | [txt](./Lang_Focus/txt/Wh8PUImUMYo.txt) | [vtt](./Lang_Focus/vtt/Wh8PUImUMYo.vtt) | [srt](./Lang_Focus/srt/Wh8PUImUMYo.srt) | [YouTube video](http://youtu.be/Wh8PUImUMYo) |
+| Wake Up Americans! A Rant Against Lazy Anglophones | [txt](./Lang_Focus/txt/XxWhXyeFYjc.txt) | [vtt](./Lang_Focus/vtt/XxWhXyeFYjc.vtt) | [srt](./Lang_Focus/srt/XxWhXyeFYjc.srt) | [YouTube video](http://youtu.be/XxWhXyeFYjc) |
+| The Russian Language | [txt](./Lang_Focus/txt/Y4cXIyyc-L0.txt) | [vtt](./Lang_Focus/vtt/Y4cXIyyc-L0.vtt) | [srt](./Lang_Focus/srt/Y4cXIyyc-L0.srt) | [YouTube video](http://youtu.be/Y4cXIyyc-L0) |
+| (Edge #3): Meditation and How it Helps You Learn a Language | [txt](./Lang_Focus/txt/ZILKRTX9ML0.txt) | [vtt](./Lang_Focus/vtt/ZILKRTX9ML0.vtt) | [srt](./Lang_Focus/srt/ZILKRTX9ML0.srt) | [YouTube video](http://youtu.be/ZILKRTX9ML0) |
+| (Edge #1) Consistency is KING - Why and How to Stick to a Study Schedule | [txt](./Lang_Focus/txt/ZPoIr_LFCsw.txt) | [vtt](./Lang_Focus/vtt/ZPoIr_LFCsw.vtt) | [srt](./Lang_Focus/srt/ZPoIr_LFCsw.srt) | [YouTube video](http://youtu.be/ZPoIr_LFCsw) |
+| Reactivate an Inactive Language | [txt](./Lang_Focus/txt/_ddS3jqZksA.txt) | [vtt](./Lang_Focus/vtt/_ddS3jqZksA.vtt) | [srt](./Lang_Focus/srt/_ddS3jqZksA.srt) | [YouTube video](http://youtu.be/_ddS3jqZksA) |
+| "How Many Languages Do You Speak?" - Q&A and Patreon Announcement | [txt](./Lang_Focus/txt/_t8OfPvuvsE.txt) | [vtt](./Lang_Focus/vtt/_t8OfPvuvsE.vtt) | [srt](./Lang_Focus/srt/_t8OfPvuvsE.srt) | [YouTube video](http://youtu.be/_t8OfPvuvsE) |
+| What is a "Lingua Franca"? | [txt](./Lang_Focus/txt/a9ZdC6wZnks.txt) | [vtt](./Lang_Focus/vtt/a9ZdC6wZnks.vtt) | [srt](./Lang_Focus/srt/a9ZdC6wZnks.srt) | [YouTube video](http://youtu.be/a9ZdC6wZnks) |
+| How Similar Are Chinese and Japanese? | [txt](./Lang_Focus/txt/aHC3i6N9Wvk.txt) | [vtt](./Lang_Focus/vtt/aHC3i6N9Wvk.vtt) | [srt](./Lang_Focus/srt/aHC3i6N9Wvk.srt) | [YouTube video](http://youtu.be/aHC3i6N9Wvk) |
+| (Edge #5) Let Go of Your Ego: How Ego Can Sabotage Your Language Learning | [txt](./Lang_Focus/txt/asmTaB6RH7I.txt) | [vtt](./Lang_Focus/vtt/asmTaB6RH7I.vtt) | [srt](./Lang_Focus/srt/asmTaB6RH7I.srt) | [YouTube video](http://youtu.be/asmTaB6RH7I) |
+| The Korean Language | [txt](./Lang_Focus/txt/cJPQEVnr0fg.txt) | [vtt](./Lang_Focus/vtt/cJPQEVnr0fg.vtt) | [srt](./Lang_Focus/srt/cJPQEVnr0fg.srt) | [YouTube video](http://youtu.be/cJPQEVnr0fg) |
+| What is Grammatical Case? | [txt](./Lang_Focus/txt/cnF1ycgelUY.txt) | [vtt](./Lang_Focus/vtt/cnF1ycgelUY.vtt) | [srt](./Lang_Focus/srt/cnF1ycgelUY.srt) | [YouTube video](http://youtu.be/cnF1ycgelUY) |
+| Tagalog - 3 Weeks In - My Progress and Discoveries | [txt](./Lang_Focus/txt/dfCPvfA3Fqs.txt) | [vtt](./Lang_Focus/vtt/dfCPvfA3Fqs.vtt) | [srt](./Lang_Focus/srt/dfCPvfA3Fqs.srt) | [YouTube video](http://youtu.be/dfCPvfA3Fqs) |
+| Discover Your Learning Style and Optimize Your Self Study | [txt](./Lang_Focus/txt/dvMex7KXLvM.txt) | [vtt](./Lang_Focus/vtt/dvMex7KXLvM.vtt) | [srt](./Lang_Focus/srt/dvMex7KXLvM.srt) | [YouTube video](http://youtu.be/dvMex7KXLvM) |
+| Languages of Belgium | [txt](./Lang_Focus/txt/dwjhfxFyhxk.txt) | [vtt](./Lang_Focus/vtt/dwjhfxFyhxk.vtt) | [srt](./Lang_Focus/srt/dwjhfxFyhxk.srt) | [YouTube video](http://youtu.be/dwjhfxFyhxk) |
+| Languages of Italy | [txt](./Lang_Focus/txt/e34M6P1NXYM.txt) | [vtt](./Lang_Focus/vtt/e34M6P1NXYM.vtt) | [srt](./Lang_Focus/srt/e34M6P1NXYM.srt) | [YouTube video](http://youtu.be/e34M6P1NXYM) |
+| The Turkish Language | [txt](./Lang_Focus/txt/eJRQRD6LAmY.txt) | [vtt](./Lang_Focus/vtt/eJRQRD6LAmY.vtt) | [srt](./Lang_Focus/srt/eJRQRD6LAmY.srt) | [YouTube video](http://youtu.be/eJRQRD6LAmY) |
+| Free FSI Language Courses - Are They Good? | [txt](./Lang_Focus/txt/f9o_Qw4CkUU.txt) | [vtt](./Lang_Focus/vtt/f9o_Qw4CkUU.vtt) | [srt](./Lang_Focus/srt/f9o_Qw4CkUU.srt) | [YouTube video](http://youtu.be/f9o_Qw4CkUU) |
+| The Best Materials For Studying Japanese | [txt](./Lang_Focus/txt/gLSFsvKXD5g.txt) | [vtt](./Lang_Focus/vtt/gLSFsvKXD5g.vtt) | [srt](./Lang_Focus/srt/gLSFsvKXD5g.srt) | [YouTube video](http://youtu.be/gLSFsvKXD5g) |
+| DUOLINGO Review - What is Duolingo and what do I think about it? | [txt](./Lang_Focus/txt/gca-C2GQsHA.txt) | [vtt](./Lang_Focus/vtt/gca-C2GQsHA.vtt) | [srt](./Lang_Focus/srt/gca-C2GQsHA.srt) | [YouTube video](http://youtu.be/gca-C2GQsHA) |
+| Phrasebook FAIL! Why Your Phrasebook Fails You | [txt](./Lang_Focus/txt/grUzLlTOHhw.txt) | [vtt](./Lang_Focus/vtt/grUzLlTOHhw.vtt) | [srt](./Lang_Focus/srt/grUzLlTOHhw.srt) | [YouTube video](http://youtu.be/grUzLlTOHhw) |
+| Why Did English Become the International Language? | [txt](./Lang_Focus/txt/iqDFPU9YeQM.txt) | [vtt](./Lang_Focus/vtt/iqDFPU9YeQM.vtt) | [srt](./Lang_Focus/srt/iqDFPU9YeQM.srt) | [YouTube video](http://youtu.be/iqDFPU9YeQM) |
+| What`s the difference between a dialect and a language? | [txt](./Lang_Focus/txt/jIi-Ug7qo74.txt) | [vtt](./Lang_Focus/vtt/jIi-Ug7qo74.vtt) | [srt](./Lang_Focus/srt/jIi-Ug7qo74.srt) | [YouTube video](http://youtu.be/jIi-Ug7qo74) |
+| The Most Widely Spoken Languages in the World | [txt](./Lang_Focus/txt/jdSiFKo8Ny4.txt) | [vtt](./Lang_Focus/vtt/jdSiFKo8Ny4.vtt) | [srt](./Lang_Focus/srt/jdSiFKo8Ny4.srt) | [YouTube video](http://youtu.be/jdSiFKo8Ny4) |
+| How To Improve Your Listening Comprehension | [txt](./Lang_Focus/txt/kzwR3ddJ368.txt) | [vtt](./Lang_Focus/vtt/kzwR3ddJ368.vtt) | [srt](./Lang_Focus/srt/kzwR3ddJ368.srt) | [YouTube video](http://youtu.be/kzwR3ddJ368) |
+| How Similar are Persian and Arabic? | [txt](./Lang_Focus/txt/lQn84dgRC8E.txt) | [vtt](./Lang_Focus/vtt/lQn84dgRC8E.vtt) | [srt](./Lang_Focus/srt/lQn84dgRC8E.srt) | [YouTube video](http://youtu.be/lQn84dgRC8E) |
+| Polyglot Popes: What languages does the Pope speak? | [txt](./Lang_Focus/txt/lVqKBVYuITg.txt) | [vtt](./Lang_Focus/vtt/lVqKBVYuITg.vtt) | [srt](./Lang_Focus/srt/lVqKBVYuITg.srt) | [YouTube video](http://youtu.be/lVqKBVYuITg) |
+| Language Isolates - Lonely Languages With No Family (Quick Video) | [txt](./Lang_Focus/txt/lkubYrRQ1y8.txt) | [vtt](./Lang_Focus/vtt/lkubYrRQ1y8.vtt) | [srt](./Lang_Focus/srt/lkubYrRQ1y8.srt) | [YouTube video](http://youtu.be/lkubYrRQ1y8) |
+| Mystery Languages 7 - Can you guess them all?! | [txt](./Lang_Focus/txt/lyGB4nDEVD4.txt) | [vtt](./Lang_Focus/vtt/lyGB4nDEVD4.vtt) | [srt](./Lang_Focus/srt/lyGB4nDEVD4.srt) | [YouTube video](http://youtu.be/lyGB4nDEVD4) |
+| Are Some People Just Naturally Good With Languages? | [txt](./Lang_Focus/txt/mBzRyTXPlyk.txt) | [vtt](./Lang_Focus/vtt/mBzRyTXPlyk.vtt) | [srt](./Lang_Focus/srt/mBzRyTXPlyk.srt) | [YouTube video](http://youtu.be/mBzRyTXPlyk) |
+| How Similar are Spanish and Portuguese? | [txt](./Lang_Focus/txt/miZUE4oF9js.txt) | [vtt](./Lang_Focus/vtt/miZUE4oF9js.vtt) | [srt](./Lang_Focus/srt/miZUE4oF9js.srt) | [YouTube video](http://youtu.be/miZUE4oF9js) |
+| How Similar Are French and Italian? (UPDATED) | [txt](./Lang_Focus/txt/mrlycViTavE.txt) | [vtt](./Lang_Focus/vtt/mrlycViTavE.vtt) | [srt](./Lang_Focus/srt/mrlycViTavE.srt) | [YouTube video](http://youtu.be/mrlycViTavE) |
+| The Arabic Language: Its Amazing History and Features | [txt](./Lang_Focus/txt/nDg3yPSzsEg.txt) | [vtt](./Lang_Focus/vtt/nDg3yPSzsEg.vtt) | [srt](./Lang_Focus/srt/nDg3yPSzsEg.srt) | [YouTube video](http://youtu.be/nDg3yPSzsEg) |
+| 5 Huge Celebrities Who Speak Foreign Languages | [txt](./Lang_Focus/txt/ny6prI0U1Ds.txt) | [vtt](./Lang_Focus/vtt/ny6prI0U1Ds.vtt) | [srt](./Lang_Focus/srt/ny6prI0U1Ds.srt) | [YouTube video](http://youtu.be/ny6prI0U1Ds) |
+| Should I Learn a Japanese Dialect, or Focus on Standard Japanese? | [txt](./Lang_Focus/txt/oWXgCXjmk2M.txt) | [vtt](./Lang_Focus/vtt/oWXgCXjmk2M.vtt) | [srt](./Lang_Focus/srt/oWXgCXjmk2M.srt) | [YouTube video](http://youtu.be/oWXgCXjmk2M) |
+| The North Germanic Languages of the Nordic Nations (UPDATED) | [txt](./Lang_Focus/txt/onduQjgAj8Y.txt) | [vtt](./Lang_Focus/vtt/onduQjgAj8Y.vtt) | [srt](./Lang_Focus/srt/onduQjgAj8Y.srt) | [YouTube video](http://youtu.be/onduQjgAj8Y) |
+| What Job Can I do With Foreign Language Skills? | [txt](./Lang_Focus/txt/os2K6pilr7k.txt) | [vtt](./Lang_Focus/vtt/os2K6pilr7k.vtt) | [srt](./Lang_Focus/srt/os2K6pilr7k.srt) | [YouTube video](http://youtu.be/os2K6pilr7k) |
+| Beginning to Learn Tagalog! My Latest Language Focus | [txt](./Lang_Focus/txt/qfZuVHOfXPc.txt) | [vtt](./Lang_Focus/vtt/qfZuVHOfXPc.vtt) | [srt](./Lang_Focus/srt/qfZuVHOfXPc.srt) | [YouTube video](http://youtu.be/qfZuVHOfXPc) |
+| What are Creoles and Pidgins? And What`s the Difference? | [txt](./Lang_Focus/txt/qqJI7SdS9Gg.txt) | [vtt](./Lang_Focus/vtt/qqJI7SdS9Gg.vtt) | [srt](./Lang_Focus/srt/qqJI7SdS9Gg.srt) | [YouTube video](http://youtu.be/qqJI7SdS9Gg) |
+| The Dutch Language | [txt](./Lang_Focus/txt/rBbQW1KzWQA.txt) | [vtt](./Lang_Focus/vtt/rBbQW1KzWQA.vtt) | [srt](./Lang_Focus/srt/rBbQW1KzWQA.srt) | [YouTube video](http://youtu.be/rBbQW1KzWQA) |
+| Metathesis - Side by Side Sounds Switching Positions | [txt](./Lang_Focus/txt/rIA4ikHFOVY.txt) | [vtt](./Lang_Focus/vtt/rIA4ikHFOVY.vtt) | [srt](./Lang_Focus/srt/rIA4ikHFOVY.srt) | [YouTube video](http://youtu.be/rIA4ikHFOVY) |
+| The Celtic Languages | [txt](./Lang_Focus/txt/ri1Vw3w1_10.txt) | [vtt](./Lang_Focus/vtt/ri1Vw3w1_10.vtt) | [srt](./Lang_Focus/srt/ri1Vw3w1_10.srt) | [YouTube video](http://youtu.be/ri1Vw3w1_10) |
+| How Similar Are Mandarin and Cantonese? | [txt](./Lang_Focus/txt/s2km_z4-1T8.txt) | [vtt](./Lang_Focus/vtt/s2km_z4-1T8.vtt) | [srt](./Lang_Focus/srt/s2km_z4-1T8.srt) | [YouTube video](http://youtu.be/s2km_z4-1T8) |
+| Language Death: How do languages die? | [txt](./Lang_Focus/txt/t3qbYFvOHwk.txt) | [vtt](./Lang_Focus/vtt/t3qbYFvOHwk.vtt) | [srt](./Lang_Focus/srt/t3qbYFvOHwk.srt) | [YouTube video](http://youtu.be/t3qbYFvOHwk) |
+| The Persian Language and What Makes It Fascinating | [txt](./Lang_Focus/txt/tZtlDNcbeE8.txt) | [vtt](./Lang_Focus/vtt/tZtlDNcbeE8.vtt) | [srt](./Lang_Focus/srt/tZtlDNcbeE8.srt) | [YouTube video](http://youtu.be/tZtlDNcbeE8) |
+| Afrikaans: A Daughter Language of Dutch | [txt](./Lang_Focus/txt/uI49IqDCgg8.txt) | [vtt](./Lang_Focus/vtt/uI49IqDCgg8.vtt) | [srt](./Lang_Focus/srt/uI49IqDCgg8.srt) | [YouTube video](http://youtu.be/uI49IqDCgg8) |
+| How Similar Are Spanish and Italian? | [txt](./Lang_Focus/txt/uMzM-s1ng7k.txt) | [vtt](./Lang_Focus/vtt/uMzM-s1ng7k.vtt) | [srt](./Lang_Focus/srt/uMzM-s1ng7k.srt) | [YouTube video](http://youtu.be/uMzM-s1ng7k) |
+| Moroccan Darija: an Arabic Dialect? | [txt](./Lang_Focus/txt/v6x_6K0OR3w.txt) | [vtt](./Lang_Focus/vtt/v6x_6K0OR3w.vtt) | [srt](./Lang_Focus/srt/v6x_6K0OR3w.srt) | [YouTube video](http://youtu.be/v6x_6K0OR3w) |
+| 10 Common Mistakes That Native English Speakers Make | [txt](./Lang_Focus/txt/vGDb-fbvJmQ.txt) | [vtt](./Lang_Focus/vtt/vGDb-fbvJmQ.vtt) | [srt](./Lang_Focus/srt/vGDb-fbvJmQ.srt) | [YouTube video](http://youtu.be/vGDb-fbvJmQ) |
+| Hindustani: Hindi and Urdu - A Single Language? | [txt](./Lang_Focus/txt/vxSd7p1i_TA.txt) | [vtt](./Lang_Focus/vtt/vxSd7p1i_TA.vtt) | [srt](./Lang_Focus/srt/vxSd7p1i_TA.srt) | [YouTube video](http://youtu.be/vxSd7p1i_TA) |
+| The Japanese Language | [txt](./Lang_Focus/txt/x9-e_3GHrzw.txt) | [vtt](./Lang_Focus/vtt/x9-e_3GHrzw.vtt) | [srt](./Lang_Focus/srt/x9-e_3GHrzw.srt) | [YouTube video](http://youtu.be/x9-e_3GHrzw) |
+| Fluent in Tagalog?! After Just One Week?! | [txt](./Lang_Focus/txt/z_7JsBjIqoA.txt) | [vtt](./Lang_Focus/vtt/z_7JsBjIqoA.vtt) | [srt](./Lang_Focus/srt/z_7JsBjIqoA.srt) | [YouTube video](http://youtu.be/z_7JsBjIqoA) |
+| Pimsleur Method Review (Pimsleur French) | [txt](./Lang_Focus/txt/znXXad6fvh8.txt) | [vtt](./Lang_Focus/vtt/znXXad6fvh8.vtt) | [srt](./Lang_Focus/srt/znXXad6fvh8.srt) | [YouTube video](http://youtu.be/znXXad6fvh8) |
 
