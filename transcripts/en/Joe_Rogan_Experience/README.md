@@ -5,6 +5,7 @@ Joe Rogan Experience (JRE) transcripts
 
 | **Title** |  | |  |  |
 |:----------:|:---:|:---:|:---:|:---------------:|
+| Joe Rogan Experience #1220 - Joey Diaz | [txt](./txt/ll4E3-kP_54.txt) | [vtt](./vtt/ll4E3-kP_54.vtt) | [srt](./srt/ll4E3-kP_54.srt) | [YouTube video](http://youtu.be/ll4E3-kP_54) |
 | Joe Rogan Experience #1219 - Bill Burr | [txt](./txt/cS1KWv0das8.txt) | [vtt](./vtt/cS1KWv0das8.vtt) | [srt](./srt/cS1KWv0das8.srt) | [YouTube video](http://youtu.be/cS1KWv0das8) |
 | Joe Rogan Experience #1218 - Gad Saad | [txt](./txt/Igc_1TPfK9Y.txt) | [vtt](./vtt/Igc_1TPfK9Y.vtt) | [srt](./srt/Igc_1TPfK9Y.srt) | [YouTube video](http://youtu.be/Igc_1TPfK9Y) |
 | Joe Rogan Experience #1217 - Nimesh Patel | [txt](./txt/1cZYXScrJyU.txt) | [vtt](./vtt/1cZYXScrJyU.vtt) | [srt](./srt/1cZYXScrJyU.srt) | [YouTube video](http://youtu.be/1cZYXScrJyU) |
