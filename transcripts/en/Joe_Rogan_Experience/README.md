@@ -9,6 +9,7 @@ Joe Rogan Experience (JRE) transcripts
 | Joe Rogan Experience #1219 - Bill Burr | [txt](./txt/cS1KWv0das8.txt) | [vtt](./vtt/cS1KWv0das8.vtt) | [srt](./srt/cS1KWv0das8.srt) | [YouTube video](http://youtu.be/cS1KWv0das8) |
 | Joe Rogan Experience #1218 - Gad Saad | [txt](./txt/Igc_1TPfK9Y.txt) | [vtt](./vtt/Igc_1TPfK9Y.vtt) | [srt](./srt/Igc_1TPfK9Y.srt) | [YouTube video](http://youtu.be/Igc_1TPfK9Y) |
 | Joe Rogan Experience #1217 - Nimesh Patel | [txt](./txt/1cZYXScrJyU.txt) | [vtt](./vtt/1cZYXScrJyU.vtt) | [srt](./srt/1cZYXScrJyU.srt) | [YouTube video](http://youtu.be/1cZYXScrJyU) |
+| Joe Rogan Experience #1216 - Sir Roger Penrose | [txt](./txt/GEw0ePZUMHA.txt) | [vtt](./vtt/GEw0ePZUMHA.vtt) | [srt](./srt/GEw0ePZUMHA.srt) | [YouTube video](http://youtu.be/GEw0ePZUMHA) |
 | Joe Rogan Experience #1215 - Ben O'Brien | [txt](./txt/tAithqQBFdQ.txt) | [vtt](./vtt/tAithqQBFdQ.vtt) | [srt](./srt/tAithqQBFdQ.srt) | [YouTube video](http://youtu.be/tAithqQBFdQ) |
 | Joe Rogan Experience #1214 - Lawrence Lessig | [txt](./txt/Igc_1TPfK9Y.txt) | [vtt](./vtt/Igc_1TPfK9Y.vtt) | [srt](./srt/Igc_1TPfK9Y.srt) | [YouTube video](http://youtu.be/Igc_1TPfK9Y) |
 | Joe Rogan Experience #1213 - Dr. Andrew Weil | [txt](./txt/WjYYdMNUXF8.txt) | [vtt](./vtt/WjYYdMNUXF8.vtt) | [srt](./srt/WjYYdMNUXF8.srt) | [YouTube video](http://youtu.be/WjYYdMNUXF8) |
