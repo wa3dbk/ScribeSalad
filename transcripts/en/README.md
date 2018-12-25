@@ -14,7 +14,7 @@ YouTube channels :
 - [Bite-sized Philosophy](#bite-sized-philosophy-top)
 - [Dan carlin](#dan-carlin-top)
 - [The Rubin Report](#the-rubin-report-top)
-- [LangFocus](#langfocus)
+- [LangFocus](#langfocus-top)
 
 
 ## Lex Fridman [:top:](#original-transcripts)
