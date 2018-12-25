@@ -592,6 +592,7 @@ YouTube channels :
 
 | **Title** |  | |  |  |
 |:----------:|:---:|:---:|:---:|:---------------:|
+| Joe Rogan Experience #1220 - Joey Diaz | [txt](./Joe_Rogan_Experience/txt/ll4E3-kP_54.txt) | [vtt](./Joe_Rogan_Experience/vtt/ll4E3-kP_54.vtt) | [srt](./Joe_Rogan_Experience/srt/ll4E3-kP_54.srt) | [YouTube video](http://youtu.be/ll4E3-kP_54) |
 | Joe Rogan Experience #1219 - Bill Burr | [txt](./Joe_Rogan_Experience/txt/cS1KWv0das8.txt) | [vtt](./Joe_Rogan_Experience/vtt/cS1KWv0das8.vtt) | [srt](./Joe_Rogan_Experience/srt/cS1KWv0das8.srt) | [YouTube video](http://youtu.be/cS1KWv0das8) |
 | Joe Rogan Experience #1218 - Gad Saad | [txt](./Joe_Rogan_Experience/txt/Igc_1TPfK9Y.txt) | [vtt](./Joe_Rogan_Experience/vtt/Igc_1TPfK9Y.vtt) | [srt](./Joe_Rogan_Experience/srt/Igc_1TPfK9Y.srt) | [YouTube video](http://youtu.be/Igc_1TPfK9Y) |
 | Joe Rogan Experience #1217 - Nimesh Patel | [txt](./Joe_Rogan_Experience/txt/1cZYXScrJyU.txt) | [vtt](./Joe_Rogan_Experience/vtt/1cZYXScrJyU.vtt) | [srt](./Joe_Rogan_Experience/srt/1cZYXScrJyU.srt) | [YouTube video](http://youtu.be/1cZYXScrJyU) |
