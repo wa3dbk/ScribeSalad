@@ -135,3 +135,45 @@ Wisecrack transcripts
 | Hidden Meaning in Pixar’s UP – Earthling Cinema | [txt](./txt/zZ9QqkCrJXE.txt) | [vtt](./vtt/zZ9QqkCrJXE.vtt) | [srt](./srt/zZ9QqkCrJXE.srt) | [YouTube video](http://youtu.be/zZ9QqkCrJXE) |
 | Hidden Meaning in Spirited Away (Miyazaki) – Earthling Cinema | [txt](./txt/zcFyXaLeXko.txt) | [vtt](./vtt/zcFyXaLeXko.vtt) | [srt](./srt/zcFyXaLeXko.srt) | [YouTube video](http://youtu.be/zcFyXaLeXko) |
 | The Political Philosophy of Captain America: Civil War – Wisecrack Edition | [txt](./txt/zm1cPHZbDPI.txt) | [vtt](./vtt/zm1cPHZbDPI.vtt) | [srt](./srt/zm1cPHZbDPI.srt) | [YouTube video](http://youtu.be/zm1cPHZbDPI) |
+| Norm Mineta: The Mission Ahead | [txt](./txt/--4JVSF16-Q.txt) | [vtt](./vtt/--4JVSF16-Q.vtt) | [srt](./srt/--4JVSF16-Q.srt) | [YouTube video](http://youtu.be/--4JVSF16-Q) |
+| Educating for the 21st Century | [txt](./txt/--7Dd2sAwPA.txt) | [vtt](./vtt/--7Dd2sAwPA.vtt) | [srt](./srt/--7Dd2sAwPA.srt) | [YouTube video](http://youtu.be/--7Dd2sAwPA) |
+| David Remnick's Advice for Young Journalists | [txt](./txt/-3HXw3vu2tc.txt) | [vtt](./vtt/-3HXw3vu2tc.vtt) | [srt](./srt/-3HXw3vu2tc.srt) | [YouTube video](http://youtu.be/-3HXw3vu2tc) |
+| How Did Micro Medical Technology Get So Small? | [txt](./txt/-4dBRUCbQdg.txt) | [vtt](./vtt/-4dBRUCbQdg.vtt) | [srt](./srt/-4dBRUCbQdg.srt) | [YouTube video](http://youtu.be/-4dBRUCbQdg) |
+| There Are No Politics on the International Space Station, with Astronaut Ron Garan | [txt](./txt/-6cVMz-BWsI.txt) | [vtt](./vtt/-6cVMz-BWsI.vtt) | [srt](./srt/-6cVMz-BWsI.srt) | [YouTube video](http://youtu.be/-6cVMz-BWsI) |
+| The End of Rational Economics? | [txt](./txt/-812wqOXGz4.txt) | [vtt](./vtt/-812wqOXGz4.vtt) | [srt](./srt/-812wqOXGz4.srt) | [YouTube video](http://youtu.be/-812wqOXGz4) |
+| How do you respond to critics? | [txt](./txt/-8t62y_Fpt4.txt) | [vtt](./vtt/-8t62y_Fpt4.vtt) | [srt](./srt/-8t62y_Fpt4.srt) | [YouTube video](http://youtu.be/-8t62y_Fpt4) |
+| How the Internet Normalized Donald Trump and Impacted American Politics | [txt](./txt/-9TDNOIw8bk.txt) | [vtt](./vtt/-9TDNOIw8bk.vtt) | [srt](./srt/-9TDNOIw8bk.srt) | [YouTube video](http://youtu.be/-9TDNOIw8bk) |
+| Three Reasons to Keep Physical Books | [txt](./txt/-9V7ngVZdCA.txt) | [vtt](./vtt/-9V7ngVZdCA.vtt) | [srt](./srt/-9V7ngVZdCA.srt) | [YouTube video](http://youtu.be/-9V7ngVZdCA) |
+| Why All the Earthquakes? | [txt](./txt/-_5AiL2M4RU.txt) | [vtt](./vtt/-_5AiL2M4RU.vtt) | [srt](./srt/-_5AiL2M4RU.srt) | [YouTube video](http://youtu.be/-_5AiL2M4RU) |
+| What do you make of the celebrity chef phenomenon? | [txt](./txt/-___08GZ7_o.txt) | [vtt](./vtt/-___08GZ7_o.vtt) | [srt](./srt/-___08GZ7_o.srt) | [YouTube video](http://youtu.be/-___08GZ7_o) |
+| Alaa Al Aswany on Writing About Sex | [txt](./txt/01bgJgHvgBs.txt) | [vtt](./vtt/01bgJgHvgBs.vtt) | [srt](./srt/01bgJgHvgBs.srt) | [YouTube video](http://youtu.be/01bgJgHvgBs) |
+| Kenji Yoshino: What is justice? | [txt](./txt/0A5dwgueXgU.txt) | [vtt](./vtt/0A5dwgueXgU.vtt) | [srt](./srt/0A5dwgueXgU.srt) | [YouTube video](http://youtu.be/0A5dwgueXgU) |
+| The Path to Discovering Your Talents and Passions, with Sir Ken Robinson | Big Think Mentor | [txt](./txt/0WYEq9ntnHI.txt) | [vtt](./vtt/0WYEq9ntnHI.vtt) | [srt](./srt/0WYEq9ntnHI.srt) | [YouTube video](http://youtu.be/0WYEq9ntnHI) |
+| The Gun Debate: Too Much Emotion, Not Enough Data? | [txt](./txt/0WsGTEN1njw.txt) | [vtt](./vtt/0WsGTEN1njw.vtt) | [srt](./srt/0WsGTEN1njw.srt) | [YouTube video](http://youtu.be/0WsGTEN1njw) |
+| Living on Mars: A 4-step guide for humans | Michio Kaku | [txt](./txt/0WtVCLZpiS8.txt) | [vtt](./vtt/0WtVCLZpiS8.vtt) | [srt](./srt/0WtVCLZpiS8.srt) | [YouTube video](http://youtu.be/0WtVCLZpiS8) |
+| Can Islam be saved? | [txt](./txt/0_JuGBDZXLg.txt) | [vtt](./vtt/0_JuGBDZXLg.vtt) | [srt](./srt/0_JuGBDZXLg.srt) | [YouTube video](http://youtu.be/0_JuGBDZXLg) |
+| Our Dangerous Belief in Intuition | [txt](./txt/0vFkyZy2ubg.txt) | [vtt](./vtt/0vFkyZy2ubg.vtt) | [srt](./srt/0vFkyZy2ubg.srt) | [YouTube video](http://youtu.be/0vFkyZy2ubg) |
+| Jean-Pierre Rosso on the World Economic Forum meeting in Davos | [txt](./txt/0zqLKQfQWhw.txt) | [vtt](./vtt/0zqLKQfQWhw.vtt) | [srt](./srt/0zqLKQfQWhw.srt) | [YouTube video](http://youtu.be/0zqLKQfQWhw) |
+| Video Games as Life Coaches | [txt](./txt/1ApMCMQ1_LQ.txt) | [vtt](./vtt/1ApMCMQ1_LQ.vtt) | [srt](./srt/1ApMCMQ1_LQ.srt) | [YouTube video](http://youtu.be/1ApMCMQ1_LQ) |
+| On Taking on a Role | [txt](./txt/1AzzJxmiQEY.txt) | [vtt](./vtt/1AzzJxmiQEY.vtt) | [srt](./srt/1AzzJxmiQEY.srt) | [YouTube video](http://youtu.be/1AzzJxmiQEY) |
+| Shaving Your "Bikini Region" While Driving, and Other Florida Stories | Humorist Dave Berry | [txt](./txt/1aXrFUjBgT8.txt) | [vtt](./vtt/1aXrFUjBgT8.vtt) | [srt](./srt/1aXrFUjBgT8.srt) | [YouTube video](http://youtu.be/1aXrFUjBgT8) |
+| Will the Internet kill the newspaper? | [txt](./txt/1bxlzN2kkFQ.txt) | [vtt](./vtt/1bxlzN2kkFQ.vtt) | [srt](./srt/1bxlzN2kkFQ.srt) | [YouTube video](http://youtu.be/1bxlzN2kkFQ) |
+| Steven Pinker: Violence Trends Are Understood by Analyzing Data, Not Reading Headlines | [txt](./txt/1ct9Ys8jQXs.txt) | [vtt](./vtt/1ct9Ys8jQXs.vtt) | [srt](./srt/1ct9Ys8jQXs.srt) | [YouTube video](http://youtu.be/1ct9Ys8jQXs) |
+| Envisioning the Cities of 2025 and 2100 | [txt](./txt/1dNcRecyq2s.txt) | [vtt](./vtt/1dNcRecyq2s.vtt) | [srt](./srt/1dNcRecyq2s.srt) | [YouTube video](http://youtu.be/1dNcRecyq2s) |
+| Dan Barber: Voting With Your Fork | [txt](./txt/1dmj6rf2ANo.txt) | [vtt](./vtt/1dmj6rf2ANo.vtt) | [srt](./srt/1dmj6rf2ANo.srt) | [YouTube video](http://youtu.be/1dmj6rf2ANo) |
+| The Future of Travel | [txt](./txt/1eMK0aDLRik.txt) | [vtt](./vtt/1eMK0aDLRik.vtt) | [srt](./srt/1eMK0aDLRik.srt) | [YouTube video](http://youtu.be/1eMK0aDLRik) |
+| Fareed Zakaria on the Knowledge Economy | [txt](./txt/_-8uhMBl6vI.txt) | [vtt](./vtt/_-8uhMBl6vI.vtt) | [srt](./srt/_-8uhMBl6vI.srt) | [YouTube video](http://youtu.be/_-8uhMBl6vI) |
+| Learn to Profit With a Sustainable Mindset | [txt](./txt/_06SJ1xirVE.txt) | [vtt](./vtt/_06SJ1xirVE.vtt) | [srt](./srt/_06SJ1xirVE.srt) | [YouTube video](http://youtu.be/_06SJ1xirVE) |
+| Increase Your Productivity by Mastering Singular Focus and Mindful Meditation | Emma Seppälä | [txt](./txt/_0op-xKpSYY.txt) | [vtt](./vtt/_0op-xKpSYY.vtt) | [srt](./srt/_0op-xKpSYY.srt) | [YouTube video](http://youtu.be/_0op-xKpSYY) |
+| The Pharmaceutical Industry | [txt](./txt/_2_ysve1lC4.txt) | [vtt](./vtt/_2_ysve1lC4.vtt) | [srt](./srt/_2_ysve1lC4.srt) | [YouTube video](http://youtu.be/_2_ysve1lC4) |
+| Improving Science Literacy | [txt](./txt/_2mXhtwGEkQ.txt) | [vtt](./vtt/_2mXhtwGEkQ.vtt) | [srt](./srt/_2mXhtwGEkQ.srt) | [YouTube video](http://youtu.be/_2mXhtwGEkQ) |
+| Should the government be involved in healthcare? | [txt](./txt/_2q7iCzsB54.txt) | [vtt](./vtt/_2q7iCzsB54.vtt) | [srt](./srt/_2q7iCzsB54.srt) | [YouTube video](http://youtu.be/_2q7iCzsB54) |
+| "Write what you know" - Nathan Englander on Misunderstood Advice | [txt](./txt/_4Xa4AXI1d4.txt) | [vtt](./vtt/_4Xa4AXI1d4.vtt) | [srt](./srt/_4Xa4AXI1d4.srt) | [YouTube video](http://youtu.be/_4Xa4AXI1d4) |
+| Environment and Coal | [txt](./txt/_4dqWnIQQzY.txt) | [vtt](./vtt/_4dqWnIQQzY.vtt) | [srt](./srt/_4dqWnIQQzY.srt) | [YouTube video](http://youtu.be/_4dqWnIQQzY) |
+| Re: Is the American political system broken? | [txt](./txt/_5clqQMovJI.txt) | [vtt](./vtt/_5clqQMovJI.vtt) | [srt](./srt/_5clqQMovJI.srt) | [YouTube video](http://youtu.be/_5clqQMovJI) |
+| LGBTQ Revolution: Coming Out, Harvey Milk, Live-Saving Statistics | Bennett Singer | [txt](./txt/_6LjhoEEx_4.txt) | [vtt](./vtt/_6LjhoEEx_4.vtt) | [srt](./srt/_6LjhoEEx_4.srt) | [YouTube video](http://youtu.be/_6LjhoEEx_4) |
+| There Are No Low-Interest Categories | [txt](./txt/_8BtA5LwNy4.txt) | [vtt](./vtt/_8BtA5LwNy4.vtt) | [srt](./srt/_8BtA5LwNy4.srt) | [YouTube video](http://youtu.be/_8BtA5LwNy4) |
+| Robert Thurman: Love Your Enemy | [txt](./txt/_8OMoJAzKtM.txt) | [vtt](./vtt/_8OMoJAzKtM.vtt) | [srt](./srt/_8OMoJAzKtM.srt) | [YouTube video](http://youtu.be/_8OMoJAzKtM) |
+| Religion is like a Placebo | [txt](./txt/_8zA_g78s-8.txt) | [vtt](./vtt/_8zA_g78s-8.vtt) | [srt](./srt/_8zA_g78s-8.srt) | [YouTube video](http://youtu.be/_8zA_g78s-8) |
+| Your Brain Tells You Time Is Real — But Is It Lying to You? | Dean Buonomano | [txt](./txt/_9khd_PNSkg.txt) | [vtt](./vtt/_9khd_PNSkg.vtt) | [srt](./srt/_9khd_PNSkg.srt) | [YouTube video](http://youtu.be/_9khd_PNSkg) |
+| A Day in the Life of Harriet Mays Powell | [txt](./txt/_9vtLYyPlA8.txt) | [vtt](./vtt/_9vtLYyPlA8.vtt) | [srt](./srt/_9vtLYyPlA8.srt) | [YouTube video](http://youtu.be/_9vtLYyPlA8) |
