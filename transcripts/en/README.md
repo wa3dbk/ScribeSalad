@@ -976,6 +976,7 @@ YouTube channels :
 
 | **Title** |  | |  |  |
 |:----------:|:---:|:---:|:---:|:---------------:|
+| JRE MMA Show #53 with Jeff Novitzky | [txt](./Joe_Rogan_MMA_Show/txt/so3qOEMZXDQ.txt) | [vtt](./Joe_Rogan_MMA_Show/vtt/so3qOEMZXDQ.vtt) | [srt](./Joe_Rogan_MMA_Show/srt/so3qOEMZXDQ.srt) | [YouTube video](http://youtu.be/so3qOEMZXDQ) |
 | JRE MMA Show #34 with Josh Barnett | [txt](./Joe_Rogan_MMA_Show/txt/tk1cQEBEWLg.txt) | [vtt](./Joe_Rogan_MMA_Show/vtt/tk1cQEBEWLg.vtt) | [srt](./Joe_Rogan_MMA_Show/srt/tk1cQEBEWLg.srt) | [YouTube video](http://youtu.be/tk1cQEBEWLg) |
 |JRE MMA Show #31 with Daniel Straus & Joe Schilling | [txt](./Joe_Rogan_MMA_Show/txt/lCR0Je9J4to.txt) | [vtt](./Joe_Rogan_MMA_Show/vtt/lCR0Je9J4to.vtt) | [srt](./Joe_Rogan_MMA_Show/srt/lCR0Je9J4to.srt) | [YouTube video](http://youtu.be/lCR0Je9J4to) |
 | JRE MMA Show #29 with Cat Zingano | [txt](./Joe_Rogan_MMA_Show/txt/kUa8UOkL4Mo.txt) | [vtt](./Joe_Rogan_MMA_Show/vtt/kUa8UOkL4Mo.vtt) | [srt](./Joe_Rogan_MMA_Show/srt/kUa8UOkL4Mo.srt) | [YouTube video](http://youtu.be/kUa8UOkL4Mo) |
