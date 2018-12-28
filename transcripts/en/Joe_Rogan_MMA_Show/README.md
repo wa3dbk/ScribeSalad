@@ -4,6 +4,7 @@ Joe Rogan MMA Show transcripts
 
 | **Title** |  | |  |  |
 |:----------:|:---:|:---:|:---:|:---------------:|
+| JRE MMA Show #53 with Jeff Novitzky | [txt](./txt/so3qOEMZXDQ.txt) | [vtt](./vtt/so3qOEMZXDQ.vtt) | [srt](./srt/so3qOEMZXDQ.srt) | [YouTube video](http://youtu.be/so3qOEMZXDQ) |
 | JRE MMA Show #34 with Josh Barnett | [txt](./txt/tk1cQEBEWLg.txt) | [vtt](./vtt/tk1cQEBEWLg.vtt) | [srt](./srt/tk1cQEBEWLg.srt) | [YouTube video](http://youtu.be/tk1cQEBEWLg) |
 | JRE MMA Show #31 with Daniel Straus & Joe Schilling | [txt](./txt/lCR0Je9J4to.txt) | [vtt](./vtt/lCR0Je9J4to.vtt) | [srt](./srt/lCR0Je9J4to.srt) | [YouTube video](http://youtu.be/lCR0Je9J4to) |
 | JRE MMA Show #29 with Cat Zingano | [txt](./txt/kUa8UOkL4Mo.txt) | [vtt](./vtt/kUa8UOkL4Mo.vtt) | [srt](./srt/kUa8UOkL4Mo.srt) | [YouTube video](http://youtu.be/kUa8UOkL4Mo) |
