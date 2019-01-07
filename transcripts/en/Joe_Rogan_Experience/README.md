@@ -5,6 +5,7 @@ Joe Rogan Experience (JRE) transcripts
 
 | **Title** |  | |  |  |
 |:----------:|:---:|:---:|:---:|:---------------:|
+| Joe Rogan Experience - 2018 Year in Review | [txt](./txt/RQ1RAd2A-rs.txt) | [vtt](./vtt/RQ1RAd2A-rs.vtt) | [srt](./srt/RQ1RAd2A-rs.srt) | [YouTube video](http://youtu.be/RQ1RAd2A-rs) |
 | Joe Rogan Experience #1220 - Joey Diaz | [txt](./txt/ll4E3-kP_54.txt) | [vtt](./vtt/ll4E3-kP_54.vtt) | [srt](./srt/ll4E3-kP_54.srt) | [YouTube video](http://youtu.be/ll4E3-kP_54) |
 | Joe Rogan Experience #1219 - Bill Burr | [txt](./txt/cS1KWv0das8.txt) | [vtt](./vtt/cS1KWv0das8.vtt) | [srt](./srt/cS1KWv0das8.srt) | [YouTube video](http://youtu.be/cS1KWv0das8) |
 | Joe Rogan Experience #1218 - Gad Saad | [txt](./txt/NAalq9lrjQA.txt) | [vtt](./vtt/NAalq9lrjQA.vtt) | [srt](./srt/NAalq9lrjQA.srt) | [YouTube video](http://youtu.be/NAalq9lrjQA) |
