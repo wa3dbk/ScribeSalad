@@ -1,16 +1,9 @@
-# AnansiPot <img align="left" width="50" height="50" src="img/KcnegBEni.jpeg"> 
+# ScribeWaltz 
 
-In absence of searchable transcripts, many interesting YouTube videos, podcasts, lectures and talks are hard to explore, quote and summarize. **AnansiPot** is an open data project regrouping over 7500 YouTube video transcripts discussing social and political issues, psychology, history and scientific topics ranging from biology, mathematics to artificial intelligence : [The Joe Rogan Experience](transcripts/en/Joe_Rogan_Experience/README.md#joe-rogan-experience), The Rubin Report, Jordan B. Peterson talks, Yale courses, MIT lectures and more. This project is a first step towards making great content more available and inspiring speakers, storytellers, interviewers and scientists better heard. 
+In absence of searchable transcripts, many interesting YouTube videos, podcasts, lectures and talks are hard to explore, quote and summarize. **ScribeWaltz** is an open data project regrouping over 7500 YouTube video transcripts discussing social and political issues, psychology, history and scientific topics ranging from biology, mathematics to artificial intelligence : [The Joe Rogan Experience](transcripts/en/Joe_Rogan_Experience/README.md#joe-rogan-experience), The Rubin Report, Jordan B. Peterson talks, Yale courses, MIT lectures and more. This project is a first step towards making great content more available and inspiring speakers, storytellers, interviewers and scientists better heard. 
 
 
 ## [ :mag: &nbsp; Explore transcripts ](transcripts/en/#original-transcripts)
-
-## Why this name, AnansiPot ? 
-<img align="left" width="125,36px" height="190px"  src="img/potOfWisdom.jpg">  Anansi is a West African folktale character. He often takes the shape of a spider and is considered to be the spirit of all knowledge of stories.
-
-From https://mythology.net : 
-> "Anansi is the King of Stories, the trickster, the joke maker, and the teacher of those who would follow these traditions. Anansi can be summoned by those with a gift for stories, either to listen to a well-told tale or to help someone who is talented but just beginning to become a master storyteller. [..] He had a pot containing all the wisdom of the world, and every day Anansi would look in the pot and learn some new and wondrous thing."
-
 
 
 ## Transcription quality 
