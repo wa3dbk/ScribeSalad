@@ -28,6 +28,8 @@ These transcriptions are generated automatically using a high-accuracy large-voc
 ## Filenames and formats 
 The transcripts identified using the corresponding YouTube videos IDs and each one is available in three formats : text, vtt (Text Tracks Format) and srt (SubRip Subtitle Format).
 
+To open the original video, replace "ID" in https://www.youtube.com/watch?v=ID by the transcript filename. 
+
 ## Terms of use 
 This is an open data project, feel free to fork this repository, download, share and use any of the transcripts. 
 
