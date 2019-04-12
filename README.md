@@ -16,7 +16,7 @@ In absence of searchable transcripts, many interesting YouTube videos, podcasts,
 
 * **N-R :** [NativLang](transcripts/en/NativLang), [Nerd writer](transcripts/en/Nerd_writer), [Nobel minds](transcripts/en/Nobel_minds), [NowYouSeeIt](transcripts/en/NowYouSeeIt), [Pop Culture Detective](transcripts/en/Pop_Culture_Detective), [Rubin Report](transcripts/en/Rubin_Report), [Russell Brand](transcripts/en/Russell_Brand)
 
-* **S-V :** [Storytellers](transcripts/en/Storytellers), [The Linguistics Channel](transcripts/en/The_Linguistics_Channel), [ThinkBigAnimation](transcripts/en/ThinkBigAnimation), [Visual politik](transcripts/en/Visual_politik)
+* **S-V :** [Storytellers](transcripts/en/Storytellers), [The Linguistics Channel](transcripts/en/The_Linguistics_Channel), [ThinkBigAnimation](transcripts/en/ThinkBigAnimation), [Tim Ferris](transcripts/en/Tim_Ferris),[Visual politik](transcripts/en/Visual_politik)
 
 * **W-Y :** [Wisecrack](transcripts/en/Wisecrack), [Wordporn](transcripts/en/Wordporn), [Yale Courses](transcripts/en/YaleCourses)
 
