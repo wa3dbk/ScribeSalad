@@ -1,6 +1,6 @@
 # ScribeWaltz 
 
-In absence of searchable transcripts, many interesting YouTube videos, podcasts, lectures and talks are hard to explore, quote and summarize. **ScribeWaltz** is an open data project regrouping over 8500 YouTube video transcripts discussing social and political issues, psychology, history and scientific topics ranging from biology, mathematics to artificial intelligence : The Joe Rogan Experience, The Rubin Report, Jordan B. Peterson talks, Yale courses, MIT lectures and more. This project is a first step towards making great content more available and inspiring speakers, storytellers, interviewers and scientists better heard. 
+In absence of searchable transcripts, many interesting YouTube videos, podcasts, lectures and talks are hard to explore, quote and summarize. **ScribeWaltz** is an open data project regrouping over 9000 YouTube video transcripts discussing social and political issues, psychology, history and scientific topics ranging from biology, mathematics to artificial intelligence : The Joe Rogan Experience, The Rubin Report, Jordan B. Peterson talks, Yale courses, MIT lectures and more. This project is a first step towards making great content more available and inspiring speakers, storytellers, interviewers and scientists better heard. 
 
 
 ## Available transcripts 
