@@ -16,10 +16,9 @@ In absence of searchable transcripts, many interesting YouTube videos, podcasts,
 
 * **N-R :** [NativLang](transcripts/en/NativLang), [Nerd writer](transcripts/en/Nerd_writer), [Nobel minds](transcripts/en/Nobel_minds), [NowYouSeeIt](transcripts/en/NowYouSeeIt), [Pop Culture Detective](transcripts/en/Pop_Culture_Detective), [Rubin Report](transcripts/en/Rubin_Report), [Russell Brand](transcripts/en/Russell_Brand)
 
-* **S-V :** [Storytellers](transcripts/en/Storytellers), [The Linguistics Channel](transcripts/en/The_Linguistics_Channel), [The Monday Morning Podcast](transcripts/en/TAMMP), [ThinkBigAnimation](transcripts/en/ThinkBigAnimation), [Tim Ferris](transcripts/en/Tim_Ferris),[Visual politik](transcripts/en/Visual_politik)
+* **S-V :** [Siraj Raval](transcripts/en/Siraj_Raval), [Storytellers](transcripts/en/Storytellers), [The Linguistics Channel](transcripts/en/The_Linguistics_Channel), [The Monday Morning Podcast](transcripts/en/TAMMP), [ThinkBigAnimation](transcripts/en/ThinkBigAnimation), [Tim Ferris](transcripts/en/Tim_Ferris),[Visual politik](transcripts/en/Visual_politik)
 
-* **W-Y :** [Wisecrack](transcripts/en/Wisecrack), [Wordporn](transcripts/en/Wordporn), [Yale Courses](transcripts/en/YaleCourses)
-
+* **W-Y :** [Wisecrack](transcripts/en/Wisecrack), [Wordporn](transcripts/en/Wordporn), [Yale Courses](transcripts/en/YaleCourses), [YourMomsHousePodcast](transcripts/en/YourMomsHousePodcast)
 
 ## Transcription quality 
 These transcriptions are generated automatically using a high-accuracy large-vocabulary continuous speech recognition system (~90% of accuracy in clean conditions : no background noise, no heavy accents and good quality audio). 
