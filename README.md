@@ -18,7 +18,7 @@ In absence of searchable transcripts, many interesting YouTube videos, podcasts,
 
 * **S-V :** [Siraj Raval](transcripts/en/Siraj_Raval), [Storytellers](transcripts/en/Storytellers), [The Linguistics Channel](transcripts/en/The_Linguistics_Channel), [The Monday Morning Podcast](transcripts/en/TAMMP), [ThinkBigAnimation](transcripts/en/ThinkBigAnimation), [Tim Ferris](transcripts/en/Tim_Ferris), [Visual politik](transcripts/en/Visual_politik)
 
-* **W-Y :** [Wisecrack](transcripts/en/Wisecrack), [Wordporn](transcripts/en/Wordporn), [Yale Courses](transcripts/en/YaleCourses), [YourMomsHousePodcast](transcripts/en/YourMomsHousePodcast)
+* **W-Y :** [Wisecrack](transcripts/en/Wisecrack), [Wordporn](transcripts/en/Wordporn), [Yale Courses](transcripts/en/YaleCourses), [Your Mom's House Podcast](transcripts/en/YourMomsHousePodcast)
 
 ## Transcription quality 
 These transcriptions are generated automatically using a high-accuracy large-vocabulary continuous speech recognition system (~90% of accuracy in clean conditions : no background noise, no heavy accents and good quality audio). 
