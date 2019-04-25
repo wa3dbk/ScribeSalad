@@ -6,7 +6,7 @@ In absence of searchable transcripts, many interesting YouTube videos, podcasts,
 ## Available transcripts 
 
 * **A-C :** [AI lectures & talks](transcripts/en/AI_lectures_talks), [Alexander Amini](transcripts/en/Alexander_Amini),
-[Big Think](transcripts/en/Big_Think), [Biographics](transcripts/en/Biographics), [Bite-sized Philosophy](transcripts/en/Bite-sized_Philosophy), [Coffee Break](transcripts/en/Coffee_Break), [Cracked](transcripts/en/Cracked)
+[Big Think](transcripts/en/Big_Think), [Biographics](transcripts/en/Biographics), [Bite-sized Philosophy](transcripts/en/Bite-sized_Philosophy), [Coffee Break](transcripts/en/Coffee_Break), [Conan O’Brien Needs A Friend](transcripts/en/Conan_OBrien_Needs_a_Friend), [Cracked](transcripts/en/Cracked)
 
 * **D-I :** [Dan Carlin](transcripts/en/Dan_carlin), [Dose Of Truth](transcripts/en/DoseOfTruth), [Fire of learning](transcripts/en/Fire_of_learning), [H3 podcast](transcripts/en/H3_podcast), [IQ squared](transcripts/en/Iqsquared)
 
@@ -18,7 +18,7 @@ In absence of searchable transcripts, many interesting YouTube videos, podcasts,
 
 * **S-V :** [Siraj Raval](transcripts/en/Siraj_Raval), [Storytellers](transcripts/en/Storytellers), [The Linguistics Channel](transcripts/en/The_Linguistics_Channel), [The Monday Morning Podcast](transcripts/en/TAMMP), [ThinkBigAnimation](transcripts/en/ThinkBigAnimation), [Tim Ferris](transcripts/en/Tim_Ferris), [Visual politik](transcripts/en/Visual_politik)
 
-* **W-Y :** [Wisecrack](transcripts/en/Wisecrack), [Wordporn](transcripts/en/Wordporn), [Yale Courses](transcripts/en/YaleCourses), [Your Mom's House Podcast](transcripts/en/YourMomsHousePodcast)
+* **W-Y :** [WhatIf](transcripts/en/WhatIf), [Wisecrack](transcripts/en/Wisecrack), [Wordporn](transcripts/en/Wordporn), [Yale Courses](transcripts/en/YaleCourses), [Your Mom's House Podcast](transcripts/en/YourMomsHousePodcast)
 
 ## Transcription quality 
 These transcriptions are generated automatically using a high-accuracy large-vocabulary continuous speech recognition system (~90% of accuracy in clean conditions : no background noise, no heavy accents and good quality audio). 
