@@ -8,7 +8,7 @@ In absence of searchable transcripts, many interesting YouTube videos, podcasts,
 * **A-C :** [AI lectures & talks](transcripts/en/AI_lectures_talks), [Alexander Amini](transcripts/en/Alexander_Amini),
 [Big Think](transcripts/en/Big_Think), [Biographics](transcripts/en/Biographics), [Bite-sized Philosophy](transcripts/en/Bite-sized_Philosophy), [Coffee Break](transcripts/en/Coffee_Break), [Conan O’Brien Needs A Friend](transcripts/en/Conan_OBrien_Needs_a_Friend), [Cracked](transcripts/en/Cracked)
 
-* **D-I :** [Dan Carlin](transcripts/en/Dan_carlin), [Dose Of Truth](transcripts/en/DoseOfTruth), [Fire of learning](transcripts/en/Fire_of_learning), [H3 podcast](transcripts/en/H3_podcast), [IQ squared](transcripts/en/Iqsquared)
+* **D-I :** [Dan Carlin](transcripts/en/Dan_carlin), [Dose Of Truth](transcripts/en/DoseOfTruth), [Fire of learning](transcripts/en/Fire_of_learning), [H3 podcast](transcripts/en/H3_podcast), [Hugo Larochelle](transcripts/en/Hugo_Larochelle), [IQ squared](transcripts/en/Iqsquared)
 
 * **J :** [Jocko Podcast](transcripts/en/Jocko_Podcast), [Joe Rogan Clips](transcripts/en/Joe_Rogan_Clips), [Joe Rogan Experience](transcripts/en/Joe_Rogan_Experience), [Joe Rogan MMA Show](transcripts/en/Joe_Rogan_MMA_Show), [Jordan B. Peterson](transcripts/en/Jordan_B_Peterson), [Jordan Peterson Fan Clips](transcripts/en/Jordan_Peterson_Fan_Clips), [Jordan Peterson clips](transcripts/en/Jordan_Peterson_clips), [Jubilee](transcripts/en/Jubilee)
 
