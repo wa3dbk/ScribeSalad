@@ -12,7 +12,7 @@ In absence of searchable transcripts, many interesting YouTube videos, podcasts,
 
 * **J :** [Jocko Podcast](transcripts/en/Jocko_Podcast), [Joe Rogan Clips](transcripts/en/Joe_Rogan_Clips), [Joe Rogan Experience](transcripts/en/Joe_Rogan_Experience), [Joe Rogan MMA Show](transcripts/en/Joe_Rogan_MMA_Show), [Jordan B. Peterson](transcripts/en/Jordan_B_Peterson), [Jordan Peterson Fan Clips](transcripts/en/Jordan_Peterson_Fan_Clips), [Jordan Peterson clips](transcripts/en/Jordan_Peterson_clips), [Jubilee](transcripts/en/Jubilee)
 
-* **K-M :** [Kurzgesagt](transcripts/en/Kurzgesagt), [Lang Focus](transcripts/en/Lang_Focus), [Lex Fridman](transcripts/en/Lex_Fridman), [Motivation Madness](transcripts/en/Motivation_Madness)
+* **K-M :** [Kurzgesagt](transcripts/en/Kurzgesagt), [Lang Focus](transcripts/en/Lang_Focus), [Lex Fridman](transcripts/en/Lex_Fridman), [MIT courses](transcripts/en/MIT), [Motivation Madness](transcripts/en/Motivation_Madness)
 
 * **N-R :** [NativLang](transcripts/en/NativLang), [Nerd writer](transcripts/en/Nerd_writer), [Nobel minds](transcripts/en/Nobel_minds), [NowYouSeeIt](transcripts/en/NowYouSeeIt), [Pop Culture Detective](transcripts/en/Pop_Culture_Detective), [Rubin Report](transcripts/en/Rubin_Report), [Russell Brand](transcripts/en/Russell_Brand)
 
