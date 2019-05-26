@@ -6,7 +6,7 @@ In absence of searchable transcripts, many interesting YouTube videos, podcasts,
 ## Available transcripts 
 
 * **A-C :** [AI lectures & talks](transcripts/en/AI_lectures_talks), [Alexander Amini](transcripts/en/Alexander_Amini),
-[Big Think](transcripts/en/Big_Think), [Biographics](transcripts/en/Biographics), [Bite-sized Philosophy](transcripts/en/Bite-sized_Philosophy), [Coffee Break](transcripts/en/Coffee_Break), [Conan O’Brien Needs A Friend](transcripts/en/Conan_OBrien_Needs_a_Friend), [Cracked](transcripts/en/Cracked)
+[Big Think](transcripts/en/Big_Think), [Biographics](transcripts/en/Biographics), [Bite-sized Philosophy](transcripts/en/Bite-sized_Philosophy), [Coffee Break](transcripts/en/Coffee_Break), [Conan O’Brien Needs A Friend](transcripts/en/Conan_OBrien_Needs_a_Friend), [Cracked](transcripts/en/Cracked), [CrashCourse](transcripts/en/CrashCourse)
 
 * **D-I :** [Dan Carlin](transcripts/en/Dan_carlin), [Dose Of Truth](transcripts/en/DoseOfTruth), [Fire of learning](transcripts/en/Fire_of_learning), [H3 podcast](transcripts/en/H3_podcast), [Hugo Larochelle](transcripts/en/Hugo_Larochelle), [IQ squared](transcripts/en/Iqsquared)
 
