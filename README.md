@@ -8,15 +8,15 @@ In absence of searchable transcripts, many interesting YouTube videos, podcasts,
 * **A-C :** [AI lectures & talks](transcripts/en/AI_lectures_talks), [Alexander Amini](transcripts/en/Alexander_Amini),
 [Big Think](transcripts/en/Big_Think), [Biographics](transcripts/en/Biographics), [Bite-sized Philosophy](transcripts/en/Bite-sized_Philosophy), [Coffee Break](transcripts/en/Coffee_Break), [Conan O’Brien Needs A Friend](transcripts/en/Conan_OBrien_Needs_a_Friend), [Cracked](transcripts/en/Cracked), [CrashCourse](transcripts/en/CrashCourse)
 
-* **D-I :** [Dan Carlin](transcripts/en/Dan_carlin), [Dose Of Truth](transcripts/en/DoseOfTruth), [Fire of learning](transcripts/en/Fire_of_learning), [H3 podcast](transcripts/en/H3_podcast), [Hugo Larochelle](transcripts/en/Hugo_Larochelle), [IQ squared](transcripts/en/Iqsquared)
+* **D-I :** [Dan Carlin](transcripts/en/Dan_carlin), [Dose Of Truth](transcripts/en/DoseOfTruth), [Fire of learning](transcripts/en/Fire_of_learning), [Future of Life Institute](transcripts/en/Future_of_Life_Institute), [H3 podcast](transcripts/en/H3_podcast), [Harvard_University](transcripts/en/Harvard_University), [Hugo Larochelle](transcripts/en/Hugo_Larochelle), [IQ squared](transcripts/en/Iqsquared)
 
 * **J :** [Jocko Podcast](transcripts/en/Jocko_Podcast), [Joe Rogan Clips](transcripts/en/Joe_Rogan_Clips), [Joe Rogan Experience](transcripts/en/Joe_Rogan_Experience), [Joe Rogan MMA Show](transcripts/en/Joe_Rogan_MMA_Show), [Jordan B. Peterson](transcripts/en/Jordan_B_Peterson), [Jordan Peterson Fan Clips](transcripts/en/Jordan_Peterson_Fan_Clips), [Jordan Peterson clips](transcripts/en/Jordan_Peterson_clips), [Jubilee](transcripts/en/Jubilee)
 
 * **K-M :** [Kurzgesagt](transcripts/en/Kurzgesagt), [Lang Focus](transcripts/en/Lang_Focus), [Lex Fridman](transcripts/en/Lex_Fridman), [MIT courses](transcripts/en/MIT), [Motivation Madness](transcripts/en/Motivation_Madness)
 
-* **N-R :** [NativLang](transcripts/en/NativLang), [Nerd writer](transcripts/en/Nerd_writer), [Nobel minds](transcripts/en/Nobel_minds), [NowYouSeeIt](transcripts/en/NowYouSeeIt), [Pop Culture Detective](transcripts/en/Pop_Culture_Detective), [Rubin Report](transcripts/en/Rubin_Report), [Russell Brand](transcripts/en/Russell_Brand)
+* **N-R :** [National Geographic](transcripts/en/National_Geographic), [NativLang](transcripts/en/NativLang), [Nerd writer](transcripts/en/Nerd_writer), [Nobel minds](transcripts/en/Nobel_minds), [NowYouSeeIt](transcripts/en/NowYouSeeIt), [Pop Culture Detective](transcripts/en/Pop_Culture_Detective), [RT Documentaries](transcripts/en/RTDocumentaries), [Rubin Report](transcripts/en/Rubin_Report), [Russell Brand](transcripts/en/Russell_Brand)
 
-* **S-V :** [Siraj Raval](transcripts/en/Siraj_Raval), [Storytellers](transcripts/en/Storytellers), [The Linguistics Channel](transcripts/en/The_Linguistics_Channel), [The Monday Morning Podcast](transcripts/en/TAMMP), [ThinkBigAnimation](transcripts/en/ThinkBigAnimation), [Tim Ferris](transcripts/en/Tim_Ferris), [Visual politik](transcripts/en/Visual_politik)
+* **S-V :** [Siraj Raval](transcripts/en/Siraj_Raval), [Storytellers](transcripts/en/Storytellers), [TED](transcripts/en/TED), [The Linguistics Channel](transcripts/en/The_Linguistics_Channel), [The Monday Morning Podcast](transcripts/en/TAMMP), [TheSchoolOfLife](transcripts/en/TheSchoolOfLife), [ThinkBigAnimation](transcripts/en/ThinkBigAnimation), [Tim Ferris](transcripts/en/Tim_Ferris), [Visual politik](transcripts/en/Visual_politik)
 
 * **W-Y :** [WhatIf](transcripts/en/WhatIf), [Wisecrack](transcripts/en/Wisecrack), [Wordporn](transcripts/en/Wordporn), [Yale Courses](transcripts/en/YaleCourses), [Your Mom's House Podcast](transcripts/en/YourMomsHousePodcast)
 
