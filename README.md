@@ -1,6 +1,6 @@
 # ScribeSalad 
 
-In absence of searchable transcripts, many interesting YouTube videos, podcasts, lectures and talks are hard to explore, quote and summarize. **ScribeSalad** is an open data project regrouping over 17000 YouTube video transcripts discussing social and political issues, psychology, history and scientific topics ranging from biology, mathematics to artificial intelligence : The Joe Rogan Experience, The Rubin Report, Jordan B. Peterson talks, Yale courses, MIT lectures and more. This project is a first step towards making great content more available and inspiring speakers, storytellers, interviewers and scientists better heard. 
+In absence of searchable transcripts, many interesting YouTube videos, podcasts, lectures and talks are hard to explore, quote and summarize. **ScribeSalad** is an open data project regrouping over 22000 YouTube video transcripts discussing social and political issues, psychology, history and scientific topics ranging from biology, mathematics to artificial intelligence : The Joe Rogan Experience, The Rubin Report, Jordan B. Peterson talks, Yale courses, MIT lectures and more. This project is a first step towards making great content more available and inspiring speakers, storytellers, interviewers and scientists better heard. 
 
 
 ## Available transcripts 
@@ -21,7 +21,7 @@ In absence of searchable transcripts, many interesting YouTube videos, podcasts,
 * **W-Y :** [WhatIf](transcripts/en/WhatIf), [Wisecrack](transcripts/en/Wisecrack), [Wordporn](transcripts/en/Wordporn), [Yale Courses](transcripts/en/YaleCourses), [Your Mom's House Podcast](transcripts/en/YourMomsHousePodcast)
 
 ## Transcription quality 
-These transcriptions are generated automatically using a high-accuracy large-vocabulary continuous speech recognition system (~90% of accuracy in clean conditions : no background noise, no heavy accents and good quality audio). 
+Some of the transcriptions originate from YouTube (subtitles uploaded by the video's owner) while the rest are generated automatically using a high-accuracy large-vocabulary continuous speech recognition system (~90% of accuracy in clean conditions : no background noise, no heavy accents and good quality audio). 
 
 ## Filenames and formats 
 The transcripts identified using the corresponding YouTube videos IDs and each one is available in three formats : text, vtt (Text Tracks Format) and srt (SubRip Subtitle Format).
