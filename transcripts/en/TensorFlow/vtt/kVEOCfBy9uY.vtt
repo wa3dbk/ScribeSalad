@@ -1,0 +1,3857 @@
+WEBVTT
+Kind: captions
+Language: en
+
+00:00:00.210 --> 00:00:01.030
+YURI: Hi, everyone.
+
+00:00:01.030 --> 00:00:01.763
+My name is Yuri.
+
+00:00:01.763 --> 00:00:03.180
+And today, I'm
+going to be talking
+
+00:00:03.180 --> 00:00:07.320
+to you about tf.data, which is
+TensorFlow's input pipeline.
+
+00:00:07.320 --> 00:00:09.720
+As a disclaimer,
+this presentation
+
+00:00:09.720 --> 00:00:12.420
+assumes familiarity with
+basic TensorFlow concepts
+
+00:00:12.420 --> 00:00:15.510
+such as ops and kernels.
+
+00:00:15.510 --> 00:00:17.520
+And it contains a
+lot of code examples
+
+00:00:17.520 --> 00:00:21.150
+that are not necessarily
+100% accurate.
+
+00:00:21.150 --> 00:00:23.158
+There may be some details
+that have been removed
+
+00:00:23.158 --> 00:00:25.200
+because they're either
+unnecessary or distracting
+
+00:00:25.200 --> 00:00:27.300
+for the purpose of presentation.
+
+00:00:27.300 --> 00:00:30.010
+So with that, let's get started.
+
+00:00:30.010 --> 00:00:32.689
+In this talk, we're going
+to cover a couple of topics.
+
+00:00:32.689 --> 00:00:34.530
+We're going to peel
+the two main layers
+
+00:00:34.530 --> 00:00:36.820
+of tf.data's
+implementation one by one,
+
+00:00:36.820 --> 00:00:39.630
+first focusing on Python
+view and then on the C++ view
+
+00:00:39.630 --> 00:00:41.130
+of tf.data.
+
+00:00:41.130 --> 00:00:45.330
+And then I'm going to cover
+three areas of tf.data that
+
+00:00:45.330 --> 00:00:47.980
+might be of interest to
+the broader audience,
+
+00:00:47.980 --> 00:00:52.140
+support for non-tensor types,
+and both static and dynamic
+
+00:00:52.140 --> 00:00:55.600
+optimizations in tf.data.
+
+00:00:55.600 --> 00:00:57.350
+So let's get started
+with the Python view.
+
+00:01:00.000 --> 00:01:02.320
+Throughout the course
+of the presentation,
+
+00:01:02.320 --> 00:01:04.950
+I'm going to be using the
+following example, which
+
+00:01:04.950 --> 00:01:08.410
+is a pretty standard example
+of an input pipeline.
+
+00:01:08.410 --> 00:01:10.350
+What this input
+pipeline does, it's
+
+00:01:10.350 --> 00:01:13.720
+reading files that are
+in TFRecord formats--
+
+00:01:13.720 --> 00:01:16.200
+so this contains records--
+
+00:01:16.200 --> 00:01:20.490
+then shuffling those records,
+applying a map transformation
+
+00:01:20.490 --> 00:01:24.340
+that allows you to transform
+the records and parse them,
+
+00:01:24.340 --> 00:01:29.340
+pre-process them, and finally,
+batching the pre-processed data
+
+00:01:29.340 --> 00:01:33.420
+so that it's amenable to
+machine learning computation.
+
+00:01:33.420 --> 00:01:36.390
+And the idiomatic way to
+iterate through elements
+
+00:01:36.390 --> 00:01:41.700
+of an input pipeline in TF
+2.0 is by a simple for loop.
+
+00:01:41.700 --> 00:01:47.520
+And that's because in TF 2.0,
+data sets are Python iterables.
+
+00:01:47.520 --> 00:01:49.110
+Besides this
+approach, you can also
+
+00:01:49.110 --> 00:01:52.540
+use the explicit iter
+or next keywords.
+
+00:01:52.540 --> 00:01:56.610
+Now, as the comment at
+the bottom mentions,
+
+00:01:56.610 --> 00:01:58.620
+the user-defined
+function that you
+
+00:01:58.620 --> 00:02:00.270
+can pass into the
+map transformation
+
+00:02:00.270 --> 00:02:02.940
+can be both graph or
+non-graph computation
+
+00:02:02.940 --> 00:02:06.030
+where the non-graph computation
+is enabled by AutoGraph.
+
+00:02:06.030 --> 00:02:09.330
+And I'll talk a little
+more about that later on.
+
+00:02:09.330 --> 00:02:12.270
+Just to contrast the
+simplifications that happened
+
+00:02:12.270 --> 00:02:15.120
+in the transition
+between 1.x and 2.0,
+
+00:02:15.120 --> 00:02:17.880
+let's take a look at
+what an input pipeline--
+
+00:02:17.880 --> 00:02:21.090
+or idiomatic iteration of
+an input pipeline-- in 1.x
+
+00:02:21.090 --> 00:02:22.060
+would look like.
+
+00:02:22.060 --> 00:02:24.060
+And you can see that the
+definition of the input
+
+00:02:24.060 --> 00:02:28.400
+pipeline that is the top part of
+the data set remains the same.
+
+00:02:28.400 --> 00:02:31.560
+But the iteration is
+much more verbose.
+
+00:02:31.560 --> 00:02:36.570
+So hopefully, this kind of
+illustrates that the simplest
+
+00:02:36.570 --> 00:02:38.490
+way to iterate
+through a data set
+
+00:02:38.490 --> 00:02:43.350
+has been made much more
+simple in the 2.0 release
+
+00:02:43.350 --> 00:02:46.770
+of TensorFlow.
+
+00:02:46.770 --> 00:02:51.030
+So let's talk a bit more about
+what's actually going on when
+
+00:02:51.030 --> 00:02:52.290
+you run the Python program.
+
+00:02:52.290 --> 00:02:53.280
+And what we're
+going to do is we're
+
+00:02:53.280 --> 00:02:55.710
+going to go through different
+lines of the Python program
+
+00:02:55.710 --> 00:02:58.890
+and talk about what actually
+happens under the hood in terms
+
+00:02:58.890 --> 00:03:03.480
+of what types of TensorFlow ops
+these invocations correspond
+
+00:03:03.480 --> 00:03:04.860
+to.
+
+00:03:04.860 --> 00:03:07.530
+And I'm using a
+diagram to visualize
+
+00:03:07.530 --> 00:03:09.480
+the different types of ops.
+
+00:03:09.480 --> 00:03:12.480
+The gray box is
+the actual op-- so
+
+00:03:12.480 --> 00:03:15.600
+in this case, TFRecordDataset--
+while the yellow boxes
+
+00:03:15.600 --> 00:03:18.330
+are the different
+inputs for the op,
+
+00:03:18.330 --> 00:03:21.720
+while the blue box is
+the output of the op.
+
+00:03:21.720 --> 00:03:23.462
+So in the case of
+the TFRecordDataset,
+
+00:03:23.462 --> 00:03:25.920
+we have a couple of inputs--
+file names, compression types,
+
+00:03:25.920 --> 00:03:27.390
+buffer sizes.
+
+00:03:27.390 --> 00:03:31.830
+And an important thing that
+I want to highlight here
+
+00:03:31.830 --> 00:03:35.610
+is that this op produces
+a variant tensor, which
+
+00:03:35.610 --> 00:03:38.370
+is a representation
+of the data set object
+
+00:03:38.370 --> 00:03:42.130
+that can be passed
+between different ops.
+
+00:03:42.130 --> 00:03:46.480
+And we will see how that's used
+right away when we're looking
+
+00:03:46.480 --> 00:03:49.220
+at the map transformation.
+
+00:03:49.220 --> 00:03:53.220
+So the MapDataset op, you can
+see that one of its inputs
+
+00:03:53.220 --> 00:03:58.840
+is actually a variant, which
+is the downstream data set that
+
+00:03:58.840 --> 00:04:03.070
+produces the elements that the
+map transformation transforms.
+
+00:04:03.070 --> 00:04:05.890
+Other inputs are-- they're
+called other arguments.
+
+00:04:05.890 --> 00:04:07.940
+And these are actually
+the captured inputs
+
+00:04:07.940 --> 00:04:09.400
+for the function.
+
+00:04:09.400 --> 00:04:11.767
+In this particular
+case, that input
+
+00:04:11.767 --> 00:04:13.600
+would be empty, because
+the function doesn't
+
+00:04:13.600 --> 00:04:17.890
+have any captured inputs,
+at least not as outlined
+
+00:04:17.890 --> 00:04:19.200
+in the example.
+
+00:04:19.200 --> 00:04:22.330
+And the round boxes
+are not inputs.
+
+00:04:22.330 --> 00:04:23.530
+They are attributes.
+
+00:04:23.530 --> 00:04:25.600
+The difference between
+inputs and attributes
+
+00:04:25.600 --> 00:04:27.370
+is that the attribute
+values do not
+
+00:04:27.370 --> 00:04:29.490
+change with different
+executions of the op.
+
+00:04:29.490 --> 00:04:30.790
+They are constant.
+
+00:04:30.790 --> 00:04:34.310
+And the attributes
+here are function,
+
+00:04:34.310 --> 00:04:39.370
+which identifies the
+function parse, which
+
+00:04:39.370 --> 00:04:41.620
+is stored separately
+in TensorFlow runtime--
+
+00:04:41.620 --> 00:04:44.530
+but it allows the op to look
+it up when it executes--
+
+00:04:44.530 --> 00:04:46.450
+as well as the type
+of the arguments
+
+00:04:46.450 --> 00:04:49.540
+that the function inputs.
+
+00:04:49.540 --> 00:04:51.970
+And again, like the
+TFRecordDataset,
+
+00:04:51.970 --> 00:04:53.330
+it produces an output variant.
+
+00:04:56.612 --> 00:04:58.320
+So a little more about
+the use of support
+
+00:04:58.320 --> 00:05:01.650
+for user-defined
+functions in tf.data.
+
+00:05:01.650 --> 00:05:03.420
+A number of tf.data
+transformations
+
+00:05:03.420 --> 00:05:05.520
+are operations that
+actually allow users
+
+00:05:05.520 --> 00:05:07.530
+to specify their own functions.
+
+00:05:07.530 --> 00:05:10.470
+Examples of those are filter,
+flat_map, interleave, map,
+
+00:05:10.470 --> 00:05:12.510
+or reduce.
+
+00:05:12.510 --> 00:05:16.170
+And irrespective of the
+mode of the execution,
+
+00:05:16.170 --> 00:05:18.840
+tf.data will convert the
+user-defined function
+
+00:05:18.840 --> 00:05:20.640
+into a graph.
+
+00:05:20.640 --> 00:05:24.180
+And as illustrated on
+the previous slide,
+
+00:05:24.180 --> 00:05:26.340
+the function graph is--
+
+00:05:26.340 --> 00:05:29.550
+a handle to the function graph
+is passed to the respective op
+
+00:05:29.550 --> 00:05:31.590
+through an attr.
+
+00:05:31.590 --> 00:05:34.260
+A little more detail on the
+tracing implementation-- it
+
+00:05:34.260 --> 00:05:38.100
+was originally based on
+framework.function.Defun
+
+00:05:38.100 --> 00:05:42.060
+and recently switched to the
+same tracing implementation
+
+00:05:42.060 --> 00:05:46.560
+that's used for TF
+functions in 2.0.
+
+00:05:46.560 --> 00:05:48.490
+This provided a
+number of benefits,
+
+00:05:48.490 --> 00:05:51.540
+including control
+flow version 2,
+
+00:05:51.540 --> 00:05:57.420
+support for resource variables,
+TensorArrayV2, and also
+
+00:05:57.420 --> 00:06:02.070
+the ability for users to specify
+user-defined functions that
+
+00:06:02.070 --> 00:06:04.740
+are not necessarily
+graph-compatible as
+
+00:06:04.740 --> 00:06:07.160
+long as they're
+supported by AutoGraph.
+
+00:06:07.160 --> 00:06:08.948
+And it's marked as
+work in progress
+
+00:06:08.948 --> 00:06:10.740
+here because this
+functionality is actually
+
+00:06:10.740 --> 00:06:12.120
+temporarily disabled.
+
+00:06:12.120 --> 00:06:15.120
+And we're working on enabling
+it back on very soon.
+
+00:06:17.840 --> 00:06:21.800
+So to tie it together, if we
+look at the input pipeline
+
+00:06:21.800 --> 00:06:25.970
+definition, the four lines, this
+definition of an input pipeline
+
+00:06:25.970 --> 00:06:29.990
+will roughly correspond to
+the following ops, and inputs,
+
+00:06:29.990 --> 00:06:30.950
+and attributes.
+
+00:06:34.180 --> 00:06:36.430
+Now, up to this
+point, we've only
+
+00:06:36.430 --> 00:06:39.495
+talked about how to
+define the input pipeline.
+
+00:06:39.495 --> 00:06:40.870
+But naturally,
+the thing that you
+
+00:06:40.870 --> 00:06:42.400
+would want to do with
+the input pipeline
+
+00:06:42.400 --> 00:06:44.400
+is that you would like
+to enumerate the elements
+
+00:06:44.400 --> 00:06:45.680
+inside of it.
+
+00:06:45.680 --> 00:06:48.460
+And that's where the
+iterator ops come in play.
+
+00:06:48.460 --> 00:06:51.510
+Because iterator,
+it can be thought
+
+00:06:51.510 --> 00:06:55.050
+of as an instance of a
+data set that has a state
+
+00:06:55.050 --> 00:06:59.710
+and allows you to enumerate the
+elements in a sequential order.
+
+00:06:59.710 --> 00:07:02.950
+So what are the
+iterator lifecycle ops?
+
+00:07:02.950 --> 00:07:05.620
+The op on the left
+top corner called
+
+00:07:05.620 --> 00:07:09.220
+Iterator that takes no input and
+produces a single output called
+
+00:07:09.220 --> 00:07:14.360
+handle is an op that creates an
+empty iterator resource, which
+
+00:07:14.360 --> 00:07:17.170
+is a way to pass the
+state, iterator state,
+
+00:07:17.170 --> 00:07:21.995
+between different operations,
+while the MakeIterator op takes
+
+00:07:21.995 --> 00:07:22.870
+two different inputs.
+
+00:07:22.870 --> 00:07:25.330
+It takes iterator resource,
+which is something
+
+00:07:25.330 --> 00:07:28.240
+that we've created
+by the iterator op,
+
+00:07:28.240 --> 00:07:29.590
+and a data set variant.
+
+00:07:29.590 --> 00:07:31.870
+And what this
+MakeIterator op does,
+
+00:07:31.870 --> 00:07:35.060
+it instantiates the
+data set-- sorry,
+
+00:07:35.060 --> 00:07:38.320
+the iterator resource with
+that particular data set.
+
+00:07:38.320 --> 00:07:40.480
+So at that point, you
+have an iterator resource
+
+00:07:40.480 --> 00:07:42.820
+that has been initialized
+to start producing
+
+00:07:42.820 --> 00:07:46.130
+elements for that particular
+data set as defined by the data
+
+00:07:46.130 --> 00:07:48.400
+set variant.
+
+00:07:48.400 --> 00:07:50.110
+Now, the actual
+iteration happens
+
+00:07:50.110 --> 00:07:52.420
+by the means of the
+IteratorGetNext op,
+
+00:07:52.420 --> 00:07:55.240
+which takes an iterator
+resource handle
+
+00:07:55.240 --> 00:07:57.520
+and produces the
+actual elements, which
+
+00:07:57.520 --> 00:08:00.460
+can be a tensor, or a nest
+of tensors, or possibly
+
+00:08:00.460 --> 00:08:02.500
+also non-tensor types.
+
+00:08:02.500 --> 00:08:04.000
+And later in the
+presentation, I'll
+
+00:08:04.000 --> 00:08:06.630
+talk about what
+exactly is supported
+
+00:08:06.630 --> 00:08:10.100
+in tf.data in terms of types.
+
+00:08:10.100 --> 00:08:13.600
+And finally, there's
+also a DeleteIterator op
+
+00:08:13.600 --> 00:08:16.180
+that takes the iterator
+resource and makes
+
+00:08:16.180 --> 00:08:18.640
+sure that the iterator
+state is properly
+
+00:08:18.640 --> 00:08:22.600
+disposed of when the
+iterator is no longer needed.
+
+00:08:22.600 --> 00:08:25.330
+This final op, as
+you can imagine,
+
+00:08:25.330 --> 00:08:30.100
+is very important to make sure
+that iterator resources are not
+
+00:08:30.100 --> 00:08:31.030
+being left behind.
+
+00:08:31.030 --> 00:08:34.690
+Because it is not uncommon
+for the iterator resource
+
+00:08:34.690 --> 00:08:37.480
+state to amass hundreds
+of megabytes or gigabytes
+
+00:08:37.480 --> 00:08:38.830
+of memory.
+
+00:08:38.830 --> 00:08:43.299
+And leaving these around can
+result in your computation
+
+00:08:43.299 --> 00:08:45.640
+running out of memory.
+
+00:08:45.640 --> 00:08:50.140
+As a side note, when you're
+looking at the performance
+
+00:08:50.140 --> 00:08:56.800
+or profiling performance of
+your program or input pipeline,
+
+00:08:56.800 --> 00:08:59.620
+you will see IteratorGetNext
+op in something
+
+00:08:59.620 --> 00:09:02.950
+like a timeline, or an
+[INAUDIBLE],, or CPU profile
+
+00:09:02.950 --> 00:09:04.570
+trace.
+
+00:09:04.570 --> 00:09:06.520
+And this is the op that
+indicates the output
+
+00:09:06.520 --> 00:09:09.130
+latency of your input pipeline.
+
+00:09:09.130 --> 00:09:13.030
+And so if that op is very
+small in its runtime--
+
+00:09:13.030 --> 00:09:15.010
+I would say on the
+order of microseconds--
+
+00:09:15.010 --> 00:09:17.470
+it means that your input
+pipeline is not a bottleneck.
+
+00:09:17.470 --> 00:09:19.540
+And if it's larger
+than that, chances
+
+00:09:19.540 --> 00:09:22.870
+are you are bottlenecked by
+input, at least to some extent.
+
+00:09:26.100 --> 00:09:31.080
+So now that we've talked
+about the different ops, let's
+
+00:09:31.080 --> 00:09:33.810
+actually see how the execution
+of the Python program
+
+00:09:33.810 --> 00:09:37.440
+corresponds or maps to the
+execution-- or creation
+
+00:09:37.440 --> 00:09:39.450
+and execution-- of
+the different ops.
+
+00:09:39.450 --> 00:09:43.680
+And what I'm going to do is I'm
+going to contrast the TF 2.0
+
+00:09:43.680 --> 00:09:48.000
+eager mode style of execution
+with the TF 1.x graph mode
+
+00:09:48.000 --> 00:09:51.930
+style of execution to help
+folks understand what are
+
+00:09:51.930 --> 00:09:53.570
+the differences between TF--
+
+00:09:53.570 --> 00:09:57.250
+between the two modes as
+far as tf.data is concerned.
+
+00:09:57.250 --> 00:10:00.990
+So let's start with
+the 2.0 eager mode.
+
+00:10:00.990 --> 00:10:04.920
+In eager mode, ops are
+created and executed
+
+00:10:04.920 --> 00:10:07.300
+as the program runs.
+
+00:10:07.300 --> 00:10:13.400
+So when the Python line that
+creates the TFRecodrDataset()
+
+00:10:13.400 --> 00:10:16.790
+runs, we end up creating--
+both creating and executing--
+
+00:10:16.790 --> 00:10:20.650
+the RFRecordDataset() op.
+
+00:10:20.650 --> 00:10:23.830
+And similarly,
+with the next line,
+
+00:10:23.830 --> 00:10:26.830
+we create and execute the
+shuffle() data set op,
+
+00:10:26.830 --> 00:10:29.600
+feeding the output of the
+previous op inside of it
+
+00:10:29.600 --> 00:10:31.840
+as part of the input variant.
+
+00:10:31.840 --> 00:10:34.780
+That way, we tie-- we're
+starting to build the input
+
+00:10:34.780 --> 00:10:36.490
+pipeline, trying it to--
+
+00:10:36.490 --> 00:10:40.570
+connecting the two
+stages together.
+
+00:10:40.570 --> 00:10:46.000
+When the .map
+transformation is executed,
+
+00:10:46.000 --> 00:10:49.660
+the user-defined function
+is traced and stored
+
+00:10:49.660 --> 00:10:51.730
+in the TensorFlow runtime.
+
+00:10:51.730 --> 00:10:55.270
+And a handle to it is
+passed, as an attribute,
+
+00:10:55.270 --> 00:10:58.930
+to the map data set op
+along with the input variant
+
+00:10:58.930 --> 00:11:03.440
+representing the input
+pipeline up to that point.
+
+00:11:03.440 --> 00:11:06.460
+And finally, the batch()
+op is created and executed,
+
+00:11:06.460 --> 00:11:10.520
+creating the final stage
+of the input pipeline.
+
+00:11:10.520 --> 00:11:16.140
+Now, when the idiomatic way of
+iterating through tf.data is
+
+00:11:16.140 --> 00:11:19.470
+used-- that is, the for loop
+for element in data set--
+
+00:11:19.470 --> 00:11:21.840
+what happens under the hood
+is that an entire method is
+
+00:11:21.840 --> 00:11:25.110
+called on the data set object.
+
+00:11:25.110 --> 00:11:27.720
+And that actually triggers
+the creation and execution
+
+00:11:27.720 --> 00:11:29.370
+of two ops.
+
+00:11:29.370 --> 00:11:32.460
+We first create the iterator
+resource through an op.
+
+00:11:32.460 --> 00:11:33.990
+It's called Anonymous Iterator.
+
+00:11:33.990 --> 00:11:36.240
+And I'm going to point out
+the difference between that
+
+00:11:36.240 --> 00:11:41.020
+and the iterator as I talk
+about the graph more execution.
+
+00:11:41.020 --> 00:11:43.110
+And then we associate
+the iterator resource
+
+00:11:43.110 --> 00:11:46.210
+with the input pipeline
+that we've created
+
+00:11:46.210 --> 00:11:48.180
+via the MakeIterator op.
+
+00:11:51.540 --> 00:11:54.880
+And as the Python
+for loop iterates,
+
+00:11:54.880 --> 00:11:58.860
+we end up invoking next() on
+the Python iterator object.
+
+00:11:58.860 --> 00:12:02.250
+And this translates to
+the IteratorGetNext op
+
+00:12:02.250 --> 00:12:04.830
+being created and
+subsequently executed.
+
+00:12:04.830 --> 00:12:07.260
+It's only created once, and
+it's executed as many times
+
+00:12:07.260 --> 00:12:12.580
+as there's elements
+in the data set.
+
+00:12:12.580 --> 00:12:15.280
+And finally, when the Python
+iterator object goes out
+
+00:12:15.280 --> 00:12:19.000
+of scope, the DeleteIterator
+op is invoked,
+
+00:12:19.000 --> 00:12:22.000
+which makes sure that the
+iterator state, iterator
+
+00:12:22.000 --> 00:12:23.740
+resource state, is
+properly disposed of.
+
+00:12:27.260 --> 00:12:29.920
+So let's contrast
+that with how this
+
+00:12:29.920 --> 00:12:35.170
+would work in 1.x graph mode.
+
+00:12:35.170 --> 00:12:37.870
+So in graph mode, the
+execution happens lazily,
+
+00:12:37.870 --> 00:12:42.220
+which means we create the ops
+as the Python lines are invoked.
+
+00:12:42.220 --> 00:12:44.290
+But they're not executed--
+
+00:12:44.290 --> 00:12:49.000
+the execution is postponed
+until the particular ops are
+
+00:12:49.000 --> 00:12:51.250
+run using decision mechanism.
+
+00:12:51.250 --> 00:12:53.440
+So just stepping
+through the program,
+
+00:12:53.440 --> 00:12:59.330
+we see that we are building
+a graph but not executing it.
+
+00:12:59.330 --> 00:13:03.080
+There is a particular mechanism
+for creating the iterator
+
+00:13:03.080 --> 00:13:06.920
+resource op and the
+MakeIterator op,
+
+00:13:06.920 --> 00:13:13.670
+as well as creating the op that
+is later used for iteration.
+
+00:13:13.670 --> 00:13:19.280
+And it's only within the
+run part of your program
+
+00:13:19.280 --> 00:13:21.210
+that ops are executed.
+
+00:13:21.210 --> 00:13:23.990
+When the iterator
+initializer op is executed,
+
+00:13:23.990 --> 00:13:26.480
+we actually end up executing
+the entire graph of the input
+
+00:13:26.480 --> 00:13:29.540
+pipeline, including
+the iterator op.
+
+00:13:29.540 --> 00:13:31.400
+Now, the difference
+between the iterator op
+
+00:13:31.400 --> 00:13:36.080
+and the anonymous iterator op
+that was used in the eager mode
+
+00:13:36.080 --> 00:13:39.350
+is that anonymous iterator
+op creates a new resource
+
+00:13:39.350 --> 00:13:42.980
+every time it's executed,
+while iterator op creates
+
+00:13:42.980 --> 00:13:45.860
+a resource only the
+first time it's executed.
+
+00:13:45.860 --> 00:13:49.520
+And any subsequent
+execution returns a handle
+
+00:13:49.520 --> 00:13:50.790
+to that resource.
+
+00:13:50.790 --> 00:13:55.590
+And the reason for that is
+when we run the get_next op,
+
+00:13:55.590 --> 00:14:01.070
+that get_next op will actually
+execute the iterator op as well
+
+00:14:01.070 --> 00:14:04.490
+by the nature of the
+difference between the graph
+
+00:14:04.490 --> 00:14:06.680
+mode and eager mode executions.
+
+00:14:06.680 --> 00:14:10.280
+And so that's kind of an
+artifact of graph mode
+
+00:14:10.280 --> 00:14:10.970
+execution.
+
+00:14:10.970 --> 00:14:13.910
+And thus we need different
+types of resource creation
+
+00:14:13.910 --> 00:14:18.290
+ops for eager mode and graph
+mode inside of tf.data.
+
+00:14:20.870 --> 00:14:23.410
+And there is no explicit
+delete iterator op.
+
+00:14:23.410 --> 00:14:25.450
+And that's because
+the iterator resource
+
+00:14:25.450 --> 00:14:28.600
+lifetime is tied to the lifetime
+of the surrounding session.
+
+00:14:28.600 --> 00:14:30.460
+And so when the
+session is destroyed,
+
+00:14:30.460 --> 00:14:33.570
+so is the iterator resource.
+
+00:14:33.570 --> 00:14:35.520
+So far, so good?
+
+00:14:35.520 --> 00:14:36.150
+OK.
+
+00:14:36.150 --> 00:14:38.002
+So let's now, after--
+
+00:14:38.002 --> 00:14:39.960
+now that we've kind of
+peeled the Python layer,
+
+00:14:39.960 --> 00:14:44.670
+and we talked about an op-level
+view of tf.data, let's dive
+
+00:14:44.670 --> 00:14:45.563
+a level deeper.
+
+00:14:45.563 --> 00:14:46.980
+And let's talk
+about what actually
+
+00:14:46.980 --> 00:14:50.090
+happens inside of the kernels
+that implement these ops.
+
+00:14:50.090 --> 00:14:54.720
+And like with most other
+TensorFlow op kernels,
+
+00:14:54.720 --> 00:14:55.980
+these are implemented in C++.
+
+00:14:59.330 --> 00:15:04.010
+So before we retrace our steps
+or take a look at the example
+
+00:15:04.010 --> 00:15:06.290
+program from a
+C++ point of view,
+
+00:15:06.290 --> 00:15:09.500
+let's talk about what are
+the important tf.data C++
+
+00:15:09.500 --> 00:15:11.060
+abstractions.
+
+00:15:11.060 --> 00:15:14.870
+So the top-level one is a
+data set op kernel which
+
+00:15:14.870 --> 00:15:17.490
+implements the op kernel API.
+
+00:15:17.490 --> 00:15:22.910
+And this provides a mechanism
+for implementing different
+
+00:15:22.910 --> 00:15:27.410
+types of data set ops through
+a single interface where
+
+00:15:27.410 --> 00:15:29.960
+the different implementations
+of the data set op kernel
+
+00:15:29.960 --> 00:15:33.260
+interface just need to override
+or implement the MakeDataset()
+
+00:15:33.260 --> 00:15:34.640
+method.
+
+00:15:34.640 --> 00:15:39.260
+What the MakeDataset() does, it
+returns a DatasetBase object.
+
+00:15:39.260 --> 00:15:43.550
+Now, the purpose of the data
+set op kernel is to provide
+
+00:15:43.550 --> 00:15:47.390
+a translation between a graph
+representation of the op
+
+00:15:47.390 --> 00:15:49.510
+and a C++ representation
+of the op.
+
+00:15:49.510 --> 00:15:52.700
+Now the data set object--
+
+00:15:52.700 --> 00:15:56.360
+DatasetBase object-- in turn
+has a method for creating
+
+00:15:56.360 --> 00:16:01.130
+an iterator for that particular
+data set as well as a method
+
+00:16:01.130 --> 00:16:04.340
+called AsGraphDef(), which
+provides the reverse of what I
+
+00:16:04.340 --> 00:16:07.790
+just talked about, which allows
+you to basically go from a C++
+
+00:16:07.790 --> 00:16:11.210
+representation of a data set
+back to a graph representation
+
+00:16:11.210 --> 00:16:15.200
+of a data set, which will come
+in handy when I talk about
+
+00:16:15.200 --> 00:16:16.580
+static optimizations of tf.data.
+
+00:16:20.180 --> 00:16:23.200
+The MakeIterator() method
+of the DatasetBase returns
+
+00:16:23.200 --> 00:16:26.410
+an IteratorBase, which is
+an interface representing
+
+00:16:26.410 --> 00:16:28.750
+the different types
+of iterators we have.
+
+00:16:28.750 --> 00:16:32.650
+And the single most important
+method in that interface is
+
+00:16:32.650 --> 00:16:37.690
+GetNext(), which is the actual
+C++ method used for iterating
+
+00:16:37.690 --> 00:16:41.740
+through the state of
+the input pipeline.
+
+00:16:41.740 --> 00:16:45.760
+And coupled with that
+is the IteratorResource,
+
+00:16:45.760 --> 00:16:48.260
+which holds the state.
+
+00:16:48.260 --> 00:16:51.250
+And so as we will see, the
+IteratorResource is actually
+
+00:16:51.250 --> 00:16:55.660
+the entry point into
+the connected structure
+
+00:16:55.660 --> 00:17:00.370
+of different C++ iterators
+through which ops like
+
+00:17:00.370 --> 00:17:02.860
+IteratorGetNext
+get receive data.
+
+00:17:02.860 --> 00:17:05.650
+And the SetIteratorFromDataset()
+method corresponds
+
+00:17:05.650 --> 00:17:09.609
+to the MakeIterator op,
+as we'll shortly see.
+
+00:17:09.609 --> 00:17:14.109
+Last but not least, tf.data
+has two C++ abstractions
+
+00:17:14.109 --> 00:17:16.810
+for representing functions,
+its CapturedFunction
+
+00:17:16.810 --> 00:17:19.300
+and
+InstantiatedCapturedFunction.
+
+00:17:19.300 --> 00:17:21.819
+The CapturedFunction
+provides a mechanism
+
+00:17:21.819 --> 00:17:25.990
+for bundling a function
+with its captured inputs
+
+00:17:25.990 --> 00:17:27.940
+and later instantiating it.
+
+00:17:27.940 --> 00:17:29.560
+And the
+InstantiateCapturedFunction
+
+00:17:29.560 --> 00:17:32.640
+provides tf.data with a
+mechanism to actually run
+
+00:17:32.640 --> 00:17:34.790
+the user-defined functions.
+
+00:17:34.790 --> 00:17:36.930
+And so you can
+perhaps see how there
+
+00:17:36.930 --> 00:17:41.350
+is a simple relationship between
+DatasetBase and IteratorBase
+
+00:17:41.350 --> 00:17:44.860
+and CapturedFunction and
+InstantiatedCapturedFunction
+
+00:17:44.860 --> 00:17:48.790
+where the letter is an
+instance of the former in both
+
+00:17:48.790 --> 00:17:51.820
+of those cases.
+
+00:17:51.820 --> 00:17:53.990
+All right, so let's go
+back to our example.
+
+00:17:53.990 --> 00:17:56.560
+And now we're going to take a
+look at what happens when we
+
+00:17:56.560 --> 00:17:58.780
+execute the different lines
+of the input pipeline,
+
+00:17:58.780 --> 00:18:01.420
+but what happens
+in the C++ world.
+
+00:18:01.420 --> 00:18:05.390
+And unlike in the previous
+Python view section,
+
+00:18:05.390 --> 00:18:09.670
+in this section, the diagram
+at the bottom will not be graph
+
+00:18:09.670 --> 00:18:12.110
+objects, but they
+will be C++ objects.
+
+00:18:12.110 --> 00:18:14.980
+So in this case, the
+TFRecord Data set down below
+
+00:18:14.980 --> 00:18:18.830
+is actually an instance
+of the TFRecord Data set
+
+00:18:18.830 --> 00:18:20.743
+that's of type DatasetBase.
+
+00:18:23.380 --> 00:18:27.230
+And for context, we are,
+again, in TF 2.0 eager mode.
+
+00:18:27.230 --> 00:18:33.070
+So when the Python program
+executes a tf.data TFRecord
+
+00:18:33.070 --> 00:18:39.690
+Data set with files argument,
+we end up creating the data set
+
+00:18:39.690 --> 00:18:43.410
+variant through the
+following C++ code.
+
+00:18:43.410 --> 00:18:45.600
+And just for illustration,
+I'm showing here
+
+00:18:45.600 --> 00:18:50.310
+how that op kernel fetches
+the set of file names.
+
+00:18:50.310 --> 00:18:51.810
+And the set of file
+names can either
+
+00:18:51.810 --> 00:18:54.720
+be a single string
+or a list of strings.
+
+00:18:54.720 --> 00:18:57.210
+So there is some
+subsequent string parsing
+
+00:18:57.210 --> 00:18:59.040
+that's elided here.
+
+00:18:59.040 --> 00:19:01.920
+But the important bit
+here is that we're then
+
+00:19:01.920 --> 00:19:07.800
+storing the TFRecord Data set
+op data set in the output, where
+
+00:19:07.800 --> 00:19:10.860
+the data set object
+itself is a variant, which
+
+00:19:10.860 --> 00:19:15.428
+allows us to pass it on
+as an input to another op.
+
+00:19:18.120 --> 00:19:22.380
+And that another op is the
+ShuffleDataset, which gets
+
+00:19:22.380 --> 00:19:24.630
+executed immediately after.
+
+00:19:24.630 --> 00:19:29.490
+And so here I'm illustrating
+how the op receives
+
+00:19:29.490 --> 00:19:34.380
+or kind of extracts the variant
+tensor input from the op kernel
+
+00:19:34.380 --> 00:19:38.970
+context and then passes it
+inside of the ShuffleDatasetOp
+
+00:19:38.970 --> 00:19:43.680
+so that the ShuffleDatasetOp
+now understands
+
+00:19:43.680 --> 00:19:47.420
+what stage is producing
+elements for it to consume.
+
+00:19:50.380 --> 00:19:52.690
+Next, it's the map
+transformation.
+
+00:19:52.690 --> 00:19:55.720
+What I want to illustrate here
+is how the CapturedFunction
+
+00:19:55.720 --> 00:19:57.760
+mechanism works.
+
+00:19:57.760 --> 00:20:00.310
+We use the CapturedFunction
+Create factory
+
+00:20:00.310 --> 00:20:03.430
+that takes the identifier
+of the function, which
+
+00:20:03.430 --> 00:20:08.500
+is a list of
+attributes, as well as
+
+00:20:08.500 --> 00:20:12.760
+any captured inputs if there
+were any stored in the op
+
+00:20:12.760 --> 00:20:14.320
+kernel context.
+
+00:20:14.320 --> 00:20:16.900
+And similar to the
+ShuffleDatasetOp,
+
+00:20:16.900 --> 00:20:20.230
+we end up passing the captured
+function as well as the input
+
+00:20:20.230 --> 00:20:25.620
+to the downstream data set
+inside of the constructor.
+
+00:20:25.620 --> 00:20:29.640
+And finally, there is
+not much new to see here
+
+00:20:29.640 --> 00:20:31.560
+for the BatchDatasetOp.
+
+00:20:31.560 --> 00:20:36.730
+So I pretty much elided all
+the details from this slide.
+
+00:20:36.730 --> 00:20:39.170
+OK, so now for the
+interesting stuff,
+
+00:20:39.170 --> 00:20:41.600
+because this is where
+we are going to start
+
+00:20:41.600 --> 00:20:43.190
+iterating through the data set.
+
+00:20:43.190 --> 00:20:45.770
+So the first thing that
+happens when you call--
+
+00:20:45.770 --> 00:20:49.850
+or when you write "for
+element in dataset"--
+
+00:20:49.850 --> 00:20:51.530
+under the hood,
+this gets translated
+
+00:20:51.530 --> 00:20:54.872
+to a Python iter invocation
+on the data set object.
+
+00:20:54.872 --> 00:20:56.330
+And the first thing
+that happens is
+
+00:20:56.330 --> 00:21:01.580
+that we create the
+anonymous Iterator Resource.
+
+00:21:01.580 --> 00:21:05.210
+And here is just an illustration
+of the actual mechanism that
+
+00:21:05.210 --> 00:21:08.900
+does this as well as the
+code that then produces
+
+00:21:08.900 --> 00:21:11.330
+the handle to the iterator.
+
+00:21:11.330 --> 00:21:15.050
+And this handle, along
+with the variant tensor
+
+00:21:15.050 --> 00:21:17.180
+representing the
+batch data set is then
+
+00:21:17.180 --> 00:21:19.890
+passed to the MakeIteratorOp.
+
+00:21:19.890 --> 00:21:23.000
+So here you can see how we
+extract both the data set
+
+00:21:23.000 --> 00:21:26.700
+variant as well as the resource
+handle and use these two
+
+00:21:26.700 --> 00:21:30.080
+to pass them into the
+SetIteratorFromDataset() method
+
+00:21:30.080 --> 00:21:35.000
+that, as we will shortly see,
+will, in a cascading fashion,
+
+00:21:35.000 --> 00:21:40.150
+create a sequence of
+connected iterator objects.
+
+00:21:40.150 --> 00:21:42.840
+So let's take a closer look at
+what SetIteratorFromDataset()
+
+00:21:42.840 --> 00:21:44.820
+does.
+
+00:21:44.820 --> 00:21:47.280
+It takes a look at the
+outermost data set,
+
+00:21:47.280 --> 00:21:50.040
+because that's the
+variant that it received.
+
+00:21:50.040 --> 00:21:54.120
+And it invokes MakeIterator
+on that particular data set.
+
+00:21:56.830 --> 00:22:02.500
+And this will prompt a creation
+of a Batch Iterator using
+
+00:22:02.500 --> 00:22:06.020
+the MakeIterator() method
+on the Batch Data set,
+
+00:22:06.020 --> 00:22:10.450
+but also trigger a recursive
+MakeIterator() invocation
+
+00:22:10.450 --> 00:22:14.510
+on the input of Batch Data
+set, which is Map Data set.
+
+00:22:14.510 --> 00:22:17.620
+And so in that fashion, the
+Map-- in a similar fashion,
+
+00:22:17.620 --> 00:22:20.490
+Map Iterator is created,
+where the Map Iterator
+
+00:22:20.490 --> 00:22:24.860
+creator will also instantiate
+the captured function.
+
+00:22:24.860 --> 00:22:27.880
+So now we'll see that we have
+a parse_fn instance in addition
+
+00:22:27.880 --> 00:22:29.890
+to just parse_fn
+CapturedFunction object.
+
+00:22:33.500 --> 00:22:38.140
+And similarly, we create a
+Shuffle Iterator, and finally,
+
+00:22:38.140 --> 00:22:39.340
+the TFRecord Iterator.
+
+00:22:39.340 --> 00:22:42.230
+And because TFRecord
+Data set has no inputs,
+
+00:22:42.230 --> 00:22:45.740
+this is where the recursive
+creation of the input pipeline
+
+00:22:45.740 --> 00:22:47.360
+state stops.
+
+00:22:47.360 --> 00:22:50.900
+And the control bubbles up
+back to IteratorResource, that
+
+00:22:50.900 --> 00:22:52.913
+returns a resource handle--
+
+00:22:52.913 --> 00:22:55.330
+actually, MakeIterator() doesn't
+return a resource handle.
+
+00:22:55.330 --> 00:22:57.248
+We already have the
+resource handle.
+
+00:22:57.248 --> 00:22:58.040
+AUDIENCE: Question.
+
+00:22:58.040 --> 00:23:00.010
+YURI: Uh-huh?
+
+00:23:00.010 --> 00:23:02.440
+AUDIENCE: Does the input
+pipeline have to be a line?
+
+00:23:02.440 --> 00:23:03.410
+Or can it be a DAG?
+
+00:23:05.940 --> 00:23:10.080
+YURI: So at the data set
+level, the input pipeline
+
+00:23:10.080 --> 00:23:12.630
+can be a DAG.
+
+00:23:12.630 --> 00:23:14.940
+At the iterator
+level, it will always
+
+00:23:14.940 --> 00:23:19.165
+be a tree, if that makes sense.
+
+00:23:19.165 --> 00:23:19.665
+OK.
+
+00:23:24.130 --> 00:23:28.830
+So next, let's take
+a look at next().
+
+00:23:28.830 --> 00:23:32.610
+So when the IteratorGetNextOp is
+invoked because we're starting
+
+00:23:32.610 --> 00:23:37.860
+to iterate through the
+elements of the input pipeline,
+
+00:23:37.860 --> 00:23:40.710
+we again look up the resource
+using to LookupResource()
+
+00:23:40.710 --> 00:23:44.070
+method and then call
+to GetNext() method
+
+00:23:44.070 --> 00:23:46.450
+on the resource.
+
+00:23:46.450 --> 00:23:48.870
+And as I mentioned
+earlier, iterator resource
+
+00:23:48.870 --> 00:23:53.760
+is thus the entry point to
+the state of the iterator.
+
+00:23:53.760 --> 00:23:57.630
+And what happens is this
+recursively calls GetNext()
+
+00:23:57.630 --> 00:23:59.220
+on the Batch Iterator.
+
+00:23:59.220 --> 00:24:00.990
+And the Batch Iterator
+says, well, I need
+
+00:24:00.990 --> 00:24:02.740
+batch size worth of elements.
+
+00:24:02.740 --> 00:24:06.340
+So let me get them one by one.
+
+00:24:06.340 --> 00:24:09.600
+So it calls to Map Iterator to
+say, please give me an element.
+
+00:24:09.600 --> 00:24:11.460
+Map Iterator says,
+well, I need an element
+
+00:24:11.460 --> 00:24:13.650
+to apply a user-defined
+function on.
+
+00:24:13.650 --> 00:24:15.810
+So it's going to
+ask Shuffle for one.
+
+00:24:15.810 --> 00:24:19.380
+And Shuffle says, well, I need
+a buffer size worth of elements
+
+00:24:19.380 --> 00:24:21.000
+to do reasonable shuffling.
+
+00:24:21.000 --> 00:24:23.490
+So it's going to call
+to TFRecord Iterator.
+
+00:24:23.490 --> 00:24:26.160
+And TFRecord Iterator will say,
+OK, well, I have these files,
+
+00:24:26.160 --> 00:24:29.290
+and I'm going to open and start
+reading elements out of them.
+
+00:24:29.290 --> 00:24:32.970
+So at this point, we
+start returning data back
+
+00:24:32.970 --> 00:24:37.590
+up this round trip between
+Shuffle and TFRecord Iterators.
+
+00:24:37.590 --> 00:24:40.080
+It might happen multiple
+times initially.
+
+00:24:40.080 --> 00:24:43.030
+And at some point, Shuffle
+or has filled its buffer
+
+00:24:43.030 --> 00:24:45.150
+off of elements
+used for shuffling,
+
+00:24:45.150 --> 00:24:49.060
+and produces a random element
+back up to the Map Iterator,
+
+00:24:49.060 --> 00:24:52.180
+which then applies the
+user-defined function on it,
+
+00:24:52.180 --> 00:24:54.570
+and takes its output,
+and returns it back
+
+00:24:54.570 --> 00:24:55.950
+to the Batch Iterator.
+
+00:24:55.950 --> 00:24:59.520
+And this would be repeated
+batch size number of times.
+
+00:24:59.520 --> 00:25:02.910
+Then the Batch Iterator
+would take all those elements
+
+00:25:02.910 --> 00:25:05.910
+and create one higher-level,
+higher-dimensional element out
+
+00:25:05.910 --> 00:25:08.350
+of the individual
+slices of the batch
+
+00:25:08.350 --> 00:25:10.080
+and pass it on to
+Iterator Resource.
+
+00:25:10.080 --> 00:25:12.070
+And that would get created--
+
+00:25:12.070 --> 00:25:16.050
+returned out to
+the Python program.
+
+00:25:16.050 --> 00:25:20.430
+Now finally, when the Python
+iterator goes out of scope,
+
+00:25:20.430 --> 00:25:23.190
+the Iterator
+Resource is deleted.
+
+00:25:23.190 --> 00:25:26.430
+And in a cascading fashion,
+the other iterators
+
+00:25:26.430 --> 00:25:30.210
+get created because their
+ref count goes to 0,
+
+00:25:30.210 --> 00:25:32.010
+or, we actually use
+smart pointers that
+
+00:25:32.010 --> 00:25:34.552
+are kind of connected between
+the different iterator objects.
+
+00:25:37.830 --> 00:25:39.220
+So far, so good?
+
+00:25:39.220 --> 00:25:40.840
+Any questions?
+
+00:25:40.840 --> 00:25:41.340
+OK.
+
+00:25:44.810 --> 00:25:48.500
+So up to this point,
+I talked primarily
+
+00:25:48.500 --> 00:25:53.310
+about input pipeline that wasn't
+trying to be performance-savvy.
+
+00:25:53.310 --> 00:25:57.920
+And if it wasn't obvious
+from the walkthrough
+
+00:25:57.920 --> 00:26:00.290
+of the stages of
+the iterator, it
+
+00:26:00.290 --> 00:26:01.730
+seems like there's
+a lot of steps
+
+00:26:01.730 --> 00:26:04.640
+that would need to happen
+to produce a single batch.
+
+00:26:04.640 --> 00:26:07.400
+And if all these steps
+lie on the critical path
+
+00:26:07.400 --> 00:26:12.470
+of your computation, then
+you're probably not executing
+
+00:26:12.470 --> 00:26:15.650
+at the best possible
+performance,
+
+00:26:15.650 --> 00:26:17.660
+or at the peak of
+your performance.
+
+00:26:17.660 --> 00:26:20.990
+So we have a tf.data
+performance guideline
+
+00:26:20.990 --> 00:26:23.210
+that talks about
+different mechanisms
+
+00:26:23.210 --> 00:26:26.360
+to make sure that your input
+pipeline is performant.
+
+00:26:26.360 --> 00:26:28.940
+And the three main ones
+are software pipelining,
+
+00:26:28.940 --> 00:26:32.300
+processing parallelization,
+and I/O parallelization.
+
+00:26:32.300 --> 00:26:36.890
+And they all use various
+performance artifacts,
+
+00:26:36.890 --> 00:26:41.540
+either buffers or
+parallelism, to allow
+
+00:26:41.540 --> 00:26:47.270
+users to specify how their input
+pipeline should be executed.
+
+00:26:47.270 --> 00:26:49.600
+And in the context
+of the parallelism--
+
+00:26:49.600 --> 00:26:51.780
+and actually,
+pre-fetching as well--
+
+00:26:51.780 --> 00:26:56.600
+they all map down to
+asynchronous threads
+
+00:26:56.600 --> 00:26:59.960
+being started by the
+data set of kernels.
+
+00:26:59.960 --> 00:27:02.210
+And they are running
+in the background,
+
+00:27:02.210 --> 00:27:05.180
+disconnected from
+the GetNext() calls,
+
+00:27:05.180 --> 00:27:08.370
+generating values into
+an internal buffer.
+
+00:27:08.370 --> 00:27:10.970
+And when a GetNext()
+call arrives,
+
+00:27:10.970 --> 00:27:14.150
+it just waits until there
+is something that buffer
+
+00:27:14.150 --> 00:27:15.510
+and returns it.
+
+00:27:15.510 --> 00:27:19.580
+So in the ideal case, there
+is data in the buffer,
+
+00:27:19.580 --> 00:27:22.640
+and you don't need
+to wait at all.
+
+00:27:22.640 --> 00:27:24.980
+But in case your
+consumer of the data
+
+00:27:24.980 --> 00:27:26.720
+is faster than
+your producer, then
+
+00:27:26.720 --> 00:27:29.870
+you might wait some of the
+time, but hopefully not all
+
+00:27:29.870 --> 00:27:31.910
+of the time.
+
+00:27:31.910 --> 00:27:35.920
+So let's just take a look at how
+this would change the diagram
+
+00:27:35.920 --> 00:27:37.107
+that we talked about.
+
+00:27:37.107 --> 00:27:39.190
+So what I did for the sake
+of an illustration is I
+
+00:27:39.190 --> 00:27:41.500
+added the
+num_parallel_calls argument
+
+00:27:41.500 --> 00:27:43.750
+to the map
+transformation as well as
+
+00:27:43.750 --> 00:27:49.780
+a prefetch transformation at the
+very end of the input pipeline.
+
+00:27:49.780 --> 00:27:52.220
+AUDIENCE: So you can prefetch
+anywhere [INAUDIBLE]??
+
+00:27:52.220 --> 00:27:53.375
+YURI: You can.
+
+00:27:53.375 --> 00:27:55.340
+Yes.
+
+00:27:55.340 --> 00:27:59.240
+Rule of thumb is that
+the one at the very end
+
+00:27:59.240 --> 00:28:01.790
+is usually the one that you
+get the most mileage out
+
+00:28:01.790 --> 00:28:05.990
+of because it allows you
+to overlap the computation
+
+00:28:05.990 --> 00:28:08.660
+the entire pipeline with
+the computation that
+
+00:28:08.660 --> 00:28:14.490
+might be happening in the
+model, either on [INAUDIBLE]..
+
+00:28:14.490 --> 00:28:17.050
+But yes, in theory--
+
+00:28:17.050 --> 00:28:19.100
+I have a pertinent
+quiz later on.
+
+00:28:19.100 --> 00:28:21.650
+We'll see that prefetching
+or decoupling the producer
+
+00:28:21.650 --> 00:28:24.660
+and consumer anywhere
+throughout you input pipeline
+
+00:28:24.660 --> 00:28:27.390
+might be a good idea.
+
+00:28:27.390 --> 00:28:33.260
+So the changes that reflect
+what happened, or changes
+
+00:28:33.260 --> 00:28:36.110
+in the pipeline code map
+to the following changes
+
+00:28:36.110 --> 00:28:37.430
+in the diagram.
+
+00:28:37.430 --> 00:28:40.070
+We now have a Prefetch
+Iterator and Prefetch Data Set
+
+00:28:40.070 --> 00:28:41.578
+at the end of the pipeline.
+
+00:28:41.578 --> 00:28:43.870
+And we also have a ParallelMap
+Iterator and ParallelMap
+
+00:28:43.870 --> 00:28:47.420
+data set, instead of just
+regular Map Iterator, Map Data
+
+00:28:47.420 --> 00:28:48.020
+Set.
+
+00:28:48.020 --> 00:28:51.050
+It turns out with tf.data,
+we have a different op kernel
+
+00:28:51.050 --> 00:28:53.470
+from the one that
+uses parallelism.
+
+00:28:53.470 --> 00:28:56.540
+AUDIENCE: Do you support
+Racket tensors yet?
+
+00:28:56.540 --> 00:28:57.510
+YURI: No.
+
+00:28:57.510 --> 00:29:01.320
+But the CL that introduces
+that support on--
+
+00:29:01.320 --> 00:29:03.390
+actually a couple of CLs--
+but we're very close.
+
+00:29:03.390 --> 00:29:04.223
+AUDIENCE: Excellent.
+
+00:29:04.223 --> 00:29:06.230
+And do you see any
+performance decreases
+
+00:29:06.230 --> 00:29:08.850
+when using Racket tensors?
+
+00:29:08.850 --> 00:29:13.272
+YURI: So because we are
+not supporting them yet,
+
+00:29:13.272 --> 00:29:14.730
+I don't have a good
+answer to that.
+
+00:29:14.730 --> 00:29:15.355
+AUDIENCE: Yeah.
+
+00:29:15.355 --> 00:29:18.600
+YURI: I think, through the
+course of the review process
+
+00:29:18.600 --> 00:29:21.480
+for bringing that
+support in, we've
+
+00:29:21.480 --> 00:29:24.750
+been cognizant of making sure
+that the implementation is
+
+00:29:24.750 --> 00:29:28.315
+efficient so that it works
+well out of the gate.
+
+00:29:28.315 --> 00:29:28.940
+AUDIENCE: Yeah.
+
+00:29:28.940 --> 00:29:30.360
+But you support sparse tensors?
+
+00:29:30.360 --> 00:29:31.020
+YURI: We do.
+
+00:29:31.020 --> 00:29:31.370
+AUDIENCE: OK.
+
+00:29:31.370 --> 00:29:31.870
+YURI: Yeah.
+
+00:29:31.870 --> 00:29:34.050
+So the hope is that
+the programs that
+
+00:29:34.050 --> 00:29:37.680
+use sparse tensors that also
+use Racket tensors will see
+
+00:29:37.680 --> 00:29:39.810
+a performance boost
+by switching to Racket
+
+00:29:39.810 --> 00:29:42.127
+tensors once that
+support is rolled up.
+
+00:29:42.127 --> 00:29:42.960
+AUDIENCE: Excellent.
+
+00:29:42.960 --> 00:29:43.440
+Thank you.
+
+00:29:43.440 --> 00:29:43.940
+YURI: Mhm.
+
+00:29:48.360 --> 00:29:51.350
+And so the runner
+threads that are our
+
+00:29:51.350 --> 00:29:54.160
+illustrated here, these are
+the background threads that
+
+00:29:54.160 --> 00:29:56.595
+decouple the producer and
+consumer in the Prefetch
+
+00:29:56.595 --> 00:29:59.910
+Iterator and the ParallelMap
+Iterator respectively.
+
+00:29:59.910 --> 00:30:04.100
+And they're actually not started
+until the very first getNext
+
+00:30:04.100 --> 00:30:05.560
+invocation.
+
+00:30:05.560 --> 00:30:08.420
+So before you call getNext
+for the first time,
+
+00:30:08.420 --> 00:30:12.420
+the iterator is idle.
+
+00:30:12.420 --> 00:30:14.340
+There's no activity happening.
+
+00:30:14.340 --> 00:30:16.470
+But the moment you
+start fetching data out
+
+00:30:16.470 --> 00:30:19.800
+of the iterator, background
+threads might be started
+
+00:30:19.800 --> 00:30:22.650
+or thread pools might be
+created that might start
+
+00:30:22.650 --> 00:30:25.110
+performing a background entity.
+
+00:30:25.110 --> 00:30:27.540
+An interesting, exciting thing,
+or a consequence of this,
+
+00:30:27.540 --> 00:30:30.390
+is that a traditional
+way to look
+
+00:30:30.390 --> 00:30:35.040
+at the performance of TensorFlow
+would be a timeline, which
+
+00:30:35.040 --> 00:30:36.570
+gives you a view
+into what happens
+
+00:30:36.570 --> 00:30:38.720
+in the context of
+a single stack.
+
+00:30:38.720 --> 00:30:43.560
+And this particular
+abstraction doesn't match well
+
+00:30:43.560 --> 00:30:49.110
+with the asynchronous
+nature of tf.data execution.
+
+00:30:49.110 --> 00:30:50.713
+In addition to
+that, you will only
+
+00:30:50.713 --> 00:30:53.130
+see the iterator get mixed up,
+which might not necessarily
+
+00:30:53.130 --> 00:30:56.900
+give you a good view
+into what's actually
+
+00:30:56.900 --> 00:31:00.090
+happening at the different
+stages of the tf.data
+
+00:31:00.090 --> 00:31:01.220
+into pipeline.
+
+00:31:01.220 --> 00:31:04.730
+And so at the recent
+Dev Summit, we
+
+00:31:04.730 --> 00:31:07.040
+announced that there is
+going to be an open source
+
+00:31:07.040 --> 00:31:09.620
+version of a tool that we've
+had available internally
+
+00:31:09.620 --> 00:31:12.380
+for some time that
+provides you with all
+
+00:31:12.380 --> 00:31:15.575
+these details of information
+so that you can debug
+
+00:31:15.575 --> 00:31:18.320
+the performance of
+your input pipeline
+
+00:31:18.320 --> 00:31:21.328
+using the same tools
+that we use internally.
+
+00:31:24.470 --> 00:31:24.970
+OK.
+
+00:31:24.970 --> 00:31:28.750
+So that concludes the section
+where I talked about C++
+
+00:31:28.750 --> 00:31:30.920
+and what happens in C++.
+
+00:31:30.920 --> 00:31:32.480
+And there's a little
+bit of a switch
+
+00:31:32.480 --> 00:31:34.605
+now, because we're going
+to go back to Python level
+
+00:31:34.605 --> 00:31:36.560
+and talk about supporting
+non-tensor types.
+
+00:31:40.390 --> 00:31:46.930
+So tf.data supports more
+than just regular tensors.
+
+00:31:46.930 --> 00:31:49.480
+The different inputs
+or outputs of your data
+
+00:31:49.480 --> 00:31:52.400
+transformations can actually be
+a number of different things--
+
+00:31:52.400 --> 00:31:54.850
+sparse tensors,
+tensor arrays, nests
+
+00:31:54.850 --> 00:31:59.530
+of any of these optionals,
+as well as nested data sets.
+
+00:31:59.530 --> 00:32:01.205
+And here, I just illustrate it.
+
+00:32:01.205 --> 00:32:02.830
+It's not an exhaustive
+list, but I just
+
+00:32:02.830 --> 00:32:05.620
+illustrate some of the
+transformations in terms
+
+00:32:05.620 --> 00:32:09.670
+of the types that
+they support either
+
+00:32:09.670 --> 00:32:11.830
+as an input or an output.
+
+00:32:11.830 --> 00:32:13.640
+AUDIENCE: What
+about NumPy arrays?
+
+00:32:13.640 --> 00:32:15.680
+YURI: NumPy arrays
+are supported as well.
+
+00:32:15.680 --> 00:32:19.250
+They kind of fall into the
+category of tensors by virtue
+
+00:32:19.250 --> 00:32:21.780
+being of trivially
+convertible to tensors.
+
+00:32:21.780 --> 00:32:23.620
+AUDIENCE: Yeah.
+
+00:32:23.620 --> 00:32:26.110
+YURI: Similar to NumPy,
+there's something
+
+00:32:26.110 --> 00:32:28.450
+called SparseTensorValue,
+which is really
+
+00:32:28.450 --> 00:32:32.280
+just a Python
+namedtuple return type.
+
+00:32:32.280 --> 00:32:35.982
+And that's kind of the NumPy
+equivalent for sparse tensors.
+
+00:32:35.982 --> 00:32:37.690
+And I think Racket
+tensors have the same.
+
+00:32:37.690 --> 00:32:39.023
+They have a Racket tensor value.
+
+00:32:42.690 --> 00:32:44.940
+AUDIENCE: With the caveat
+in [INAUDIBLE] and in eager,
+
+00:32:44.940 --> 00:32:46.400
+you don't actually
+need the value types
+
+00:32:46.400 --> 00:32:49.080
+because you can have a sparse
+tensor or a Racket tensor whose
+
+00:32:49.080 --> 00:32:51.810
+values are eager tensors,
+which are trivially
+
+00:32:51.810 --> 00:32:53.670
+convertible to NumPy arrays.
+
+00:32:53.670 --> 00:32:54.170
+YURI: Yeah.
+
+00:32:54.170 --> 00:32:54.670
+Yeah.
+
+00:32:54.670 --> 00:32:58.260
+So the value type is an
+artifact of graph mode 1.x.
+
+00:33:00.980 --> 00:33:03.990
+So the mechanism that
+tf.data uses under the hoods
+
+00:33:03.990 --> 00:33:07.030
+could provide support
+for these different types
+
+00:33:07.030 --> 00:33:12.500
+is the tf.data structure
+API, which is this interface
+
+00:33:12.500 --> 00:33:17.110
+and will require any type
+to be supported in tf.data
+
+00:33:17.110 --> 00:33:19.920
+to implement this interface.
+
+00:33:19.920 --> 00:33:22.830
+I'm not going to talk
+about each of these,
+
+00:33:22.830 --> 00:33:28.570
+but the list of methods
+is neither short nor long.
+
+00:33:28.570 --> 00:33:31.200
+So for example, the
+support for TensorArray
+
+00:33:31.200 --> 00:33:34.360
+was introduced less
+than a month ago.
+
+00:33:34.360 --> 00:33:37.180
+And it was one day of work.
+
+00:33:37.180 --> 00:33:39.690
+So I don't think that the
+overhead of introducing
+
+00:33:39.690 --> 00:33:42.990
+the support for the
+type, as long as it's
+
+00:33:42.990 --> 00:33:46.770
+kind of natural how to implement
+this method is very large.
+
+00:33:46.770 --> 00:33:49.680
+Having said that, the
+support for Racket tensor
+
+00:33:49.680 --> 00:33:51.580
+has been in the
+works for some time.
+
+00:33:51.580 --> 00:33:53.190
+And part of it is
+because we actually
+
+00:33:53.190 --> 00:33:55.650
+want that implementation
+to be very performant.
+
+00:33:55.650 --> 00:33:59.820
+And so it prompted creation of
+new C++ kernels to make sure
+
+00:33:59.820 --> 00:34:01.950
+that the performance is
+good from the get-go.
+
+00:34:04.810 --> 00:34:07.240
+Instead of talking
+about the individual
+
+00:34:07.240 --> 00:34:10.030
+methods in the interface,
+what I want to do here
+
+00:34:10.030 --> 00:34:12.370
+is I want to illustrate how
+this interface is actually
+
+00:34:12.370 --> 00:34:17.620
+used to provide the
+polymorphism at the Python level
+
+00:34:17.620 --> 00:34:21.199
+for different types of
+tf.data transformations.
+
+00:34:21.199 --> 00:34:25.120
+So for instance, if we look
+at the tf.data data set
+
+00:34:25.120 --> 00:34:28.540
+from tensors transformation,
+which is a data source that
+
+00:34:28.540 --> 00:34:34.110
+just take a memory array and use
+it as a data set source, what
+
+00:34:34.110 --> 00:34:37.929
+the implementation at the Python
+level does is it computes,
+
+00:34:37.929 --> 00:34:40.610
+or it involves the structure
+from value methods,
+
+00:34:40.610 --> 00:34:44.120
+to compute an instance of the
+structure object and stores
+
+00:34:44.120 --> 00:34:46.380
+internally in its attribute.
+
+00:34:46.380 --> 00:34:52.030
+And then it passes the output
+of structure to tensor arrays,
+
+00:34:52.030 --> 00:34:52.989
+to the op kernel--
+
+00:34:52.989 --> 00:34:55.750
+so the tensor data
+set op kernel.
+
+00:34:55.750 --> 00:34:58.700
+I forgot to mention
+earlier, at the C++ level,
+
+00:34:58.700 --> 00:35:03.550
+tf.data only deals with
+flat lists of tensors.
+
+00:35:03.550 --> 00:35:07.630
+And so we need a mechanism to
+go between that representation
+
+00:35:07.630 --> 00:35:10.720
+and the Python numTensor
+nested structure
+
+00:35:10.720 --> 00:35:12.760
+of also arbitrary types.
+
+00:35:12.760 --> 00:35:15.160
+And it's the to_tensor_list
+and from_tensor_list
+
+00:35:15.160 --> 00:35:20.990
+that provide us with this boxing
+and unboxing, if you will,
+
+00:35:20.990 --> 00:35:24.390
+between the two representations.
+
+00:35:24.390 --> 00:35:27.170
+from_tensor_slices is similar.
+
+00:35:27.170 --> 00:35:29.090
+The difference
+between from_tensors
+
+00:35:29.090 --> 00:35:31.180
+and from_tensor_slices
+is that instead
+
+00:35:31.180 --> 00:35:35.730
+of viewing data as a single
+tensor, we end up slicing it.
+
+00:35:35.730 --> 00:35:39.640
+We assume that the value
+has a rank of at least 1.
+
+00:35:39.640 --> 00:35:44.950
+And we end up slicing it
+into however many slices
+
+00:35:44.950 --> 00:35:47.960
+it has in the dimension.
+
+00:35:47.960 --> 00:35:51.010
+And these are the invocations
+of the structure API
+
+00:35:51.010 --> 00:35:54.850
+that would allow us to do
+this kind of agnostically
+
+00:35:54.850 --> 00:35:58.030
+to the actual type
+of the Python value.
+
+00:36:03.560 --> 00:36:06.490
+I also want to illustrate
+how the structure
+
+00:36:06.490 --> 00:36:11.790
+API is used in the context
+of user defined functions.
+
+00:36:11.790 --> 00:36:16.440
+In particular, the function
+that we end up tracing
+
+00:36:16.440 --> 00:36:20.660
+is actually a different function
+than just the function the user
+
+00:36:20.660 --> 00:36:21.720
+process.
+
+00:36:21.720 --> 00:36:23.990
+We end up wrapping
+the function that
+
+00:36:23.990 --> 00:36:28.460
+gets passed in the Python
+program in invocations
+
+00:36:28.460 --> 00:36:31.730
+to from_tensor_list and
+then to_tensor_list.
+
+00:36:31.730 --> 00:36:33.440
+And this is kind
+of the glue that I
+
+00:36:33.440 --> 00:36:41.290
+talked about where we make sure
+that the Python record expects
+
+00:36:41.290 --> 00:36:43.520
+a flat list of tensors.
+
+00:36:43.520 --> 00:36:47.510
+And then we reconstruct the
+structure and the typing,
+
+00:36:47.510 --> 00:36:50.060
+using the from_tensor_list
+invocation,
+
+00:36:50.060 --> 00:36:53.600
+because that's what user
+provided function expects.
+
+00:36:53.600 --> 00:36:59.910
+And then we again deconstruct
+the structure and box
+
+00:36:59.910 --> 00:37:01.910
+all the known tensor
+types and tensors,
+
+00:37:01.910 --> 00:37:05.250
+because that's what the upstream
+transformation of tf.data
+
+00:37:05.250 --> 00:37:05.750
+expects.
+
+00:37:10.480 --> 00:37:12.070
+All right.
+
+00:37:12.070 --> 00:37:16.480
+So next up, let's talk
+about static optimizations,
+
+00:37:16.480 --> 00:37:21.460
+which illustrates that
+everything that I talked
+
+00:37:21.460 --> 00:37:24.850
+about up to this point
+about how tf.data works
+
+00:37:24.850 --> 00:37:27.280
+is only part of the truth.
+
+00:37:27.280 --> 00:37:33.340
+So in tf.data, we have a number
+of transformations or a number
+
+00:37:33.340 --> 00:37:35.430
+of optimizations implemented.
+
+00:37:35.430 --> 00:37:39.340
+Here is a subset of
+the ones who we have.
+
+00:37:39.340 --> 00:37:43.180
+And the ones that
+are in italics are
+
+00:37:43.180 --> 00:37:45.670
+the ones that
+enabled by default.
+
+00:37:45.670 --> 00:37:47.410
+And the ones that
+are not italic,
+
+00:37:47.410 --> 00:37:52.480
+then those can be enabled
+through tf.data options.
+
+00:37:52.480 --> 00:37:54.490
+This is how you
+would, for example,
+
+00:37:54.490 --> 00:37:58.330
+go about enabling a map
+vectorization transformation
+
+00:37:58.330 --> 00:38:00.360
+if you wanted to.
+
+00:38:00.360 --> 00:38:04.550
+The tf.data options
+has other features.
+
+00:38:04.550 --> 00:38:07.300
+It's not just for optimizations,
+it is also, for example,
+
+00:38:07.300 --> 00:38:12.650
+for specifying threading or
+statistics collection features.
+
+00:38:12.650 --> 00:38:15.370
+But in the context of
+static optimizations,
+
+00:38:15.370 --> 00:38:20.240
+I'm just illustrating
+how it's used for those.
+
+00:38:20.240 --> 00:38:26.320
+So what happens at the Python
+level when iterator is created
+
+00:38:26.320 --> 00:38:30.880
+is that the data set Python
+object has an options
+
+00:38:30.880 --> 00:38:33.290
+object associated with it.
+
+00:38:33.290 --> 00:38:35.890
+And we use the
+information in the options
+
+00:38:35.890 --> 00:38:39.940
+object to possibly chain
+additional data set
+
+00:38:39.940 --> 00:38:45.310
+transformations on the
+end of the data set.
+
+00:38:45.310 --> 00:38:48.100
+This is something that the
+user doesn't see in their code,
+
+00:38:48.100 --> 00:38:49.630
+doesn't write in their code.
+
+00:38:49.630 --> 00:38:51.790
+It's something that we
+do at the Python level
+
+00:38:51.790 --> 00:38:54.250
+to allow us to
+insert functionality
+
+00:38:54.250 --> 00:38:57.400
+that we would like to insert.
+
+00:38:57.400 --> 00:39:02.200
+And one of the main uses of
+this is this optimized data set
+
+00:39:02.200 --> 00:39:06.640
+that's used as an entry point
+for any static optimizations
+
+00:39:06.640 --> 00:39:10.028
+that are to be applied
+to the input pipeline.
+
+00:39:12.900 --> 00:39:16.920
+So if we take a look
+at the C++ level,
+
+00:39:16.920 --> 00:39:20.360
+what's happening inside of the
+optimized data set kernel is
+
+00:39:20.360 --> 00:39:24.050
+we'll again get the
+input of the data set,
+
+00:39:24.050 --> 00:39:29.620
+and then invoke a data
+set optimized method
+
+00:39:29.620 --> 00:39:33.730
+on the optimized
+data set kernel.
+
+00:39:33.730 --> 00:39:36.790
+And the code is
+actually quite long,
+
+00:39:36.790 --> 00:39:42.440
+so I just summarized it in
+high level statements here.
+
+00:39:42.440 --> 00:39:45.190
+This is what happens inside
+of the optimized method.
+
+00:39:45.190 --> 00:39:50.830
+We first use the AsGraphDef
+functionality to go from
+
+00:39:50.830 --> 00:39:55.180
+the C++ representation of
+the input object to GraphDef
+
+00:39:55.180 --> 00:39:57.680
+representation of
+the input object.
+
+00:39:57.680 --> 00:40:01.870
+We then use Grappler to
+apply the subset of tf.data
+
+00:40:01.870 --> 00:40:04.940
+optimizations that are
+either enabled by default,
+
+00:40:04.940 --> 00:40:08.500
+or explicitly enabled
+by a user, which
+
+00:40:08.500 --> 00:40:12.060
+will give us a transformed
+GraphDef representing the data
+
+00:40:12.060 --> 00:40:13.290
+set.
+
+00:40:13.290 --> 00:40:16.960
+And we then convert the
+rewritten GraphDef to a C++
+
+00:40:16.960 --> 00:40:19.840
+representation
+using GraphRunner.
+
+00:40:19.840 --> 00:40:23.630
+And finally, we update
+the input with the result.
+
+00:40:23.630 --> 00:40:26.230
+So because map and
+batch optimization
+
+00:40:26.230 --> 00:40:30.860
+is one of the optimizations
+enabled by default,
+
+00:40:30.860 --> 00:40:34.490
+the map and batch stages
+that were in our example
+
+00:40:34.490 --> 00:40:37.450
+would be, in fact, replaced
+with a single map and batch data
+
+00:40:37.450 --> 00:40:41.990
+set, which is a more performant
+version of diffused map
+
+00:40:41.990 --> 00:40:43.945
+and batch transformation.
+
+00:40:49.280 --> 00:40:52.580
+And last topic that
+I want to talk about
+
+00:40:52.580 --> 00:40:54.704
+are dynamic optimizations.
+
+00:40:57.550 --> 00:41:00.355
+So I mentioned before
+that users have
+
+00:41:00.355 --> 00:41:03.640
+a number of mechanisms to make
+their input pipelines more
+
+00:41:03.640 --> 00:41:04.540
+performant.
+
+00:41:04.540 --> 00:41:07.360
+They can insert prefetching
+with buffer_size.
+
+00:41:07.360 --> 00:41:09.648
+They can insert map
+with num_parallel_calls
+
+00:41:09.648 --> 00:41:11.190
+or interleave with
+num_parallel_calls
+
+00:41:11.190 --> 00:41:17.500
+to apply various performance
+optimization tools.
+
+00:41:17.500 --> 00:41:20.500
+But what are good values
+of these arguments,
+
+00:41:20.500 --> 00:41:24.680
+like buffer_size and
+num_parallel_calls?
+
+00:41:24.680 --> 00:41:26.960
+Well, so in the context
+of this section,
+
+00:41:26.960 --> 00:41:31.340
+I'm only going to focus on
+the parallelism optimization.
+
+00:41:31.340 --> 00:41:36.730
+And to get you interested,
+I have a quiz for you.
+
+00:41:36.730 --> 00:41:37.610
+[LAUGHTER]
+
+00:41:37.610 --> 00:41:39.530
+So imagine that
+you have an input
+
+00:41:39.530 --> 00:41:40.830
+pipeline that looks like this.
+
+00:41:40.830 --> 00:41:43.640
+It reads from a set
+of files, and then it
+
+00:41:43.640 --> 00:41:46.520
+applies two transformations.
+
+00:41:46.520 --> 00:41:49.040
+And on the right-hand
+side in the comment,
+
+00:41:49.040 --> 00:41:52.730
+I mentioned how much
+time is required
+
+00:41:52.730 --> 00:41:55.190
+to get a single element,
+assuming constant processing
+
+00:41:55.190 --> 00:41:59.010
+time through the particular
+stage of the input pipeline.
+
+00:41:59.010 --> 00:42:01.700
+So with this information,
+how much time do you
+
+00:42:01.700 --> 00:42:04.940
+think you would need,
+when you call getNext,
+
+00:42:04.940 --> 00:42:09.490
+how long would it take to
+get a single element out?
+
+00:42:09.490 --> 00:42:12.930
+AUDIENCE: 200 milliseconds.
+
+00:42:12.930 --> 00:42:14.307
+YURI: 320.
+
+00:42:14.307 --> 00:42:14.890
+AUDIENCE: 320.
+
+00:42:14.890 --> 00:42:19.770
+YURI: 320 is the answer,
+because everything
+
+00:42:19.770 --> 00:42:21.930
+executes sequentially.
+
+00:42:21.930 --> 00:42:25.890
+So when you call into
+the outermost map,
+
+00:42:25.890 --> 00:42:29.160
+that goes recursively
+into the innermost
+
+00:42:29.160 --> 00:42:31.170
+or the inner map,
+which calls recursively
+
+00:42:31.170 --> 00:42:32.850
+into the tf record data set.
+
+00:42:32.850 --> 00:42:36.180
+We spend 20 milliseconds
+there, then we
+
+00:42:36.180 --> 00:42:41.250
+spend 100 milliseconds in the
+inner map executing f, and then
+
+00:42:41.250 --> 00:42:44.920
+200 milliseconds in the
+order map executing g.
+
+00:42:44.920 --> 00:42:46.920
+So it's 320.
+
+00:42:46.920 --> 00:42:51.180
+I think you kind of jumped
+one step ahead here.
+
+00:42:51.180 --> 00:42:52.225
+[LAUGHTER]
+
+00:42:52.225 --> 00:42:54.100
+And this was supposed
+to be a trick question,
+
+00:42:54.100 --> 00:42:55.392
+but you already got the answer.
+
+00:42:57.780 --> 00:43:02.490
+What happens here if we
+just add num_parallel_calls
+
+00:43:02.490 --> 00:43:06.280
+to the map transformations?
+
+00:43:06.280 --> 00:43:11.920
+Nothing, except
+something happens.
+
+00:43:11.920 --> 00:43:14.380
+And the reason for this
+being 200 milliseconds
+
+00:43:14.380 --> 00:43:18.940
+is that num_parallel_calls uses
+a different op kernel which
+
+00:43:18.940 --> 00:43:22.390
+has a background thread that
+will be performing activity
+
+00:43:22.390 --> 00:43:26.150
+independently of the
+consumer of the data.
+
+00:43:26.150 --> 00:43:31.750
+So the very first element will
+actually take 320 milliseconds.
+
+00:43:31.750 --> 00:43:35.120
+But then over time,
+there is going
+
+00:43:35.120 --> 00:43:38.323
+to be the processing done for
+the three different stages will
+
+00:43:38.323 --> 00:43:40.740
+be actually overlapped because
+there is now two background
+
+00:43:40.740 --> 00:43:44.160
+threads doing
+everything in parallel.
+
+00:43:44.160 --> 00:43:46.450
+The parallelism is
+1 at each stage,
+
+00:43:46.450 --> 00:43:49.290
+but that still gives
+you 200 milliseconds,
+
+00:43:49.290 --> 00:43:52.225
+in total, in the stable
+state, assuming--
+
+00:43:52.225 --> 00:43:54.900
+AUDIENCE: Is that the
+correct mental model to think
+
+00:43:54.900 --> 00:43:56.790
+that this implies prefetch?
+
+00:43:56.790 --> 00:43:57.420
+YURI: Yes.
+
+00:43:57.420 --> 00:44:01.020
+That a very good mental model.
+
+00:44:01.020 --> 00:44:04.290
+Parallel map is, in
+fact, the prefetching
+
+00:44:04.290 --> 00:44:07.060
+by the virtue of using
+a background thread.
+
+00:44:07.060 --> 00:44:10.920
+And so in a way, this is
+an answer to your question
+
+00:44:10.920 --> 00:44:13.110
+where prefetching
+inside of the input
+
+00:44:13.110 --> 00:44:16.545
+pipeline, not just at the very
+end, might provide benefits.
+
+00:44:20.170 --> 00:44:21.310
+AUDIENCE: Question.
+
+00:44:21.310 --> 00:44:25.358
+So does that imply that the
+map function has to be traced?
+
+00:44:25.358 --> 00:44:27.650
+Like, for example, if the
+map function is just a Python
+
+00:44:27.650 --> 00:44:29.610
+function, and if you
+have multi-threading
+
+00:44:29.610 --> 00:44:32.240
+on Python function,
+then really [INAUDIBLE]??
+
+00:44:35.544 --> 00:44:40.000
+YURI: So I think the
+answer is that you
+
+00:44:40.000 --> 00:44:45.490
+will get these benefits,
+irrespective of the cost,
+
+00:44:45.490 --> 00:44:48.280
+the constant cost of
+the Python function is--
+
+00:44:48.280 --> 00:44:52.300
+of the function passed into
+the map transformation.
+
+00:44:52.300 --> 00:44:54.340
+If it's implemented
+as a py_func,
+
+00:44:54.340 --> 00:44:56.470
+that function itself might be--
+
+00:44:56.470 --> 00:44:58.960
+oh, I see what you're saying,
+that multiple functions would
+
+00:44:58.960 --> 00:45:00.700
+be escaping into Python.
+
+00:45:00.700 --> 00:45:02.860
+That's a good point.
+
+00:45:02.860 --> 00:45:04.660
+Possibly.
+
+00:45:04.660 --> 00:45:07.000
+I would want to convince
+myself that they actually
+
+00:45:07.000 --> 00:45:08.750
+are all content for
+the same [INAUDIBLE]..
+
+00:45:08.750 --> 00:45:10.165
+AUDIENCE: Either way.
+
+00:45:10.165 --> 00:45:11.540
+AUDIENCE: If you
+ever use Python,
+
+00:45:11.540 --> 00:45:13.340
+you need to make sure your
+Python is thread safe.
+
+00:45:13.340 --> 00:45:14.930
+It's very hard for
+a TensorFlow runtime
+
+00:45:14.930 --> 00:45:17.138
+to not accidentally run
+Python code from many threads
+
+00:45:17.138 --> 00:45:19.520
+at the same time.
+
+00:45:19.520 --> 00:45:20.020
+YURI: Yeah.
+
+00:45:20.020 --> 00:45:22.750
+I think the bottom line
+here is that if you
+
+00:45:22.750 --> 00:45:29.190
+can avoid using py_func,
+for instance, use autograph.
+
+00:45:31.950 --> 00:45:35.760
+So it perhaps might
+not be surprising
+
+00:45:35.760 --> 00:45:39.828
+that if you increase the
+values of num_parallel_calls,
+
+00:45:39.828 --> 00:45:41.370
+because you know
+how much time you're
+
+00:45:41.370 --> 00:45:43.320
+going to spend in
+each of those stages,
+
+00:45:43.320 --> 00:45:46.020
+you can get to the optimal
+output latency of this input
+
+00:45:46.020 --> 00:45:46.980
+pipeline.
+
+00:45:46.980 --> 00:45:50.850
+You cannot run any faster than
+the slowest part of the input
+
+00:45:50.850 --> 00:45:56.050
+pipeline, which in this case is
+the sequential TFRecordReader.
+
+00:45:56.050 --> 00:45:58.550
+There might actually be a way
+to speed this up even further,
+
+00:45:58.550 --> 00:46:01.820
+by using interleave,
+num_parallel_calls
+
+00:46:01.820 --> 00:46:03.240
+over the different readers.
+
+00:46:03.240 --> 00:46:08.090
+But instead of exploring that
+avenue, what I want to ask
+
+00:46:08.090 --> 00:46:10.530
+is, what do you
+think happens here?
+
+00:46:16.770 --> 00:46:19.070
+AUDIENCE: Dismal performance.
+
+00:46:19.070 --> 00:46:19.570
+YURI: Yeah.
+
+00:46:19.570 --> 00:46:24.220
+I think the answer
+is, it depends.
+
+00:46:24.220 --> 00:46:28.840
+It might actually run
+well, well enough,
+
+00:46:28.840 --> 00:46:30.850
+because
+num_parallel_calls doesn't
+
+00:46:30.850 --> 00:46:35.440
+mean that you create that
+many threads, at least
+
+00:46:35.440 --> 00:46:38.200
+in the case of map
+transformation anyhow.
+
+00:46:38.200 --> 00:46:44.240
+It means that you allow
+to schedule as many ops
+
+00:46:44.240 --> 00:46:47.790
+into the interop thread
+pool at the same time.
+
+00:46:47.790 --> 00:46:50.490
+And because you're allowed to
+schedule them at the same time,
+
+00:46:50.490 --> 00:46:52.320
+you need a place to store them.
+
+00:46:52.320 --> 00:46:56.540
+So if nothing else, the
+downside of specifying
+
+00:46:56.540 --> 00:46:59.000
+a very large value
+of num_parallel_calls
+
+00:46:59.000 --> 00:47:01.250
+is that you're going to
+use more memory to store
+
+00:47:01.250 --> 00:47:04.010
+these intermediate values
+than you would actually
+
+00:47:04.010 --> 00:47:06.770
+need for equal
+performance, which
+
+00:47:06.770 --> 00:47:10.640
+might hurt your temporal
+locality or thread locality.
+
+00:47:10.640 --> 00:47:14.150
+So yes, the performance
+might actually become worse,
+
+00:47:14.150 --> 00:47:17.720
+but the reasons for
+why can be subtle and
+
+00:47:17.720 --> 00:47:20.690
+environment-specific.
+
+00:47:20.690 --> 00:47:24.827
+AUDIENCE: You said earlier that
+ops create their own threads.
+
+00:47:24.827 --> 00:47:25.910
+Is that actually the case?
+
+00:47:25.910 --> 00:47:29.400
+Or do they use the shared
+thread pools in the executor?
+
+00:47:31.980 --> 00:47:34.320
+YURI: They create
+their own thread.
+
+00:47:34.320 --> 00:47:38.460
+Parallel map, prefetch end
+up creating their own thread.
+
+00:47:38.460 --> 00:47:41.340
+Parallel interleave creates
+its own thread pool.
+
+00:47:41.340 --> 00:47:46.230
+Under the hoods, they end
+up using this abstraction
+
+00:47:46.230 --> 00:47:51.330
+of an unbounded thread pool,
+if you are familiar with that,
+
+00:47:51.330 --> 00:47:57.420
+which was introduced recently
+to combat memory fragmentation
+
+00:47:57.420 --> 00:48:01.380
+issues in the open
+source memory allocator,
+
+00:48:01.380 --> 00:48:03.820
+resulting from excessive
+thread creation.
+
+00:48:03.820 --> 00:48:07.290
+So the unbounded thread pool
+that the tf.data uses creates
+
+00:48:07.290 --> 00:48:11.070
+this illusion of logical threads
+that are mapped onto a smaller
+
+00:48:11.070 --> 00:48:12.570
+subset of physical threads.
+
+00:48:12.570 --> 00:48:17.590
+But they're different from
+the inter_op thread pools
+
+00:48:17.590 --> 00:48:22.850
+or any of the core TensorFlow
+runtime thread pools.
+
+00:48:22.850 --> 00:48:26.370
+We do rely in tf.data data
+on the inter_op thread
+
+00:48:26.370 --> 00:48:30.320
+pool for the execution of
+the user-defined functions,
+
+00:48:30.320 --> 00:48:35.510
+by default. But there is also
+an option to override that.
+
+00:48:35.510 --> 00:48:39.800
+And we also, by
+default, take advantage
+
+00:48:39.800 --> 00:48:43.620
+or inherit the setting of
+the inter_op_parallelism.
+
+00:48:43.620 --> 00:48:48.050
+And there is also a way
+to override that just
+
+00:48:48.050 --> 00:48:51.650
+for the tf.data ops.
+
+00:48:51.650 --> 00:48:54.140
+And as a matter of
+fact, our experience
+
+00:48:54.140 --> 00:48:58.240
+has been that disabling
+inter_op_parallelism for--
+
+00:48:58.240 --> 00:48:59.990
+and this is perhaps
+not a surprise to you,
+
+00:48:59.990 --> 00:49:01.460
+but disabling
+inter_op_parallelism
+
+00:49:01.460 --> 00:49:07.460
+altogether for CPU
+content input pipelines
+
+00:49:07.460 --> 00:49:11.570
+gives you 10%, 20% speed up.
+
+00:49:11.570 --> 00:49:14.670
+Because you don't need to
+parallelize the individual ops,
+
+00:49:14.670 --> 00:49:17.040
+you get the parallelism by
+running multiple of them
+
+00:49:17.040 --> 00:49:18.233
+in parallel.
+
+00:49:18.233 --> 00:49:20.400
+AUDIENCE: Do we have any
+guides internally about how
+
+00:49:20.400 --> 00:49:23.940
+you can do tricks
+with tf.data to get
+
+00:49:23.940 --> 00:49:25.986
+performance enhancements?
+
+00:49:25.986 --> 00:49:27.030
+Or not so much?
+
+00:49:27.030 --> 00:49:29.980
+YURI: Great question.
+
+00:49:29.980 --> 00:49:34.060
+So instead of having
+guides, why not
+
+00:49:34.060 --> 00:49:38.292
+just have tf.data do
+the hard work for you?
+
+00:49:38.292 --> 00:49:39.650
+AUDIENCE: Excellent.
+
+00:49:39.650 --> 00:49:42.460
+YURI: And so this is
+something close to my heart
+
+00:49:42.460 --> 00:49:45.310
+because I worked both on tf.data
+performance in the early days
+
+00:49:45.310 --> 00:49:47.080
+in terms of exposing
+these knobs,
+
+00:49:47.080 --> 00:49:49.380
+and then I worked very
+hard on making sure
+
+00:49:49.380 --> 00:49:51.630
+that users don't need to use
+these knobs because there
+
+00:49:51.630 --> 00:49:55.660
+is something that does a good
+enough job automatically.
+
+00:49:55.660 --> 00:49:58.780
+And you might think,
+well, this seems
+
+00:49:58.780 --> 00:50:01.840
+like a good fit for
+reinforcement learning,
+
+00:50:01.840 --> 00:50:03.940
+since we're in RMI.
+
+00:50:03.940 --> 00:50:07.060
+And that's something that
+I explored as an idea.
+
+00:50:07.060 --> 00:50:09.250
+I didn't get it
+to work, but that
+
+00:50:09.250 --> 00:50:11.540
+might be because of me, not
+because of reinforcement
+
+00:50:11.540 --> 00:50:12.040
+learning.
+
+00:50:12.040 --> 00:50:13.600
+[LAUGHTER]
+
+00:50:13.600 --> 00:50:16.960
+The issue with reinforcement
+learning-- so the idea is this.
+
+00:50:16.960 --> 00:50:20.360
+What if you just pick some
+values for the different paths
+
+00:50:20.360 --> 00:50:22.690
+and knobs in your
+input pipeline,
+
+00:50:22.690 --> 00:50:25.570
+observed behavior, and then
+try some different values
+
+00:50:25.570 --> 00:50:28.870
+and use a smart algorithm
+that kind of converges,
+
+00:50:28.870 --> 00:50:31.150
+hopefully, to global optimum.
+
+00:50:31.150 --> 00:50:34.430
+Well, it turns out that the
+convergence was very slow.
+
+00:50:34.430 --> 00:50:37.300
+And if you set abysmal
+parameters for something
+
+00:50:37.300 --> 00:50:38.950
+that could be
+heavily parallelized,
+
+00:50:38.950 --> 00:50:40.810
+then you would need
+a very long time
+
+00:50:40.810 --> 00:50:43.930
+to actually realize that
+this is slow because
+
+00:50:43.930 --> 00:50:45.520
+of poor parameters,
+as opposed to this
+
+00:50:45.520 --> 00:50:49.030
+is slow because that's how
+fast the input pipeline runs.
+
+00:50:49.030 --> 00:50:52.330
+So instead of
+exploring reinforcement
+
+00:50:52.330 --> 00:50:57.880
+learning that tries to modify
+the parameters, or tf.data
+
+00:50:57.880 --> 00:51:01.210
+has an analytical
+model that models
+
+00:51:01.210 --> 00:51:03.160
+the performance of
+the input pipeline
+
+00:51:03.160 --> 00:51:05.710
+that's currently instantiated.
+
+00:51:05.710 --> 00:51:09.310
+And there's a little bit
+of math in my presentation
+
+00:51:09.310 --> 00:51:13.850
+because I'm originally a
+formal verification person.
+
+00:51:13.850 --> 00:51:15.190
+So here's some math for you.
+
+00:51:15.190 --> 00:51:17.740
+You can model the
+output latency of a node
+
+00:51:17.740 --> 00:51:22.170
+as a function of the output
+latencies of its inputs.
+
+00:51:22.170 --> 00:51:28.000
+And the challenge
+was, how do you
+
+00:51:28.000 --> 00:51:33.160
+implement these two functions--
+the processing time of a node,
+
+00:51:33.160 --> 00:51:37.570
+as well as the lambda
+function that captures
+
+00:51:37.570 --> 00:51:39.880
+what the node itself does?
+
+00:51:39.880 --> 00:51:43.570
+So the processing time is
+modeled through a lightweight
+
+00:51:43.570 --> 00:51:46.750
+instrumentation of the C++
+implementation we have.
+
+00:51:46.750 --> 00:51:48.670
+By lightweight,
+I mean it imposes
+
+00:51:48.670 --> 00:51:53.020
+roughly 100 nanoseconds of
+overhead on the critical path.
+
+00:51:53.020 --> 00:51:57.640
+And we keep track of
+node creation, deletion,
+
+00:51:57.640 --> 00:51:59.800
+as well as the computation,
+the processing time,
+
+00:51:59.800 --> 00:52:03.970
+spent within a node and
+a user-defined function.
+
+00:52:03.970 --> 00:52:08.320
+And the lambda, which is
+the transformation-specific
+
+00:52:08.320 --> 00:52:13.750
+functionality which maps how the
+output latencies of the inputs
+
+00:52:13.750 --> 00:52:18.070
+correspond to the output
+latency of the op,
+
+00:52:18.070 --> 00:52:20.470
+turns out there is a fairly
+small number of categories
+
+00:52:20.470 --> 00:52:23.500
+of node for each of which there
+is a different type of lambda.
+
+00:52:26.110 --> 00:52:29.440
+And the autotuning
+mechanism then
+
+00:52:29.440 --> 00:52:31.750
+takes advantage of these
+two implementation artifacts
+
+00:52:31.750 --> 00:52:34.210
+to tie it all together.
+
+00:52:34.210 --> 00:52:37.420
+And we start a background thread
+that periodically performs
+
+00:52:37.420 --> 00:52:39.610
+the following optimization.
+
+00:52:39.610 --> 00:52:42.820
+We snapshot the state of
+the analytical model, which
+
+00:52:42.820 --> 00:52:46.270
+captures the processing times
+of the different iterators
+
+00:52:46.270 --> 00:52:48.460
+that are currently
+floating around.
+
+00:52:48.460 --> 00:52:52.870
+And then we perform a very
+simple hill-climbing algorithm
+
+00:52:52.870 --> 00:52:56.560
+that allocates threads or
+cores to parallelism knobs that
+
+00:52:56.560 --> 00:52:58.010
+provide the greatest benefit.
+
+00:52:58.010 --> 00:53:00.910
+So it's really algorithm,
+assuming that this optimization
+
+00:53:00.910 --> 00:53:04.400
+is actually monotonic.
+
+00:53:04.400 --> 00:53:09.690
+And if you do that,
+you can specify
+
+00:53:09.690 --> 00:53:12.630
+AUTOTUNE for num_parallel_calls
+in this example.
+
+00:53:12.630 --> 00:53:15.960
+And as long as you
+have 16 or more cores,
+
+00:53:15.960 --> 00:53:19.560
+you get the same output
+latency that you would get out
+
+00:53:19.560 --> 00:53:22.410
+of the manually tuned one.
+
+00:53:22.410 --> 00:53:25.710
+And the key is that it will
+actually not over-provision
+
+00:53:25.710 --> 00:53:27.690
+by an order of magnitude.
+
+00:53:27.690 --> 00:53:34.830
+It might over-provision a
+little bit, but not 1,024.
+
+00:53:34.830 --> 00:53:36.930
+And that's it.
+
+00:53:36.930 --> 00:53:39.380
+[APPLAUSE]
+
