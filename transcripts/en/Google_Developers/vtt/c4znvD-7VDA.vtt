@@ -1,0 +1,2724 @@
+WEBVTT
+Kind: captions
+Language: en
+
+00:00:00.580 --> 00:00:01.580
+&gt;&gt;Brad Fitzpatrick: All right. Hello, hello,
+hello.
+
+00:00:01.580 --> 00:00:03.169
+All right.
+This is a talk on writing zippy Android apps.
+
+00:00:03.169 --> 00:00:08.080
+I am Brad Fitzpatrick, and I will talk about
+writing zippy Android apps.
+
+00:00:08.080 --> 00:00:12.540
+There's the obligatory live Wave that we can
+get to at the end for questions, or if people
+
+00:00:12.540 --> 00:00:17.411
+have questions at any time, if mics are set
+up, just blurt something out and I will try
+
+00:00:17.411 --> 00:00:21.340
+to repeat.
+This is basically the outline of the talk.
+
+00:00:21.340 --> 00:00:27.240
+I will basically say who I am and why I care
+about writing zippy Android apps. We can talk
+
+00:00:27.240 --> 00:00:34.720
+about ANRs and what people call Jank. What
+is a Janky app which is the original title
+
+00:00:34.720 --> 00:00:42.250
+of my talk which they changed to zippy.
+Talk about some new and some old Android SDK
+
+00:00:42.250 --> 00:00:48.260
+features to use to avoid Jankiness. And some
+general numbers to know.
+
+00:00:48.260 --> 00:00:53.150
+And new things that are in Froyo to help you
+measure the stuff and actually some war stories
+
+00:00:53.150 --> 00:00:58.430
+from optimizing Froyo. We'll just do Q&amp;A.
+But notably this is not a talk about the JIT
+
+00:00:58.430 --> 00:01:02.340
+and this is not a talk about V8 or anything
+like that. So if you are CPU bound, probably
+
+00:01:02.340 --> 00:01:05.220
+not the right talk. This is about making responsive
+apps.
+
+00:01:05.220 --> 00:01:12.430
+So, me. I am Brad. Prior to Google, I did
+a bunch of stuff around like social and back-end
+
+00:01:12.430 --> 00:01:17.890
+infrastructure stuff, around mem cache and
+file systems and also social stuff. And then
+
+00:01:17.890 --> 00:01:21.710
+at Google I got sucked into social stuff for
+a while. So I did this social graph API and
+
+00:01:21.710 --> 00:01:26.080
+profiles and hubbub. But I really like open
+source, so now I am back to hacking on Android
+
+00:01:26.080 --> 00:01:30.940
+now and back to hacking on open source.
+I joined the Android team because I wanted
+
+00:01:30.940 --> 00:01:35.250
+it to be faster. I believed in it philosophically,
+and I wanted Android to succeed because it's
+
+00:01:35.250 --> 00:01:38.750
+open source, but I didn't want it to fail
+in the marketplace because it was kind of
+
+00:01:38.750 --> 00:01:49.600
+janky and nonresponsive. So that's me.
+So jank. I keep saying "jank." Jank is what
+
+00:01:49.600 --> 00:01:55.110
+the Chrome team calls, like, stalling the
+event loop or being, like, not responsive.
+
+00:01:55.110 --> 00:01:59.790
+So the Chrome team is awesome about this.
+They only do, like, asynchronous messaging
+
+00:01:59.790 --> 00:02:05.080
+between processes all the time and they never
+really do any, like, blocking function call.
+
+00:02:05.080 --> 00:02:11.190
+Android, historically, not so good about jank.
+So there's a lot of places, Android kind of
+
+00:02:11.190 --> 00:02:17.000
+lets you get away with stalling your event
+loop, your UI thread for way too long, and
+
+00:02:17.000 --> 00:02:20.980
+the documentation, in my opinion, isn't as
+strict about telling you what thread things
+
+00:02:20.980 --> 00:02:25.200
+happen on and what you should defer till later
+and all of this.
+
+00:02:25.200 --> 00:02:31.320
+So basically this whole talk is about not
+being janky, being fast, doing work in the
+
+00:02:31.320 --> 00:02:35.020
+background, and minimizing the amount of work
+you do.
+
+00:02:35.020 --> 00:02:40.270
+A lot of it is about I/O and not doing too
+much I/O when the Flash is slow and stuff
+
+00:02:40.270 --> 00:02:44.980
+like that.
+So this is the ultimate worst case. I'm sure
+
+00:02:44.980 --> 00:02:49.630
+you have seen this from the docs or seen it
+in your own app. If you ever seen this, this
+
+00:02:49.630 --> 00:02:54.020
+is saying something is wrong. This is not
+a bug in the framework. This is saying some
+
+00:02:54.020 --> 00:02:58.480
+event is happening in the system, like probably
+a key press or something and your application
+
+00:02:58.480 --> 00:03:02.909
+is not responding to it.
+So this means, like, there's one thread on
+
+00:03:02.909 --> 00:03:07.819
+ -- your main thread is your UI thread that
+is sitting there waiting to process events.
+
+00:03:07.819 --> 00:03:11.260
+And if you are doing something else like a
+network request or a really slow database
+
+00:03:11.260 --> 00:03:15.489
+query this is comes up.
+So this is like the ultimate worst case of
+
+00:03:15.489 --> 00:03:21.670
+jank, this is after five seconds, but even
+under that users will still be like this app
+
+00:03:21.670 --> 00:03:28.100
+is kind of weird and unresponsive.
+So what I just said. So, yeah, it's five seconds
+
+00:03:28.100 --> 00:03:33.410
+or an activity, and if it's a broadcast receiver,
+which also by default will run in the same
+
+00:03:33.410 --> 00:03:36.819
+process as your activity. If you have like
+a broadcast receiver and a service and activity
+
+00:03:36.819 --> 00:03:42.480
+they will all share the same main thread.
+So responding to a broadcast receiver in what
+
+00:03:42.480 --> 00:03:46.319
+you think is a whole, like, maybe separate
+isolated environment, or I used to think that,
+
+00:03:46.319 --> 00:03:49.489
+is actually stalling the same event loop that
+your activity is on.
+
+00:03:49.489 --> 00:03:54.190
+So it's really important to either use separate
+processes or don't do that janky thing on
+
+00:03:54.190 --> 00:03:58.690
+your main thread instead.
+So the worst cases are typically network requests
+
+00:03:58.690 --> 00:04:07.310
+and slow disk operations.
+So some numbers to put things in perspective.
+
+00:04:07.310 --> 00:04:13.489
+I think these -- yeah, these numbers were
+on the Nexus One. Switching back and forth
+
+00:04:13.489 --> 00:04:17.539
+between two processes, so basically a contact
+switch speed. This is Dalvik to Dalvik, just
+
+00:04:17.539 --> 00:04:22.430
+writing a byte along a Unix pipe. It's about
+.04 milliseconds.
+
+00:04:22.430 --> 00:04:28.240
+So contact switch speed is about that.
+Doing a Binder call, which is like the RPC
+
+00:04:28.240 --> 00:04:33.749
+mechanism on Android, between two processes,
+about .12 or less.
+
+00:04:33.749 --> 00:04:38.370
+We had a regression at the end of Eclair and
+most of Froyo was like twice this slow, and
+
+00:04:38.370 --> 00:04:42.469
+then we found the bug right at the end of
+Froyo, or the performance regression, and
+
+00:04:42.469 --> 00:04:46.669
+got it back down to I think even less than
+that.
+
+00:04:46.669 --> 00:04:52.059
+Reading a byte from flash varies. If it's
+uncached, it's not in any of the kernel caches,
+
+00:04:52.059 --> 00:04:55.639
+between 5 and 25 milliseconds.
+Writing, on the other hand, writing is all
+
+00:04:55.639 --> 00:04:59.650
+over the place Writing is extremely slow.
+And the next slides will go into how slow
+
+00:04:59.650 --> 00:05:05.669
+writes are.
+And as far as what is perceptible to a user,
+
+00:05:05.669 --> 00:05:11.300
+there are some numbers about like frames of
+video and what the human perception of a slow
+
+00:05:11.300 --> 00:05:15.811
+action. Like at Google, we try to make all
+of our Web properties be under 500 milliseconds
+
+00:05:15.811 --> 00:05:19.889
+or under 250 milliseconds because that's like
+what a user really notices.
+
+00:05:19.889 --> 00:05:23.309
+If it's over that, users drop off and users
+complain that things are too slow.
+
+00:05:23.309 --> 00:05:27.749
+So network, on the other hand, network is
+like ridiculously slow, or it's all over the
+
+00:05:27.749 --> 00:05:36.169
+board, at least. So never, never do any network
+requests in your UI thread.
+
+00:05:36.169 --> 00:05:41.349
+We did an experiment through Froyo somewhere
+in the middle of the development cycle to
+
+00:05:41.349 --> 00:05:47.639
+see how slow file systems got, or how slow
+the nand got as your file system got more
+
+00:05:47.639 --> 00:05:51.900
+and more full. Because I was always complaining
+that my phone was incredibly slow, and it
+
+00:05:51.900 --> 00:05:56.851
+turned out all my disk space was used up.
+I only had a little bit left, and it turns
+
+00:05:56.851 --> 00:06:01.529
+out the file system gets incredibly slow as
+it gets full because it has to garbage collect
+
+00:06:01.529 --> 00:06:06.229
+and move stuff around on the nand. Because
+unlike typical hard drives where you just
+
+00:06:06.229 --> 00:06:10.439
+read and write, those are the two verbs you
+can do to 512 byte sectors, flash is -- or
+
+00:06:10.439 --> 00:06:14.949
+nand parts where you run a flash file system
+on it, there is erase which is really slow,
+
+00:06:14.949 --> 00:06:18.499
+write which is kind of slow, read which is
+incredibly fast with no seek time.
+
+00:06:18.499 --> 00:06:21.589
+So those writes and erases are terrible, and
+it has to do that more as it shuffles things
+
+00:06:21.589 --> 00:06:25.409
+around and things get full.
+If you have a phone and you think it's kind
+
+00:06:25.409 --> 00:06:29.031
+of slow, the first thing I would recommend
+is moving a whole bunch of apps to the SD
+
+00:06:29.031 --> 00:06:32.869
+card, now that you can in Froyo. Your phone
+will get a whole hell of a lot faster.
+
+00:06:32.869 --> 00:06:37.369
+Sometimes people say that factory reset makes
+it faster. It's the same thing; you are deleting
+
+00:06:37.369 --> 00:06:43.039
+a lot of stuff from your data partition.
+So, yeah, those are two different phones.
+
+00:06:43.039 --> 00:06:48.030
+The point is not blaming phones. They all
+have different speeds butt curve is about
+
+00:06:48.030 --> 00:06:51.379
+the same.
+So we will probably be more aggressive past
+
+00:06:51.379 --> 00:06:58.689
+Froyo, and right now I think we warn at 15%
+that your data partition is filling up.
+
+00:06:58.689 --> 00:07:04.119
+We are probably going to go shift that or
+maybe auto migrate some apps to SD card or
+
+00:07:04.119 --> 00:07:09.289
+something or warn more aggressively.
+Anyway, the nutshell is performance varies
+
+00:07:09.289 --> 00:07:17.389
+a lot.
+So let's talk about SQLite performance. You
+
+00:07:17.389 --> 00:07:20.939
+probably should avoid writing in your UI thread
+because writes can take a long time. Even
+
+00:07:20.939 --> 00:07:27.190
+a single byte in SQLite likes to write a lot.
+So if you don't know what SQLite is doing,
+
+00:07:27.190 --> 00:07:32.309
+don't assume it's magic. It does oftentimes
+quite literally what you tell it to do.
+
+00:07:32.309 --> 00:07:36.309
+So there's things like explain and explain
+query plan that you can see what stuff is
+
+00:07:36.309 --> 00:07:39.410
+doing.
+We are going to bounce in and out of demos
+
+00:07:39.410 --> 00:07:45.689
+here.
+I wrote ally little app here for this talk.
+
+00:07:45.689 --> 00:07:56.050
+The code is at code dot -- here code.google.com/zippy-Android.
+So basically this code does a lot of bad things
+
+00:07:56.050 --> 00:08:00.909
+that we can introspect it and we can see what
+tools are available.
+
+00:08:00.909 --> 00:08:07.179
+Let's start with another one. Here is a button
+that does nothing. It's literally hooked up
+
+00:08:07.179 --> 00:08:13.599
+to nothing. Here is a button, that's like
+600 milliseconds. So that was noticeable.
+
+00:08:13.599 --> 00:08:17.789
+I just made the screen go red so you can kind
+of feel it, but this button actually stalls
+
+00:08:17.789 --> 00:08:24.790
+the event loop for 600 milliseconds.
+This one, on the other hand, does it for six
+
+00:08:24.790 --> 00:08:34.020
+seconds, and I can click around, these buttons
+aren't doing anything. And it's kind of like
+
+00:08:34.020 --> 00:08:39.490
+kind of working but kind of not. And after
+about six seconds here or five seconds, there
+
+00:08:39.490 --> 00:08:42.310
+it is.
+So basically, the framework was like, hey,
+
+00:08:42.310 --> 00:08:45.491
+we have all these events piling up and you
+are not responding in more than five seconds
+
+00:08:45.491 --> 00:08:50.150
+so do you want to force quit this?
+So that was just a sleep in there in that
+
+00:08:50.150 --> 00:08:58.380
+six-second one. But let's play with databases.
+Let's make a little database here and meanwhile
+
+00:08:58.380 --> 00:09:00.180
+we will switch over to a shell while that's
+still going.
+
+00:09:00.180 --> 00:09:08.340
+All right. More than one device. Let me unplug
+this other phone.
+
+00:09:08.340 --> 00:09:22.810
+All right. So in data/data com.Google/io2010.zippy,
+which is my little app. Here is my demo database.
+
+00:09:22.810 --> 00:09:27.550
+So that just made a little -- must have meant
+this one. Demo dot DB. So I made a little
+
+00:09:27.550 --> 00:09:35.510
+5 meg database here. So we can pull this.
+You should always, like, look what's in your
+
+00:09:35.510 --> 00:09:45.470
+databases and kind of understand their structure.
+So databases.
+
+00:09:45.470 --> 00:09:49.970
+So the SDK actually comes with SQLite, the
+same version that's on the device. So I can
+
+00:09:49.970 --> 00:09:54.592
+run it host side. You can see that it's in
+ -- I don't know, is that readable? Let me
+
+00:09:54.592 --> 00:10:03.390
+make it a little bit bigger.
+All right. So we can go in here and look at
+
+00:10:03.390 --> 00:10:09.640
+the database that I put on there.
+Look at the schema. It just made a little
+
+00:10:09.640 --> 00:10:14.900
+table called foo with the primary key and
+two properties and a big junk column. And
+
+00:10:14.900 --> 00:10:19.110
+I just put a junk column in there to put a
+big thing just to make rows big and to make
+
+00:10:19.110 --> 00:10:23.860
+it 5 meg. And I put an index on property one
+but not on property two.
+
+00:10:23.860 --> 00:10:32.180
+So now we can do fun stuff like -- well, maybe
+select count from foo where prop 1 equals
+
+00:10:32.180 --> 00:10:36.190
+ -- I just populated prop one and prop two
+with random numbers between one and 100. So
+
+00:10:36.190 --> 00:10:46.250
+you can see six rows there have 57 of 500
+total.
+
+00:10:46.250 --> 00:10:52.120
+And here is another column that has, you know,
+five. About the same.
+
+00:10:52.120 --> 00:11:00.000
+So if you are ever curious like what those
+queries are actually doing, you can say explain.
+
+00:11:00.000 --> 00:11:03.811
+And so property one is the one that's indexed.
+And you can see this is SQLite's internal
+
+00:11:03.811 --> 00:11:08.760
+byte code that it steps through.
+So that's a little hard to parse. But explain
+
+00:11:08.760 --> 00:11:18.491
+query plan is slightly different.
+Where you see table foo with index, prop one
+
+00:11:18.491 --> 00:11:21.110
+index. So that's a little more readable. You
+can see what's going.
+
+00:11:21.110 --> 00:11:25.110
+This is a really simple table.
+Sometimes people have views and views and
+
+00:11:25.110 --> 00:11:30.610
+views of joins and selects.
+You probably shouldn't do that. Sqlite isn't
+
+00:11:30.610 --> 00:11:36.500
+as magical, like I said, as you think it can
+be. So if you are thinking it's Oracle or
+
+00:11:36.500 --> 00:11:41.500
+something, don't. Just treat this as simply
+as you can, if you want good performance,
+
+00:11:41.500 --> 00:11:45.930
+in my experience.
+Let's do this. There is no read line here.
+
+00:11:45.930 --> 00:11:50.660
+Do this on a different index. 57. You will
+see something different.
+
+00:11:50.660 --> 00:11:58.410
+Oh.
+Explain query plan. So here is the one that
+
+00:11:58.410 --> 00:12:00.550
+just had table foo.
+So sometimes it's kind of hard to see what's
+
+00:12:00.550 --> 00:12:09.060
+actually going on, so one tool I found useful
+and I put on zippy Android on the code project,
+
+00:12:09.060 --> 00:12:14.890
+is I have this SQLite wrapper where I give
+it a database. What was this called? Demo.DB,
+
+00:12:14.890 --> 00:12:23.600
+and I can do a query, let's say this one,
+and it can tell you -- it basically runs it
+
+00:12:23.600 --> 00:12:28.150
+under S trace and then parses the S trace
+output. This is like -- I mean, you can see
+
+00:12:28.150 --> 00:12:32.970
+the script. It's just like a page of ugly
+Perl.
+
+00:12:32.970 --> 00:12:39.490
+You can see that it did 65 reads, and it ended
+up reading 64K of data. Change this to property
+
+00:12:39.490 --> 00:12:44.610
+one and you can see it read 3K of data and
+five reads.
+
+00:12:44.610 --> 00:12:48.820
+I kind of like when I am testing queries and
+I'm not quite sure what the SQLite optimizer
+
+00:12:48.820 --> 00:12:52.690
+is going to do and I want to convince myself
+it is actually doing something more efficient,
+
+00:12:52.690 --> 00:12:58.850
+you can do explain query and explain query
+plan to kind of see that it's different, but
+
+00:12:58.850 --> 00:13:02.210
+if you really want to be sure how many bytes
+it's sucking in from flash, I find this to
+
+00:13:02.210 --> 00:13:07.230
+be helpful.
+So it's a little tool I have used. You can
+
+00:13:07.230 --> 00:13:11.100
+grab it.
+The other fun thing to look at is proc/YAFFS
+
+00:13:11.100 --> 00:13:14.630
+on the device.
+The file system that these things are on isn't
+
+00:13:14.630 --> 00:13:20.110
+like X3 or FATS or something. It's actually
+called YAFFS, yet another flash file system,
+
+00:13:20.110 --> 00:13:26.180
+that runs directly on top of the MTD, the
+memory technology device, the flash part that
+
+00:13:26.180 --> 00:13:30.620
+actually does raw reads, writes and erases
+rather than work in terms of sectors.
+
+00:13:30.620 --> 00:13:37.010
+So on the device you can show cat proc yes.
+You can see all the steps here, like here
+
+00:13:37.010 --> 00:13:42.010
+is the system partitions. It's the read-only
+one that OTAs come to. And here is slash data,
+
+00:13:42.010 --> 00:13:47.230
+the user data device. And you can see, for
+instance, the page writes, reads and erasures.
+
+00:13:47.230 --> 00:13:54.170
+Erases are the really slow operations. Page
+reads are pretty fast. Writes are not as fast.
+
+00:13:54.170 --> 00:13:58.710
+So it's also kind of interesting to watch
+this as your app runs and see how often it's
+
+00:13:58.710 --> 00:14:03.110
+reading and writing. This is global on the
+whole system so try to turn off your sync
+
+00:14:03.110 --> 00:14:07.510
+and turn off other parts of the system you
+don't need while you watch this. But that
+
+00:14:07.510 --> 00:14:14.030
+can be a useful tool as well.
+So maybe we will jump back to SQLite towards
+
+00:14:14.030 --> 00:14:19.350
+the end, but so far what I wanted to emphasize
+is that writing to disk is slow. You shouldn't
+
+00:14:19.350 --> 00:14:20.750
+do it on the main thread. And writing to the
+network is slow.
+
+00:14:20.750 --> 00:14:25.990
+And even if your app seems to work, especially
+in the emulator, the emulator has very different
+
+00:14:25.990 --> 00:14:31.070
+properties sometimes than the actual device.
+For instance, the CPU can be a little bit
+
+00:14:31.070 --> 00:14:35.000
+slower on the emulator depending on your machine,
+but I/O is incredibly fast on the emulator
+
+00:14:35.000 --> 00:14:39.490
+compared to real parts.
+In this app here, one of the other apps in
+
+00:14:39.490 --> 00:14:43.760
+the Google.code project is this thing I wrote
+a while ago called I/O Droid. These just read
+
+00:14:43.760 --> 00:14:48.510
+and write a single byte. These are, like,
+immediate. Like, writes are one millisecond
+
+00:14:48.510 --> 00:14:54.290
+in the emulator, which is not true in reality.
+I will put this on the other device later
+
+00:14:54.290 --> 00:14:58.720
+and we can see that writes jump all over the
+place. And SQLite in turn does tons and tons
+
+00:14:58.720 --> 00:15:05.010
+of writes.
+So don't trust a millisecond or even 20 milliseconds
+
+00:15:05.010 --> 00:15:13.220
+because it's going to add up to quite a bit.
+So, yeah, things will be slow. Some users
+
+00:15:13.220 --> 00:15:18.130
+will have weaker devices or data partitions
+that are more and more full.
+
+00:15:18.130 --> 00:15:22.810
+So pretty much doing any writing or network
+on your main thread, even though it works
+
+00:15:22.810 --> 00:15:27.740
+most of the time, is pretty much a recipe
+for an ANR at some point.
+
+00:15:27.740 --> 00:15:32.150
+Or, worst case, you work at Google, and I'm
+just filing lots of bugs on you, which is
+
+00:15:32.150 --> 00:15:36.810
+basically what I've been doing the last several
+months.
+
+00:15:36.810 --> 00:15:41.050
+So tools.
+Things that you can use to avoid running into
+
+00:15:41.050 --> 00:15:44.240
+ANRs.
+The first one is AsyncTask, this has been
+
+00:15:44.240 --> 00:15:48.050
+in SDK for a while.
+I forget the exact version, but at least,
+
+00:15:48.050 --> 00:15:52.050
+like, Cupcake.
+So the docs say that "enables proper and easy
+
+00:15:52.050 --> 00:15:56.150
+use of the UI thread."
+So, basically, you don't have to deal with
+
+00:15:56.150 --> 00:15:59.460
+handlers and sending messages to handlers.
+It's a little less efficient than doing it
+
+00:15:59.460 --> 00:16:05.150
+yourself but it makes it dead easy to react
+to some event on the UI thread, kick it off
+
+00:16:05.150 --> 00:16:09.480
+to a background thread that you don't have
+to create and get the result back on the UI
+
+00:16:09.480 --> 00:16:13.990
+thread later.
+So the example that's in the Docs is downloading
+
+00:16:13.990 --> 00:16:20.740
+some files.
+So you call this -- you call -- you create
+
+00:16:20.740 --> 00:16:24.450
+the async tact like this.
+You instantiate the task once and send it
+
+00:16:24.450 --> 00:16:28.350
+some things to do which is parameterized by
+the URL.
+
+00:16:28.350 --> 00:16:34.790
+So it basically has three template parameters,
+the type of work to do, which is often void;
+
+00:16:34.790 --> 00:16:38.610
+the progress update as the thing is proceeding,
+which is often void, but in this case it's
+
+00:16:38.610 --> 00:16:42.190
+an integer; and then the final result of the
+computation, which can also be void, but in
+
+00:16:42.190 --> 00:16:46.320
+this example, it's long.
+So the framework when you make an AsyncTask
+
+00:16:46.320 --> 00:16:51.420
+and instantiate it and call execute on it
+will run your -- doing background on some
+
+00:16:51.420 --> 00:16:55.000
+background thread.
+Then you return some result that you can occasionally
+
+00:16:55.000 --> 00:16:59.339
+say publish progress as you go.
+That will also come to the UI thread.
+
+00:16:59.339 --> 00:17:03.880
+Unprogress update runs on your UI thread when
+it gets a message from your background thread.
+
+00:17:03.880 --> 00:17:05.879
+That's optional.
+You don't have to override that.
+
+00:17:05.879 --> 00:17:10.659
+And on post execute is your final one.
+This is also called on the UI thread.
+
+00:17:10.659 --> 00:17:14.669
+Then you can, like, do other things like mess
+with the viewer hierarchy, you know, and change
+
+00:17:14.669 --> 00:17:20.079
+widgets states and stuff like that.
+So that's pretty much the best practice way
+
+00:17:20.079 --> 00:17:23.480
+to do something in the background.
+Sometimes, people -- for instance, this is
+
+00:17:23.480 --> 00:17:26.629
+code in Froyo's browser.
+There were a whole bunch of ANRs in the browser
+
+00:17:26.629 --> 00:17:30.810
+that we fixed.
+Sometimes it's as simple as fire and forget,
+
+00:17:30.810 --> 00:17:34.580
+like writing to something that SQLite in the
+background.
+
+00:17:34.580 --> 00:17:38.860
+This was handle Websearch request.
+And the code was pretty much -- it got passed
+
+00:17:38.860 --> 00:17:42.129
+into content resolver.
+And then in the background, we updated the
+
+00:17:42.129 --> 00:17:45.970
+visit history with the content resolver out
+of the searcher well, and basically, it was
+
+00:17:45.970 --> 00:17:48.820
+void, void, void.
+We just, like, in the background kicked off
+
+00:17:48.820 --> 00:17:51.639
+writing to -- this to SQLite and returned
+immediately.
+
+00:17:51.639 --> 00:17:55.750
+So a whole bunch of stuff like this went into
+Froyo.
+
+00:17:55.750 --> 00:18:00.639
+Some caveats.
+It is -- You have to have a handler around.
+
+00:18:00.639 --> 00:18:04.880
+You have to have a main thread.
+So don't just go stick this in libraries just
+
+00:18:04.880 --> 00:18:07.889
+to be safe, like, if you have some library
+that needs to write to the database.
+
+00:18:07.889 --> 00:18:13.289
+Oh, like I might be called from the library
+sometime so I use AsyncTask and if you do
+
+00:18:13.289 --> 00:18:17.129
+and there's not a looper around and you're
+not on the main thread, it'll kind of blow
+
+00:18:17.129 --> 00:18:18.970
+up.
+I mean, it will blow up.
+
+00:18:18.970 --> 00:18:24.010
+So don't do that.
+Also, if you have to do something important
+
+00:18:24.010 --> 00:18:29.390
+that's, like, the user would expect to be
+persistent, if you call this from an activity
+
+00:18:29.390 --> 00:18:33.429
+and the user leaves your activity and your
+AsyncTask is still running, your system is
+
+00:18:33.429 --> 00:18:35.279
+like, oh, that's just an activity. That's
+not important.
+
+00:18:35.279 --> 00:18:38.999
+I can kill that to reclaim the memory and
+reinstantiate it later.
+
+00:18:38.999 --> 00:18:46.570
+So only do this if it's not really important.
+If you need to do critical stuff, use instead
+
+00:18:46.570 --> 00:18:51.200
+intent service.
+The Docs in Eclair were actually really terse,
+
+00:18:51.200 --> 00:18:54.330
+and no one actually used this.
+We grew up through our own code base and it
+
+00:18:54.330 --> 00:19:00.300
+turned out despite this income the SDK, we
+never really used it ourselves, because one
+
+00:19:00.300 --> 00:19:06.119
+guy knew what it meant.
+So Jason filled us in, and now the Docs, you
+
+00:19:06.119 --> 00:19:10.789
+know, have, like, three paragraphs instead
+of one, and it says -- so I'm not going to
+
+00:19:10.789 --> 00:19:13.249
+read all this.
+But, basically, it's kind of like AsyncTask,
+
+00:19:13.249 --> 00:19:17.659
+but it starts up this ephemeral service and
+does the work in the service, and then the
+
+00:19:17.659 --> 00:19:23.049
+service when it's out of work do shuts down.
+Because you're now running a service, your
+
+00:19:23.049 --> 00:19:27.840
+process is, like, special, because you have
+a service running and the system isn't as
+
+00:19:27.840 --> 00:19:35.240
+apt to kill you to reclaim memory.
+So yeah, you have a service running.
+
+00:19:35.240 --> 00:19:37.860
+You won't be killed.
+Anyway, it's a real easy way to use the service.
+
+00:19:37.860 --> 00:19:41.980
+Everyone thinks, like, oh, Android background
+stuff, it's so hard because it's client/server
+
+00:19:41.980 --> 00:19:44.980
+and you have to write servers.
+And by default, like, when you add a service,
+
+00:19:44.980 --> 00:19:47.659
+it's just some other object that's in your
+process.
+
+00:19:47.659 --> 00:19:52.360
+And by default, it's in the same process.
+They're actually really lightweight.
+
+00:19:52.360 --> 00:19:54.440
+If you want to make it a separate process,
+you can.
+
+00:19:54.440 --> 00:20:00.519
+But....
+So here is one use I found of intent service.
+
+00:20:00.519 --> 00:20:08.850
+Calendar at some point has some broadcast
+receiver, and it gets something, I don't know
+
+00:20:08.850 --> 00:20:12.130
+ -- somehow it has to dismiss all alarms for
+some reason.
+
+00:20:12.130 --> 00:20:16.249
+Maybe you hit the dismiss.
+I don't really know this code.
+
+00:20:16.249 --> 00:20:18.470
+But for some reason, they need to dismiss
+all alarms.
+
+00:20:18.470 --> 00:20:23.690
+And they have to update this content resolver.
+And this is probably some SQLite query in
+
+00:20:23.690 --> 00:20:26.769
+the background behind this content resolver
+on the content provider side.
+
+00:20:26.769 --> 00:20:31.039
+So they on handle this intent, and they don't
+even use the intent.
+
+00:20:31.039 --> 00:20:34.299
+Basically, they use the class as, like, we
+do one thing.
+
+00:20:34.299 --> 00:20:39.120
+We just delete star or whatever.
+So that's, like, the simplest use of intent
+
+00:20:39.120 --> 00:20:41.559
+service.
+So it kind of feels like AsyncTask.
+
+00:20:41.559 --> 00:20:46.770
+It doesn't really have return values.
+Anyway.
+
+00:20:46.770 --> 00:20:52.250
+Other miscellaneous tasks.
+Disable UI elements, like, immediately when
+
+00:20:52.250 --> 00:20:56.830
+a user does something, even if you have a
+AsyncTask, just so the user knows you're working
+
+00:20:56.830 --> 00:21:02.110
+on it, you felt their touch.
+Do some little animation or something, or
+
+00:21:02.110 --> 00:21:05.629
+progress dialogues.
+If you don't know how long it will take, flashing
+
+00:21:05.629 --> 00:21:11.130
+up a modal dialogue for 10, 20 milliseconds
+and going away would be jarring.
+
+00:21:11.130 --> 00:21:18.970
+You probably only want to disable it and spin
+some animation and then only bring up a dialogue
+
+00:21:18.970 --> 00:21:22.179
+if it's actually going to take a while and
+you want to convey progress.
+
+00:21:22.179 --> 00:21:27.600
+So going back to this little demo app, it
+shows some of these techniques.
+
+00:21:27.600 --> 00:21:31.049
+This button, we showed the janky one and the
+ANR one.
+
+00:21:31.049 --> 00:21:37.009
+Here is a slow one that use AsyncTask.
+Notice immediately goes gray.
+
+00:21:37.009 --> 00:21:40.480
+And up at the top, there's this little thing
+spinning.
+
+00:21:40.480 --> 00:21:44.239
+So that's, like -- the user is like, oh, okay,
+I see something moving.
+
+00:21:44.239 --> 00:21:46.610
+Something must be working really hard for
+me.
+
+00:21:46.610 --> 00:21:49.730
+So -- but notice this.
+Like, I'm going to click AsyncTask, and you'll
+
+00:21:49.730 --> 00:21:53.159
+see the little spinny thing, because that
+animation is happening on the UI thread.
+
+00:21:53.159 --> 00:21:57.770
+But then I will go hit Janky button, which
+will still be responding, because the UI thread
+
+00:21:57.770 --> 00:22:00.929
+is free.
+But then watch that the animation stops when
+
+00:22:00.929 --> 00:22:05.039
+I hit the Janky button.
+Because I'm killing all animations on the
+
+00:22:05.039 --> 00:22:10.220
+phone because I'm installing the UI thread.
+So one Janky button can make your whole app
+
+00:22:10.220 --> 00:22:16.190
+kind of be Janky.
+Speaking of Janky stuff, this is how you kind
+
+00:22:16.190 --> 00:22:22.330
+of want your ListViews to feel.
+They're kind of like fast.
+
+00:22:22.330 --> 00:22:27.960
+The problem is, lots of people do database
+lookups or Binder calls or something in their
+
+00:22:27.960 --> 00:22:32.960
+populate view or list -- whatever it's called.
+And then their ListViews ended up looking
+
+00:22:32.960 --> 00:22:36.879
+like this, where it's kind of look chop, chop,
+chop, chop, chop, chop.
+
+00:22:36.879 --> 00:22:40.150
+That's another Janky thing, whenever it's
+not smooth, it's not really responsive.
+
+00:22:40.150 --> 00:22:46.860
+Anyway, so what you should really do -- and
+apparently -- I went to the ListView talk
+
+00:22:46.860 --> 00:22:50.419
+yesterday, and apparently, I'm doing it wrong.
+So don't copy my code.
+
+00:22:50.419 --> 00:22:52.110
+But, basically, the point is, you should do
+it async.
+
+00:22:52.110 --> 00:22:56.539
+You should populate -- this simulates that
+we're still smooth, but there's some, like,
+
+00:22:56.539 --> 00:23:00.860
+loading that needs to be done.
+One thing I did in the Cupcake release when
+
+00:23:00.860 --> 00:23:07.610
+I was 20 percenting, was, the MMS app was
+doing database lookups on the UI thread.
+
+00:23:07.610 --> 00:23:12.149
+So scrolling your SMSs was, like, chunk, chunk,
+chunk, chunk, chunk, and sometimes would ANR.
+
+00:23:12.149 --> 00:23:14.880
+So I did all of that async.
+And that's, like, when you scroll up and actually
+
+00:23:14.880 --> 00:23:19.299
+see, like, dot dot dot while it's loading
+and then, like, the text comes in later.
+
+00:23:19.299 --> 00:23:23.929
+It's kind of hard to do that with list adapter.
+Well, it was until I saw the talk yesterday
+
+00:23:23.929 --> 00:23:27.590
+about the proper way to do it on notify -- on
+data notify change or whatever.
+
+00:23:27.590 --> 00:23:31.170
+I'm not really a UI guy at all.
+So this might have been one of my bigger apps
+
+00:23:31.170 --> 00:23:36.200
+I've ever written.
+Okay.
+
+00:23:36.200 --> 00:23:41.919
+So those are the three ListView examples.
+Okay.
+
+00:23:41.919 --> 00:23:47.370
+So other nonjank-related tools.
+This stuff you probably know about.
+
+00:23:47.370 --> 00:23:52.460
+It's pretty well documented in the SDK Traceview.
+If you are CPU-bound or not quite sure what's
+
+00:23:52.460 --> 00:23:59.000
+going on, you used to have to use Traceview,
+you used to have to say start and stop method
+
+00:23:59.000 --> 00:24:01.929
+profiling in your code.
+You had to explicitly, like, rebuild your
+
+00:24:01.929 --> 00:24:07.460
+app to add these start and stop points.
+But now there's a way -- or it's not that
+
+00:24:07.460 --> 00:24:09.490
+new.
+But as of a release or two ago, there's a
+
+00:24:09.490 --> 00:24:13.409
+way to do it at run time with the AM command
+that's on the phone.
+
+00:24:13.409 --> 00:24:20.419
+So we will demonstrate profiling the browser
+here.
+
+00:24:20.419 --> 00:24:24.100
+So let's bring the browser up.
+Bring a shell up.
+
+00:24:24.100 --> 00:24:35.669
+All right.
+There you see the browser running.
+
+00:24:35.669 --> 00:24:41.120
+So we'll run ADP shell AM, which is activity
+manager, profile, and then the process name,
+
+00:24:41.120 --> 00:24:47.330
+com.android.browser, start, and the file name
+to write the trace to.
+
+00:24:47.330 --> 00:24:52.299
+So we'll write it to the SD card.
+I'm going to start that profiling.
+
+00:24:52.299 --> 00:24:56.519
+So that sends a message to the process being,
+like, yo, turn on your profiling.
+
+00:24:56.519 --> 00:25:09.460
+And we'll go to something here.
+I'll scroll around a little, zoom in a little.
+
+00:25:09.460 --> 00:25:25.370
+It's using a lot of CPU.
+Oh, I even have Ethernet up here I think.
+
+00:25:25.370 --> 00:25:29.830
+I didn't even use that.
+Okay.
+
+00:25:29.830 --> 00:25:35.409
+So assume it did some stuff.
+Then you can say stop.
+
+00:25:35.409 --> 00:25:37.649
+And now it'll flush out the trace from that
+process.
+
+00:25:37.649 --> 00:25:40.940
+So this actually will make your program run
+a little bit slower.
+
+00:25:40.940 --> 00:25:47.859
+So now, if we look at SD card, you see, there's
+the trace we just did.
+
+00:25:47.859 --> 00:25:59.909
+So we can pull
+that.
+
+00:25:59.909 --> 00:26:04.129
+Now there's Traceview, which comes with the
+SDK, and you can look at foo2.trace and see
+
+00:26:04.129 --> 00:26:12.509
+what was happening during the time that we
+were profiling it.
+
+00:26:12.509 --> 00:26:14.471
+So you can see all the different threads that
+were running on the phone.
+
+00:26:14.471 --> 00:26:21.529
+There's your UI thread, some binder threads.
+There's your AsyncTask thread.
+
+00:26:21.529 --> 00:26:27.100
+And the cool thing is, you can see all the
+function names down here, and you can see
+
+00:26:27.100 --> 00:26:30.960
+how many times they were called.
+Sometimes it's interesting to sort by number
+
+00:26:30.960 --> 00:26:35.419
+of calls, being like, why was string.length
+being called 5,000 times?
+
+00:26:35.419 --> 00:26:38.679
+But that's probably a common one.
+Sometimes you see surprising things, and you're
+
+00:26:38.679 --> 00:26:39.850
+like, what?
+I thought that was cached.
+
+00:26:39.850 --> 00:26:43.009
+Why is that thing being loaded a thousand
+times?
+
+00:26:43.009 --> 00:26:46.909
+Sometimes it's useful to sort by exclusive
+time and you can drill down into all the children.
+
+00:26:46.909 --> 00:26:52.539
+So this is good if you're CPU-bound.
+But the JIT and stuff like that should help
+
+00:26:52.539 --> 00:26:55.150
+with this anyway.
+Sometimes, though, this can give really confusing
+
+00:26:55.150 --> 00:26:58.809
+numbers, because it kind of skews everything.
+It doesn't really adjust for the tracing overhead.
+
+00:26:58.809 --> 00:27:03.220
+So sometimes you have a small method that
+is actually fast, but when you look at it
+
+00:27:03.220 --> 00:27:05.980
+in Traceview, it seems to suggest that it's
+slower than it is.
+
+00:27:05.980 --> 00:27:13.809
+So I'll talk about some stuff that's coming
+up later to kind of fix that.
+
+00:27:13.809 --> 00:27:20.470
+All right.
+So, yep, Traceview's good.
+
+00:27:20.470 --> 00:27:24.830
+Other thing that, you know, never hurts is
+just some print here, here, here with Android
+
+00:27:24.830 --> 00:27:28.070
+u2 log.
+A lot of people make, like, a little struct
+
+00:27:28.070 --> 00:27:32.519
+that just has a wall time and a CPU, like,
+current thread.
+
+00:27:32.519 --> 00:27:36.909
+There's Android system debug VM thread CPU
+time nanos.
+
+00:27:36.909 --> 00:27:41.519
+So you can see, like, wall times versus CPU
+time and put it at various points of your
+
+00:27:41.519 --> 00:27:47.749
+program just to see, oh, that little function
+that looked so -- looked so nice and clean
+
+00:27:47.749 --> 00:27:52.549
+turned out calls, you know, abstraction hell
+and ends up doing tons of CPU behind your
+
+00:27:52.549 --> 00:27:55.149
+back.
+So we found some surprising things just dropping
+
+00:27:55.149 --> 00:27:58.919
+these around.
+I've seen a whole bunch of one-off, like,
+
+00:27:58.919 --> 00:28:02.179
+structs that do this.
+There's actually a class, performance collector
+
+00:28:02.179 --> 00:28:05.899
+in the SDK, but it's hidden, because it wasn't
+quite polished.
+
+00:28:05.899 --> 00:28:11.720
+At some point, I'm sure we'll make that public.
+Turns out no one actually used it anyway.
+
+00:28:11.720 --> 00:28:18.749
+So you should watch your own device.
+What I've done over the last five, six months
+
+00:28:18.749 --> 00:28:25.179
+is, we added a bunch of instrumentation all
+over in Froyo.
+
+00:28:25.179 --> 00:28:29.590
+I went in and added instrumentation to all
+database queries, so all of SQLite, all Binder
+
+00:28:29.590 --> 00:28:35.299
+queries, all RPCs between processors, content
+resolvers, content providers, and also had
+
+00:28:35.299 --> 00:28:42.999
+the Dalvik team add logging on Mutexes that
+were contended.
+
+00:28:42.999 --> 00:28:47.019
+And, indeed, each one of these found tons
+of surprising things.
+
+00:28:47.019 --> 00:28:50.770
+We logged for each of these whether or not
+we were on the main thread, what was the thread
+
+00:28:50.770 --> 00:28:54.289
+or process name, what version of the build,
+because we have, like, new nightly builds
+
+00:28:54.289 --> 00:28:59.369
+every night.
+So -- and then we have weekend builds for
+
+00:28:59.369 --> 00:29:01.960
+non-Android team members, like, more Google
+employees.
+
+00:29:01.960 --> 00:29:07.499
+So we log a small percentage of these events
+as a function of how slow it was.
+
+00:29:07.499 --> 00:29:12.509
+And every day, like, every Google employee
+was uploading a couple meg a day.
+
+00:29:12.509 --> 00:29:17.409
+And then it would go up to Google log analysis
+stuff, and I would generate a bunch of reports,
+
+00:29:17.409 --> 00:29:22.139
+and just found tons of fun stuff, where fun
+is totally broken.
+
+00:29:22.139 --> 00:29:28.019
+But that's -- that's, hopefully, most fixed.
+I mean, they're -- now the problem is making
+
+00:29:28.019 --> 00:29:33.620
+sure we don't regress and trying to automate
+the -- automate the process so, like, things
+
+00:29:33.620 --> 00:29:36.529
+are detected quickly when we regress, and
+so that doesn't happen.
+
+00:29:36.529 --> 00:29:49.080
+So let me show you some of these.
+For instance, here is Android util binder.
+
+00:29:49.080 --> 00:29:54.690
+Literally, all it kind of does is look at
+the uptime millis of the phone, do the Binder
+
+00:29:54.690 --> 00:29:57.220
+call, and then afterwards, conditionally log
+it.
+
+00:29:57.220 --> 00:30:03.299
+And conditionally logging it is just, if it
+took over 500 milliseconds, this one is hard-coded
+
+00:30:03.299 --> 00:30:05.470
+to be 500.
+Some of them we made tunable, but this was,
+
+00:30:05.470 --> 00:30:08.549
+like, at a low level enough that making it
+tunable was a pain.
+
+00:30:08.549 --> 00:30:16.609
+If it was super fast, we wouldn't log it.
+Then we would log all the stuff, the process
+
+00:30:16.609 --> 00:30:21.100
+name and blah, blah, blah.
+So we did that to content resolver in here,
+
+00:30:21.100 --> 00:30:24.580
+like, whenever you're querying something,
+you'll see stuff in the source code later
+
+00:30:24.580 --> 00:30:32.379
+about, like, you know, look at the time before
+and after, and we've done the databases, logging
+
+00:30:32.379 --> 00:30:34.460
+stuff there.
+You can see, like, system properties.
+
+00:30:34.460 --> 00:30:38.600
+For instance, if you want to -- this is in
+the SDK and it's part of the Froyo SDK now,
+
+00:30:38.600 --> 00:30:44.230
+so if you want to go see your own, I'll show
+you how you can set these properties DB, DB
+
+00:30:44.230 --> 00:30:48.280
+operation threshold millisecond.
+By default, it's on at 500 milliseconds.
+
+00:30:48.280 --> 00:30:54.369
+But you can turn that way down while you're
+debugging your application to see everything.
+
+00:30:54.369 --> 00:30:58.750
+So let's see some of that.
+So here's my app again that's supposed to
+
+00:30:58.750 --> 00:31:02.249
+do slow stuff.
+We populated the database already with five
+
+00:31:02.249 --> 00:31:06.139
+meg of stuff.
+So let's logcat.
+
+00:31:06.139 --> 00:31:13.399
+All right.
+That's actually maybe -- let's actually maybe
+
+00:31:13.399 --> 00:31:19.330
+bring up another logcat.
+This one will be the event logcat.
+
+00:31:19.330 --> 00:31:23.749
+So I actually have another -- there's actually
+two logcat buffers that are notable.
+
+00:31:23.749 --> 00:31:27.169
+There's also, like, the radio logcat.
+Basically, they're all separate radio buffers
+
+00:31:27.169 --> 00:31:32.019
+that are in the kernel just in memory.
+The normal logcat that you get from Android
+
+00:31:32.019 --> 00:31:36.359
+u2 log is just big strings.
+You pretty much just, like, say things that
+
+00:31:36.359 --> 00:31:39.570
+are human-readable.
+The other one, the event log, is more for,
+
+00:31:39.570 --> 00:31:42.919
+like, the platform itself to use, and they're
+all structured stuff.
+
+00:31:42.919 --> 00:31:48.210
+So they have names and numbers, and these
+are all, like, some packed binary structure.
+
+00:31:48.210 --> 00:31:54.749
+So this button starts two threads that are
+fighting over the same Mutex.
+
+00:31:54.749 --> 00:31:59.990
+And because Dalvik is logging slow Mutexes,
+please wait, Mutexes are fighting.
+
+00:31:59.990 --> 00:32:05.309
+You can see DVM lock sample, Dalvik virtual
+machine lock sample events are going by.
+
+00:32:05.309 --> 00:32:09.059
+You can see that in process com.google.IO
+zippy.
+
+00:32:09.059 --> 00:32:14.179
+It was not the main thread.
+In fact, it was called thread 14 or 15.
+
+00:32:14.179 --> 00:32:19.320
+So these are the two I started up and down.
+It took 184 milliseconds.
+
+00:32:19.320 --> 00:32:23.599
+And it was at -- it was at this file and this
+line number.
+
+00:32:23.599 --> 00:32:27.751
+And because of how I have the logging set,
+it logged 100% of these.
+
+00:32:27.751 --> 00:32:34.739
+So this is how we extrapolate when we subsample.
+So you can actually see, I set this low by
+
+00:32:34.739 --> 00:32:44.889
+setting on the phone data.local.prop.
+So there is something called system properties
+
+00:32:44.889 --> 00:32:48.520
+on the phone which is different from settings.
+System properties are things like global things
+
+00:32:48.520 --> 00:32:53.100
+that are in memory. So if you say ABD shell
+get prop, you can see all these things that
+
+00:32:53.100 --> 00:32:59.889
+are set by the phone manufacturer. It's kind
+of like part of the build, but they are tunable
+
+00:32:59.889 --> 00:33:06.269
+and if you are root you can change these.
+So this file, data local.prop, you can override
+
+00:33:06.269 --> 00:33:12.529
+them. So in the emulator, if you set this
+and then reboot your phone, when this comes
+
+00:33:12.529 --> 00:33:19.919
+up -- ADB shell getprop, grep Dalvik -- you
+can see, indeed, the lock profiling threshold
+
+00:33:19.919 --> 00:33:25.820
+is set to 10 milliseconds. By default it's
+500, but that would make for a much slow demo
+
+00:33:25.820 --> 00:33:30.029
+if I had to have mutexes fighting for 500
+milliseconds instead of 10.
+
+00:33:30.029 --> 00:33:39.239
+So that is the DVM lock sample one.
+Let's also so initializing a database here.
+
+00:33:39.239 --> 00:33:46.420
+So it's going to drop it. Now you can see
+some database sample things. So the event
+
+00:33:46.420 --> 00:33:52.399
+there is database sample. There is the database
+name. If it has an e-mail address in it, the
+
+00:33:52.399 --> 00:33:56.820
+e-mail address is cleaned up so it doesn't
+leak any stuff.
+
+00:33:56.820 --> 00:34:03.399
+There's like the first N characters of the
+SQL query. You don't get the placeholder values.
+
+00:34:03.399 --> 00:34:09.540
+And then you see how many milliseconds. This
+was the name of the processor thread it was
+
+00:34:09.540 --> 00:34:15.170
+blocking. And if it wasn't, as this one isn't,
+it was on a background thread, and this is
+
+00:34:15.170 --> 00:34:21.110
+the subsampling percentage.
+So you can turn this one way down, too. That's
+
+00:34:21.110 --> 00:34:29.230
+in the code as -- let's show that.
+So there's this DB, DB operation threshold
+
+00:34:29.230 --> 00:34:36.090
+milliseconds and right now it's set to 500.
+But we can go on the phone and say ADB shell
+
+00:34:36.090 --> 00:34:40.870
+setprop, and we will set this to -- I don't
+know, ten. Make it really Spammy.
+
+00:34:40.870 --> 00:34:50.410
+Make sure it is actually there.
+Oh, helps to actually run the command. Anyway,
+
+00:34:50.410 --> 00:34:58.770
+now you can see I have Dalvik and database
+samples set at 10 milliseconds. So this was
+
+00:34:58.770 --> 00:35:04.610
+cached in a static variable, so I will exit
+my app and restart it.
+
+00:35:04.610 --> 00:35:11.940
+And now we have the -- here's the event log
+again. I will do some selects.
+
+00:35:11.940 --> 00:35:19.601
+So this one is not using an index so you can
+see them going by occasionally. DB sample.
+
+00:35:19.601 --> 00:35:24.570
+You can see the select, primary key, it took
+like five milliseconds.
+
+00:35:24.570 --> 00:35:29.660
+This one uses index, and this one I would
+have to bang on a lot for it to show up statistically.
+
+00:35:29.660 --> 00:35:33.801
+There is one.
+If you set this low enough, and like I said
+
+00:35:33.801 --> 00:35:38.740
+I/O on this thing is really fast. If you are
+using read and writes, it's a lot slower.
+
+00:35:38.740 --> 00:35:44.080
+For instance, here is a write where I update
+everything. I think this will take three or
+
+00:35:44.080 --> 00:35:49.940
+four seconds so now you see this update go
+by. Update foo and this one took, yeah, 3.8
+
+00:35:49.940 --> 00:35:55.050
+seconds. I was just appending a character
+to all the junk rows.
+
+00:35:55.050 --> 00:35:57.731
+These are fun things to do in your app to
+see where you are doing slow things that you
+
+00:35:57.731 --> 00:36:06.110
+are not expecting.
+So we did that a lot in Froyo. We talked about
+
+00:36:06.110 --> 00:36:11.330
+log versus event log.
+And those are all the events that were added.
+
+00:36:11.330 --> 00:36:15.170
+The database samples, binder samples, content
+providers were broken into queries and updates
+
+00:36:15.170 --> 00:36:21.910
+depending how we wanted to structure that.
+And Dalvik lock contention when you are acquiring
+
+00:36:21.910 --> 00:36:25.200
+the mutex.
+We don't currently have instrumentation for
+
+00:36:25.200 --> 00:36:29.990
+who is holding the mutex the longest to kind
+of like find the person who was to blame for
+
+00:36:29.990 --> 00:36:34.090
+it, but generally it's pretty obvious from
+your code. But we probably will be adding
+
+00:36:34.090 --> 00:36:36.210
+maybe DVM unlock sample or something like
+that.
+
+00:36:36.210 --> 00:36:42.290
+Coming later.
+This is all speculative. This is all kind
+
+00:36:42.290 --> 00:36:47.780
+of things I want to do. I haven't totally
+prioritized all this stuff.
+
+00:36:47.780 --> 00:36:53.261
+Need a lot more instrumentation. Every time
+we have added something, I've found more and
+
+00:36:53.261 --> 00:36:58.240
+more things that I want to instrument.
+I have always found offensive things whenever
+
+00:36:58.240 --> 00:37:03.070
+we added instrumentation that was surprising,
+so I just want to keep adding more and make
+
+00:37:03.070 --> 00:37:05.630
+more dashboards.
+I also want to make all this sort of stuff
+
+00:37:05.630 --> 00:37:12.070
+be easier to use, be you'll SDK platform features
+for end developers rather than this hackie
+
+00:37:12.070 --> 00:37:16.260
+kind of thing you have to do with set prop
+and changing these things and rebooting the
+
+00:37:16.260 --> 00:37:23.550
+emulator. It's not quite easy to use now.
+I also want a strict mode. Right now the documentation
+
+00:37:23.550 --> 00:37:29.910
+doesn't really tell what you thread you should
+do stuff on often, or sometimes it's ambiguous
+
+00:37:29.910 --> 00:37:35.670
+how you should do stuff. And sometimes the
+ -- like the view system crashes if you invalidate
+
+00:37:35.670 --> 00:37:39.260
+a view on the wrong thread.
+But other things of the view system, you can
+
+00:37:39.260 --> 00:37:44.480
+do off the wrong thread. And sometimes you
+get away with it and sometimes it happens
+
+00:37:44.480 --> 00:37:49.660
+to cause a repaint, and then you explode.
+I basically want a strict mode where you blow
+
+00:37:49.660 --> 00:37:57.580
+up early, so you can maybe add in your manifest,
+like, strict mode or call Dalvik OS debug.set
+
+00:37:57.580 --> 00:38:02.530
+strict mode, and maybe blow up if you do writes
+on your main thread or blow up if you do networking.
+
+00:38:02.530 --> 00:38:06.380
+Maybe give you granular control over when
+you blow up. This is all stuff you can do
+
+00:38:06.380 --> 00:38:11.950
+yourself now if you just drop in little sanity
+check functions at key points, but it's kind
+
+00:38:11.950 --> 00:38:16.530
+of a pain.
+You saw during the keynote the thing where
+
+00:38:16.530 --> 00:38:21.410
+show Android feedback, or I'll go -- whatever.
+In the market, you can see all the stack traces
+
+00:38:21.410 --> 00:38:25.500
+from things that crashed in your users' apps.
+I kind of want to do that for performance
+
+00:38:25.500 --> 00:38:32.000
+data. Figure out a way to maybe let users
+opt in to performance collection and upload
+
+00:38:32.000 --> 00:38:36.030
+that to the Android Market. So you can go
+in and be like, oh, these are like the files
+
+00:38:36.030 --> 00:38:40.500
+and lines and mutexes that are making my apps
+slow for my end users. I think that would
+
+00:38:40.500 --> 00:38:44.140
+be kind of cool.
+This is what we have now internally, but trying
+
+00:38:44.140 --> 00:38:49.470
+to figure out how to surface that in a way
+that doesn't kill people's networks and batteries
+
+00:38:49.470 --> 00:38:57.290
+and privacy, that stuff is harder.
+The other thing I am excited about and after
+
+00:38:57.290 --> 00:39:01.732
+Froyo is SQLite is getting another feature
+called write ahead logging where it basically
+
+00:39:01.732 --> 00:39:06.990
+makes SQLite have multi-version concurrency
+control, kind of like real databases where
+
+00:39:06.990 --> 00:39:09.060
+reads don't block writes and writes don't
+block reads.
+
+00:39:09.060 --> 00:39:14.720
+So at the time you go to read it, you get
+the version of the database that existed at
+
+00:39:14.720 --> 00:39:19.520
+the time you were reading and then writes
+continue to be appended to the end. And then
+
+00:39:19.520 --> 00:39:23.150
+when that write is done, there can still only
+be one writer at the time, but when that write
+
+00:39:23.150 --> 00:39:28.570
+is done it says this is the new version number.
+And then the readers go and apply all the
+
+00:39:28.570 --> 00:39:33.410
+blocks -- all the pages that were (inaudible)
+retroactively on top of it.
+
+00:39:33.410 --> 00:39:37.660
+So this will let you do things like write
+to a database from your provider without block,
+
+00:39:37.660 --> 00:39:42.340
+like, say, Gmail scrolling your conversation
+list where that's faulting it in from your
+
+00:39:42.340 --> 00:39:46.730
+the SQLite database. And sometimes you can
+kill your animations or your activity was
+
+00:39:46.730 --> 00:39:51.530
+noticeably janky because it was blocked on
+the SQLite F lock.
+
+00:39:51.530 --> 00:40:02.160
+So I think the concurrency out of read-ahead
+logging will be interesting post-Froyo.
+
+00:40:02.160 --> 00:40:07.260
+So the summary, I can do some more demos.
+Yeah, get off the main thread. Things are
+
+00:40:07.260 --> 00:40:11.730
+actually slow that sometimes you are fast
+ -- I'm sure your home network connection
+
+00:40:11.730 --> 00:40:17.100
+and your emulator or your phone on your home
+Wi-Fi is really fast, and emulators, if you
+
+00:40:17.100 --> 00:40:21.620
+have an empty device you are developing on,
+their disk is going to be a lot faster than
+
+00:40:21.620 --> 00:40:26.060
+users in the field with full disks.
+Yeah, basically assume things are slow. Know
+
+00:40:26.060 --> 00:40:32.000
+what SQLite is doing. Add your own instrumentation.
+Just because it's, you know, not automatic
+
+00:40:32.000 --> 00:40:36.261
+ -- auto magically exposed to you right like
+through the market, you can totally do it
+
+00:40:36.261 --> 00:40:40.800
+yourself for your own apps or put a little
+server on app engine or something and upload
+
+00:40:40.800 --> 00:40:45.120
+performance data from your own users if they
+agree to that.
+
+00:40:45.120 --> 00:40:47.660
+So all the code is up that you could play
+with in these demos.
+
+00:40:47.660 --> 00:40:53.840
+I think I will also show kind of how slow
+I/O is on a real device here.
+
+00:40:53.840 --> 00:41:03.420
+Android.
+Kill the emulator.
+
+00:41:03.420 --> 00:41:40.720
+All right. Switch to this guy.
+This is another fun tool we wrote during Froyo
+
+00:41:40.720 --> 00:41:46.791
+that lets us measure various speeds of things.
+Little micro benchmarks on reads and writes
+
+00:41:46.791 --> 00:41:53.490
+and settings and binder calls along things.
+You can see like a binder call between two
+
+00:41:53.490 --> 00:41:58.900
+processes was like .18 milliseconds. Or here
+is a binder call returning a string or content
+
+00:41:58.900 --> 00:42:05.130
+provider calls, or writing settings. We just
+did a thousand of those.
+
+00:42:05.130 --> 00:42:10.030
+Reading files.
+So we were using tools like this to kind of
+
+00:42:10.030 --> 00:42:17.790
+measure improvements over time.
+You should have told me it was way up there.
+
+00:42:17.790 --> 00:42:22.320
+So that is in the open source tree, whenever
+it is released in Froyo.
+
+00:42:22.320 --> 00:42:31.030
+So where is my I/O Droid here?
+Alphabetical order is hard.
+
+00:42:31.030 --> 00:42:38.050
+Here is a random one byte read. You can see
+it's, like, sometimes fast. Even a read jumps
+
+00:42:38.050 --> 00:42:42.800
+up to 139 milliseconds there sometimes. This
+isn't very scientific. This is just kind of
+
+00:42:42.800 --> 00:42:49.750
+fun. Writes, on the other hand, like 391,
+200. That's like writing a single byte. Maybe
+
+00:42:49.750 --> 00:42:55.230
+my SD card -- or my internal flash got full
+again, but it kind of jumps all over the place.
+
+00:42:55.230 --> 00:43:05.830
+A single byte writing was like 390 milliseconds.
+So switch it back to this guy.
+
+00:43:05.830 --> 00:43:11.330
+One thing that's fun here is if you think
+like your internal caches are making your
+
+00:43:11.330 --> 00:43:26.320
+thing fast, you can always go to your device
+and say -- oh, ADB root. Echo 3 to PROC SYS
+
+00:43:26.320 --> 00:43:37.770
+VM, drop caches. Spelled correctly. So basically
+three is the bit mask of one and two, which
+
+00:43:37.770 --> 00:43:42.720
+is one is like inodes and two is like slab
+or something like that. I/O is just echo 3
+
+00:43:42.720 --> 00:43:45.650
+to this and basically drops a whole bunch
+of the kernel caches.
+
+00:43:45.650 --> 00:43:55.410
+So then switching back my app here, reads
+are, like, slow again. So I can just sit up
+
+00:43:55.410 --> 00:44:02.020
+here and hit up enter, or paste, paste, paste,
+and I can force it to be slow. Slow, slow,
+
+00:44:02.020 --> 00:44:07.660
+slow, slow, slow.
+That's a fun trick, too, to like simulate
+
+00:44:07.660 --> 00:44:11.610
+worst case.
+You should also put like a big file on your
+
+00:44:11.610 --> 00:44:16.461
+data partition that makes your app -- like
+training in Denver. Make your data partition
+
+00:44:16.461 --> 00:44:22.320
+really, really slow to simulate the worst
+case for your end users, and get your file
+
+00:44:22.320 --> 00:44:27.211
+system, like, 80, 90% full, and then you will
+see like SQLite at its worst.
+
+00:44:27.211 --> 00:44:36.720
+Anyway, do some questions and maybe we could
+jump around code if there aren't any questions.
+
+00:44:36.720 --> 00:44:45.320
+I think I saw a bunch on the Wave.
+If there are live questions, too, we can do
+
+00:44:45.320 --> 00:44:47.040
+those.
+All right.
+
+00:44:47.040 --> 00:44:52.600
+Just go in order.
+If there's any plan for nexus two or does
+
+00:44:52.600 --> 00:44:59.490
+it already exist?
+I have no clue. I guess the web store is shutting
+
+00:44:59.490 --> 00:45:03.310
+down, and I guess Nexus One is kind of marketing
+name anyway, so maybe someone will name a
+
+00:45:03.310 --> 00:45:09.040
+phone nexus two. I don't know.
+What is the most common performance problem
+
+00:45:09.040 --> 00:45:15.770
+you see? I think pretty much just people doing
+stuff in the wrong thread, I/O being slow.
+
+00:45:15.770 --> 00:45:20.210
+SQL queries that look innocent but if you
+look at the table it's selecting from it's
+
+00:45:20.210 --> 00:45:24.650
+really a view of a view of a subselect view.
+And you say what? It was just a view. Why
+
+00:45:24.650 --> 00:45:30.331
+is it slow? So, yeah, would I say I/O and
+doing stuff in the wrong thread.
+
+00:45:30.331 --> 00:45:37.770
+I have no idea about Google TV although I
+have one and it's fun. I can run my Android
+
+00:45:37.770 --> 00:45:43.020
+apps on it.
+Oh, this as good one. Any rules of thumb to
+
+00:45:43.020 --> 00:45:46.440
+follow to improve the speed of UI redraws
+when the orientation of the phone changes?
+
+00:45:46.440 --> 00:45:53.552
+So I actually bookmarked this one to point
+out there is something here. There is something
+
+00:45:53.552 --> 00:46:02.510
+called on retain nonconfiguration instance,
+which doesn't sound like on prepare to rotate
+
+00:46:02.510 --> 00:46:03.510
+the screen.
+[ Laughter ]
+
+00:46:03.510 --> 00:46:07.290
+&gt;&gt;Brad Fitzpatrick: But that is effectively
+what it is.
+
+00:46:07.290 --> 00:46:12.520
+So rotating the screen is a configuration
+change. Basically, you have a whole new type
+
+00:46:12.520 --> 00:46:16.710
+of screen, rather than a screen that's tall
+you now have a screen that's wide. And because
+
+00:46:16.710 --> 00:46:19.710
+you have a different type of schools you can
+have different layout files and different
+
+00:46:19.710 --> 00:46:24.310
+drawables and all this stuff.
+So the way the Android system works is if
+
+00:46:24.310 --> 00:46:27.550
+you don't declare in your manifest that you
+don't handle a certain type of configuration
+
+00:46:27.550 --> 00:46:34.540
+change, then by default, like your activity
+is just killed. Not your process, just your
+
+00:46:34.540 --> 00:46:38.190
+activity is shut down and reinstantiated with
+the new configuration.
+
+00:46:38.190 --> 00:46:42.640
+So if you have a bunch of expensive state
+in your activity, like network resources you
+
+00:46:42.640 --> 00:46:48.580
+loaded or data or JPEG or the user was drawing
+something and you didn't write it out somewhere,
+
+00:46:48.580 --> 00:46:55.240
+as you should, then when your application
+is restarted or the activity is destroyed
+
+00:46:55.240 --> 00:46:58.960
+and reinstantiated with the new configuration,
+you have to load all that stuff again.
+
+00:46:58.960 --> 00:47:04.190
+So you have two options. You can either declare
+in your manifest that I handle rotating the
+
+00:47:04.190 --> 00:47:09.840
+screen, I handle that sort of configuration
+change, or you can do this.
+
+00:47:09.840 --> 00:47:15.380
+Generally, you don't want to do that first
+one because then you have to handle on -- I
+
+00:47:15.380 --> 00:47:22.320
+think it was on configuration changed. And
+if the configuration is like now I am wider
+
+00:47:22.320 --> 00:47:25.810
+versus tall and those are different layout
+files, then you would have to handle like
+
+00:47:25.810 --> 00:47:30.680
+destroying all your views and changing everything
+yourself. Basically what you want to do is
+
+00:47:30.680 --> 00:47:34.280
+destroy the whole activity and start it up
+again with the correct views that the system
+
+00:47:34.280 --> 00:47:38.540
+will inflate for you.
+What you don't want to do is redo all those
+
+00:47:38.540 --> 00:47:44.030
+heavy objects. So that's when would you use
+on retain nonconfiguration instance.
+
+00:47:44.030 --> 00:47:48.590
+Basically, this is called right before on
+stop and on destroy, and it says you can return
+
+00:47:48.590 --> 00:47:54.030
+any arbitrary object. This is like you are
+expensive state. And then when the next activity
+
+00:47:54.030 --> 00:47:58.440
+is started right after you, which is the exact
+same one, you call get last nonconfiguration
+
+00:47:58.440 --> 00:48:01.800
+instance, and you restore your state that
+was expensive.
+
+00:48:01.800 --> 00:48:08.430
+So that is the answer to that question.
+How is Android 2.2?
+
+00:48:08.430 --> 00:48:18.250
+I love it. I really wanted to throw my phone
+against the wall half the time in Eclair.
+
+00:48:18.250 --> 00:48:21.040
+And I mean, this is why I joined Android.
+I was just really frustrated by performance.
+
+00:48:21.040 --> 00:48:26.790
+Like certain parts that just weren't responsive.
+One of my pet peeves that I got into Android
+
+00:48:26.790 --> 00:48:31.670
+2.2 which is kind of a side thing is that
+power control widget. Like just T just wouldn't
+
+00:48:31.670 --> 00:48:35.880
+respond. You would turn Wi-Fi on or off or
+Bluetooth on or off and sometimes it would
+
+00:48:35.880 --> 00:48:40.541
+hang and the UI wouldn't change or sometimes
+there was a little toast because it was doing
+
+00:48:40.541 --> 00:48:44.740
+all really expensive things that went all
+the way down to the kernel and drivers and
+
+00:48:44.740 --> 00:48:50.260
+Bluetooth and the PPP daemon.
+That was all happening synchronously before
+
+00:48:50.260 --> 00:48:55.290
+any UI was ever updated. So I tried to make
+that responsive. There are still a couple
+
+00:48:55.290 --> 00:48:58.300
+of buttons that aren't as responsive as I
+would like in there, but the first three or
+
+00:48:58.300 --> 00:49:02.150
+four are pretty good.
+There's a whole bunch of other stuff. Basically
+
+00:49:02.150 --> 00:49:04.521
+ -- Let me see if I have any reports here
+that we did.
+
+00:49:04.521 --> 00:49:19.270
+No.
+Basically, we just made tons of reports about
+
+00:49:19.270 --> 00:49:24.340
+all the slow parts, and we had meetings once
+a week after we did the weekend builds for
+
+00:49:24.340 --> 00:49:27.300
+all the Googlers.
+On Mondays, we'd go and look at these reports
+
+00:49:27.300 --> 00:49:32.820
+and be, like, whoa, what is that thing?
+So, yeah, I like it.
+
+00:49:32.820 --> 00:49:36.920
+There's still a lot more to do.
+But -- is that a question?
+
+00:49:36.920 --> 00:49:39.770
+&gt;&gt;&gt; Yeah.
+We have an application that's downloading
+
+00:49:39.770 --> 00:49:45.250
+a bunch of thumbnails in a ListView, kind
+of two parts to this question.
+
+00:49:45.250 --> 00:49:50.800
+Do you have a good piece of code that kind
+of illustrates asynchronously downloading
+
+00:49:50.800 --> 00:49:55.780
+that stuff into ListView or is there a good
+pattern to follow?
+
+00:49:55.780 --> 00:50:00.940
+&gt;&gt;Brad Fitzpatrick: So I do.
+It's -- I open sourced it this morning, this
+
+00:50:00.940 --> 00:50:05.050
+little sample app.
+Apparently, I did one part of it wrong, so
+
+00:50:05.050 --> 00:50:10.610
+I'm going to go update the code.
+So yeah.
+
+00:50:10.610 --> 00:50:15.170
+Basically, -- we can go and look at the code.
+&gt;&gt;&gt; So the second part to that question is
+
+00:50:15.170 --> 00:50:20.980
+that we have an implementation that's working.
+It's -- I think it's pretty fair.
+
+00:50:20.980 --> 00:50:26.910
+But it's downloading these thumbnails using
+the context get cachedir and just basically
+
+00:50:26.910 --> 00:50:31.480
+throwing everything into the cachedir.
+And based on everything you are saying about
+
+00:50:31.480 --> 00:50:34.470
+file reads and writes, is there anything special
+we should do?
+
+00:50:34.470 --> 00:50:39.180
+I mean, the documentation on get cachedir
+says, basically, Android is going to manage
+
+00:50:39.180 --> 00:50:43.600
+this for you and delete stuff whenever it
+feels like it needs to.
+
+00:50:43.600 --> 00:50:45.810
+Is there anything we should do to kind of
+ --
+
+00:50:45.810 --> 00:50:47.830
+&gt;&gt;Brad Fitzpatrick: Android is going to delete
+what part?
+
+00:50:47.830 --> 00:50:54.461
+&gt;&gt;&gt; When you use the context.get cachedir
+and just throw files into it, the documentation
+
+00:50:54.461 --> 00:50:59.570
+basically says Android's going to manage this
+and delete files when it needs space.
+
+00:50:59.570 --> 00:51:05.130
+So is there anything from a performance perspective
+we should do to help it manage that?
+
+00:51:05.130 --> 00:51:08.170
+&gt;&gt;Brad Fitzpatrick: I think that's actually
+on a separate partition that's probably not
+
+00:51:08.170 --> 00:51:12.060
+very contended.
+So I think you're probably fine there.
+
+00:51:12.060 --> 00:51:17.840
+And also, raw files are actually pretty good.
+One thing I didn't mention was, if you're
+
+00:51:17.840 --> 00:51:22.050
+just, like -- sometimes all you need is raw
+files and you don't need an SQLite database.
+
+00:51:22.050 --> 00:51:25.540
+Especially, like, log data.
+If you have something like my tracks, where
+
+00:51:25.540 --> 00:51:29.650
+you're recording points over time, just inserting
+a row into a database over and over again,
+
+00:51:29.650 --> 00:51:34.250
+if you actually go look at (inaudible) while
+you're doing it, you can see it does a lot
+
+00:51:34.250 --> 00:51:39.290
+of operations, like reads, writes, erases
+to Flash that just appending to a file doesn't.
+
+00:51:39.290 --> 00:51:45.730
+So it's not really totally relevant to your
+question, but I -- I think cache is probably
+
+00:51:45.730 --> 00:51:48.040
+fine.
+Raw files are generally pretty fast.
+
+00:51:48.040 --> 00:51:50.560
+&gt;&gt;&gt; Okay.
+&gt;&gt;Brad Fitzpatrick: In terms of asynchronously
+
+00:51:50.560 --> 00:51:57.430
+doing something, in here, I made this Jankable
+list adapter where, when I create it on the
+
+00:51:57.430 --> 00:52:04.990
+constructor, I can select my Jankable segments,
+I do the proper convert view thing if one's
+
+00:52:04.990 --> 00:52:08.100
+being recycled, I use it, otherwise, I inflate
+a new one.
+
+00:52:08.100 --> 00:52:12.350
+And I didn't do the pattern that they talked
+about yesterday during the ListView talk to
+
+00:52:12.350 --> 00:52:15.540
+have that little struct.
+So I'm doing the correct way and not the fast
+
+00:52:15.540 --> 00:52:22.100
+way, where I look up the views every time.
+Like I said, I don't really do any UI work.
+
+00:52:22.100 --> 00:52:25.920
+But what I did here is -- okay, so ignore
+the Jank one.
+
+00:52:25.920 --> 00:52:34.840
+For the async stuff, what I do is set off
+AsyncTasks that just sleeps, just to kill
+
+00:52:34.840 --> 00:52:37.240
+some type.
+Post execute, which happens back on the UI
+
+00:52:37.240 --> 00:52:40.850
+thread, the problem is after 500 milliseconds
+or whenever I'm actually scheduled, because
+
+00:52:40.850 --> 00:52:46.820
+all AsyncTasks run serially in one background
+thread, the view that I was modifying may
+
+00:52:46.820 --> 00:52:49.360
+be gone, it may be recycled because I was,
+like, actively scrolling.
+
+00:52:49.360 --> 00:52:58.370
+I basically set a tag on the thing when -- when
+I finally -- when I first show the view on
+
+00:52:58.370 --> 00:53:01.340
+the screen, I set a tag, being, like, what
+position I'm at.
+
+00:53:01.340 --> 00:53:06.010
+And this gets -- I think that's, like, an
+object or something, it's auto boxed to an
+
+00:53:06.010 --> 00:53:09.470
+integer.
+Later, I check to make sure that it's still
+
+00:53:09.470 --> 00:53:12.531
+the same number, like, that actual view instance
+is the same one.
+
+00:53:12.531 --> 00:53:16.120
+Apparently, you're not supposed to do this.
+So don't do that.
+
+00:53:16.120 --> 00:53:20.330
+But, basically, the pattern is, you do some
+AsyncTask or other thread from your get view
+
+00:53:20.330 --> 00:53:27.380
+and then you go update your data set afterwards.
+So I'll go update this code to be correct.
+
+00:53:27.380 --> 00:53:29.120
+So....
+Yep.
+
+00:53:29.120 --> 00:53:34.510
+&gt;&gt;&gt; Hey, you recommended for long-running
+background I/O, I think you called it intend
+
+00:53:34.510 --> 00:53:38.830
+service.
+How far back does that go for OS versions
+
+00:53:38.830 --> 00:53:40.440
+that we're targeting?
+&gt;&gt;Brad Fitzpatrick: I think that's pretty
+
+00:53:40.440 --> 00:53:41.930
+old.
+&gt;&gt;&gt; Is it?
+
+00:53:41.930 --> 00:53:45.020
+&gt;&gt;Brad Fitzpatrick: Yeah.
+We can check here.
+
+00:53:45.020 --> 00:53:53.220
+Intent service.
+Well, we'll find out whenever the Wi-Fi is
+
+00:53:53.220 --> 00:53:58.920
+cooperating.
+Since API 3, so -- yeah, old, Donut or something,
+
+00:53:58.920 --> 00:54:00.140
+Cupcake.
+&gt;&gt;&gt; Great.
+
+00:54:00.140 --> 00:54:03.960
+Thank you.
+&gt;&gt;Brad Fitzpatrick: Yeah.
+
+00:54:03.960 --> 00:54:11.840
+&gt;&gt;&gt; Hey, the last app I worked on, we had
+to (inaudible) much later, and I tried out
+
+00:54:11.840 --> 00:54:20.130
+SQL and, like, serialization, and XML, and
+so on, and it turns out serialization is awfully
+
+00:54:20.130 --> 00:54:24.550
+slow in Dalvik.
+Do you know if this is better in the Froyo?
+
+00:54:24.550 --> 00:54:27.460
+&gt;&gt;Brad Fitzpatrick: Probably.
+If it was CPU-bound, it will be a lot better.
+
+00:54:27.460 --> 00:54:32.150
+&gt;&gt;&gt; Okay.
+&gt;&gt;Brad Fitzpatrick: So.
+
+00:54:32.150 --> 00:54:36.150
+And if it's still really bad, maybe that should
+be done in native code.
+
+00:54:36.150 --> 00:54:41.780
+I mean, maybe we're already using libXML.
+The question was, XML or some data structure
+
+00:54:41.780 --> 00:54:50.080
+ -- Was it XML?
+&gt;&gt;&gt; Yeah, I tried XML, SQL, ZSV, all of them.
+
+00:54:50.080 --> 00:54:56.230
+But it turns out SQL was the fastest because
+of the native code.
+
+00:54:56.230 --> 00:55:03.820
+And I tested it, like, on the normal PC, but
+the serialization of the 10,000 objects, it
+
+00:55:03.820 --> 00:55:07.630
+was, like, 70 milliseconds.
+And on the Android device, then it was, like,
+
+00:55:07.630 --> 00:55:13.990
+five seconds, which was painfully slow.
+And, like, on the Dalvik, there was all triggering
+
+00:55:13.990 --> 00:55:18.180
+the --
+&gt;&gt;Brad Fitzpatrick: So even with JIT, sometimes
+
+00:55:18.180 --> 00:55:20.730
+things will actually be CPU-bound and they
+won't be I/O-bound.
+
+00:55:20.730 --> 00:55:24.370
+But that's still something that you can do
+on a background thread and have a little progress
+
+00:55:24.370 --> 00:55:28.510
+indicator in your UI and actually set that
+background thread to a lower priority.
+
+00:55:28.510 --> 00:55:32.500
+There's somewhere in the API to reduce your
+priority of a thread.
+
+00:55:32.500 --> 00:55:36.182
+And that way, the user can still use your
+app while you're maybe exporting the SD card
+
+00:55:36.182 --> 00:55:44.330
+or something like that.
+&gt;&gt;&gt; How expensive are random access rights
+
+00:55:44.330 --> 00:55:49.391
+into a flat file?
+&gt;&gt;Brad Fitzpatrick: It's about what I was
+
+00:55:49.391 --> 00:55:51.041
+showing here.
+They jump around.
+
+00:55:51.041 --> 00:55:57.780
+Switch to the ELMO.
+You know, like, writing a single byte, which
+
+00:55:57.780 --> 00:56:01.560
+is about the same, up to, you know, 2K or
+something on -- it jumps around.
+
+00:56:01.560 --> 00:56:05.790
+Sometimes it's, like, 200 milliseconds.
+Sometimes it's, like, very few.
+
+00:56:05.790 --> 00:56:08.650
+It really depends how -- how full the device
+is.
+
+00:56:08.650 --> 00:56:13.240
+&gt;&gt;&gt; But it would be significantly faster than
+the equivalent SQL, SQLite update?
+
+00:56:13.240 --> 00:56:17.800
+&gt;&gt;Brad Fitzpatrick: Yeah.
+Generally, SQLite will -- when you append
+
+00:56:17.800 --> 00:56:19.740
+ -- like, when you do a transaction, even
+when you're not doing.
+
+00:56:19.740 --> 00:56:24.670
+Anything, will create a roll-back journal,
+create a header to it and delete it at the
+
+00:56:24.670 --> 00:56:30.080
+end.
+So what this one slide was doing where I showed
+
+00:56:30.080 --> 00:56:37.460
+the graph, this was actually the operation
+ -- this was creating a file, writing 512
+
+00:56:37.460 --> 00:56:41.110
+bytes to and to have it and deleting it.
+This is what SQLite does on every transaction,
+
+00:56:41.110 --> 00:56:45.510
+whether or not you write at all.
+So this bug is now fixed in SQLite, but not
+
+00:56:45.510 --> 00:56:51.300
+in time for Froyo, or it was just too risky.
+So post Gingerbread, all SQLite transactions
+
+00:56:51.300 --> 00:56:57.970
+will be faster.
+If you're going to conditionally write and
+
+00:56:57.970 --> 00:57:02.320
+you're, like, oh, I'll use a transaction and
+then do my read and then bail out, out of
+
+00:57:02.320 --> 00:57:08.000
+my transaction, without doing a write, that's
+actually more expensive than -- you should
+
+00:57:08.000 --> 00:57:12.390
+do your read outside of your transaction,
+'cause reads outside of a transaction are
+
+00:57:12.390 --> 00:57:14.720
+a lot faster.
+Then go into your transaction, do the read
+
+00:57:14.720 --> 00:57:19.670
+again, double-check that you -- that the condition
+still applies, and then do your write.
+
+00:57:19.670 --> 00:57:25.400
+Because if -- just entering a transaction
+is -- involves disk I/O and it's pretty slow.
+
+00:57:25.400 --> 00:57:28.020
+And it also blocks out all other readers on
+the phone.
+
+00:57:28.020 --> 00:57:31.430
+So -- all right.
+I think we'll wrap up, then.
+
+00:57:31.430 --> 00:57:32.250
+Thank you.
+[ Applause ]
+

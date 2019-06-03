@@ -1,0 +1,3471 @@
+WEBVTT
+Kind: captions
+Language: en
+
+00:00:00.497 --> 00:01:08.765
+[MUSIC PLAYING]
+
+00:01:19.244 --> 00:01:22.140
+SHAWN: Hi, my name is Shawn.
+
+00:01:22.140 --> 00:01:25.720
+Today I'd like to talk about
+how WebCore, Blink, and
+
+00:01:25.720 --> 00:01:29.490
+WebKit, how we do compositing
+in WebKit.
+
+00:01:29.490 --> 00:01:33.270
+So the way Chromium works,
+we actually have several
+
+00:01:33.270 --> 00:01:35.030
+different pieces that
+fit together.
+
+00:01:35.030 --> 00:01:40.530
+Blink is basically our
+rendering engine.
+
+00:01:40.530 --> 00:01:42.680
+We forked from WebKit
+recently.
+
+00:01:42.680 --> 00:01:47.070
+And what happens is, Blink as
+a rendering engine uses a
+
+00:01:47.070 --> 00:01:47.940
+compositor.
+
+00:01:47.940 --> 00:01:50.470
+The compositor is implemented
+in Chromium.
+
+00:01:50.470 --> 00:01:53.580
+What I'd like to talk about
+today is how Blink actually
+
+00:01:53.580 --> 00:01:55.550
+chooses what gets composited.
+
+00:01:55.550 --> 00:01:57.450
+What does compositing
+really mean?
+
+00:01:57.450 --> 00:01:59.400
+And these sorts of
+basic concepts.
+
+00:01:59.400 --> 00:02:03.570
+And I will also get into bits
+of implementation detail and
+
+00:02:03.570 --> 00:02:06.520
+code pads for those who are
+interested at the end.
+
+00:02:06.520 --> 00:02:07.890
+So yeah, let's get started.
+
+00:02:07.890 --> 00:02:12.260
+And maybe you can go
+to the slides now.
+
+00:02:12.260 --> 00:02:19.710
+OK so what you're seeing here is
+imagine maybe this is some
+
+00:02:19.710 --> 00:02:21.030
+sort of HTML page.
+
+00:02:21.030 --> 00:02:25.400
+These boxes could be considered
+as divs, and the
+
+00:02:25.400 --> 00:02:28.590
+question here is as we see this
+animation happening on
+
+00:02:28.590 --> 00:02:32.890
+the yellow div, what actually
+needs to be
+
+00:02:32.890 --> 00:02:35.930
+rerendered or repainted?
+
+00:02:35.930 --> 00:02:39.760
+If we assume the traditional
+rendering model where we have
+
+00:02:39.760 --> 00:02:43.260
+software just going pixel by
+pixel and figuring out what
+
+00:02:43.260 --> 00:02:46.470
+the color of each pixel is, and
+we only have one set of
+
+00:02:46.470 --> 00:02:49.990
+pixels to represent the final
+output image, the answer would
+
+00:02:49.990 --> 00:02:52.730
+be portions of all
+four layers.
+
+00:02:52.730 --> 00:02:57.610
+Now, yeah, if we're smart enough
+in WebKit or in Blink,
+
+00:02:57.610 --> 00:03:02.930
+we could say, yes, there's
+actually only a portion of the
+
+00:03:02.930 --> 00:03:07.890
+actual full size image that
+needs to be rerendered.
+
+00:03:07.890 --> 00:03:09.790
+So I'll look again.
+
+00:03:09.790 --> 00:03:12.190
+Yeah, only this portion needs
+to be rerendered.
+
+00:03:12.190 --> 00:03:17.590
+But still all four layers really
+do need to be repainted
+
+00:03:17.590 --> 00:03:19.810
+in order to get that
+scene correct.
+
+00:03:19.810 --> 00:03:21.940
+So what that means is, and by
+the way, the fourth layer here
+
+00:03:21.940 --> 00:03:24.920
+is the gray background.
+
+00:03:24.920 --> 00:03:28.230
+So what that really means is as
+this yellow div, say as it
+
+00:03:28.230 --> 00:03:32.920
+spins around, for example, it
+will actually expose parts of
+
+00:03:32.920 --> 00:03:34.770
+the gray element
+underneath it.
+
+00:03:34.770 --> 00:03:38.050
+And that gray really does need
+to be repainted just as much
+
+00:03:38.050 --> 00:03:41.720
+as the yellow layer actually
+needs to be repainted as well.
+
+00:03:41.720 --> 00:03:44.410
+The same would be true for the
+blue layer underneath the
+
+00:03:44.410 --> 00:03:48.280
+yellow one and even, possibly,
+unless we're very clever,
+
+00:03:48.280 --> 00:03:52.640
+which we're actually not in
+Blink we would also actually
+
+00:03:52.640 --> 00:03:55.590
+have to repaint portions of this
+red layer on top of the
+
+00:03:55.590 --> 00:03:58.230
+yellow layer.
+
+00:03:58.230 --> 00:04:01.210
+One thing to point out is that
+computing these pixels, the
+
+00:04:01.210 --> 00:04:03.540
+value, the color
+of these pixels
+
+00:04:03.540 --> 00:04:07.080
+actually gets pretty expensive.
+
+00:04:07.080 --> 00:04:08.750
+It's surprisingly complicated.
+
+00:04:08.750 --> 00:04:11.360
+Not only do we have things like
+background colors, we
+
+00:04:11.360 --> 00:04:12.390
+also have borders.
+
+00:04:12.390 --> 00:04:13.670
+The borders could be curved.
+
+00:04:13.670 --> 00:04:16.279
+We need anti-aliasing
+for the borders.
+
+00:04:16.279 --> 00:04:18.750
+Then we need to support things
+like blending for
+
+00:04:18.750 --> 00:04:19.820
+transparency.
+
+00:04:19.820 --> 00:04:23.110
+Text rendering, anti-alias text
+rendering, is a whole
+
+00:04:23.110 --> 00:04:24.340
+other beast.
+
+00:04:24.340 --> 00:04:27.650
+All of these things add up and
+it becomes quite expensive to
+
+00:04:27.650 --> 00:04:30.840
+figure out what the color of
+each pixel is to actually
+
+00:04:30.840 --> 00:04:33.300
+render a page.
+
+00:04:33.300 --> 00:04:37.900
+Another example here is imagine
+if we have a web page
+
+00:04:37.900 --> 00:04:39.180
+that we want to scroll.
+
+00:04:39.180 --> 00:04:42.890
+I wasn't able to get this to
+animate or interact on the
+
+00:04:42.890 --> 00:04:47.200
+presentation, but if you just
+imagine this blue layer here
+
+00:04:47.200 --> 00:04:49.410
+scrolling up and down.
+
+00:04:49.410 --> 00:04:52.600
+What that really means is that
+we actually have to repaint,
+
+00:04:52.600 --> 00:04:55.800
+rerender every pixel,
+almost every pixel
+
+00:04:55.800 --> 00:04:58.660
+on this entire view.
+
+00:04:58.660 --> 00:05:01.185
+And, again, that's
+very expensive.
+
+00:05:03.910 --> 00:05:07.260
+Now, you might be asking, well
+couldn't we just recognize
+
+00:05:07.260 --> 00:05:11.780
+that this layer is shifting and
+instead of rerendering and
+
+00:05:11.780 --> 00:05:16.150
+recomputing every pixel
+maybe we can just
+
+00:05:16.150 --> 00:05:18.430
+shift that pixel up.
+
+00:05:18.430 --> 00:05:20.690
+And that is a very
+good observation.
+
+00:05:20.690 --> 00:05:25.510
+In fact, that's exactly what we
+would use compositing for.
+
+00:05:25.510 --> 00:05:29.170
+And, in particular, what we
+would need is not just one
+
+00:05:29.170 --> 00:05:33.200
+backing store, not just one
+buffer of pixels, but we
+
+00:05:33.200 --> 00:05:36.650
+actually need multiple buffers
+of pixels so that we could
+
+00:05:36.650 --> 00:05:39.590
+store this blue layer
+in a separate layer,
+
+00:05:39.590 --> 00:05:42.560
+in a separate buffer.
+
+00:05:42.560 --> 00:05:46.950
+And then when we need to, we can
+just copy it over to the
+
+00:05:46.950 --> 00:05:51.220
+final output image in
+a shifted position.
+
+00:05:51.220 --> 00:05:54.250
+So that's basically what
+compositing is.
+
+00:05:54.250 --> 00:05:57.710
+It's the use of multiple backing
+stores to cache and
+
+00:05:57.710 --> 00:05:59.060
+group chunks of the
+render tree.
+
+00:06:01.770 --> 00:06:04.480
+So how does this help us?
+
+00:06:04.480 --> 00:06:06.990
+Well, like I just said,
+it can help us to
+
+00:06:06.990 --> 00:06:09.520
+avoid unnecessary repaints.
+
+00:06:09.520 --> 00:06:12.520
+We don't have to figure out what
+the color of every pixel
+
+00:06:12.520 --> 00:06:15.080
+is every time we need
+to change something.
+
+00:06:15.080 --> 00:06:19.840
+Instead, we can just cache
+that and redraw it.
+
+00:06:19.840 --> 00:06:21.670
+It's a little bit of a
+terminology thing.
+
+00:06:21.670 --> 00:06:24.530
+Repainting, in our case, would
+mean that we really have to
+
+00:06:24.530 --> 00:06:27.450
+rerender every pixel and figure
+out what color it is.
+
+00:06:27.450 --> 00:06:30.590
+Redrawing would be when we
+already know the color of the
+
+00:06:30.590 --> 00:06:35.360
+pixel and we just need to
+display it to the screen.
+
+00:06:35.360 --> 00:06:38.750
+So, again, repainting would
+be considered very costly.
+
+00:06:38.750 --> 00:06:40.550
+Redrawing is very cheap.
+
+00:06:43.390 --> 00:06:45.740
+So, for example, in this
+animation that you had seen
+
+00:06:45.740 --> 00:06:49.990
+already, if we had a layer for
+the yellow that was a separate
+
+00:06:49.990 --> 00:06:50.960
+backing store.
+
+00:06:50.960 --> 00:06:53.480
+If we had a separate backing
+store for the red layer.
+
+00:06:53.480 --> 00:06:56.170
+These two layers, both, so
+that we could put the red
+
+00:06:56.170 --> 00:06:58.210
+layer on top of yellow, and
+the yellow on top of
+
+00:06:58.210 --> 00:07:02.480
+everything else, then we would
+actually not need to repaint
+
+00:07:02.480 --> 00:07:06.760
+anything as that example
+animates.
+
+00:07:06.760 --> 00:07:10.290
+So other benefits of
+compositing, it also makes
+
+00:07:10.290 --> 00:07:12.970
+some things practical
+that otherwise just
+
+00:07:12.970 --> 00:07:13.630
+wouldn't really work.
+
+00:07:13.630 --> 00:07:18.151
+Especially if we use hardware
+accelerated compositing.
+
+00:07:18.151 --> 00:07:21.180
+In particular, things like
+WebGL or hardware video
+
+00:07:21.180 --> 00:07:25.730
+decoding they are just
+best done on the GPU.
+
+00:07:25.730 --> 00:07:30.030
+And having to read back from the
+GPU to be able to render a
+
+00:07:30.030 --> 00:07:33.380
+final output image can get
+pretty costly and performance
+
+00:07:33.380 --> 00:07:34.270
+would just go out the window.
+
+00:07:34.270 --> 00:07:38.620
+So being able to composite what
+we render on WebGL or
+
+00:07:38.620 --> 00:07:42.600
+what we decode from hardware
+video at the same time as
+
+00:07:42.600 --> 00:07:47.140
+compositing both on the GPU,
+it's a great enabler to make
+
+00:07:47.140 --> 00:07:49.370
+things like WebGL and hardware
+video decoding possible.
+
+00:07:53.050 --> 00:07:57.690
+So what really needs to be
+done when we talk about
+
+00:07:57.690 --> 00:07:58.190
+compositing?
+
+00:07:58.190 --> 00:08:01.420
+It's really just three
+basic tasks.
+
+00:08:01.420 --> 00:08:02.480
+Three straightforward tasks.
+
+00:08:02.480 --> 00:08:06.180
+One, we need to figure out what
+we would like to put in a
+
+00:08:06.180 --> 00:08:07.990
+separate backing store.
+
+00:08:07.990 --> 00:08:11.610
+And I tend to call these
+composited layers as opposed
+
+00:08:11.610 --> 00:08:15.430
+to what WebCore rendering
+layers.
+
+00:08:15.430 --> 00:08:18.510
+We also need to figure out what
+the contents of those
+
+00:08:18.510 --> 00:08:20.760
+layers will be, render
+the pixels.
+
+00:08:20.760 --> 00:08:23.540
+And that's what we're
+calling painting.
+
+00:08:23.540 --> 00:08:29.200
+And we also need to finally draw
+the composited layers in
+
+00:08:29.200 --> 00:08:31.850
+order to render the
+final webpage.
+
+00:08:31.850 --> 00:08:37.480
+So step three is what the
+compositor's job is.
+
+00:08:37.480 --> 00:08:40.650
+And we actually won't be
+focusing on how the compositor
+
+00:08:40.650 --> 00:08:44.480
+actually works in Chromium, but
+for this talk what I would
+
+00:08:44.480 --> 00:08:47.590
+like to talk about is just a
+small little micro slice of
+
+00:08:47.590 --> 00:08:50.550
+things where we actually
+figure out what gets
+
+00:08:50.550 --> 00:08:52.920
+composited and why.
+
+00:08:52.920 --> 00:08:56.930
+And in order to explain things
+clearly I will also have to
+
+00:08:56.930 --> 00:09:00.420
+talk a little bit about how
+things are painted.
+
+00:09:00.420 --> 00:09:04.850
+So in case you're interested in
+the bigger picture and how
+
+00:09:04.850 --> 00:09:08.570
+things fit together, there's
+several other talks and links.
+
+00:09:08.570 --> 00:09:12.780
+These slides will be available
+on dev.Chromium.org under the
+
+00:09:12.780 --> 00:09:14.710
+Tech Talks Slides link.
+
+00:09:14.710 --> 00:09:19.920
+And these talks and these docs
+are also available there.
+
+00:09:19.920 --> 00:09:25.600
+So Eric Seidel gave to talk a
+while ago about WebCore's guts
+
+00:09:25.600 --> 00:09:28.810
+and how rendering works, even
+the software world with
+
+00:09:28.810 --> 00:09:33.210
+respect to things like taking
+the HTML that you provide and
+
+00:09:33.210 --> 00:09:36.900
+converting it from a DOM tree
+to a rendering tree.
+
+00:09:36.900 --> 00:09:38.390
+That's what Eric's
+talk is about.
+
+00:09:38.390 --> 00:09:42.220
+Brett Wilson also gave a talk
+on some other details of how
+
+00:09:42.220 --> 00:09:43.110
+painting works.
+
+00:09:43.110 --> 00:09:49.170
+In particular, the API is used
+to actually do painting.
+
+00:09:49.170 --> 00:09:52.720
+Chromium's compositor has
+quite a few docs.
+
+00:09:52.720 --> 00:09:57.520
+This link is one that I think
+is the overall one.
+
+00:09:57.520 --> 00:10:00.170
+Also available on
+dev.chromium.org.
+
+00:10:00.170 --> 00:10:05.800
+And what I would do in this talk
+is bridge the gap between
+
+00:10:05.800 --> 00:10:10.380
+once we have a tree of render
+layers that we can actually
+
+00:10:10.380 --> 00:10:14.790
+render to the screen, how we
+go from there to a tree of
+
+00:10:14.790 --> 00:10:18.900
+composited layers that the
+compositor knows how to draw.
+
+00:10:18.900 --> 00:10:21.700
+And it actually is pretty
+insightful for web developers
+
+00:10:21.700 --> 00:10:24.100
+to have this in mind.
+
+00:10:24.100 --> 00:10:27.660
+Maybe it's not necessarily
+appropriate to develop your
+
+00:10:27.660 --> 00:10:32.360
+web to tailor to compositing,
+but it is very appropriate to
+
+00:10:32.360 --> 00:10:35.400
+be aware of these issues when
+you think about how you want
+
+00:10:35.400 --> 00:10:36.650
+to design your page.
+
+00:10:38.740 --> 00:10:42.640
+So in order to describe why we
+would choose things to become
+
+00:10:42.640 --> 00:10:46.350
+composited and how we do that,
+let's really, really quickly
+
+00:10:46.350 --> 00:10:51.160
+cover some CSS details.
+
+00:10:51.160 --> 00:10:55.220
+So you might already know
+about positioning.
+
+00:10:55.220 --> 00:10:58.570
+Elements can be either in what's
+called normal flow
+
+00:10:58.570 --> 00:11:02.300
+where layout really does
+position them automatically,
+
+00:11:02.300 --> 00:11:05.260
+and elements interact with each
+other when they're all in
+
+00:11:05.260 --> 00:11:07.280
+normal flow.
+
+00:11:07.280 --> 00:11:10.100
+Relative position you can
+specify on elements.
+
+00:11:10.100 --> 00:11:13.640
+It keeps your elements in a
+normal flow, but it allows you
+
+00:11:13.640 --> 00:11:17.370
+to position the element with
+respect to where it would've
+
+00:11:17.370 --> 00:11:20.340
+been in normal flow.
+
+00:11:20.340 --> 00:11:22.490
+Absolute positioned elements and
+fixed position elements,
+
+00:11:22.490 --> 00:11:25.630
+on the other hand, actually are
+taken out of normal flow.
+
+00:11:25.630 --> 00:11:29.470
+So when this layout is computed
+for normal flow
+
+00:11:29.470 --> 00:11:32.350
+elements, absolute position
+elements and fixed position
+
+00:11:32.350 --> 00:11:34.510
+elements actually do not affect
+
+00:11:34.510 --> 00:11:36.240
+that part of the layout.
+
+00:11:36.240 --> 00:11:38.700
+And this allows you to actually
+position with a bit
+
+00:11:38.700 --> 00:11:41.430
+more control your elements.
+
+00:11:41.430 --> 00:11:45.410
+So absolute positioned elements
+would be positioned
+
+00:11:45.410 --> 00:11:47.940
+with respect to a containing
+block.
+
+00:11:47.940 --> 00:11:50.570
+Fixed positioned elements would
+typically be positioned
+
+00:11:50.570 --> 00:11:52.210
+with respect to a viewport.
+
+00:11:55.710 --> 00:12:00.230
+So from there CSS also has
+this concept of a Z-index
+
+00:12:00.230 --> 00:12:03.610
+which allows you to control the
+ordering of how elements
+
+00:12:03.610 --> 00:12:06.180
+are layered on top
+of each other.
+
+00:12:06.180 --> 00:12:11.700
+And this is the beginnings of
+where compositing becomes
+
+00:12:11.700 --> 00:12:12.190
+interesting.
+
+00:12:12.190 --> 00:12:16.230
+Because in order to render
+things that are stacked on top
+
+00:12:16.230 --> 00:12:18.410
+of each other, and they may be
+dynamically changing, they may
+
+00:12:18.410 --> 00:12:20.690
+have animations.
+
+00:12:20.690 --> 00:12:23.540
+The Z-index is what causes
+that, typically.
+
+00:12:23.540 --> 00:12:28.150
+And so the compositor really
+relies on Z-index
+
+00:12:28.150 --> 00:12:29.400
+a lot of the time.
+
+00:12:32.630 --> 00:12:37.020
+Yes, so one important thing to
+note is that if we have a
+
+00:12:37.020 --> 00:12:41.500
+positioned element that also has
+a Z-index according to the
+
+00:12:41.500 --> 00:12:52.870
+CSS spec, that would be defined
+as a stacking context.
+
+00:12:52.870 --> 00:12:54.360
+So what is the stacking
+context?
+
+00:12:54.360 --> 00:12:57.080
+A stacking context, it's a very
+nice concept, actually.
+
+00:12:57.080 --> 00:13:00.430
+And I think it actually gets
+overlooked quite a lot from a
+
+00:13:00.430 --> 00:13:01.700
+web developer's perspective.
+
+00:13:01.700 --> 00:13:08.230
+A stacking context is a way to
+flatten a group of layers into
+
+00:13:08.230 --> 00:13:13.440
+a single conceptual layer from
+outside of the subtree.
+
+00:13:13.440 --> 00:13:17.120
+So here is an example where I
+have four different stacking
+
+00:13:17.120 --> 00:13:18.990
+contexts in this example.
+
+00:13:18.990 --> 00:13:22.460
+The fourth, the smaller stacking
+context over here, is
+
+00:13:22.460 --> 00:13:25.770
+actually a stacking
+context within the
+
+00:13:25.770 --> 00:13:28.420
+green stacking context.
+
+00:13:28.420 --> 00:13:29.580
+There's no way to
+indicate that.
+
+00:13:29.580 --> 00:13:31.510
+I'm just telling you that that's
+what I had intended
+
+00:13:31.510 --> 00:13:34.290
+when making this figure.
+
+00:13:34.290 --> 00:13:37.520
+And you'll see that, OK, so a
+negative Z-index renders below
+
+00:13:37.520 --> 00:13:41.730
+a 0 is Z-index value, which
+renders below a
+
+00:13:41.730 --> 00:13:43.680
+Z-index value of 1.
+
+00:13:43.680 --> 00:13:47.390
+And you note that even though I
+have large Z-indexes here in
+
+00:13:47.390 --> 00:13:51.050
+the blue and also in yellow
+layers here, these are
+
+00:13:51.050 --> 00:13:54.780
+actually inside of a stacking
+context which means that they
+
+00:13:54.780 --> 00:13:57.810
+are flattened to their stacking
+context before they
+
+00:13:57.810 --> 00:14:00.370
+are rendered with respect
+to everything
+
+00:14:00.370 --> 00:14:01.620
+else in the DOM tree.
+
+00:14:04.170 --> 00:14:07.910
+So, for example, if we made
+the Z-index 2 on this blue
+
+00:14:07.910 --> 00:14:11.670
+stacking context, it suddenly
+is designated as the one on
+
+00:14:11.670 --> 00:14:13.630
+top of everything else, and
+that's what you would see.
+
+00:14:13.630 --> 00:14:18.000
+So the previous example the
+Z-index was 0 making it 2
+
+00:14:18.000 --> 00:14:19.800
+would actually render
+everything on top.
+
+00:14:22.900 --> 00:14:27.230
+So the way to interpret stacking
+contexts is they're
+
+00:14:27.230 --> 00:14:28.970
+really flattening the
+element's subtree.
+
+00:14:28.970 --> 00:14:33.760
+So it forms a nice isolation
+between what's in the subtree
+
+00:14:33.760 --> 00:14:36.980
+of a stacking context and what's
+outside of the subtree.
+
+00:14:36.980 --> 00:14:41.050
+Inside of the subtree of this
+stacking context, all layers
+
+00:14:41.050 --> 00:14:43.490
+think that they have their own
+isolated universe without
+
+00:14:43.490 --> 00:14:45.530
+knowing about anything else.
+
+00:14:45.530 --> 00:14:49.280
+Outside of the stacking context,
+that stacking context
+
+00:14:49.280 --> 00:14:54.350
+is then just treated like a
+normal conceptual layer.
+
+00:14:54.350 --> 00:14:55.750
+Atomic, that's the key word.
+
+00:14:55.750 --> 00:14:59.000
+An atomic conceptual layer.
+
+00:14:59.000 --> 00:15:02.940
+So at the end of the day, what
+CSS Spec found that is that
+
+00:15:02.940 --> 00:15:08.160
+this is a very nice place to
+define the order of how we're
+
+00:15:08.160 --> 00:15:11.800
+supposed to paint things when
+you give us a web page.
+
+00:15:11.800 --> 00:15:16.130
+And, yes, actually CSS spec
+does specify paint order.
+
+00:15:16.130 --> 00:15:19.170
+It's a little bit complicated,
+you can see the full details
+
+00:15:19.170 --> 00:15:22.590
+in section 9.9 in Appendix
+E of the spec.
+
+00:15:22.590 --> 00:15:24.870
+You can just find
+it on Google.
+
+00:15:24.870 --> 00:15:30.030
+But the basic idea is that first
+we paint backgrounds and
+
+00:15:30.030 --> 00:15:32.180
+borders for a given element.
+
+00:15:32.180 --> 00:15:36.660
+And then we paint the negative
+Z-index children.
+
+00:15:36.660 --> 00:15:39.260
+Then, whatever contents of the
+layers itself or any other
+
+00:15:39.260 --> 00:15:43.350
+normal flow elements that are
+part of this layers subtree
+
+00:15:43.350 --> 00:15:45.690
+get painted.
+
+00:15:45.690 --> 00:15:48.940
+After that we do absolute
+position and
+
+00:15:48.940 --> 00:15:51.690
+positive Z-index children.
+
+00:15:51.690 --> 00:15:56.300
+So what this means is that we're
+actually creating a tree
+
+00:15:56.300 --> 00:15:58.770
+that is not quite corresponding
+to the DOM tree.
+
+00:15:58.770 --> 00:16:02.700
+There's cases where you can
+have an element in the DOM
+
+00:16:02.700 --> 00:16:08.300
+tree that may appear first in
+the list of children, but if
+
+00:16:08.300 --> 00:16:09.210
+you put the [? Craig ?]
+
+00:16:09.210 --> 00:16:11.720
+Z-index on it, it may have
+to paint last on top of
+
+00:16:11.720 --> 00:16:14.860
+everything else.
+
+00:16:14.860 --> 00:16:18.190
+Another thing would be that
+depending on how the tree is
+
+00:16:18.190 --> 00:16:21.850
+structured, you may even get,
+what you had as parent-child
+
+00:16:21.850 --> 00:16:26.540
+pairs in the DOM, might be more
+appropriate as siblings
+
+00:16:26.540 --> 00:16:30.050
+when we talk about the order
+in which they paint.
+
+00:16:30.050 --> 00:16:34.290
+And that's how things are
+implemented in Blink.
+
+00:16:34.290 --> 00:16:39.050
+Where we actually take render
+layers as the data structure
+
+00:16:39.050 --> 00:16:46.080
+and instead of using the tree of
+render layers that coarsely
+
+00:16:46.080 --> 00:16:51.030
+approximates the DOM, instead
+we actually collect layers
+
+00:16:51.030 --> 00:16:53.140
+into a different tree.
+
+00:16:53.140 --> 00:16:57.810
+And I'll call that the paint
+order entry in this case.
+
+00:16:57.810 --> 00:17:02.070
+But otherwise, it implements
+equivalently the same paint
+
+00:17:02.070 --> 00:17:07.040
+order as the CSS spec.
+
+00:17:07.040 --> 00:17:11.390
+So given that, how do we choose
+to composite layers?
+
+00:17:11.390 --> 00:17:15.180
+Which layers do we choose
+to be composited?
+
+00:17:15.180 --> 00:17:17.980
+Well we would choose composited
+layers based on
+
+00:17:17.980 --> 00:17:19.980
+when it benefits us or when
+we really need to.
+
+00:17:19.980 --> 00:17:24.280
+So cases where it benefits us
+is if we have transparency.
+
+00:17:24.280 --> 00:17:27.980
+Maybe we have a transform that
+is just easier to apply by
+
+00:17:27.980 --> 00:17:31.060
+feeding transform matrix
+to the GPU.
+
+00:17:31.060 --> 00:17:34.130
+There may be some filters
+like blur.
+
+00:17:34.130 --> 00:17:39.030
+Reflections where it's nice to
+be able to just have that
+
+00:17:39.030 --> 00:17:41.870
+chunk of layers or that subtree
+of layers cached
+
+00:17:41.870 --> 00:17:44.370
+before we actually reflect it.
+
+00:17:44.370 --> 00:17:46.840
+It's a good opportunity to make
+it a composited layer so
+
+00:17:46.840 --> 00:17:50.170
+that all we have to do instead
+of rerendering it twice is
+
+00:17:50.170 --> 00:17:54.980
+just redraw this same
+pixels reflected.
+
+00:17:54.980 --> 00:17:59.320
+Scrolling is another example
+where instead of having to
+
+00:17:59.320 --> 00:18:02.270
+repaint we can just put
+everything into a layer and
+
+00:18:02.270 --> 00:18:04.250
+shift the layer and give the
+
+00:18:04.250 --> 00:18:06.280
+wonderful allusion of scrolling.
+
+00:18:06.280 --> 00:18:09.710
+Fixed-position elements that
+need to stay fixed even though
+
+00:18:09.710 --> 00:18:12.550
+things underneath it may change
+is another example
+
+00:18:12.550 --> 00:18:17.040
+where if we just composite this
+fixed-position element we
+
+00:18:17.040 --> 00:18:19.490
+don't have to redraw it
+every time things
+
+00:18:19.490 --> 00:18:20.740
+underneath it changed.
+
+00:18:22.980 --> 00:18:25.520
+And then, of course, as I said
+before things, like WebGL or
+
+00:18:25.520 --> 00:18:31.080
+hardware video coding are also
+nice to make composited layers
+
+00:18:31.080 --> 00:18:33.600
+just so that we can take
+advantage of not having to
+
+00:18:33.600 --> 00:18:35.910
+read them back into
+software before we
+
+00:18:35.910 --> 00:18:37.160
+actually render them.
+
+00:18:39.970 --> 00:18:46.090
+There's also a necessary evil of
+having to deal with when we
+
+00:18:46.090 --> 00:18:49.560
+really need to composite.
+
+00:18:49.560 --> 00:18:54.450
+Now part of this is, I have to
+admit, how WebCore and Blink
+
+00:18:54.450 --> 00:18:55.710
+are actually implemented.
+
+00:18:55.710 --> 00:18:59.110
+How the compositing is
+actually implemented?
+
+00:18:59.110 --> 00:19:01.700
+But for the foreseeable future
+this is going to be the way
+
+00:19:01.700 --> 00:19:02.390
+things are.
+
+00:19:02.390 --> 00:19:05.300
+And these are realities
+we have to live with.
+
+00:19:05.300 --> 00:19:08.660
+If there's a layer that overlaps
+another composited
+
+00:19:08.660 --> 00:19:12.260
+layer, and I'll show an example
+of this in a second,
+
+00:19:12.260 --> 00:19:17.190
+then we actually have to make
+that composited as well.
+
+00:19:17.190 --> 00:19:20.750
+Another issue is that if there's
+some sort of CSS
+
+00:19:20.750 --> 00:19:24.340
+property that needs to be
+propagated down to composited
+
+00:19:24.340 --> 00:19:28.470
+layers, for example, opacity,
+or maybe some transform is
+
+00:19:28.470 --> 00:19:30.970
+inherited by an ancestor.
+
+00:19:30.970 --> 00:19:34.260
+Those are cases where the
+parent that has that
+
+00:19:34.260 --> 00:19:37.560
+information needs to be
+composited just for the sake
+
+00:19:37.560 --> 00:19:41.270
+of having that information in
+the composited tree as well as
+
+00:19:41.270 --> 00:19:42.350
+in the render tree.
+
+00:19:42.350 --> 00:19:44.760
+So that all the composited
+layers actually get the
+
+00:19:44.760 --> 00:19:47.610
+information that they need.
+
+00:19:47.610 --> 00:19:50.380
+So here's an example
+of overlap.
+
+00:19:50.380 --> 00:19:56.580
+Imagine we have one backing
+store in our webpage.
+
+00:19:56.580 --> 00:19:57.940
+If that's all we had.
+
+00:19:57.940 --> 00:20:00.270
+And this backing store I'm just
+representing that by a
+
+00:20:00.270 --> 00:20:02.450
+red rectangle here.
+
+00:20:02.450 --> 00:20:05.340
+If that's all we had, then we
+would repaint all of these
+
+00:20:05.340 --> 00:20:07.440
+pixels in one backing
+store and be
+
+00:20:07.440 --> 00:20:09.120
+done with it, no problem.
+
+00:20:09.120 --> 00:20:13.640
+But suppose we thought we would
+benefit for some reason
+
+00:20:13.640 --> 00:20:17.800
+from making this blue layer a
+separately composited layer.
+
+00:20:17.800 --> 00:20:20.760
+So what we would have is backing
+store one would draw
+
+00:20:20.760 --> 00:20:22.490
+underneath backing store two.
+
+00:20:22.490 --> 00:20:25.000
+Or, actually, it might be more
+appropriate to say backing
+
+00:20:25.000 --> 00:20:29.350
+store two, depending on how we
+talk about things, would
+
+00:20:29.350 --> 00:20:33.180
+actually redraw itself into
+backing store one.
+
+00:20:36.100 --> 00:20:39.360
+If we do that the green element
+that we had intended
+
+00:20:39.360 --> 00:20:43.440
+to be on top would not be on
+top because we're painting
+
+00:20:43.440 --> 00:20:45.690
+this into backing store one.
+
+00:20:45.690 --> 00:20:50.740
+This is the case where overlap
+requires us to create another
+
+00:20:50.740 --> 00:20:55.380
+composited layer so that the
+green element can actually
+
+00:20:55.380 --> 00:20:58.680
+draw on top of what we thought
+we would like composite, which
+
+00:20:58.680 --> 00:21:01.010
+was the blue layer.
+
+00:21:01.010 --> 00:21:03.800
+So it's interesting that
+this comes up.
+
+00:21:03.800 --> 00:21:09.210
+In the real world this can
+cause an explosion of the
+
+00:21:09.210 --> 00:21:14.650
+number of composited layers,
+which can drain GP resources
+
+00:21:14.650 --> 00:21:15.630
+quite badly.
+
+00:21:15.630 --> 00:21:18.130
+So this is something
+to be aware of.
+
+00:21:18.130 --> 00:21:20.960
+In general, personally, I
+haven't found any explosion of
+
+00:21:20.960 --> 00:21:23.930
+layer counts too badly
+in the real world.
+
+00:21:23.930 --> 00:21:26.080
+But it's something
+to be aware of.
+
+00:21:26.080 --> 00:21:29.370
+If you're making a very
+complicated web app that
+
+00:21:29.370 --> 00:21:33.660
+things that overlap something
+that might get composited will
+
+00:21:33.660 --> 00:21:35.090
+probably also have to
+get composited.
+
+00:21:38.200 --> 00:21:43.630
+So there are some other cases
+where overlap becomes
+
+00:21:43.630 --> 00:21:44.430
+interesting.
+
+00:21:44.430 --> 00:21:48.170
+Animations, in particular, is an
+interesting one where it's
+
+00:21:48.170 --> 00:21:54.160
+actually not really practical
+to predict what will overlap
+
+00:21:54.160 --> 00:21:56.960
+an animated layer at
+any given time.
+
+00:21:56.960 --> 00:22:01.140
+So instead we just assume that
+everything on top is going to
+
+00:22:01.140 --> 00:22:02.760
+overlap, even if it doesn't.
+
+00:22:02.760 --> 00:22:04.330
+And I'll actually show
+an example of
+
+00:22:04.330 --> 00:22:07.060
+that in just a second.
+
+00:22:07.060 --> 00:22:09.520
+So that's another interesting
+thing to be aware of is that
+
+00:22:09.520 --> 00:22:12.490
+when you have animations you
+might actually see lots of
+
+00:22:12.490 --> 00:22:15.560
+layers suddenly pop up,
+composited layers, pop up on
+
+00:22:15.560 --> 00:22:18.500
+your page simply because
+the animation
+
+00:22:18.500 --> 00:22:19.320
+is underneath things.
+
+00:22:19.320 --> 00:22:23.780
+And by bringing animation on top
+you might be able to avoid
+
+00:22:23.780 --> 00:22:26.010
+unnecessarily causing
+things to be
+
+00:22:26.010 --> 00:22:27.260
+composited in your webpage.
+
+00:22:32.450 --> 00:22:36.470
+This third point is also very
+interesting to note.
+
+00:22:36.470 --> 00:22:37.910
+This is where stacking contexts
+
+00:22:37.910 --> 00:22:39.060
+actually become very useful.
+
+00:22:39.060 --> 00:22:43.010
+Because if you have children
+that are inside of a second
+
+00:22:43.010 --> 00:22:47.170
+context, you know that they
+are treated as atomic with
+
+00:22:47.170 --> 00:22:51.590
+respect to everything else
+outside of that subtree.
+
+00:22:51.590 --> 00:22:54.100
+And what that allows you to
+do then, is if you made a
+
+00:22:54.100 --> 00:22:58.040
+stacking context out of the
+subtree of your DOM, you can
+
+00:22:58.040 --> 00:23:00.630
+feel a little bit more
+comfortable that you won't
+
+00:23:00.630 --> 00:23:04.020
+have an explosion of composited
+layers inside of
+
+00:23:04.020 --> 00:23:04.980
+that subtree.
+
+00:23:04.980 --> 00:23:07.420
+Instead, the compositor will
+recognize, OK, this is
+
+00:23:07.420 --> 00:23:08.620
+stacking context.
+
+00:23:08.620 --> 00:23:11.340
+I can make one composited
+layer for this
+
+00:23:11.340 --> 00:23:13.430
+entire stacking context.
+
+00:23:13.430 --> 00:23:16.850
+And I don't need to check if
+everything else overlaps
+
+00:23:16.850 --> 00:23:19.015
+inside of the subtree if it
+overlaps other content.
+
+00:23:23.020 --> 00:23:27.510
+So basically what we do then
+in Blink is we iterate over
+
+00:23:27.510 --> 00:23:29.980
+this paint order tree,
+recursively.
+
+00:23:29.980 --> 00:23:32.400
+And we ask, does this layer
+need compositing?
+
+00:23:32.400 --> 00:23:34.770
+Would we benefit from it?
+
+00:23:34.770 --> 00:23:39.520
+And then we also ask, now that
+we've chosen composited layers
+
+00:23:39.520 --> 00:23:42.460
+for the subtree, once we
+bubble back up from the
+
+00:23:42.460 --> 00:23:44.960
+recursion we have to ask, well,
+is there some reason
+
+00:23:44.960 --> 00:23:50.210
+that maybe we ought to composite
+this parent as well?
+
+00:23:50.210 --> 00:23:51.470
+For example, overlap.
+
+00:23:51.470 --> 00:23:54.240
+Or if something in the subtree
+became composited that needs
+
+00:23:54.240 --> 00:23:58.510
+some properties like transform
+or opacity.
+
+00:23:58.510 --> 00:24:01.270
+And at the end, once we've
+decided if something change
+
+00:24:01.270 --> 00:24:05.620
+its state whether a subtree
+needs to be composited or not
+
+00:24:05.620 --> 00:24:07.250
+composited we also have
+to issue that
+
+00:24:07.250 --> 00:24:10.030
+it needs to be repainted.
+
+00:24:10.030 --> 00:24:11.570
+OK, let's go to some demos.
+
+00:24:11.570 --> 00:24:14.700
+See some examples of this
+stuff in action.
+
+00:24:14.700 --> 00:24:18.500
+If you'd like to try this on
+your own, there's probably
+
+00:24:18.500 --> 00:24:20.420
+four essential--
+
+00:24:20.420 --> 00:24:25.470
+or maybe these first three are
+the most essential command
+
+00:24:25.470 --> 00:24:28.480
+line flags that you'd
+like to use.
+
+00:24:28.480 --> 00:24:30.290
+First, force-compositing mode.
+
+00:24:30.290 --> 00:24:31.170
+Just in case.
+
+00:24:31.170 --> 00:24:34.590
+For example, if you're on
+Linux or if you're in a
+
+00:24:34.590 --> 00:24:38.130
+situation where it seems like
+you might be running software
+
+00:24:38.130 --> 00:24:40.560
+mode instead, force-compositing
+mode will
+
+00:24:40.560 --> 00:24:44.390
+ensure that you're actually
+using accelerated compositing
+
+00:24:44.390 --> 00:24:47.740
+on all your pages, even if they
+didn't really require it.
+
+00:24:47.740 --> 00:24:52.050
+So just in case you actually
+don't see what you expect, try
+
+00:24:52.050 --> 00:24:53.510
+force-compositing mode.
+
+00:24:53.510 --> 00:24:56.090
+Show composited layer
+borders is probably
+
+00:24:56.090 --> 00:24:57.350
+the most useful one.
+
+00:24:57.350 --> 00:25:01.830
+This allows you to visualize
+orange and some other color
+
+00:25:01.830 --> 00:25:04.890
+borders around layers that
+become composited.
+
+00:25:04.890 --> 00:25:07.020
+And it's very insightful.
+
+00:25:07.020 --> 00:25:09.130
+Show paint rects is also
+very valuable.
+
+00:25:09.130 --> 00:25:13.830
+What this shows is regions of
+the page and regions of
+
+00:25:13.830 --> 00:25:17.330
+various layers that actually
+needed to be repainted.
+
+00:25:17.330 --> 00:25:21.960
+That implies that we had to do
+very expensive paint process
+
+00:25:21.960 --> 00:25:25.330
+to figure out the pixels
+of that region.
+
+00:25:25.330 --> 00:25:27.840
+And generally what you would
+like to do to get really
+
+00:25:27.840 --> 00:25:30.820
+performant web apps is minimize
+the amount of paint
+
+00:25:30.820 --> 00:25:34.440
+rects that you see if you
+were to visualize this.
+
+00:25:34.440 --> 00:25:37.370
+Another one that we have, it's
+not really as useful, but it
+
+00:25:37.370 --> 00:25:40.980
+is still there, is show
+property change recs.
+
+00:25:40.980 --> 00:25:44.470
+What you'll see here is these
+will be layers that, for
+
+00:25:44.470 --> 00:25:47.720
+example, have an animation
+where, yes, they did not need
+
+00:25:47.720 --> 00:25:50.740
+repainting, but they had some
+property that changed on them
+
+00:25:50.740 --> 00:25:52.870
+that does require them
+to be redrawn.
+
+00:25:52.870 --> 00:25:57.180
+If you see these sorts of recs
+then chances are you're in a
+
+00:25:57.180 --> 00:25:59.710
+good state because you didn't
+need to repaint.
+
+00:25:59.710 --> 00:26:02.360
+But rather, you can just
+quickly redraw them.
+
+00:26:02.360 --> 00:26:05.970
+So, for example, in animation
+you might actually see that.
+
+00:26:05.970 --> 00:26:10.660
+So yeah let's run some demos
+and see how this looks.
+
+00:26:10.660 --> 00:26:14.100
+So I have a script of my
+own called runtest.
+
+00:26:14.100 --> 00:26:17.220
+This is basically just my way
+of running Chrome from the
+
+00:26:17.220 --> 00:26:18.830
+command line.
+
+00:26:18.830 --> 00:26:23.840
+I have a command line [? rx ?]
+show composite layer borders.
+
+00:26:23.840 --> 00:26:27.490
+Let's see, we can go to Poster
+Circle is it as one of the
+
+00:26:27.490 --> 00:26:32.070
+standard examples for
+looking at 3D CSS.
+
+00:26:32.070 --> 00:26:35.330
+And what you see here
+is orange borders.
+
+00:26:35.330 --> 00:26:38.640
+This is the composited layer
+borders flag showing you that
+
+00:26:38.640 --> 00:26:42.610
+all of these layers here that
+are being animated in 3D,
+
+00:26:42.610 --> 00:26:46.810
+they're getting composited so
+that the GPU can do 3D stuff
+
+00:26:46.810 --> 00:26:49.450
+much faster and much
+more easily.
+
+00:26:49.450 --> 00:26:51.790
+It also happens, it looks like
+we have a scroll bar here on
+
+00:26:51.790 --> 00:26:55.990
+the right even though,
+OK, there it is.
+
+00:26:55.990 --> 00:26:57.880
+Yeah, so we have a scroll
+bar here on the right.
+
+00:26:57.880 --> 00:26:59.610
+This gets separately
+composited as
+
+00:26:59.610 --> 00:27:03.410
+well for various reasons.
+
+00:27:03.410 --> 00:27:07.970
+For example, when we scroll it's
+easier to have the scroll
+
+00:27:07.970 --> 00:27:09.370
+bar as a separate layer.
+
+00:27:09.370 --> 00:27:12.590
+So that we don't have to change
+any contents of this
+
+00:27:12.590 --> 00:27:17.830
+huge root layer, so to speak,
+underneath it, as we shift
+
+00:27:17.830 --> 00:27:19.490
+that layer up and down.
+
+00:27:19.490 --> 00:27:21.290
+So another interesting
+thing we can do
+
+00:27:21.290 --> 00:27:22.540
+is, let's go to Inspector.
+
+00:27:27.970 --> 00:27:34.381
+And what I'd like to do is,
+you can see that basically
+
+00:27:34.381 --> 00:27:36.780
+this text here, they're
+really just
+
+00:27:36.780 --> 00:27:38.520
+simple paragraph elements.
+
+00:27:38.520 --> 00:27:41.220
+There's nothing special
+about them.
+
+00:27:41.220 --> 00:27:44.300
+And there's this animation going
+on that is completely
+
+00:27:44.300 --> 00:27:47.060
+unrelated to these paragraphs.
+
+00:27:47.060 --> 00:27:51.990
+However, if I create some layer
+here with a Z-index
+
+00:27:51.990 --> 00:27:53.240
+that's positive.
+
+00:28:03.510 --> 00:28:07.190
+And I also need to actually
+make it a stacking context
+
+00:28:07.190 --> 00:28:10.520
+just so that the render tree
+recognizes it as a separate
+
+00:28:10.520 --> 00:28:11.880
+render layer.
+
+00:28:11.880 --> 00:28:13.360
+So I'll just make a
+position relative.
+
+00:28:13.360 --> 00:28:15.680
+So I'm not actually changing
+its position.
+
+00:28:15.680 --> 00:28:19.950
+But what you see now is suddenly
+this paragraph
+
+00:28:19.950 --> 00:28:21.610
+becomes composited.
+
+00:28:21.610 --> 00:28:22.670
+Why is that?
+
+00:28:22.670 --> 00:28:26.420
+Well the answer is that because
+of this animation we
+
+00:28:26.420 --> 00:28:31.820
+weren't able to assume where
+this text is with respect to
+
+00:28:31.820 --> 00:28:32.950
+the animation.
+
+00:28:32.950 --> 00:28:35.040
+And so we have to
+assume that it
+
+00:28:35.040 --> 00:28:37.060
+might overlap the animation.
+
+00:28:37.060 --> 00:28:40.070
+And therefore we create a
+composited layer out of it.
+
+00:28:40.070 --> 00:28:43.600
+Now, in this case, we would
+judge that this layer is
+
+00:28:43.600 --> 00:28:45.230
+really unnecessary.
+
+00:28:45.230 --> 00:28:50.070
+And the way we could avoid that
+is change the Z-index so
+
+00:28:50.070 --> 00:28:53.560
+that it's actually underneath
+this animation.
+
+00:28:53.560 --> 00:28:58.750
+So here what I have a Z-index
+of one on that paragraph, it
+
+00:28:58.750 --> 00:29:02.150
+actually is stacked on
+top of the animation.
+
+00:29:02.150 --> 00:29:04.260
+And we have to assume
+that it overlaps.
+
+00:29:04.260 --> 00:29:07.030
+So we make it a composited
+layer.
+
+00:29:07.030 --> 00:29:11.170
+If I made a Z-index that was
+underneath the animation, then
+
+00:29:11.170 --> 00:29:13.900
+there would be no reason to
+composite it because it does
+
+00:29:13.900 --> 00:29:14.450
+not overlap.
+
+00:29:14.450 --> 00:29:17.230
+In fact, it's underneath
+the animation.
+
+00:29:17.230 --> 00:29:19.560
+So that's example number one.
+
+00:29:19.560 --> 00:29:21.820
+Let's see.
+
+00:29:21.820 --> 00:29:23.300
+A few other examples.
+
+00:29:35.340 --> 00:29:36.630
+MapsGL is a fun example.
+
+00:29:39.650 --> 00:29:45.670
+Not only does it show off WebGL,
+but it also shows off
+
+00:29:45.670 --> 00:29:47.770
+how a compositor is smart
+enough to render
+
+00:29:47.770 --> 00:29:49.440
+stuff on top of WebGL.
+
+00:29:49.440 --> 00:29:54.820
+So what I have here is using
+the vector form of MapGL.
+
+00:29:54.820 --> 00:30:01.390
+So this map is actually a WebGL
+canvas on the page.
+
+00:30:01.390 --> 00:30:04.630
+And these elements on top
+are overlapping a
+
+00:30:04.630 --> 00:30:07.130
+composited WebGL element.
+
+00:30:07.130 --> 00:30:09.040
+And so they also have
+to get composited.
+
+00:30:12.522 --> 00:30:13.700
+Let's see.
+
+00:30:13.700 --> 00:30:14.980
+Any other interesting?
+
+00:30:14.980 --> 00:30:17.840
+Android apps is also
+a fun example.
+
+00:30:17.840 --> 00:30:21.920
+Here you can see animations in
+action that actually cause
+
+00:30:21.920 --> 00:30:25.130
+other layers to get created.
+
+00:30:25.130 --> 00:30:30.110
+So what you see here is as I
+interact, as I mouse over the
+
+00:30:30.110 --> 00:30:34.140
+shadow, the halo around
+this [? holes ?]
+
+00:30:34.140 --> 00:30:37.720
+changes some of these highlight
+elements like the
+
+00:30:37.720 --> 00:30:40.880
+brackets that are focusing
+on different
+
+00:30:40.880 --> 00:30:42.660
+elements as I mouse over.
+
+00:30:42.660 --> 00:30:43.650
+They animate.
+
+00:30:43.650 --> 00:30:46.750
+And what you see is that
+depending on what needs to
+
+00:30:46.750 --> 00:30:51.080
+animate, it might actually have
+a lot of things on top.
+
+00:30:51.080 --> 00:30:54.280
+And those a lot of things on top
+then also need to become
+
+00:30:54.280 --> 00:30:55.250
+composited.
+
+00:30:55.250 --> 00:30:59.900
+Because we can't assume that the
+animation is not actually
+
+00:30:59.900 --> 00:31:00.450
+overlapping.
+
+00:31:00.450 --> 00:31:02.760
+We have to assume that
+it might overlap.
+
+00:31:02.760 --> 00:31:06.850
+And so this is a pitfall that,
+in this case, it's actually
+
+00:31:06.850 --> 00:31:07.690
+very reasonable.
+
+00:31:07.690 --> 00:31:09.570
+The number of layers
+is not too bad.
+
+00:31:09.570 --> 00:31:12.270
+The animations are
+very controlled.
+
+00:31:12.270 --> 00:31:16.550
+The layer explosion disappears
+after the animations are done,
+
+00:31:16.550 --> 00:31:20.690
+which is generally
+a good thing.
+
+00:31:20.690 --> 00:31:23.710
+But it's still interesting to
+note that it can accidentally
+
+00:31:23.710 --> 00:31:26.470
+get out of hand if you're
+not careful in
+
+00:31:26.470 --> 00:31:28.570
+making your web page.
+
+00:31:28.570 --> 00:31:30.810
+It's also interesting to note
+that we have some 3D layers
+
+00:31:30.810 --> 00:31:32.060
+here that get composited.
+
+00:31:34.980 --> 00:31:37.240
+There's a flip card
+animation here.
+
+00:31:37.240 --> 00:31:42.420
+If you see the purple
+composited
+
+00:31:42.420 --> 00:31:45.180
+layer flipping around.
+
+00:31:45.180 --> 00:31:48.280
+The reason that it's purple is
+because in our compositor we
+
+00:31:48.280 --> 00:31:51.890
+actually have to create a
+secondary intermediate thing
+
+00:31:51.890 --> 00:31:55.390
+where we render a bunch of
+composited layers into another
+
+00:31:55.390 --> 00:31:56.700
+intermediate surface.
+
+00:31:56.700 --> 00:31:58.320
+That's what this purple is.
+
+00:31:58.320 --> 00:32:01.100
+The reason we have to do that
+is because we have something
+
+00:32:01.100 --> 00:32:04.340
+like this 3D composited
+layer inside of it.
+
+00:32:04.340 --> 00:32:06.430
+But we're going to want
+to do something 3D to
+
+00:32:06.430 --> 00:32:08.070
+this outside layer.
+
+00:32:08.070 --> 00:32:11.390
+Like a flip card animation.
+
+00:32:11.390 --> 00:32:14.000
+And so what that requires is
+that we actually have to
+
+00:32:14.000 --> 00:32:16.870
+render a bunch of composited
+layers down to an
+
+00:32:16.870 --> 00:32:17.730
+intermediate surface.
+
+00:32:17.730 --> 00:32:21.170
+And that's what this blue
+layer actually is.
+
+00:32:21.170 --> 00:32:24.580
+In our Chromium compositor
+terminology we call that a
+
+00:32:24.580 --> 00:32:25.490
+render surface.
+
+00:32:25.490 --> 00:32:28.470
+If you encounter that.
+
+00:32:28.470 --> 00:32:33.280
+Let me go back to the command
+line here really quickly and
+
+00:32:33.280 --> 00:32:36.220
+show you what it looks like
+to see paper rects.
+
+00:32:42.400 --> 00:32:45.340
+So here is poster
+circle again.
+
+00:32:45.340 --> 00:32:48.680
+Now notice that you're not
+seeing any visualizations on
+
+00:32:48.680 --> 00:32:51.240
+top of the page itself yet.
+
+00:32:51.240 --> 00:32:53.020
+And the reason is is
+because nothing is
+
+00:32:53.020 --> 00:32:54.210
+actually being repainted.
+
+00:32:54.210 --> 00:32:56.030
+And that's a very
+wonderful thing.
+
+00:32:56.030 --> 00:32:58.760
+That's a great place to
+be on your web page as
+
+00:32:58.760 --> 00:33:00.440
+often as you can.
+
+00:33:00.440 --> 00:33:02.840
+If I actually select some text,
+though, you can actually
+
+00:33:02.840 --> 00:33:07.230
+see that there's this red
+visualization that comes up on
+
+00:33:07.230 --> 00:33:12.570
+top showing that, oh, actually
+this is a region of the page
+
+00:33:12.570 --> 00:33:15.850
+that needed to be repainted
+at that particular frame.
+
+00:33:15.850 --> 00:33:17.670
+And the reason it's flickering
+on and off is because the
+
+00:33:17.670 --> 00:33:21.270
+animation is actually going on
+as well, at the same time.
+
+00:33:21.270 --> 00:33:25.990
+And so the next frame is so soon
+after that the paint rect
+
+00:33:25.990 --> 00:33:27.830
+for the previous frame
+disappears.
+
+00:33:27.830 --> 00:33:28.720
+That's why it's flickering.
+
+00:33:28.720 --> 00:33:32.050
+If you had a more static page
+and you selected some text,
+
+00:33:32.050 --> 00:33:34.560
+you would see that visualization
+stick because no
+
+00:33:34.560 --> 00:33:39.340
+other frame has been rendered
+after that yet.
+
+00:33:39.340 --> 00:33:40.620
+So that's interesting.
+
+00:33:40.620 --> 00:33:44.800
+Maybe one last thing to show
+is property change rects.
+
+00:33:44.800 --> 00:33:49.830
+Again, show paint rects is
+probably the most important,
+
+00:33:49.830 --> 00:33:51.890
+especially to get web apps.
+
+00:33:51.890 --> 00:33:57.100
+You want to avoid paint rects
+showing up if you use that
+
+00:33:57.100 --> 00:33:58.130
+visualization.
+
+00:33:58.130 --> 00:33:59.710
+But in the case of property
+change rects.
+
+00:34:07.510 --> 00:34:09.760
+In the case of property
+change rects, it's
+
+00:34:09.760 --> 00:34:11.179
+actually a good thing.
+
+00:34:11.179 --> 00:34:14.340
+And so what you're seeing here
+is that well the animations
+
+00:34:14.340 --> 00:34:18.929
+here are actually animating the
+CSS transform property.
+
+00:34:18.929 --> 00:34:21.190
+And so that property is
+changing every frame.
+
+00:34:21.190 --> 00:34:24.949
+And these rects are just a rough
+visualization to show
+
+00:34:24.949 --> 00:34:27.639
+that here the layers that
+actually did need to be
+
+00:34:27.639 --> 00:34:30.840
+redrawn even though nothing
+needed to be repainted.
+
+00:34:30.840 --> 00:34:32.550
+That's what this visualization
+shows.
+
+00:34:36.500 --> 00:34:37.750
+OK back to the slides.
+
+00:34:44.840 --> 00:34:49.230
+So I just want to briefly go
+over some of how WebCore and
+
+00:34:49.230 --> 00:34:53.550
+Blink actually implement the
+choice of how composited
+
+00:34:53.550 --> 00:34:55.080
+layers work.
+
+00:34:55.080 --> 00:34:57.620
+It turns out there's actually
+lots of levels of abstraction
+
+00:34:57.620 --> 00:35:00.450
+here just to get different
+pieces of
+
+00:35:00.450 --> 00:35:02.220
+software clumped together.
+
+00:35:02.220 --> 00:35:06.960
+So at the bottom of this stack
+here we sort of have the
+
+00:35:06.960 --> 00:35:10.960
+output of the Blink side
+of compositing.
+
+00:35:10.960 --> 00:35:15.020
+The output is a tree of
+composited layers.
+
+00:35:15.020 --> 00:35:20.150
+CC is the name space for
+Chromium's compositor.
+
+00:35:20.150 --> 00:35:25.040
+So ultimately the output of
+Blink deciding what's
+
+00:35:25.040 --> 00:35:29.540
+composite is a tree of these
+CC layer data structures.
+
+00:35:29.540 --> 00:35:32.170
+For each CC layer, then, what
+the compositor will do is it
+
+00:35:32.170 --> 00:35:35.800
+will actually hook back into
+Blink asking Blink, when it's
+
+00:35:35.800 --> 00:35:39.440
+ready it will say Blink please
+repeat this composited layer.
+
+00:35:39.440 --> 00:35:43.660
+Blink then has the knowledge
+of what render layers and
+
+00:35:43.660 --> 00:35:47.060
+render objects and just how to
+render what's inside of that
+
+00:35:47.060 --> 00:35:49.780
+particular composited layer.
+
+00:35:49.780 --> 00:35:53.430
+So just to bridge the gap
+between Chromium and Blink we
+
+00:35:53.430 --> 00:35:58.930
+have several levels of
+interaction where they're
+
+00:35:58.930 --> 00:36:04.210
+really just essentially
+wrappers to CC layer.
+
+00:36:04.210 --> 00:36:06.940
+But it's just necessary for the
+fact that these are two
+
+00:36:06.940 --> 00:36:09.500
+separate pieces of software that
+are interacting with each
+
+00:36:09.500 --> 00:36:11.980
+other and they need to
+talk back and forth.
+
+00:36:11.980 --> 00:36:14.610
+So we have this interface
+called web layer.
+
+00:36:14.610 --> 00:36:16.590
+And web layer impl is the
+implementation of that.
+
+00:36:19.380 --> 00:36:24.610
+From there on the Blink side,
+then, we have graphics layer
+
+00:36:24.610 --> 00:36:27.180
+Chromium is the actual
+Chromium-specific
+
+00:36:27.180 --> 00:36:31.660
+implementation of a
+graphics layer.
+
+00:36:31.660 --> 00:36:35.940
+And a graphics layer, then,
+this is really Blink's
+
+00:36:35.940 --> 00:36:40.140
+representation of a single
+individual composited layer.
+
+00:36:40.140 --> 00:36:42.600
+Not all of these will actually
+draw things.
+
+00:36:42.600 --> 00:36:46.470
+They may exist in the tree just
+to represent a transform
+
+00:36:46.470 --> 00:36:49.030
+or maybe a clipping region.
+
+00:36:49.030 --> 00:36:54.340
+But the idea is that a tree of
+graphics layer generally
+
+00:36:54.340 --> 00:37:00.590
+corresponds to a tree of
+Chromium compositor layers.
+
+00:37:00.590 --> 00:37:02.450
+Basically one to one.
+
+00:37:02.450 --> 00:37:05.580
+Not quite, but basically.
+
+00:37:05.580 --> 00:37:08.040
+So the real interesting stuff is
+actually at the top of the
+
+00:37:08.040 --> 00:37:09.270
+stack here.
+
+00:37:09.270 --> 00:37:11.490
+It's these top three things.
+
+00:37:11.490 --> 00:37:15.130
+So we have graphics layer as our
+Blink representation of a
+
+00:37:15.130 --> 00:37:16.920
+composited layer.
+
+00:37:16.920 --> 00:37:22.100
+Then we have this bridge call
+render layer backing.
+
+00:37:22.100 --> 00:37:26.470
+Render layer backing is the
+bridge between render layers
+
+00:37:26.470 --> 00:37:27.960
+and graphics layers.
+
+00:37:27.960 --> 00:37:32.190
+So render layers, I'll just
+assume that this is the input
+
+00:37:32.190 --> 00:37:35.990
+to our problem statement
+in this talk here.
+
+00:37:35.990 --> 00:37:40.410
+But it actually came from taking
+the DOM tree, computing
+
+00:37:40.410 --> 00:37:43.620
+render tree of render objects,
+that's another class in
+
+00:37:43.620 --> 00:37:46.700
+WebCore name space is
+render objects.
+
+00:37:46.700 --> 00:37:49.560
+These render objects,
+some of them become
+
+00:37:49.560 --> 00:37:52.160
+promoted to render layers.
+
+00:37:52.160 --> 00:37:56.720
+And so we have a tree of render
+layers that some of
+
+00:37:56.720 --> 00:37:59.680
+these render layers will have,
+we would decide to be
+
+00:37:59.680 --> 00:38:00.620
+composited.
+
+00:38:00.620 --> 00:38:03.200
+And those composited render
+layers will have
+
+00:38:03.200 --> 00:38:04.850
+render layer backings.
+
+00:38:04.850 --> 00:38:08.440
+The render layer backings then
+will have a small chunk of
+
+00:38:08.440 --> 00:38:12.130
+graphics layers that it puts
+together to create the entire
+
+00:38:12.130 --> 00:38:14.370
+composited layer tree.
+
+00:38:14.370 --> 00:38:17.070
+So I know that might be a little
+confusing, yet here's a
+
+00:38:17.070 --> 00:38:20.370
+visualization that hopefully
+clears up a bit of it.
+
+00:38:20.370 --> 00:38:23.850
+On the left-hand side we start
+with the render layer paint
+
+00:38:23.850 --> 00:38:25.170
+order tree.
+
+00:38:25.170 --> 00:38:30.240
+So the idea would be that here
+where my mouse is is actually
+
+00:38:30.240 --> 00:38:35.540
+maybe the root, the root render
+view of the page.
+
+00:38:35.540 --> 00:38:39.050
+These other layers are not
+necessarily composited, but
+
+00:38:39.050 --> 00:38:43.970
+let's say over here this next
+red circle is also we chose to
+
+00:38:43.970 --> 00:38:47.660
+make a composited layer
+in the paint order.
+
+00:38:47.660 --> 00:38:52.480
+What would happen then is these
+composited layers would
+
+00:38:52.480 --> 00:38:56.840
+have a reference, or actually
+they would own a
+
+00:38:56.840 --> 00:38:57.730
+render layer backing.
+
+00:38:57.730 --> 00:39:00.910
+Which is represented in these
+blue circles here.
+
+00:39:00.910 --> 00:39:04.640
+By themselves the render layer
+backings are not the final
+
+00:39:04.640 --> 00:39:06.890
+output that we can actually
+take in the
+
+00:39:06.890 --> 00:39:08.290
+compositor and renderer.
+
+00:39:08.290 --> 00:39:13.310
+Instead, the render layer
+backings each manage a small
+
+00:39:13.310 --> 00:39:17.040
+chunk of graphics layers.
+
+00:39:17.040 --> 00:39:20.320
+And I'll show you in a second
+what the purpose of some of
+
+00:39:20.320 --> 00:39:21.870
+these graphics layers are.
+
+00:39:21.870 --> 00:39:25.750
+But basically what happens
+then is that these render
+
+00:39:25.750 --> 00:39:28.980
+layer backings will stitch
+together their chunks of
+
+00:39:28.980 --> 00:39:31.760
+graphics layers to create the
+actual graphics layer tree.
+
+00:39:31.760 --> 00:39:35.140
+So the graphics layer tree, that
+would basically be output
+
+00:39:35.140 --> 00:39:40.426
+to the Chromium compositor, is
+this tree of gray squares that
+
+00:39:40.426 --> 00:39:43.250
+you see here.
+
+00:39:43.250 --> 00:39:46.670
+And so it's interesting to
+note that from the render
+
+00:39:46.670 --> 00:39:50.050
+layer tree to the graphics layer
+tree, it's not really a
+
+00:39:50.050 --> 00:39:51.110
+direct correspondence.
+
+00:39:51.110 --> 00:39:55.590
+You can't quite easily say that
+this layer on the render
+
+00:39:55.590 --> 00:39:57.630
+layer tree corresponds
+to this layer in the
+
+00:39:57.630 --> 00:39:59.730
+graphics layer tree.
+
+00:39:59.730 --> 00:40:02.940
+What you have to say is that
+this chunk of the render layer
+
+00:40:02.940 --> 00:40:07.610
+tree corresponds to this chunk
+of the graphics layer tree.
+
+00:40:07.610 --> 00:40:13.880
+That's the way to more easily
+see what's going on here.
+
+00:40:13.880 --> 00:40:17.020
+So inside the render layer
+backing, there's actually a
+
+00:40:17.020 --> 00:40:19.730
+fairly complicated, hopefully
+we can simplify this over
+
+00:40:19.730 --> 00:40:22.330
+time, but for now the way it's
+implemented, it's a fairly
+
+00:40:22.330 --> 00:40:28.020
+complicated set of layers that
+are used just for convenience.
+
+00:40:28.020 --> 00:40:32.940
+That we can more easily handle
+things like clipping or
+
+00:40:32.940 --> 00:40:36.060
+containment of a separate
+background in a foreground if
+
+00:40:36.060 --> 00:40:39.350
+we found that while we're
+computing what should be
+
+00:40:39.350 --> 00:40:43.700
+composited, there's some cases
+where it's actually reasonable
+
+00:40:43.700 --> 00:40:46.650
+to separate the background
+from the foreground.
+
+00:40:46.650 --> 00:40:49.610
+And so that's what it is
+represented here inside a
+
+00:40:49.610 --> 00:40:51.730
+render layer backing.
+
+00:40:51.730 --> 00:40:54.370
+Clip layers and container
+layers
+
+00:40:54.370 --> 00:40:56.230
+generally won't draw anything.
+
+00:40:56.230 --> 00:40:59.390
+Instead their purpose is simply
+to be a little bit
+
+00:40:59.390 --> 00:41:01.790
+easier to represent something
+in the tree.
+
+00:41:01.790 --> 00:41:04.940
+So the clip layer would
+basically clip its entire
+
+00:41:04.940 --> 00:41:08.500
+subtree from the composited
+layer tree's perspective.
+
+00:41:08.500 --> 00:41:12.220
+And then, of course, once we
+reach this end game here at
+
+00:41:12.220 --> 00:41:15.710
+the bottom of the chunk of tree
+here, we would have a
+
+00:41:15.710 --> 00:41:18.620
+container that actually contains
+the other render
+
+00:41:18.620 --> 00:41:22.030
+layer children as needed.
+
+00:41:25.800 --> 00:41:29.130
+So I basically just said
+already, why do we need so
+
+00:41:29.130 --> 00:41:29.620
+many layers?
+
+00:41:29.620 --> 00:41:32.410
+Well scroll bars is one
+I didn't mention.
+
+00:41:32.410 --> 00:41:34.910
+It's always nice to keep scroll
+bars separate so that
+
+00:41:34.910 --> 00:41:37.280
+you don't have to change the
+contents of a layer just
+
+00:41:37.280 --> 00:41:38.810
+because you scrolled it.
+
+00:41:38.810 --> 00:41:41.720
+All you have to do is then just
+repaint the scroll bar as
+
+00:41:41.720 --> 00:41:44.330
+things scroll around.
+
+00:41:44.330 --> 00:41:48.030
+And then, yes, as I said clips,
+background, foreground.
+
+00:41:48.030 --> 00:41:51.690
+Grouping things together, such
+as when you have contents that
+
+00:41:51.690 --> 00:41:53.940
+would scroll you want
+to group them.
+
+00:41:53.940 --> 00:41:57.020
+Masks, reflections, these are
+actually implicit if you look
+
+00:41:57.020 --> 00:41:57.890
+at the code.
+
+00:41:57.890 --> 00:42:01.080
+These are not actually
+represented as part of this
+
+00:42:01.080 --> 00:42:06.590
+tree, but rather each individual
+layer might contain
+
+00:42:06.590 --> 00:42:09.145
+a reference to mask or a
+reference to a reflection.
+
+00:42:13.910 --> 00:42:16.920
+So in terms of code paths, I'm
+going to go over this quickly.
+
+00:42:16.920 --> 00:42:20.150
+The slides will be
+available online.
+
+00:42:20.150 --> 00:42:21.860
+It's really something that
+you just have to
+
+00:42:21.860 --> 00:42:24.350
+read and look through.
+
+00:42:24.350 --> 00:42:27.140
+This is more of a reference than
+anything that is really
+
+00:42:27.140 --> 00:42:29.510
+worth explaining in a talk.
+
+00:42:29.510 --> 00:42:34.100
+But I will at least quickly say,
+what we have then is we
+
+00:42:34.100 --> 00:42:40.870
+have a paint code path which
+Chromium asks Blink to paint.
+
+00:42:40.870 --> 00:42:50.670
+And basically what happens is
+each graphics layer here has
+
+00:42:50.670 --> 00:42:52.940
+an associated paint
+face with it.
+
+00:42:52.940 --> 00:42:57.670
+And that paint phase is the way
+that a render layer knows
+
+00:42:57.670 --> 00:43:00.450
+how to paint itself.
+
+00:43:00.450 --> 00:43:03.790
+So when we actually ask Blink,
+please paint this composited
+
+00:43:03.790 --> 00:43:08.260
+layer using your subtree of
+render layers, the render
+
+00:43:08.260 --> 00:43:12.440
+layers will then paint based on
+if they contribute to that
+
+00:43:12.440 --> 00:43:13.580
+particular graphics layer.
+
+00:43:13.580 --> 00:43:16.780
+And the way they recognize
+whether they contribute is
+
+00:43:16.780 --> 00:43:17.600
+through this phase.
+
+00:43:17.600 --> 00:43:19.470
+So they kind of filter
+themselves out.
+
+00:43:19.470 --> 00:43:23.250
+And they don't paint themselves
+to composited
+
+00:43:23.250 --> 00:43:28.510
+layers that they don't actually
+contribute to.
+
+00:43:28.510 --> 00:43:32.340
+So it's this phase mechanism
+that couples that.
+
+00:43:32.340 --> 00:43:35.820
+If you're asking how a render
+layer paints into a graphics
+
+00:43:35.820 --> 00:43:40.105
+layer the answer is it uses a
+phase to recognize which layer
+
+00:43:40.105 --> 00:43:42.180
+it paints into.
+
+00:43:42.180 --> 00:43:44.890
+And then we have the code path
+which actually computes what
+
+00:43:44.890 --> 00:43:46.310
+actually gets composited.
+
+00:43:46.310 --> 00:43:49.270
+This is the recursive algorithm
+I mentioned earlier.
+
+00:43:49.270 --> 00:43:50.620
+There's basically two
+parts to this.
+
+00:43:50.620 --> 00:43:53.590
+One is you want to determine
+what gets composited.
+
+00:43:53.590 --> 00:43:56.480
+And the second part is you
+actually need to stitch
+
+00:43:56.480 --> 00:43:59.800
+together these data structures
+and initialize these data
+
+00:43:59.800 --> 00:44:00.660
+structures.
+
+00:44:00.660 --> 00:44:03.360
+So that second part is rebuild
+compositing layer tree.
+
+00:44:08.880 --> 00:44:12.390
+And it's worth mentioning if you
+do look at this code, when
+
+00:44:12.390 --> 00:44:17.110
+you paint, knowing what you
+paint into is actually
+
+00:44:17.110 --> 00:44:19.610
+implicitly represented
+by a context.
+
+00:44:19.610 --> 00:44:23.060
+This graphics context is
+basically the 2D drawing
+
+00:44:23.060 --> 00:44:28.670
+library that is given to a set
+of render layers which was
+
+00:44:28.670 --> 00:44:30.550
+then used to actually draw.
+
+00:44:30.550 --> 00:44:35.150
+So in this 2D library what's
+implied underneath is that you
+
+00:44:35.150 --> 00:44:37.400
+already know what is the buffer
+of pixels that you're
+
+00:44:37.400 --> 00:44:38.940
+going to be painting into.
+
+00:44:38.940 --> 00:44:41.380
+And so all you have to do is
+use this pointer, use this
+
+00:44:41.380 --> 00:44:45.250
+reference, this context, to
+actually invoke your 2D
+
+00:44:45.250 --> 00:44:47.330
+drawing commands.
+
+00:44:47.330 --> 00:44:49.370
+And it will draw into
+the correct buffer.
+
+00:44:49.370 --> 00:44:56.130
+So this is the context that's
+passed from the compositor to
+
+00:44:56.130 --> 00:45:01.230
+Blink to identify your painting
+into this correct
+
+00:45:01.230 --> 00:45:03.320
+buffer of pixels.
+
+00:45:03.320 --> 00:45:05.250
+And then as I mentioned before,
+it uses the painting
+
+00:45:05.250 --> 00:45:08.730
+phase mechanism for render
+layers to identify which
+
+00:45:08.730 --> 00:45:12.170
+composited layers
+it paints into.
+
+00:45:12.170 --> 00:45:15.420
+So these are basically the two
+pieces of data that need to be
+
+00:45:15.420 --> 00:45:19.825
+passed from the compositor to
+the render layer in order to
+
+00:45:19.825 --> 00:45:21.075
+paint correctly.
+
+00:45:26.790 --> 00:45:30.690
+Yes and I think I'll let you
+all look at these slides on
+
+00:45:30.690 --> 00:45:32.850
+your own afterwards.
+
+00:45:32.850 --> 00:45:37.660
+Let's talk about some of the
+issues that come up with
+
+00:45:37.660 --> 00:45:38.230
+compositing.
+
+00:45:38.230 --> 00:45:42.680
+Compositing seems like it may
+solve the world's problems,
+
+00:45:42.680 --> 00:45:44.130
+but it actually doesn't.
+
+00:45:44.130 --> 00:45:47.220
+And it has its own set of
+problems that gets created.
+
+00:45:47.220 --> 00:45:51.740
+Ideally, what we would like is
+the compositor to be super
+
+00:45:51.740 --> 00:45:55.660
+intelligent and it knows
+what can we composite.
+
+00:45:55.660 --> 00:45:58.340
+What would be the cost
+of doing so?
+
+00:45:58.340 --> 00:46:01.780
+What would be the memory cost,
+the computation cost?
+
+00:46:01.780 --> 00:46:02.920
+What do we gain?
+
+00:46:02.920 --> 00:46:06.120
+And it would be able to optimize
+between the trade off
+
+00:46:06.120 --> 00:46:09.000
+of what we gain by compositing,
+in particular
+
+00:46:09.000 --> 00:46:12.420
+avoiding repainting, versus the
+cost of actually computing
+
+00:46:12.420 --> 00:46:14.590
+all that stuff in
+the first place.
+
+00:46:14.590 --> 00:46:18.100
+Realistically, that's
+a very hard problem.
+
+00:46:18.100 --> 00:46:21.370
+And it's not always clear that
+there is actually an ideal
+
+00:46:21.370 --> 00:46:24.690
+answer for various algorithms
+or various policies or
+
+00:46:24.690 --> 00:46:28.100
+heuristics we choose, we may
+be trading off making some
+
+00:46:28.100 --> 00:46:30.620
+pages better and other
+pages worse.
+
+00:46:30.620 --> 00:46:35.570
+So, in reality, what we really
+do is just we composite when
+
+00:46:35.570 --> 00:46:39.620
+we believe that we need it, or
+when we really do need it.
+
+00:46:39.620 --> 00:46:42.960
+For example, 3D transforms are
+not supported unless you have
+
+00:46:42.960 --> 00:46:46.310
+the accelerated compositor
+enabled.
+
+00:46:46.310 --> 00:46:52.770
+And once we do that and we
+accept that it is what it is,
+
+00:46:52.770 --> 00:46:56.770
+whatever we've composited
+blindly, we just accept that
+
+00:46:56.770 --> 00:46:59.450
+the overhead exists.
+
+00:46:59.450 --> 00:47:05.740
+And we rely on ourselves as
+architects of this to add
+
+00:47:05.740 --> 00:47:08.510
+heuristics or to identify cases
+where the overhead can
+
+00:47:08.510 --> 00:47:09.910
+be reduced.
+
+00:47:09.910 --> 00:47:13.570
+But as an algorithm itself,
+the principal and the
+
+00:47:13.570 --> 00:47:16.240
+fundamental design of the
+algorithm is basically blind.
+
+00:47:19.330 --> 00:47:20.940
+What are the overheads
+of compositing?
+
+00:47:20.940 --> 00:47:24.650
+Well there's the computational
+cost of actually checking for
+
+00:47:24.650 --> 00:47:27.550
+overlap, iterating over
+all the render layers.
+
+00:47:27.550 --> 00:47:29.940
+Where they are there can be
+hundreds, even thousands on
+
+00:47:29.940 --> 00:47:31.510
+some pages.
+
+00:47:31.510 --> 00:47:34.500
+Most of them won't get
+composited, but they all have
+
+00:47:34.500 --> 00:47:38.130
+to be visited in order to
+determine whether we might
+
+00:47:38.130 --> 00:47:41.560
+need to composite them.
+
+00:47:41.560 --> 00:47:43.680
+That can get pretty costly.
+
+00:47:43.680 --> 00:47:46.930
+There's the cost of actually
+managing several more layer
+
+00:47:46.930 --> 00:47:48.680
+tree data structures.
+
+00:47:48.680 --> 00:47:52.760
+We have the composited layer
+tree structure in Chromium.
+
+00:47:52.760 --> 00:47:54.890
+We have the graphics later
+composited layer tree
+
+00:47:54.890 --> 00:47:56.840
+structure in Blink.
+
+00:47:56.840 --> 00:48:00.570
+We have the paint order
+render layer tree.
+
+00:48:00.570 --> 00:48:04.990
+There's actually a few extra
+layer trees inside of the
+
+00:48:04.990 --> 00:48:08.140
+Chromium compositor itself.
+
+00:48:08.140 --> 00:48:15.120
+And mostly I think the worst
+issue is that when we choose
+
+00:48:15.120 --> 00:48:19.560
+to create a composite layer out
+of a render layer, we are
+
+00:48:19.560 --> 00:48:24.060
+saying that we intend to
+allocate pixels to represent
+
+00:48:24.060 --> 00:48:28.000
+that layer or that group of
+layers, that subtree.
+
+00:48:28.000 --> 00:48:32.500
+And that greatly increases
+memory cost
+
+00:48:32.500 --> 00:48:34.120
+for rendering a page.
+
+00:48:39.030 --> 00:48:41.510
+There's also some issues for
+just rendering in general.
+
+00:48:45.950 --> 00:48:49.230
+In theory you should not know if
+we are actually compositing
+
+00:48:49.230 --> 00:48:50.620
+things or not.
+
+00:48:50.620 --> 00:48:52.850
+But realistically there are
+some things that you,
+
+00:48:52.850 --> 00:48:57.900
+especially as a web developer,
+might want to be aware of.
+
+00:48:57.900 --> 00:49:01.690
+Anti-aliasing we would actually
+do around the edges
+
+00:49:01.690 --> 00:49:03.510
+of our composited layers.
+
+00:49:03.510 --> 00:49:07.720
+But we wouldn't necessarily be
+able to anti-alias as nicely
+
+00:49:07.720 --> 00:49:10.220
+the contents inside
+of a layer.
+
+00:49:10.220 --> 00:49:15.170
+So, for example, if you had
+elements with a border inside
+
+00:49:15.170 --> 00:49:18.950
+of a composited layer and then
+you maybe rotated that layer,
+
+00:49:18.950 --> 00:49:23.300
+the edges of the composited
+layer outside would look
+
+00:49:23.300 --> 00:49:25.430
+smooth because we are able
+to anti-alias those.
+
+00:49:25.430 --> 00:49:29.360
+But the border on the inside
+that renders in that layer may
+
+00:49:29.360 --> 00:49:32.530
+not necessarily look smooth
+because it's actually just
+
+00:49:32.530 --> 00:49:37.500
+pixel data that's rendered into
+the composited layer.
+
+00:49:37.500 --> 00:49:40.800
+Another issue that comes up is
+the difference between LCD
+
+00:49:40.800 --> 00:49:46.440
+text anti-aliasing and non LCD
+text anti-aliasing, which
+
+00:49:46.440 --> 00:49:49.170
+looks a bit blurrier.
+
+00:49:49.170 --> 00:49:54.310
+Unless we know for sure that
+the composited layer is
+
+00:49:54.310 --> 00:49:58.100
+completely opaque, we
+actually cannot.
+
+00:49:58.100 --> 00:50:02.170
+There's just some fundamental
+limitations that solving them
+
+00:50:02.170 --> 00:50:03.360
+is actually bit costly.
+
+00:50:03.360 --> 00:50:05.880
+And it's an open problem of how
+we might eventually solve
+
+00:50:05.880 --> 00:50:08.290
+this, but we actually
+cannot do LCD text
+
+00:50:08.290 --> 00:50:11.230
+anti-aliasing in that case.
+
+00:50:11.230 --> 00:50:14.560
+The best we can do then is
+resort to the blurry text
+
+00:50:14.560 --> 00:50:16.000
+anti-aliasiing.
+
+00:50:16.000 --> 00:50:22.130
+And for devices that don't
+have a high resolution,
+
+00:50:22.130 --> 00:50:24.150
+switching between these two
+actually becomes very
+
+00:50:24.150 --> 00:50:26.780
+noticeable and unpleasing.
+
+00:50:26.780 --> 00:50:29.440
+And in many cases it's not
+even just the switching
+
+00:50:29.440 --> 00:50:31.950
+between the two that would look
+like the text is sort of
+
+00:50:31.950 --> 00:50:36.250
+flickering or wiggling a little,
+but also just the fact
+
+00:50:36.250 --> 00:50:38.640
+that you might get blurry text
+where you would prefer to have
+
+00:50:38.640 --> 00:50:41.000
+very nicely anti-alias text.
+
+00:50:41.000 --> 00:50:45.070
+A good example of this is in
+menus, nav bars at the top
+
+00:50:45.070 --> 00:50:47.760
+that you might make fixed
+position, for example.
+
+00:50:47.760 --> 00:50:50.060
+If they become composited
+for some reason.
+
+00:50:50.060 --> 00:50:53.890
+Maybe they overlap some other
+composited stuff, their text
+
+00:50:53.890 --> 00:50:59.810
+might not be able to get nice
+LCD text anti-aliasing.
+
+00:50:59.810 --> 00:51:01.500
+In theory we also want
+to render at
+
+00:51:01.500 --> 00:51:04.500
+least as fast as software.
+
+00:51:04.500 --> 00:51:06.250
+And generally we do.
+
+00:51:06.250 --> 00:51:10.540
+It is usually quite successful
+at rendering very fast.
+
+00:51:10.540 --> 00:51:14.880
+But there's often cases where
+once a page becomes
+
+00:51:14.880 --> 00:51:18.570
+complicated enough, especially
+if we cannot benefit from
+
+00:51:18.570 --> 00:51:19.730
+avoiding repainting.
+
+00:51:19.730 --> 00:51:24.910
+If we still really need to
+repaint layers every frame,
+
+00:51:24.910 --> 00:51:30.730
+then compositing actually is not
+going to be as beneficial.
+
+00:51:30.730 --> 00:51:32.220
+We would have to
+repaint anyway.
+
+00:51:32.220 --> 00:51:35.560
+We would have to not only do the
+repainting whether we were
+
+00:51:35.560 --> 00:51:38.630
+in software or in composited
+mode, but we would also then
+
+00:51:38.630 --> 00:51:42.510
+with composited mode have
+potentially a larger number of
+
+00:51:42.510 --> 00:51:44.660
+layers that cost more memory.
+
+00:51:44.660 --> 00:51:49.490
+And sometimes the bandwidth of
+just drawing these layers on a
+
+00:51:49.490 --> 00:51:52.610
+lightweight mobile GPU, for
+example, can actually become
+
+00:51:52.610 --> 00:51:56.770
+the bottleneck that maybe is
+just more costly than the
+
+00:51:56.770 --> 00:51:58.830
+painting itself in
+some rare cases.
+
+00:52:02.230 --> 00:52:04.970
+So I think that's about it.
+
+00:52:04.970 --> 00:52:08.540
+If you have any questions I'd
+be happy to taking them over
+
+00:52:08.540 --> 00:52:13.180
+the graphics dev at chromium.org
+discussion list.
+
+00:52:13.180 --> 00:52:14.920
+My LDAP is Shawn Singh.
+
+00:52:14.920 --> 00:52:19.120
+That's spelled S-H-A-WN
+S-I-N-G-H @chromium.org.
+
+00:52:19.120 --> 00:52:22.630
+Chromium I'm happy to receive
+emails as well.
+
+00:52:22.630 --> 00:52:23.870
+And thank you for your time.
+
+00:52:23.870 --> 00:52:24.620
+Thank you for listening.
+
+00:52:24.620 --> 00:52:25.870
+I hope you enjoyed it.
+
+00:52:38.140 --> 00:54:13.950
+[MUSIC PLAYING]
+

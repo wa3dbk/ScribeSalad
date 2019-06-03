@@ -1,0 +1,3508 @@
+WEBVTT
+Kind: captions
+Language: en
+
+00:00:00.000 --> 00:00:02.220
+ALFRED FULLER: So, my name is
+Alfred Fuller, and I'm going to
+
+00:00:02.220 --> 00:00:05.980
+talk about Next Gen Queries.
+
+00:00:05.980 --> 00:00:07.400
+So who am I?
+
+00:00:07.400 --> 00:00:10.758
+I'm the software engineer on
+the Datastore App Engine Team.
+
+00:00:10.758 --> 00:00:13.658
+I work mostly with
+the Query Planner.
+
+00:00:13.658 --> 00:00:15.858
+I helped remove the
+thousand-entity limit
+
+00:00:15.858 --> 00:00:18.738
+for queries, I added --
+
+00:00:18.738 --> 00:00:19.738
+[APPLAUSE]
+
+00:00:18.738 --> 00:00:22.120
+ALFRED FULLER: Thank you.
+
+00:00:22.120 --> 00:00:24.720
+I added cursors and
+prefetching, and I've done lot
+
+00:00:24.720 --> 00:00:28.970
+of work in the Python and Java
+SDK around the datastore, so
+
+00:00:28.970 --> 00:00:33.020
+I'm familiar with both.
+
+00:00:33.020 --> 00:00:35.860
+So if you want to follow
+along with the wave notes,
+
+00:00:35.860 --> 00:00:37.480
+you all know the drill.
+
+00:00:37.480 --> 00:00:38.760
+The bitly link is
+NextGen/Queries/Wave.
+
+00:00:41.580 --> 00:00:45.880
+I would also highly recommend
+looking at some past talks.
+
+00:00:45.880 --> 00:00:48.820
+I'm gonna briefly go over some
+concepts that were gone over in
+
+00:00:48.820 --> 00:00:51.758
+detail, especially in Building
+Scalable, Complex Apps on App
+
+00:00:51.758 --> 00:00:55.800
+Engine by Brett Slatkin last
+year, and also there's Under
+
+00:00:55.800 --> 00:00:59.086
+the Covers of the Google App
+Engine Datastore by
+
+00:00:59.086 --> 00:01:02.274
+Ryan Barrett, which is
+excellent as well.
+
+00:01:02.520 --> 00:01:05.460
+So the first thing I'm going
+to do is overview some of
+
+00:01:05.460 --> 00:01:06.240
+the features we're adding.
+
+00:01:06.240 --> 00:01:09.400
+These are the largest set of
+features that we're adding to
+
+00:01:09.400 --> 00:01:13.100
+the datastore query engine
+since its launch, so these
+
+00:01:13.100 --> 00:01:14.540
+are fairly substantial.
+
+00:01:14.540 --> 00:01:17.220
+I'm going to go over some
+background of how we run these
+
+00:01:17.220 --> 00:01:23.620
+queries and then talk about the
+technology we use to improve
+
+00:01:23.620 --> 00:01:26.240
+upon what we already have, and
+mainly this is Zigzag Merge
+
+00:01:26.240 --> 00:01:28.060
+Join and what we
+call MultiQuery.
+
+00:01:29.820 --> 00:01:31.540
+And then I wanna talk about
+some -- I'll give you a few
+
+00:01:31.540 --> 00:01:34.080
+examples, which are probably
+not very practical, but they're
+
+00:01:34.080 --> 00:01:39.140
+very interesting, so I'll let
+you guys put them to practical
+
+00:01:39.140 --> 00:01:43.040
+use, and then talk about some
+corollaries that came out of
+
+00:01:43.040 --> 00:01:45.300
+some of the same technologies
+that went into adding
+
+00:01:45.300 --> 00:01:47.300
+these features.
+
+00:01:47.300 --> 00:01:49.800
+So the current system is
+incredibly scalable.
+
+00:01:49.800 --> 00:01:53.160
+It's also schema-less so
+it's incredibly flexible.
+
+00:01:53.160 --> 00:01:56.540
+It does the scaling
+automatically, and with that,
+
+00:01:56.540 --> 00:02:00.540
+we are able to perform many
+query operations such as
+
+00:02:00.540 --> 00:02:03.120
+equality filters, inequality
+filters, sorts, and through the
+
+00:02:03.120 --> 00:02:06.020
+magic of composite indexes,
+we're able to do many of
+
+00:02:06.020 --> 00:02:08.080
+these on the same query.
+
+00:02:10.778 --> 00:02:13.638
+These usually require a
+composite index whenever you're
+
+00:02:13.638 --> 00:02:16.038
+trying to do a combination of
+these filters and you have to
+
+00:02:16.038 --> 00:02:19.700
+plan for those ahead of time,
+but you can do a lot of
+
+00:02:19.700 --> 00:02:19.900
+different things with these.
+
+00:02:19.900 --> 00:02:21.338
+They're very flexible.
+
+00:02:22.938 --> 00:02:25.758
+And everything's combined with
+a logical AND operator, except
+
+00:02:25.758 --> 00:02:27.278
+in the case when there are no
+sorts and they're all equality
+
+00:02:27.278 --> 00:02:29.080
+filters, then its free rein.
+
+00:02:29.878 --> 00:02:32.058
+You can do whatever you want,
+although you might want to add
+
+00:02:32.058 --> 00:02:35.478
+composite indexes if you
+want to make it faster and
+
+00:02:35.478 --> 00:02:37.938
+give some read-and-write
+performance tradeoffs.
+
+00:02:37.938 --> 00:02:39.900
+So how are we improving this?
+
+00:02:39.900 --> 00:02:41.080
+First thing we're going to do
+is we're going to add support
+
+00:02:41.080 --> 00:02:43.258
+for arbitrary query logic.
+
+00:02:43.258 --> 00:02:47.058
+So AND, OR, NOT subexpressions,
+so you can use the whole
+
+00:02:47.058 --> 00:02:51.558
+gambit, everything that you
+can do, you know, with your
+
+00:02:51.558 --> 00:02:52.018
+sequel queries and stuff.
+
+00:02:52.118 --> 00:02:53.718
+I know that we
+announced that today.
+
+00:02:53.718 --> 00:02:57.558
+There's definitely
+-- or yesterday.
+
+00:02:57.558 --> 00:02:59.798
+This is definitely
+different from what you
+
+00:02:59.798 --> 00:03:00.738
+expect in a sequel.
+
+00:03:00.578 --> 00:03:03.718
+There are still limitations,
+especially the
+
+00:03:03.718 --> 00:03:07.238
+single-inequality
+filter limitation.
+
+00:03:07.238 --> 00:03:09.358
+But we're not leaving the
+datastore behind, especially
+
+00:03:09.358 --> 00:03:12.458
+since it's -- what can
+automatically scale, you
+
+00:03:12.458 --> 00:03:17.798
+know, with no supervision,
+which is why we like It.
+
+00:03:17.798 --> 00:03:21.818
+We're also adding first-class
+support for domain-specific
+
+00:03:21.818 --> 00:03:24.860
+queries, such as Geo-Queries,
+Date Range queries, and this
+
+00:03:24.860 --> 00:03:27.720
+can actually be extended to do
+multiple-inequality filters on
+
+00:03:27.720 --> 00:03:29.860
+numeric properties, or anything
+that can be normalized
+
+00:03:29.860 --> 00:03:33.678
+to zero and one.
+
+00:03:34.258 --> 00:03:38.358
+The main thing, the thing that
+makes this all possible, is
+
+00:03:38.358 --> 00:03:39.560
+improvements to the
+composite indexes.
+
+00:03:39.560 --> 00:03:41.740
+So we're gonna reduce
+the requirements on
+
+00:03:41.740 --> 00:03:42.520
+composite indexes.
+
+00:03:42.520 --> 00:03:45.718
+We're going to eliminate the
+exploding index problem.
+
+00:03:45.718 --> 00:03:48.438
+I don't know, how many
+of you run into the
+
+00:03:48.438 --> 00:03:52.358
+exploding index problem?
+83
+00:03:52,358 --&gt; 00:03:52,138
+[APPLAUSE]
+
+00:03:52.138 --> 00:03:55.178
+ALFRED FULLER: And we're gonna
+have fewer indexes serve a lot
+
+00:03:55.178 --> 00:03:58.780
+more queries so you can really
+balance this, and this makes
+
+00:03:58.780 --> 00:04:01.500
+composite index selection
+kind of a dark art.
+
+00:04:01.500 --> 00:04:03.920
+Not that it wasn't already,
+but even more so.
+
+00:04:03.920 --> 00:04:07.580
+And we really want to provide
+tools to help you do this, but
+
+00:04:07.580 --> 00:04:10.118
+right now, I think you're gonna
+have to rely on this talk, so
+
+00:04:10.118 --> 00:04:11.498
+you can refer to it
+later on YouTube.
+
+00:04:13.518 --> 00:04:18.258
+And the composite index
+selection really provides the
+
+00:04:18.258 --> 00:04:22.598
+wrench to decide between space
+and speed, between
+
+00:04:22.598 --> 00:04:25.178
+write-and-read latency in
+costs, where you want spend
+
+00:04:25.178 --> 00:04:28.438
+this based on what your
+application does.
+
+00:04:30.078 --> 00:04:34.500
+And first and foremost,
+although last in this overview,
+
+00:04:34.500 --> 00:04:36.940
+none of these result stats were
+pulled into memory during any
+
+00:04:36.940 --> 00:04:38.760
+time during the making
+of these features.
+
+00:04:38.760 --> 00:04:47.100
+So these are scalable, they do
+use low resources, and we're
+
+00:04:47.100 --> 00:04:49.220
+very happy about that.
+
+00:04:50.860 --> 00:04:54.878
+Quick disclaimer: So,
+unfortunately, this is Next Gen
+
+00:04:54.878 --> 00:04:56.360
+Queries, so it's not in the
+current release or
+
+00:04:56.360 --> 00:04:57.618
+the next release.
+
+00:04:57.618 --> 00:05:01.060
+We're rolling out these
+features in pieces.
+
+00:05:01.060 --> 00:05:03.620
+The infrastructure's there,
+but we have -- it takes time
+
+00:05:03.620 --> 00:05:05.318
+to expose them to users.
+
+00:05:05.318 --> 00:05:08.198
+That being said, you can feel
+free to use all your Bluetooth
+
+00:05:08.198 --> 00:05:14.398
+devices and cell phones because
+this is only a presentation.
+
+00:05:17.220 --> 00:05:19.158
+Although some of the back-end
+changes are available today,
+
+00:05:19.158 --> 00:05:22.538
+and I'll go over exactly what
+those are, and those are the
+
+00:05:22.538 --> 00:05:24.598
+ones that are likely to come
+out first, so the exploding
+
+00:05:24.598 --> 00:05:31.858
+index problem should be solved
+as soon as I can get to it.
+
+00:05:31.858 --> 00:05:34.278
+So throughout this
+presentation, I'm gonna be
+
+00:05:34.278 --> 00:05:38.078
+talking -- or using the model
+Photo, which has a owner or
+
+00:05:38.078 --> 00:05:41.838
+person who posted the picture;
+a tag, which is a multivalued
+
+00:05:41.838 --> 00:05:44.000
+property or a list of
+user-assigned tags; people,
+
+00:05:44.000 --> 00:05:47.500
+which can be either user
+assigned or if they're facial
+
+00:05:47.500 --> 00:05:51.498
+recognition; location, which is
+where the photo was
+
+00:05:51.498 --> 00:05:52.500
+taken, and the date.
+
+00:05:52.500 --> 00:05:54.840
+And this is what I normally
+look like over there when I'm
+
+00:05:54.840 --> 00:05:56.938
+not trying to be presentable.
+
+00:05:59.540 --> 00:06:01.278
+I was told I was the only
+with a tie today so
+
+00:06:01.278 --> 00:06:04.478
+maybe I went overboard.
+
+00:06:04.878 --> 00:06:05.358
+Not the pug, not the pug.
+
+00:06:06.558 --> 00:06:13.920
+That's my wife's cruel
+joke again, our dog.
+
+00:06:13.758 --> 00:06:17.600
+So for some background,
+what we use to solve
+
+00:06:17.600 --> 00:06:18.320
+every query are indexes.
+
+00:06:19.898 --> 00:06:23.898
+These are the contained index
+data, which is a set of ordered
+
+00:06:23.898 --> 00:06:26.070
+values that are then, when they
+are placed in the index, they
+
+00:06:26.070 --> 00:06:27.160
+are sorted lexigraphically.
+
+00:06:28.698 --> 00:06:31.918
+So it's a sorted collection of
+the index data, and so this is
+
+00:06:31.918 --> 00:06:44.998
+exactly -- or an example of
+what the -- silent
+
+00:06:44.998 --> 00:06:45.240
+mode, please.
+
+00:06:45.240 --> 00:06:45.878
+That was my wife.
+
+00:06:45.878 --> 00:06:48.552
+I think she heard the
+comment about the dog.
+
+00:06:49.364 --> 00:06:53.018
+So this is the built-in
+property index.
+
+00:06:53.818 --> 00:06:57.418
+So it has the kind, the name of
+the property, the value of the
+
+00:06:57.418 --> 00:07:00.198
+property, and the key of the
+entity that it's referring to.
+
+00:07:00.198 --> 00:07:02.380
+This is what a composite
+index looks like.
+
+00:07:02.380 --> 00:07:04.958
+It has the index ID of the
+composite index that it's
+
+00:07:04.958 --> 00:07:08.358
+using, a composite value,
+and then the key.
+
+00:07:08.358 --> 00:07:12.938
+So queries are converted into
+scans over these indexes
+
+00:07:12.938 --> 00:07:16.278
+through the Query Planner, and
+this is done by splitting the
+
+00:07:16.278 --> 00:07:19.660
+index data into two different
+pieces: a prefix that's held
+
+00:07:19.660 --> 00:07:22.698
+constant and a postfix that's
+different for each result.
+
+00:07:22.698 --> 00:07:25.620
+So all the equality filters
+that go into the prefix, the
+
+00:07:25.620 --> 00:07:29.160
+sort orders that go into the
+postfix, and inequality filters
+
+00:07:29.160 --> 00:07:32.798
+are just range restrictions on
+that postfix, which is
+
+00:07:32.798 --> 00:07:35.360
+why we only allow one.
+
+00:07:35.360 --> 00:07:39.500
+And so for easy example, select
+"FROM Photo WHERE tag
+
+00:07:39.500 --> 00:07:42.638
+equals family." We decide
+to split the index data
+
+00:07:42.638 --> 00:07:44.278
+between the value and key.
+
+00:07:44.278 --> 00:07:48.540
+We apply a post -- or prefix
+constraints of kind equals
+
+00:07:48.540 --> 00:07:51.600
+photo, name equals tag, value
+equals "family," and
+
+00:07:51.600 --> 00:07:56.198
+this assures that we only see
+index rows that refer to photos
+
+00:07:56.198 --> 00:07:58.438
+that have these properties.
+
+00:07:58.438 --> 00:07:59.638
+Then we let the key vary.
+
+00:07:59.638 --> 00:08:02.040
+We use this key to look up the
+actual entity, and we return
+
+00:08:02.040 --> 00:08:07.398
+the photo to you
+as a result set.
+
+00:08:07.398 --> 00:08:10.718
+So, as you can see, since this
+is lexigraphically sorted,
+
+00:08:10.718 --> 00:08:13.498
+these photos are actually
+coming out in postfix ordering
+
+00:08:13.498 --> 00:08:15.578
+in this case, which
+is key ascending.
+
+00:08:17.778 --> 00:08:19.318
+So if we wanted to change that
+ordering, we wanted to SELECT
+
+00:08:19.318 --> 00:08:23.238
+FROM Photo ORDER BY date
+DESCENDING, we would choose a
+
+00:08:23.238 --> 00:08:25.720
+slightly different separation
+of these index data.
+
+00:08:25.720 --> 00:08:28.458
+We subdivide it between
+the name and the value.
+
+00:08:28.458 --> 00:08:31.938
+We apply the prefix constraints
+of kind equals photo, name
+
+00:08:31.938 --> 00:08:36.072
+equals date, which this is an
+implied existence filter, so if
+
+00:08:36.072 --> 00:08:37.320
+it doesn't have a date, it
+won't show up in this
+
+00:08:37.320 --> 00:08:41.800
+index, and then we
+let the postfix vary.
+
+00:08:41.800 --> 00:08:43.160
+And you can see that if we do
+the encoding correctly, we
+
+00:08:43.160 --> 00:08:47.280
+encode this so that date
+descending becomes
+
+00:08:47.280 --> 00:08:49.740
+lexigraphically date
+descending in order.
+
+00:08:50.720 --> 00:08:52.340
+When we pull off the key, we
+can look at the photo, and we
+
+00:08:52.340 --> 00:08:55.820
+get everything with the postfix
+ordering of data descending,
+
+00:08:55.820 --> 00:08:58.300
+key ascending, which is
+how we serve this query.
+
+00:09:00.540 --> 00:09:02.280
+We get a little bit
+more complicated.
+
+00:09:02.000 --> 00:09:05.980
+SELECT FROM Photo WHERE tag
+equals "family" AND
+
+00:09:05.980 --> 00:09:07.180
+tag equals "outside,
+ORDER BY date.
+
+00:09:07.180 --> 00:09:10.080
+Now this requires a composite
+index so the first thing we
+
+00:09:10.080 --> 00:09:12.080
+have to do is we specify
+a composite index on
+
+00:09:12.080 --> 00:09:13.920
+tag, tag, and date.
+
+00:09:13.920 --> 00:09:17.600
+We choose to split this index
+data in the middle of the
+
+00:09:17.600 --> 00:09:20.940
+composite value between
+the last tag and date.
+
+00:09:20.940 --> 00:09:24.580
+We set our prefix constraints
+tag equals "family"
+
+00:09:24.580 --> 00:09:26.978
+and tag equals
+"outside," and we
+
+00:09:26.978 --> 00:09:29.080
+let the postfix vary.
+
+00:09:29.080 --> 00:09:32.480
+So we have a postfix ordering
+of date descending, key
+
+00:09:32.480 --> 00:09:35.200
+ascending, and we get the
+photos in this order.
+
+00:09:35.200 --> 00:09:37.618
+Are you still with me?
+191
+00:09:37,618 --&gt; 00:09:37,32
+Good.
+
+00:09:38.718 --> 00:09:39.440
+Awesome.
+
+00:09:40.800 --> 00:09:43.520
+So we expand on this in
+two ways, one of which is
+
+00:09:43.520 --> 00:09:45.580
+with Zigzag Merge Join.
+
+00:09:45.580 --> 00:09:47.620
+So currently, this
+is how it operates.
+
+00:09:47.260 --> 00:09:50.760
+Zigzag Merge Join can
+efficiently find postfix
+
+00:09:50.760 --> 00:09:52.700
+common to multiple scans.
+
+00:09:52.600 --> 00:09:56.920
+It produces intermediate false
+results because it does two
+
+00:09:56.920 --> 00:10:00.960
+scans or multiple scans to find
+the postfixes that are in
+
+00:10:00.960 --> 00:10:04.100
+common, but it knows how to
+skip past sections of large,
+
+00:10:04.100 --> 00:10:07.458
+not matching results so it
+tends to scale in the size of
+
+00:10:07.458 --> 00:10:09.820
+the result set instead
+of the size of each
+
+00:10:09.820 --> 00:10:11.360
+individual subscan.
+
+00:10:11.360 --> 00:10:14.012
+So say we have photos that are
+tagged with dogs, photos that
+
+00:10:14.012 --> 00:10:16.220
+are tagged with cats, and we
+would want to find photos that
+
+00:10:16.220 --> 00:10:19.180
+show dogs and cats
+living together.
+
+00:10:19.180 --> 00:10:23.080
+Well, Zigzag Merge Join can
+efficiently find when that
+
+00:10:23.080 --> 00:10:25.900
+correlates with mass hysteria.
+
+00:10:30.700 --> 00:10:32.220
+So here's an example
+of Zigzag Merge Join.
+
+00:10:32.220 --> 00:10:34.660
+SELECT FROM Photos WHERE tag
+equals "family" AND
+
+00:10:34.660 --> 00:10:37.000
+tag equals "outside."
+Notice there are all only
+
+00:10:37.000 --> 00:10:40.280
+equality filters here and
+there's no sort order so we can
+
+00:10:40.280 --> 00:10:42.360
+service this query with
+Zigzag Merge Join with
+
+00:10:42.360 --> 00:10:44.740
+only the built-in indexes.
+
+00:10:44.740 --> 00:10:49.760
+So we're gonna run two queries,
+or two index scans, I mean, on
+
+00:10:49.760 --> 00:10:54.700
+the property index, one -- OK,
+we'll split these index data in
+
+00:10:54.700 --> 00:10:57.940
+the same place for each query
+between value and key.
+
+00:10:57.940 --> 00:11:00.940
+We'll apply a prefix constraint
+of kind equals photo, name
+
+00:11:00.940 --> 00:11:04.240
+equals tag, value equals
+"family" for the
+
+00:11:04.240 --> 00:11:07.538
+first scan, and we'll apply a
+prefix constraint of
+
+00:11:07.538 --> 00:11:08.580
+"photo tag" and
+"outside."
+
+00:11:08.580 --> 00:11:10.820
+So the first scan will give
+us all photos that are
+224
+00:11:10,82 --&gt; 00:11:10,798
+tagged with family.
+
+00:11:10.980 --> 00:11:13.186
+The second scan will give
+us all photos that are
+
+00:11:13.186 --> 00:11:13.700
+tagged with outside.
+
+00:11:13.700 --> 00:11:16.120
+Then we apply a postfix
+constraint using Zigzag Merge
+
+00:11:16.120 --> 00:11:20.478
+Join to say that the first
+scan's key must equal the
+
+00:11:20.478 --> 00:11:23.040
+second scan's key for
+there to be a match.
+
+00:11:23.040 --> 00:11:24.980
+So they become one.
+
+00:11:24.980 --> 00:11:27.360
+We run the scan through the
+magic of Zigzag Merge Join,
+
+00:11:27.360 --> 00:11:33.500
+which is gone over in detail in
+Brett's Slatkin's doc, and we
+
+00:11:33.500 --> 00:11:39.960
+have our photos that match this
+query in key ascending order.
+
+00:11:39.960 --> 00:11:41.040
+MultiQuery is the second
+technology we use to
+
+00:11:41.040 --> 00:11:42.560
+expand upon this.
+
+00:11:42.560 --> 00:11:47.680
+MultiQuery combines
+multiple-query result sets
+
+00:11:47.680 --> 00:11:51.520
+using a prority queue based on
+the orders of the query itself,
+
+00:11:51.520 --> 00:11:54.240
+and I've nearly optimized it to
+avoid the need for this
+
+00:11:54.240 --> 00:12:00.000
+priority queue when possible,
+and it currently just
+
+00:12:00.000 --> 00:12:01.140
+supports IN and NOT EQUAL.
+
+00:12:01.140 --> 00:12:03.620
+This is how we
+implemented these two.
+
+00:12:03.620 --> 00:12:07.860
+So if you look at a query where
+tag IN "family" or
+
+00:12:07.860 --> 00:12:09.930
+"friends," ORDER BY
+date DESCENDING, this query is
+
+00:12:09.930 --> 00:12:13.558
+supposed to return any photos
+that are either tagged
+
+00:12:13.558 --> 00:12:15.020
+family or friends.
+
+00:12:15.020 --> 00:12:18.640
+We split into two different
+queries where one has all the
+
+00:12:18.640 --> 00:12:20.110
+family and the other one has
+all the ones that are tagged
+
+00:12:20.110 --> 00:12:24.020
+with friends, and each result
+-- a result from either one of
+
+00:12:24.020 --> 00:12:26.640
+these queries is a correct
+result and is returned to the
+
+00:12:26.640 --> 00:12:29.658
+user, and we maintain the
+ordering because both of these
+
+00:12:29.658 --> 00:12:31.620
+subqueries have the same
+ordering that was on the
+
+00:12:31.620 --> 00:12:35.660
+original query, and so we only
+need to see the first result,
+
+00:12:35.660 --> 00:12:39.680
+the top result on each query to
+merge these result sets
+
+00:12:39.680 --> 00:12:41.120
+together appropriately.
+
+00:12:41.500 --> 00:12:45.678
+The NOT EQUAL, on the other
+hand -- I've also recently
+
+00:12:45.678 --> 00:12:50.640
+expanded this, at least in
+Java, sorry, to support NOT
+
+00:12:50.640 --> 00:12:53.060
+EQUAL on multiple NOT EQUAL
+expressions as long as they're
+
+00:12:53.060 --> 00:12:54.780
+on the same property.
+
+00:12:54.780 --> 00:12:57.480
+But this is actually expanded
+into inequality filters.
+
+00:13:00.940 --> 00:13:03.380
+And so WHERE tag is less than
+"beach," WHERE tag is
+
+00:13:03.380 --> 00:13:04.480
+greater than "beach"
+AND less than
+
+00:13:04.480 --> 00:13:07.020
+"coworkers," and
+WHERE tag is greater than
+
+00:13:07.020 --> 00:13:09.100
+"coworkers." Now,
+hopefully, you see a
+
+00:13:09.100 --> 00:13:11.500
+problem with this.
+
+00:13:11.500 --> 00:13:13.880
+This actually does not do
+what you think it does.
+
+00:13:13.880 --> 00:13:17.458
+It doesn't return photos that
+are not tagged with beach and
+
+00:13:17.458 --> 00:13:18.638
+are not tagged with coworkers.
+
+00:13:18.638 --> 00:13:22.400
+It returns -- these are
+multivalued properties, and if
+
+00:13:22.400 --> 00:13:25.620
+you look at this closely, it
+returns photos that have a tag
+
+00:13:25.620 --> 00:13:28.400
+other than coworkers or beach.
+
+00:13:28.400 --> 00:13:30.558
+So any other tag, and
+that result will be
+
+00:13:30.558 --> 00:13:31.818
+in your result set.
+
+00:13:32.040 --> 00:13:34.980
+This does the intuitive thing
+when it's the single-valued
+
+00:13:34.980 --> 00:13:36.598
+property, but when it's a
+multivalued property, it
+
+00:13:36.598 --> 00:13:40.240
+has an unintuitive result.
+
+00:13:40.240 --> 00:13:42.660
+So the Next Gen features.
+
+00:13:43.260 --> 00:13:44.700
+Was that clear?
+
+00:13:44.700 --> 00:13:45.320
+Is everybody caught up?
+
+00:13:45.320 --> 00:13:47.040
+OK, good.
+
+00:13:48.860 --> 00:13:53.400
+So the first thing I did,
+or we did, was add sort
+
+00:13:53.400 --> 00:13:54.460
+to Zigzag Merge Join.
+
+00:13:54.460 --> 00:13:56.180
+So right now, Zigzag Merge
+Join doesn't work when
+
+00:13:56.180 --> 00:13:57.320
+you have a sort order.
+
+00:13:58.580 --> 00:14:03.080
+Well, it's pretty simple to
+expand Merge Join from looking
+
+00:14:03.080 --> 00:14:05.418
+at just keys to looking
+at the entire postfix.
+
+00:14:05.740 --> 00:14:06.380
+And so we've done that.
+
+00:14:06.380 --> 00:14:09.100
+And so here's an example of the
+same query I showed you earlier
+
+00:14:09.100 --> 00:14:12.760
+that required the index
+on tag, tag and date.
+
+00:14:13.560 --> 00:14:15.260
+But now we can use
+Zigzag Merge Join.
+
+00:14:15.260 --> 00:14:22.180
+We do two scans or -- OK, we
+first -- or we created an
+
+00:14:22.180 --> 00:14:23.680
+index on tag and date.
+
+00:14:23.680 --> 00:14:25.780
+We do two scans instead of one.
+
+00:14:25.780 --> 00:14:27.960
+We divide it between the tag
+and date, as I previously
+
+00:14:27.960 --> 00:14:32.480
+showed you, and then we apply
+our prefix constraints.
+
+00:14:32.480 --> 00:14:34.200
+The first scan is for
+"family." The
+
+00:14:34.200 --> 00:14:36.558
+second scan is for
+"outside." We apply
+
+00:14:36.558 --> 00:14:40.540
+Zigzag Merge Join, which now
+can merge both the prefix or
+
+00:14:40.540 --> 00:14:44.620
+both the date and the key, so
+basically the entire postfix,
+
+00:14:44.620 --> 00:14:46.200
+and then we let that vary.
+
+00:14:46.200 --> 00:14:48.420
+We pull off the key.
+
+00:14:48.420 --> 00:14:52.618
+We get the photos in date
+descending and key ascending.
+
+00:14:52.618 --> 00:14:56.680
+Now this is an essential
+difference because tag, tag and
+
+00:14:56.680 --> 00:14:58.178
+date is an exploding index.
+
+00:14:58.178 --> 00:15:04.420
+Tag and date is not because tag
+is a multivalued property.
+
+00:15:04.420 --> 00:15:10.620
+Another thing we've added,
+will add -- sorry, it's not
+
+00:15:10.620 --> 00:15:14.560
+out yet -- is OR and NOT.
+
+00:15:14.720 --> 00:15:16.640
+So this is how AND works.
+
+00:15:17.140 --> 00:15:19.880
+The postfix must equal.
+
+00:15:19.880 --> 00:15:22.680
+And OR, for this Venn diagram,
+we want everything that's in
+
+00:15:22.680 --> 00:15:25.418
+both of these circles, so we
+just don't have a constraint.
+
+00:15:25.418 --> 00:15:27.440
+Everything that's in
+either scan matches.
+
+00:15:27.440 --> 00:15:30.600
+But Zigzag can also be very
+efficient here in which we
+
+00:15:30.600 --> 00:15:33.380
+never look at the
+same key twice.
+
+00:15:33.660 --> 00:15:36.400
+So it scales on the size of the
+blue region, not on the size
+
+00:15:36.400 --> 00:15:39.660
+of the individual circles.
+
+00:15:39.660 --> 00:15:41.820
+NOT, on the other hand, is
+a little more complicated.
+
+00:15:41.820 --> 00:15:44.940
+We say one scan's postfix
+does not equal a postfix
+
+00:15:44.940 --> 00:15:46.240
+of another scan's.
+
+00:15:46.240 --> 00:15:48.940
+This is equivalent
+to set subtraction.
+
+00:15:48.940 --> 00:15:51.640
+So if I want to do NOT just
+some subexpression, I would
+
+00:15:51.640 --> 00:15:55.640
+take everything NOT in
+that subexpression.
+
+00:15:55.640 --> 00:15:58.860
+Everything and NOT(a).
+
+00:15:58.860 --> 00:16:01.380
+Note, though, that is
+not converted into an
+
+00:16:01.380 --> 00:16:02.940
+inequality expression.
+
+00:16:03.420 --> 00:16:04.658
+It is not a greater
+than or a less than.
+
+00:16:04.658 --> 00:16:06.140
+This is still an inequality.
+
+00:16:06.440 --> 00:16:10.740
+So it can be put in the prefix,
+thus you can have a sort order
+
+00:16:10.740 --> 00:16:13.340
+while doing NOT in this case.
+
+00:16:13.900 --> 00:16:16.520
+And it returns intuitive
+results for multivalued
+
+00:16:16.520 --> 00:16:19.860
+properties, because this is now
+set subtraction so it will
+
+00:16:19.860 --> 00:16:20.880
+do exactly what you
+think it will do.
+
+00:16:21.320 --> 00:16:23.158
+If the photo is tagged with
+"coworker" and
+
+00:16:23.158 --> 00:16:26.540
+"outside," it won't
+show up in the result set even
+
+00:16:26.540 --> 00:16:29.740
+if it has another tag on it.
+
+00:16:29.740 --> 00:16:30.760
+So here's an example
+of actually how we
+
+00:16:30.760 --> 00:16:31.940
+do this efficiently.
+
+00:16:31.940 --> 00:16:36.100
+So a and NOT(b), if a is a
+result set that contains 2, 3
+
+00:16:36.100 --> 00:16:39.658
+and 5, and b is a result set
+that contains 1, 3 and 4, we
+
+00:16:39.658 --> 00:16:44.220
+expect the result to
+be a set of 2 and 5.
+
+00:16:44.220 --> 00:16:47.620
+So the algorithm pulls the
+first value off of a, which is
+
+00:16:47.620 --> 00:16:51.500
+2, looks for a value in b that
+is greater than our equal to 2,
+
+00:16:51.500 --> 00:16:56.080
+finds 3, so two matches because
+3 is greater than 2, pulls the
+
+00:16:56.080 --> 00:16:59.440
+next result off of a, finds 3.
+
+00:16:59.240 --> 00:17:05.560
+We already pulled 3 off of b so
+we know that 3 doesn't match.
+
+00:17:05.560 --> 00:17:08.618
+Then it pulls the next result
+off of a, which is 5.
+
+00:17:08.580 --> 00:17:10.618
+We look for a result in b that
+is greater than or equal to 5.
+
+00:17:11.440 --> 00:17:12.820
+We find none.
+
+00:17:12.820 --> 00:17:14.118
+Five matches.
+
+00:17:14.118 --> 00:17:16.298
+We pull the next result
+off of a, we find none.
+
+00:17:16.298 --> 00:17:17.278
+That's the end of
+our result set.
+
+00:17:18.398 --> 00:17:21.860
+So we've only looked at four
+out of the six keys to produce
+
+00:17:21.860 --> 00:17:24.560
+two results, but each one of
+these keys that we skipped over
+
+00:17:24.560 --> 00:17:28.638
+in b can be a large region
+of nonmatching results.
+
+00:17:28.638 --> 00:17:32.200
+So this does tend to scale in
+a size of the result set, and
+
+00:17:32.200 --> 00:17:35.380
+it becomes very efficient,
+especially when combined with
+
+00:17:35.380 --> 00:17:39.720
+many more merge constraints.
+
+00:17:39.720 --> 00:17:41.980
+So we can go crazy with this.
+
+00:17:41.800 --> 00:17:45.040
+You can even go -- this is
+very actually not that crazy,
+
+00:17:45.040 --> 00:17:47.380
+now that I look at it.
+
+00:17:47.380 --> 00:17:51.180
+So (a and b) OR c) AND NOT(d).
+
+00:17:51.180 --> 00:17:55.080
+This, when all combined
+together, runs the
+
+00:17:55.080 --> 00:17:55.720
+same algorithm.
+
+00:17:56.240 --> 00:18:00.380
+It's pushed through doing the
+same process at the same time
+
+00:18:00.380 --> 00:18:04.300
+so it does scale in the size of
+the blue area, not the area of
+
+00:18:04.300 --> 00:18:08.980
+any of the sub -- of the other
+combinations or of the result
+
+00:18:08.980 --> 00:18:10.120
+sets from any of those.
+
+00:18:10.120 --> 00:18:12.320
+So this does scale and you can
+get it as complicated as you
+
+00:18:12.320 --> 00:18:15.680
+want, and it will still tend to
+scale in the size
+
+00:18:15.680 --> 00:18:19.520
+of the blue area.
+
+00:18:19.680 --> 00:18:22.380
+So another thing that we're
+doing is we're adding
+
+00:18:22.380 --> 00:18:23.920
+OR to MulitQuery.
+
+00:18:24.220 --> 00:18:26.280
+So WHERE tag IN
+"family" or
+
+00:18:26.280 --> 00:18:28.300
+"friends" or
+"person" IN some list
+
+00:18:28.300 --> 00:18:33.180
+of people, ORDER BY date
+DESCENDING, we'll split out,
+
+00:18:33.180 --> 00:18:36.400
+and you can see it's actually
+almost a trivial change where
+
+00:18:36.400 --> 00:18:40.640
+we just split or we start
+saying person equals.
+
+00:18:40.640 --> 00:18:46.080
+As long as they're sorted by
+the same sort properties, the
+
+00:18:46.080 --> 00:18:51.380
+postfix is the same, thus we
+can order them properly when
+
+00:18:51.380 --> 00:18:55.700
+we merge them using
+the priority queue.
+
+00:18:55.700 --> 00:18:56.180
+Wow, that was awesome.
+
+00:18:59.660 --> 00:19:01.560
+So if you look at this, you
+notice that this actually has
+
+00:19:01.560 --> 00:19:03.860
+no false positive results.
+
+00:19:03.860 --> 00:19:06.760
+In fact, MultiQuery never has
+a false positive result.
+
+00:19:06.760 --> 00:19:09.640
+Every result that MultiQuery
+returns is a result.
+
+00:19:09.640 --> 00:19:11.940
+But it does have a lot of
+duplicates, or it could have a
+
+00:19:11.940 --> 00:19:13.900
+lot of duplicates, depending on
+the data, because each one of
+
+00:19:13.900 --> 00:19:17.320
+these subqueries could produce
+the exact same results, and we
+
+00:19:17.320 --> 00:19:20.080
+will have to de-dupe it for
+you so that you never see
+
+00:19:20.080 --> 00:19:21.580
+the same result twice.
+
+00:19:21.580 --> 00:19:25.400
+So the performance of this OR
+versus Zigzag, or MultiQuery
+
+00:19:25.400 --> 00:19:28.640
+versus Zigzag in general,
+depends a lot on the data
+
+00:19:28.640 --> 00:19:29.920
+because it's a trade-off
+between the duplicate
+
+00:19:29.920 --> 00:19:34.700
+values or the intermediate
+false positive results.
+
+00:19:34.700 --> 00:19:39.080
+Another thing that we've added
+or are going to add -- sorry --
+
+00:19:39.080 --> 00:19:43.580
+are going to add to MultiQuery
+is support for a
+
+00:19:43.580 --> 00:19:44.800
+domain-specific query such as
+Geo-Queries and Date
+
+00:19:44.800 --> 00:19:45.760
+Range queries.
+
+00:19:45.760 --> 00:19:49.818
+We do this by adding a query
+splitter that produces multiple
+
+00:19:49.818 --> 00:19:51.758
+parallel query components.
+
+00:19:51.420 --> 00:19:55.580
+And the splitting logic
+can be anything, right?
+
+00:19:55.580 --> 00:19:59.260
+So in the case of Geo and Date
+Range, this is done using
+
+00:19:59.260 --> 00:20:00.800
+a space-filling curve.
+
+00:20:00.800 --> 00:20:08.358
+So these queries are split out
+into regions to scan along this
+
+00:20:08.358 --> 00:20:11.720
+space-filling curve, and you
+can choose the number of
+
+00:20:11.720 --> 00:20:13.480
+regions you want to scan, which
+is the number of queries you
+
+00:20:13.480 --> 00:20:17.060
+want to run in parallel versus
+the accuracy of those regions.
+
+00:20:17.060 --> 00:20:20.060
+So there's a performance
+trade-off there, and when you
+
+00:20:20.060 --> 00:20:23.118
+choose something besides the
+most accurate, you get false
+
+00:20:23.118 --> 00:20:27.606
+positive results in this case,
+so you have to do some pruning.
+
+00:20:27.440 --> 00:20:29.960
+So we have entity filters.
+
+00:20:29.960 --> 00:20:31.380
+We always apply a de-duping
+filter because that's almost
+
+00:20:31.380 --> 00:20:35.000
+always needed or always needed
+with multiqueries and so
+
+00:20:35.000 --> 00:20:38.180
+there's a special filter for
+the Geo and Date Range Queries
+
+00:20:38.180 --> 00:20:40.760
+that prunes these
+fuzzy results.
+
+00:20:40.760 --> 00:20:43.234
+So you only see the ones that
+exactly match your query,
+
+00:20:43.234 --> 00:20:45.880
+but it's still done
+efficiently through the
+
+00:20:45.880 --> 00:20:49.180
+space-filling curve.
+
+00:20:49.180 --> 00:20:52.540
+So here's some examples of how
+the Next Gen queries improve
+
+00:20:52.540 --> 00:20:55.318
+your life as a developer.
+
+00:20:55.338 --> 00:20:59.098
+So SELECT FROM Photo WHERE tag
+equals "family" and
+
+00:20:59.098 --> 00:21:00.978
+tag equals "outside,"
+date DESCENDING.
+
+00:21:00.978 --> 00:21:01.478
+I use this a lot.
+
+00:21:01.478 --> 00:21:04.358
+This just means find recent
+photos of my family
+
+00:21:04.358 --> 00:21:05.840
+taken outside.
+
+00:21:06.120 --> 00:21:10.980
+So for the current gen, it's an
+index on tag, tag and date,
+
+00:21:10.980 --> 00:21:13.800
+which is exploding and doesn't
+scale when you have
+
+00:21:13.800 --> 00:21:14.440
+a lot of tags.
+
+00:21:15.820 --> 00:21:23.300
+There's a 5,000 index row limit
+on the datastore, and your
+
+00:21:23.300 --> 00:21:28.840
+users might not put in, you
+know, 5,000 square-rooted, but,
+
+00:21:28.840 --> 00:21:29.920
+you know, I wouldn't
+trust that.
+
+00:21:29.920 --> 00:21:32.300
+You know, users do crazy things
+sometimes, and maybe there's
+
+00:21:32.300 --> 00:21:34.800
+enough stuff to tag
+in their photos.
+
+00:21:35.760 --> 00:21:37.620
+So this is dangerous.
+
+00:21:37.620 --> 00:21:38.860
+This is a dangerous
+index to do.
+
+00:21:38.860 --> 00:21:42.220
+You might have errors that
+don't show up in testing, that
+
+00:21:42.220 --> 00:21:45.880
+don't show up when you're
+exploring the possibilities
+
+00:21:45.880 --> 00:21:47.860
+of using the datastore.
+
+00:21:47.860 --> 00:21:50.060
+But on the Next Gen, you only
+require the index on tag and
+
+00:21:50.060 --> 00:21:57.140
+date so it does not
+explode anymore.
+
+00:21:57.140 --> 00:22:02.380
+This query SELECT photos WHERE
+tag IN "family" or
+
+00:22:02.380 --> 00:22:04.400
+"friends" and tag
+equals "outside,"
+
+00:22:04.400 --> 00:22:08.860
+and tag does not equal
+"beach." "Find
+
+00:22:08.860 --> 00:22:10.686
+all photos of my friends and
+family taken outside but not on
+
+00:22:10.686 --> 00:22:13.140
+the beach." I didn't
+specify a sort order because I
+
+00:22:13.140 --> 00:22:15.880
+wanted to compare this to the
+current generation, and in the
+
+00:22:15.880 --> 00:22:18.720
+current generation, you
+couldn't do this query if you
+
+00:22:18.720 --> 00:22:21.100
+had a sort order because the
+inequality expression of the
+
+00:22:21.100 --> 00:22:25.920
+NOT EQUAL turns into inequality
+filters, which require that
+
+00:22:25.920 --> 00:22:29.540
+it's sorted on tag, plus you
+get unintuitive results because
+
+00:22:29.540 --> 00:22:31.700
+tag is a multivalued property.
+
+00:22:31.700 --> 00:22:34.880
+But in the Next Gen, it
+requires no additional indexes.
+
+00:22:34.058 --> 00:22:38.240
+You can run this all only on
+the built-in indexes, and you
+
+00:22:38.240 --> 00:22:42.860
+get the intuitive results.
+
+00:22:42.860 --> 00:22:47.260
+If I add the filter and convert
+this to use OR instead of IN
+
+00:22:47.260 --> 00:22:50.618
+and subexpressions, so NOT
+instead of NOT EQUALS,
+
+00:22:50.618 --> 00:22:52.520
+NOT and then the term.
+
+00:22:55.820 --> 00:22:57.500
+So, as I said, this is not
+possible in the current
+
+00:22:57.500 --> 00:23:00.000
+generation, but if you were to
+do this in Next Gen, it only
+
+00:23:00.000 --> 00:23:02.660
+requires that index on
+tag and date still.
+
+00:23:02.660 --> 00:23:07.400
+And this is -- one of the many
+features that I think is
+
+00:23:07.400 --> 00:23:09.280
+incredibly useful because if
+you have an index on tag and
+
+00:23:09.280 --> 00:23:13.640
+date, you can have any number
+of tag equality filters in your
+
+00:23:13.640 --> 00:23:17.280
+query in any combination of OR
+and AND, AND NOT, and it
+
+00:23:17.280 --> 00:23:19.258
+will still be able to
+satisfy that query.
+
+00:23:19.258 --> 00:23:23.840
+So if you have a search box and
+someone's typing in what tags
+
+00:23:23.840 --> 00:23:25.540
+they want to find, I wanna see
+these tags, and not those tags,
+
+00:23:25.540 --> 00:23:29.640
+a user is, before you'd be
+restricted on what queries
+471
+00:23:29,64 --&gt; 00:23:29,28
+you have access to.
+
+00:23:29.280 --> 00:23:32.100
+If you had a query on tag, tag,
+tag and date, you could do
+
+00:23:32.100 --> 00:23:34.760
+three, but you couldn't do two.
+
+00:23:34.760 --> 00:23:36.160
+You'd need an index
+on tag and date.
+
+00:23:38.240 --> 00:23:39.760
+And then if you had that one,
+it wouldn't support four.
+
+00:23:39.760 --> 00:23:43.760
+So the only way to dynamically
+allow a search box where a user
+
+00:23:43.760 --> 00:23:46.920
+could enter this and it would
+be converted efficiently into a
+
+00:23:46.920 --> 00:23:52.520
+query is to use the Zigzag
+Merge Join, which currently
+
+00:23:52.520 --> 00:23:53.460
+doesn't allow you to sort.
+
+00:23:53.460 --> 00:23:58.460
+And now that it does, we
+can solve it efficiently.
+
+00:23:58.460 --> 00:24:01.818
+So we're gonna go really crazy.
+
+00:24:01.818 --> 00:24:03.680
+Tag IN "family" and
+"friends," or people
+
+00:24:03.680 --> 00:24:07.320
+IN some list of people that are
+your family and friends AND tag
+
+00:24:07.320 --> 00:24:09.180
+equals "outside" AND
+NOT tag equals
+
+00:24:09.180 --> 00:24:13.560
+"beach" OR location
+IN the coastal region, ORDER BY
+
+00:24:13.560 --> 00:24:13.680
+date DESCENDING.
+
+00:24:14.100 --> 00:24:20.440
+I do not recommend you run this
+query, but you could do it.
+
+00:24:20.440 --> 00:24:22.700
+This is the exact same meaning
+of the previous query, but it
+
+00:24:22.700 --> 00:24:25.880
+does not rely on proper tagging
+because you have facial
+
+00:24:25.880 --> 00:24:28.720
+recognition for people who are
+in your the friends and family
+
+00:24:28.720 --> 00:24:31.220
+contact lists, and you have a
+region that you think is near
+
+00:24:31.220 --> 00:24:36.240
+the beach, thus I assume those
+tags are equal, although I
+
+00:24:36.240 --> 00:24:37.998
+wouldn't trust that either.
+
+00:24:37.998 --> 00:24:42.000
+But notice, though, that the
+NOT is applied to an entire
+
+00:24:42.000 --> 00:24:46.220
+subexpression, so this is
+literally how you can work with
+
+00:24:46.220 --> 00:24:49.740
+the new Zigzag framework, is it
+can be applied to any
+
+00:24:49.740 --> 00:24:52.060
+subexpression, and it
+will do it efficiently.
+
+00:24:52.060 --> 00:24:56.320
+This does require clever use of
+Geo encoding that I plan to
+
+00:24:56.320 --> 00:24:59.920
+support, or we plan to support.
+
+00:24:59.920 --> 00:25:06.400
+The team's not very big.
+
+00:25:07.740 --> 00:25:12.880
+So normally, a location would
+be a location query, or a
+
+00:25:12.880 --> 00:25:19.280
+geospatial query would be an
+inequality filter on the
+
+00:25:19.280 --> 00:25:22.040
+space-filling curve, but you
+can, if you encode it correctly
+
+00:25:22.040 --> 00:25:24.526
+and are clever about it, make
+it an inequality expression so
+
+00:25:24.526 --> 00:25:27.360
+you can actually have that
+sort, which allows you to
+
+00:25:27.360 --> 00:25:29.700
+prioritize, like if you have a
+map, you could prioritize what
+
+00:25:29.700 --> 00:25:36.420
+you see in that map using
+this technique as well.
+
+00:25:36.420 --> 00:25:38.000
+So in the current generation,
+it's definitely not possible.
+
+00:25:38.000 --> 00:25:40.566
+In the next generation, you can
+deal with an index on tag and
+
+00:25:40.566 --> 00:25:42.920
+date, tag and people,
+geolocation and date, and
+
+00:25:42.920 --> 00:25:43.960
+that's all you need.
+
+00:25:43.960 --> 00:25:48.140
+And those, if you look at them,
+can service as a whole slew of
+
+00:25:48.140 --> 00:25:51.920
+queries, whereas before, when
+you were specifying a composite
+
+00:25:51.920 --> 00:25:54.098
+index, there are very few that
+you could actually service
+
+00:25:54.098 --> 00:25:58.670
+with these queries, or with
+these composite indexes.
+
+00:25:59.680 --> 00:26:00.700
+So when do we use what?
+
+00:26:00.700 --> 00:26:04.220
+When do we decide to use the
+MultiQuery OR, or the Zigzag
+
+00:26:04.220 --> 00:26:07.440
+OR, or these all seem to
+support similar features?
+
+00:26:08.500 --> 00:26:11.420
+Well it, all depends on
+what composite indexes
+
+00:26:11.420 --> 00:26:13.520
+are given to us, but we
+do have a preference.
+
+00:26:14.420 --> 00:26:20.820
+So Zigzag pretends to produce
+results that scale on the size
+
+00:26:20.820 --> 00:26:24.980
+of the result set, but can in
+pathological cases, scale only
+
+00:26:24.980 --> 00:26:30.640
+in a size of the largest
+subscan, while MultiQuery
+
+00:26:30.640 --> 00:26:33.960
+produces duplicate correct
+results but is guaranteed to
+
+00:26:33.960 --> 00:26:35.298
+scale on the side of the result
+set because there are no
+
+00:26:35.298 --> 00:26:36.338
+false positive results.
+
+00:26:36.338 --> 00:26:38.430
+Every result you pop off
+is a result that is
+
+00:26:38.430 --> 00:26:39.380
+in the result set.
+
+00:26:39.778 --> 00:26:44.380
+Although there are duplicates,
+but we do have a limit, which
+
+00:26:44.380 --> 00:26:46.880
+makes that a constant value,
+the number of duplicates you
+
+00:26:46.880 --> 00:26:50.810
+can see, which is kind of
+cheating and bad, but it
+
+00:26:50.810 --> 00:26:51.680
+doesn't scale very well.
+
+00:26:51.680 --> 00:26:54.520
+So in those cases, we're
+going to use Zigzag anyway.
+
+00:26:54.520 --> 00:26:56.220
+So the actual performance does
+depend on the shape of your
+
+00:26:56.220 --> 00:27:01.400
+data, but when possible, we
+will always prefer to run a
+
+00:27:01.400 --> 00:27:04.680
+full-fledged query, or a
+MultiQuery, when we have the
+
+00:27:04.680 --> 00:27:09.400
+composite indexes there, but
+there are many cases in which
+
+00:27:09.400 --> 00:27:11.720
+this just does not work.
+
+00:27:11.660 --> 00:27:13.600
+So if we look at the
+capabilities of these two
+
+00:27:13.600 --> 00:27:17.040
+methods, Zigzag, if you ever
+talk to me afterwards, is the
+
+00:27:17.040 --> 00:27:18.858
+answer to everything.
+
+00:27:19.480 --> 00:27:22.560
+It does a lot of stuff, and
+it is very, very flexible,
+
+00:27:22.560 --> 00:27:25.940
+especially in this case,
+whereas MultiQuery has
+
+00:27:25.940 --> 00:27:27.640
+that unintuitive NOT.
+
+00:27:27.540 --> 00:27:30.300
+It can only do that on
+a single property.
+
+00:27:30.300 --> 00:27:32.760
+It has a limited number of
+filters when you do AND because
+
+00:27:32.760 --> 00:27:35.038
+you have that composite index
+for each number of
+
+00:27:35.038 --> 00:27:36.500
+those AND filters.
+
+00:27:38.200 --> 00:27:39.980
+It restricts the number of
+queries you can run in parallel
+
+00:27:39.980 --> 00:27:42.098
+so that OR is a little
+restrictive, but it's the only
+
+00:27:42.098 --> 00:27:45.060
+thing that you can really do to
+the main specific queries.
+
+00:27:45.380 --> 00:27:51.798
+So we'll continue -- so we pick
+what to use on what is given to
+
+00:27:51.798 --> 00:27:57.520
+us and what are the constraints
+for each of these methods.
+
+00:27:57.520 --> 00:28:01.520
+So specifically here, almost
+every query can be converted
+
+00:28:01.520 --> 00:28:04.720
+into a MultiQuery that will
+potentially run faster
+
+00:28:04.720 --> 00:28:07.560
+than the Zigzag except
+when we have the NOT.
+
+00:28:07.160 --> 00:28:11.198
+It's a dividing line where if
+you want the intuitive NOT or
+
+00:28:11.198 --> 00:28:14.480
+you want the NOT on multiple
+properties, it'll have to at
+
+00:28:14.480 --> 00:28:19.740
+some point do the Zigzag
+between multiple indexes.
+
+00:28:19.740 --> 00:28:22.000
+So let's look at how an actual
+query will be planned.
+
+00:28:22.000 --> 00:28:25.020
+So if we have only the built-in
+indexes, if we're going to run
+
+00:28:25.020 --> 00:28:29.584
+this query, it will have to be
+done using Zigzag Merge Join.
+
+00:28:29.584 --> 00:28:36.306
+So we convert this into an AND
+operation, we split out the IN
+
+00:28:36.306 --> 00:28:41.500
+to an OR, we pull out the NOT,
+pull out that OR, combine them
+
+00:28:41.500 --> 00:28:46.980
+all together, and this is
+actually the class hierarchy
+
+00:28:46.980 --> 00:28:52.940
+that we use, and this runs
+as a single Zigzag run.
+
+00:28:52.940 --> 00:28:54.040
+But if you look at this,
+we're actually running
+
+00:28:54.040 --> 00:28:55.680
+a lot of subscans.
+
+00:28:55.680 --> 00:28:57.920
+So in this case, we're running
+five subscans, and each one of
+
+00:28:57.920 --> 00:28:59.340
+these are very broad, right?
+
+00:28:59.340 --> 00:29:02.500
+So there's a lot of potential
+for false-positive
+
+00:29:02.500 --> 00:29:03.338
+results in these.
+
+00:29:03.338 --> 00:29:09.046
+So this may not be efficient if
+you have a pathological case, a
+
+00:29:09.046 --> 00:29:10.540
+specific query, a specific
+user-data combination.
+
+00:29:10.540 --> 00:29:13.160
+So you might want to optimize
+this, depending on what kind
+
+00:29:13.160 --> 00:29:15.860
+of restrictions you want
+to place on your users.
+
+00:29:16.100 --> 00:29:18.680
+So if we add the index, which
+is exploding, but if we wanted
+
+00:29:18.680 --> 00:29:22.980
+to restrict the users to be
+5,000 square-rooted, a number
+
+00:29:22.980 --> 00:29:28.600
+of tags, we can do this with
+Multiquery, and in this case,
+
+00:29:28.600 --> 00:29:31.900
+we'll split out that IN into
+two different parallel query
+
+00:29:31.900 --> 00:29:32.840
+components, tag equals
+"family" or tag
+
+00:29:32.840 --> 00:29:34.606
+equals "friends."
+Those are run in
+
+00:29:34.606 --> 00:29:35.838
+separate queries.
+
+00:29:35.838 --> 00:29:39.618
+We split out the NOT into their
+own separate query components,
+
+00:29:39.618 --> 00:29:40.338
+and then we run this.
+
+00:29:40.338 --> 00:29:43.880
+We'll run these queries, and
+you can see that we're running
+
+00:29:43.880 --> 00:29:44.580
+more queries in this case.
+
+00:29:44.580 --> 00:29:48.380
+There's six of them, but
+they're very specific.
+
+00:29:48.380 --> 00:29:52.838
+They only hit the positive
+results so they will
+
+00:29:52.838 --> 00:29:56.860
+tend to be a lot faster.
+
+00:29:56.860 --> 00:29:59.560
+Happily, there's
+middle ground now.
+
+00:29:59.560 --> 00:30:02.740
+Before there was no middle
+ground, and we're gonna
+
+00:30:02.740 --> 00:30:03.880
+provide a middle ground.
+
+00:30:03.880 --> 00:30:08.120
+So in this case, you can just
+add an index on tag and tag,
+
+00:30:08.120 --> 00:30:12.200
+and if we see this, Zigzag will
+actually combine the OR and
+
+00:30:12.200 --> 00:30:14.520
+that one tag equals
+"outside" into a
+
+00:30:14.520 --> 00:30:15.650
+single OR constraint.
+
+00:30:20.920 --> 00:30:22.520
+So we're only running four
+queries now and two of them
+
+00:30:22.520 --> 00:30:25.460
+are much more specific.
+
+00:30:25.880 --> 00:30:27.480
+They scan a much smaller
+region, have a lot
+
+00:30:27.480 --> 00:30:31.640
+smaller potential for
+false-positive results.
+
+00:30:31.640 --> 00:30:34.500
+So this allows you to control
+the space versus time or
+
+00:30:34.500 --> 00:30:36.560
+write versus read latency.
+
+00:30:36.560 --> 00:30:39.800
+By the selection of these
+indexes, you can choose where
+
+00:30:39.800 --> 00:30:42.860
+to optimize your queries.
+
+00:30:42.860 --> 00:30:47.058
+So say we have these two
+queries, and if we had no
+
+00:30:47.058 --> 00:30:50.340
+composite indexes, they would
+be running on three different
+
+00:30:50.340 --> 00:30:55.080
+scans for each of these and
+doing Zigzag to merge them, and
+
+00:30:55.080 --> 00:30:58.358
+your only choice today is to
+add these indexes
+
+00:30:58.358 --> 00:31:00.218
+to speed them up.
+
+00:31:00.280 --> 00:31:04.780
+Every time you add an index,
+you increase the space that
+
+00:31:04.780 --> 00:31:07.520
+you're taking up with these
+indexes, you're reducing the
+
+00:31:07.520 --> 00:31:10.160
+time it takes to run these
+queries, but you're also
+
+00:31:10.160 --> 00:31:14.340
+increasing the cost of the
+write because each index
+
+00:31:14.340 --> 00:31:18.318
+requires you to put in an index
+row, and when you do that it,
+
+00:31:18.318 --> 00:31:21.660
+takes up you CPU quota for your
+API stuff, and that's very
+
+00:31:21.660 --> 00:31:29.700
+precious in App Engine, but you
+are reducing your read time.
+
+00:31:29.700 --> 00:31:31.640
+So already available,
+you can add this add
+
+00:31:31.640 --> 00:31:32.580
+this index instead.
+
+00:31:32.580 --> 00:31:37.060
+So this is the parts that were
+common to both of those queries
+
+00:31:37.060 --> 00:31:40.060
+before so they will run
+on these indexes instead.
+
+00:31:40.060 --> 00:31:43.480
+So today, if you added
+the common index, Zigzag
+
+00:31:43.480 --> 00:31:46.200
+is smart enough to use
+that composite index.
+
+00:31:47.320 --> 00:31:51.880
+And so you really have the
+tools to tweak your indexes and
+
+00:31:51.880 --> 00:31:54.520
+really make them work for you
+which, if you can do and
+
+00:31:54.520 --> 00:31:56.660
+successfully, will probably
+make you very valuable
+
+00:31:56.660 --> 00:32:01.420
+to your company.
+
+00:32:01.420 --> 00:32:05.618
+So some corollaries to this
+work, just some side notes.
+
+00:32:05.618 --> 00:32:08.780
+So I don't know if any of you
+have seen the SearchableModel
+
+00:32:08.780 --> 00:32:15.460
+class that Ryan wrote, but it
+was pretty useful unless you
+
+00:32:15.460 --> 00:32:18.500
+wanted to sort, and datastore
+is meant to scale.
+
+00:32:18.500 --> 00:32:22.598
+It's meant to have really large
+data sets, and those aren't
+
+00:32:22.598 --> 00:32:24.740
+actually very useful unless
+you can sort, unless you can
+
+00:32:24.740 --> 00:32:29.500
+pull out the most important
+results from all the noise.
+
+00:32:29.500 --> 00:32:33.040
+So now SearchableModel becomes
+useful because you can actually
+
+00:32:33.040 --> 00:32:37.460
+sort, and you can have a user
+enter a string that has any
+
+00:32:37.460 --> 00:32:40.420
+length, and you can service
+that query, and it might take
+
+00:32:40.420 --> 00:32:44.200
+longer to enter like 25 words,
+but it will still complete.
+
+00:32:45.358 --> 00:32:47.960
+You won't get an
+index-not-found error or
+
+00:32:47.960 --> 00:32:51.620
+a need-an-index error,
+and it will run.
+
+00:32:51.680 --> 00:32:55.380
+Another thing you can notice is
+that multivalued properties
+
+00:32:55.380 --> 00:32:57.200
+don't really sort well,
+like it's not very
+
+00:32:57.200 --> 00:32:57.220
+intuitive to sort.
+
+00:32:57.220 --> 00:33:02.240
+There's almost never a reason
+to put them in a sort order.
+
+00:33:02.240 --> 00:33:05.680
+So given that and given the
+fact that you can Zigzag
+
+00:33:05.680 --> 00:33:09.660
+everything, that you only
+require one property at most in
+
+00:33:09.660 --> 00:33:12.260
+any prefix, although it is
+recommended that you put more
+
+00:33:12.260 --> 00:33:16.058
+than those to optimize for
+specific queries, that
+
+00:33:16.058 --> 00:33:17.940
+means there are no more
+exploding indexes.
+
+00:33:17.660 --> 00:33:20.980
+There's no need to have a
+multivalued property repeated
+
+00:33:20.980 --> 00:33:24.278
+more than once in an exploding
+index or in an index so
+
+00:33:24.278 --> 00:33:29.000
+thus it will not explode.
+
+00:33:29.000 --> 00:33:34.080
+And so another thing, if you've
+been paying attention and I
+
+00:33:34.080 --> 00:33:40.280
+didn't go too fast, and you
+like my pretty slides that are
+
+00:33:40.280 --> 00:33:44.200
+animated, you'll notice that
+the only thing that's different
+
+00:33:44.200 --> 00:33:48.660
+for each of these results that
+was pushed to the users as a
+
+00:33:48.660 --> 00:33:49.980
+result set was the postfix.
+
+00:33:50.318 --> 00:33:52.578
+The prefix stayed constant.
+
+00:33:52.578 --> 00:33:54.358
+And right now for cursors, what
+we're actually returning in the
+
+00:33:54.358 --> 00:33:58.940
+cursor is the index row so we
+know where to start the scan
+
+00:33:58.940 --> 00:34:01.560
+the next time you resume.
+
+00:34:01.560 --> 00:34:03.760
+So we can look at this, and
+we can say we only need to
+
+00:34:03.760 --> 00:34:06.480
+store the postfix so we can
+make these much smaller.
+
+00:34:06.480 --> 00:34:11.138
+If you think about it for
+MultiQuery, the postfixes all
+
+00:34:11.138 --> 00:34:13.998
+have to be the same because
+that determines the ordering,
+
+00:34:13.998 --> 00:34:16.970
+and all the subqueries have to
+use the same ordering to be
+
+00:34:16.970 --> 00:34:18.998
+able to merge efficiently.
+
+00:34:18.998 --> 00:34:21.338
+So these cursors can work for
+multiqueries as well, although
+
+00:34:21.338 --> 00:34:24.298
+you will face de-duping issues
+across multiple requests
+
+00:34:24.298 --> 00:34:25.754
+if you do this.
+
+00:34:26.742 --> 00:34:29.738
+But another thing we can do
+is that the only difference
+
+00:34:29.738 --> 00:34:32.318
+between a date descending index
+and a date ascending index is
+
+00:34:32.318 --> 00:34:35.438
+how the index data is encoded.
+
+00:34:35.438 --> 00:34:38.278
+So we can store raw properties
+in cursors instead of the
+
+00:34:38.278 --> 00:34:42.718
+encoded values, and that means
+that you can run a cursor on an
+
+00:34:42.718 --> 00:34:47.540
+index that has the ordering
+reversed, thus allowing you to
+
+00:34:47.540 --> 00:34:53.318
+scroll backwards and forwards
+in a given result set.
+
+00:34:53.318 --> 00:34:55.018
+However, this does have
+a little catch, got-ya.
+
+00:34:59.198 --> 00:35:03.840
+Since the final ordering of
+every query is key ascending,
+
+00:35:03.840 --> 00:35:06.138
+you have to explicitly put in
+a key descending ordering.
+
+00:35:06.898 --> 00:35:09.838
+Otherwise, it won't
+work properly.
+
+00:35:09.838 --> 00:35:13.478
+But this does allow you to
+page endlessly forwards
+
+00:35:13.478 --> 00:35:18.078
+and backwards in the
+same result set.
+
+00:35:18.078 --> 00:35:30.818
+So that's it.
+
+00:35:30.818 --> 00:35:33.298
+Wow, that was way under time.
+
+00:35:33.298 --> 00:35:37.938
+I was supposed to talks slow,
+and I hope it did, But you guys
+
+00:35:37.938 --> 00:35:39.718
+seem pretty free up there.
+
+00:35:39.718 --> 00:35:47.098
+I asked a couple of times.
+
+00:35:47.098 --> 00:35:48.158
+Oh yeah, I'm unplugged.
+
+00:35:48.558 --> 00:36:22.898
+That's right.
+693
+00:36:22,898 --&gt; 00:36:22,438
+[LAUGHTER]
+
+00:36:22.438 --> 00:36:23.760
+ALFRED FULLER: I think
+my wife picked it out.
+
+00:36:23.760 --> 00:36:26.260
+She didn't really
+like the ones I had.
+
+00:36:26.260 --> 00:36:28.078
+Apparently, she likes
+to dress up her family
+
+00:36:28.078 --> 00:36:37.538
+members, including the pug.
+
+00:36:37.538 --> 00:36:42.720
+So I have mainly been working
+on reliability issues right
+
+00:36:42.720 --> 00:36:45.400
+now, and I really want to
+get these out for you.
+
+00:36:45.400 --> 00:36:50.678
+All the infrastructure is there
+so if you were -- if I really
+
+00:36:50.678 --> 00:36:52.718
+wanted to run these queries
+right now, I could, but
+
+00:36:52.718 --> 00:36:55.398
+exposing them to you and
+building all the pipeline that
+
+00:36:55.398 --> 00:36:58.138
+needs to take it from the APIs,
+all the way through to the
+
+00:36:58.138 --> 00:37:02.798
+back-end datastore, it's
+actually a fair amount of work,
+
+00:37:02.798 --> 00:37:05.618
+and I'll get to it
+as soon as I can.
+
+00:37:05.618 --> 00:37:12.978
+I really want to do this
+because -- it's a small team.
+
+00:37:13.020 --> 00:37:20.698
+But the Zigzag operating on
+every query so you can use
+
+00:37:20.698 --> 00:37:23.680
+SearchableModel will be
+out really, really soon.
+
+00:37:23.680 --> 00:37:28.738
+So that part will be there, but
+improving -- like there are
+
+00:37:28.738 --> 00:37:31.138
+many ways to enter the query so
+GQL won't be that hard to
+
+00:37:31.138 --> 00:37:34.778
+upgrade, but the programmatic
+interface for Python and stuff
+
+00:37:34.778 --> 00:37:37.078
+will have to be completely
+changed to support other
+
+00:37:37.078 --> 00:37:43.938
+things, you know, besides AND,
+so that'll take a little work.
+
+00:37:43.938 --> 00:37:48.658
+But I really want to
+get it you guys.
+
+00:37:48.658 --> 00:37:54.618
+So the query splitter and the
+entity filters, they're in the
+
+00:37:54.618 --> 00:37:58.158
+Java SDK right now, and we're
+going to put them in the Python
+
+00:37:58.158 --> 00:38:02.838
+one and we want to finalize the
+API there, and I want to expose
+
+00:38:02.838 --> 00:38:09.278
+those to users so you can have
+your queries work as if
+
+00:38:09.278 --> 00:38:10.658
+they were our queries.
+
+00:38:10.658 --> 00:38:14.624
+So the prototype I have right
+now for the GeoQueries, let's
+
+00:38:14.624 --> 00:38:16.578
+just say, point in region.
+
+00:38:16.578 --> 00:38:20.498
+Like you literally can say
+that, and exposing these will
+
+00:38:20.498 --> 00:38:23.858
+let you do the exact same thing
+for your to domain-specific
+
+00:38:23.858 --> 00:38:27.440
+queries so that you can have
+like an SQL-like statement that
+
+00:38:27.440 --> 00:38:30.178
+will just work, and they'll
+have them, so I definitely
+
+00:38:30.178 --> 00:38:31.320
+do want to expose those.
+
+00:38:31.320 --> 00:38:33.518
+They aren't right now because
+we haven't finalized the API.
+
+00:38:33.518 --> 00:38:35.300
+Do you have a question?
+
+00:38:35.300 --> 00:38:37.768
+AUDIENCE: Yeah, so I was just
+wondering, so like on the Dev
+
+00:38:37.768 --> 00:38:41.300
+App server, it recommends
+indexes to create based
+
+00:38:41.300 --> 00:38:42.300
+on your run time.
+
+00:38:42.300 --> 00:38:45.820
+Is that now going to change
+because certain indexes aren't
+
+00:38:45.820 --> 00:38:46.518
+going to be needed for--
+
+00:38:46.518 --> 00:38:47.118
+ALFRED FULLER: Yes.
+
+00:38:47.118 --> 00:38:48.238
+AUDIENCE: --some of the queries
+that the Dev App server's
+
+00:38:48.238 --> 00:38:48.980
+going to generate?
+
+00:38:48.980 --> 00:38:49.440
+ALFRED FULLER: Yes,
+it will change.
+
+00:38:49.440 --> 00:38:52.098
+AUDIENCE: And also do we need
+to delete manually some of
+
+00:38:52.098 --> 00:38:55.938
+our composite indexes that
+were previously created?
+740
+00:38:55,938 --&gt; 00:38:55,8
+ALFRED FULLER: Yes.
+
+00:38:55.800 --> 00:38:59.880
+So it will require refactoring
+of your indexes and the Dev App
+
+00:38:59.880 --> 00:39:01.480
+server will recommend
+different indexes.
+
+00:39:02.380 --> 00:39:05.660
+Notably what it will do is it
+will never recommended an index
+
+00:39:05.660 --> 00:39:08.278
+with a repeated property in it.
+
+00:39:08.238 --> 00:39:11.998
+So if you have the same
+property repeated twice in the
+
+00:39:11.998 --> 00:39:13.648
+index, we just won't recommend
+that, but other than that, it
+
+00:39:13.648 --> 00:39:17.378
+will always recommend the
+fastest index, which is the
+
+00:39:17.378 --> 00:39:18.758
+very explicit one, right?
+
+00:39:20.800 --> 00:39:24.658
+But it does -- we'll have to
+make it so that it sees the
+
+00:39:24.658 --> 00:39:26.238
+indexes you already have
+and doesn't recommend it
+
+00:39:26.238 --> 00:39:33.860
+when you don't need it.
+
+00:39:33.860 --> 00:39:36.820
+AUDIENCE: Yes, now that
+SearchableModel class is more
+
+00:39:36.820 --> 00:39:39.260
+usable, are we able to
+essentially do what
+
+00:39:39.260 --> 00:39:43.958
+are LIKE queries?
+
+00:39:43.958 --> 00:39:47.198
+ALFRED FULLER: There's a large
+domain of full-text search
+
+00:39:47.198 --> 00:39:50.300
+queries that you can use with
+it, but it's not going
+
+00:39:50.300 --> 00:39:51.278
+to be like queries.
+
+00:39:52.718 --> 00:39:54.018
+And it's pretty limited.
+
+00:39:54.018 --> 00:39:56.098
+We are definitely working
+on a better solution
+
+00:39:56.098 --> 00:39:59.058
+for full-text search.
+
+00:39:59.058 --> 00:40:04.480
+We really want to get that out
+to you guys, but for right now,
+
+00:40:04.480 --> 00:40:08.420
+searchable models like the only
+-- I'm not saying you should
+
+00:40:08.420 --> 00:40:11.378
+use it for sure, but you can
+customize and do a similar
+
+00:40:11.378 --> 00:40:17.558
+model for your type of data
+that meets your specific needs.
+
+00:40:17.558 --> 00:40:21.718
+But no, LIKE is not really
+working right now.
+
+00:40:21.718 --> 00:40:26.948
+So there is a place for sequel
+for sure, and it's just to get
+
+00:40:26.948 --> 00:40:29.298
+it to this scale and make it
+scale automatically, there are
+
+00:40:29.298 --> 00:40:31.018
+still those restrictions.
+
+00:40:31.018 --> 00:40:33.038
+AUDIENCE: Did you say
+in cursors that we
+
+00:40:33.038 --> 00:40:34.518
+can now go backwards?
+
+00:40:34.518 --> 00:40:36.678
+Is that what you were saying?
+
+00:40:36.678 --> 00:40:38.578
+Like the current cursors?
+773
+00:40:38,578 --&gt; 00:40:38,018
+ALFRED FULLER: Yes.
+
+00:40:38.018 --> 00:40:40.898
+The current cursors right now
+can only go forward, which
+
+00:40:40.898 --> 00:40:44.618
+means they're very useful when
+you're chaining task view tasks
+
+00:40:44.618 --> 00:40:47.318
+and stuff like that, but if
+you're paging through results,
+
+00:40:47.318 --> 00:40:50.198
+it becomes very much less
+useful, and I always wanted
+
+00:40:50.198 --> 00:40:52.278
+them to be able page both
+forwards and backwards
+
+00:40:52.278 --> 00:40:52.498
+in a result set.
+
+00:40:53.578 --> 00:40:57.338
+And to do that, it does require
+that you have an index that is
+
+00:40:57.338 --> 00:41:00.638
+basically the reverse of
+whatever index you're going
+
+00:41:00.638 --> 00:41:05.078
+over, but if we encode the raw
+values, we can actually find a
+
+00:41:05.078 --> 00:41:09.780
+spot for that spot in the other
+index in the reverse index, and
+
+00:41:09.780 --> 00:41:11.660
+thus you can scroll forward in
+that index, which is
+
+00:41:11.660 --> 00:41:13.280
+essentially backwards
+in the other one.
+
+00:41:13.280 --> 00:41:16.238
+We can also do things like
+here's an entity, tell me where
+
+00:41:16.238 --> 00:41:19.260
+it is in this index, or just
+start on this entity, and we
+
+00:41:19.260 --> 00:41:22.278
+can actually convert that
+entity into a cursor, and
+
+00:41:22.278 --> 00:41:24.420
+so you can do things
+like that as well.
+
+00:41:24.420 --> 00:41:25.380
+AUDIENCE: That's for
+the future, right?
+
+00:41:25.380 --> 00:41:27.124
+Is that for Python and Java?
+
+00:41:27.238 --> 00:41:28.698
+ALFRED FULLER: Yeah.
+
+00:41:31.178 --> 00:41:35.658
+So that's actually on a lower
+level than the APIs, so if I
+
+00:41:35.658 --> 00:41:41.978
+write it for one,
+it's for both.
+
+00:41:41.978 --> 00:41:43.778
+AUDIENCE: Yeah, you mentioned
+point-in-region queries?
+
+00:41:43.778 --> 00:41:43.858
+Geospatial queries?
+
+00:41:43.858 --> 00:41:45.178
+ALFRED FULLER: Yes.
+
+00:41:45.178 --> 00:41:45.980
+AUDIENCE: That sounds cool.
+
+00:41:45.980 --> 00:41:48.760
+Is the region like a bounding
+box, or is it like a polygon?
+
+00:41:49.058 --> 00:41:51.738
+ALFRED FULLER: So in the
+prototype that I have running,
+
+00:41:51.738 --> 00:41:54.698
+you can specify a circle,
+a bounding box, or a
+
+00:41:54.698 --> 00:41:56.878
+polyregion, polylines.
+
+00:41:56.998 --> 00:41:57.550
+AUDIENCE: Polylines.
+
+00:41:57.104 --> 00:41:58.210
+ALFRED FULLER: And
+
+00:41:58.210 --> 00:42:01.830
+then you can -- should
+I not say this stuff?
+807
+00:42:01,83 --&gt; 00:42:01,778
+I don't know.
+
+00:42:05.078 --> 00:42:06.260
+Probably not?
+
+00:42:06.260 --> 00:42:08.578
+Oh, well, in the prototype I
+have running, which is not
+
+00:42:08.578 --> 00:42:12.598
+necessarily the final
+prototype, you can also do --
+
+00:42:12.598 --> 00:42:14.764
+if you have IN, you can plug
+multiple regions in there and
+
+00:42:14.764 --> 00:42:18.538
+it'll do a union, and you can
+end that with another IN, and
+
+00:42:18.538 --> 00:42:21.478
+it will do an intersection of
+the regions, so you could do
+
+00:42:21.478 --> 00:42:25.658
+any sort of combination of
+these regions as well.
+
+00:42:25.658 --> 00:42:26.538
+AUDIENCE: Could you explain
+what you meant when you said
+
+00:42:26.538 --> 00:42:29.398
+the only difference between
+an ascending and descending
+
+00:42:29.398 --> 00:42:30.658
+index is the encoding?
+
+00:42:30.658 --> 00:42:32.078
+ALFRED FULLER: Yeah, sure.
+
+00:42:32.078 --> 00:42:36.378
+So the indexes we have are
+sort of lexigraphically
+
+00:42:36.378 --> 00:42:38.270
+by-the-byte encoding, right?
+
+00:42:39.138 --> 00:42:42.158
+So an integer value, depending
+on whether it's a big Indian or
+
+00:42:42.158 --> 00:42:45.098
+little Indian, you know, it
+kind of will mess with that.
+
+00:42:45.098 --> 00:42:49.820
+So we have special encodings,
+right, so that if you have like
+
+00:42:49.820 --> 00:42:54.458
+an integer, it will encode
+it such that one is first,
+
+00:42:54.458 --> 00:42:56.480
+two is second in a byte.
+
+00:42:56.580 --> 00:42:58.272
+That's why they're
+fixed length, right?
+
+00:42:59.320 --> 00:43:01.118
+And so when you do a descending
+decoding, it sorts it in the
+
+00:43:01.118 --> 00:43:06.318
+opposite direction so it's like
+255 minus all of those bytes.
+
+00:43:06.318 --> 00:43:07.158
+So they're encoded differently.
+
+00:43:07.158 --> 00:43:11.058
+And right now, cursors store
+the encoded value and not the
+
+00:43:11.058 --> 00:43:13.478
+raw value, which is why we can
+disencode them differently
+
+00:43:13.478 --> 00:43:15.792
+on the back end.
+
+00:43:19.598 --> 00:43:20.998
+And we do have a plan.
+
+00:43:20.998 --> 00:43:24.878
+We do have plans to
+support full-text search.
+
+00:43:24.558 --> 00:43:27.958
+The main problem is
+we have many plans.
+
+00:43:28.478 --> 00:43:32.898
+Well, actually, the problem is
+that we have multiple solutions
+
+00:43:32.898 --> 00:43:35.038
+for this internally, and none
+of them really fit App
+
+00:43:35.038 --> 00:43:36.558
+Engine quite right.
+
+00:43:36.558 --> 00:43:39.878
+And they don't mesh exactly,
+and getting them to mesh, and
+
+00:43:39.878 --> 00:43:42.228
+making sure that that mesh is
+solid and that the user will
+
+00:43:42.228 --> 00:43:45.658
+have a good experience, is
+actually very difficult.
+
+00:43:45.658 --> 00:43:48.778
+So that's what we're working on
+right now is we're testing
+
+00:43:48.778 --> 00:43:51.040
+these solutions and making sure
+that they will work correctly
+
+00:43:51.040 --> 00:43:53.878
+for you guys before
+we release them.
+
+00:43:53.878 --> 00:44:10.258
+So that's why we
+don't have it yet.
+848
+00:44:10,258 --&gt; 00:44:10,178
+[INAUDIBLE]
+
+00:44:10.178 --> 00:44:10.230
+ALFRED FULLER: Oh, yeah?
+
+00:44:10.230 --> 00:44:10.282
+The gear?
+
+00:44:10.282 --> 00:44:13.760
+Yeah, for some reason, the
+encoding of this stuff is kinda
+
+00:44:13.760 --> 00:44:14.046
+weird on here like that one.
+
+00:44:14.046 --> 00:44:16.820
+[INAUDIBLE]
+
+00:44:16.820 --> 00:44:17.618
+ALFRED FULLER: Which one?
+
+00:44:17.618 --> 00:44:22.358
+Where?
+
+00:44:22.358 --> 00:44:26.678
+[INAUDIBLE]
+
+00:44:26.678 --> 00:44:27.652
+ALFRED FULLER:
+Presentation view.
+
+00:44:27.640 --> 00:44:30.578
+[INAUDIBLE]
+
+00:44:30.578 --> 00:44:37.478
+ALFRED FULLER: As soon as
+possible for that one if I can
+
+00:44:37.478 --> 00:44:48.558
+parse that one correctly.
+
+00:44:48.558 --> 00:44:48.718
+[READING___QUEST
+ION___FROM___SCREEN]
+
+00:44:48.718 --> 00:44:52.658
+ALFRED FULLER: Are there any
+short-term plans to allow
+
+00:44:52.658 --> 00:45:02.838
+filtering by more than
+one inequality filter?
+
+00:45:02.838 --> 00:45:06.658
+So theoretically, the
+space-flowing curve, like the
+
+00:45:06.658 --> 00:45:09.038
+Hilbert curve, can be expanded
+into any dimensionality space,
+
+00:45:09.038 --> 00:45:11.638
+although the higher the
+dimensionality, the less
+
+00:45:11.638 --> 00:45:15.018
+efficient your query is going
+to be, and the harder the
+
+00:45:15.018 --> 00:45:16.118
+encoding of these indexes.
+
+00:45:16.118 --> 00:45:19.058
+I mean, you'll need more
+bytes to get more accuracy
+
+00:45:19.058 --> 00:45:20.138
+for that encoding.
+
+00:45:20.558 --> 00:45:24.158
+But theoretically, you can take
+the Hilbert curve and use that
+
+00:45:24.158 --> 00:45:31.538
+to do any property or to apply
+multiple inequality filters to
+
+00:45:31.538 --> 00:45:35.538
+any property that can be
+normalized to like a zero and
+
+00:45:35.538 --> 00:45:41.298
+one range, which does not
+include strings, right, or --
+
+00:45:41.298 --> 00:45:42.568
+theoretically it doesn't
+include real numbers, but, you
+
+00:45:42.568 --> 00:45:44.238
+know, for floating point
+numbers it's definitely
+
+00:45:44.238 --> 00:45:47.040
+possible because
+there is a max.
+
+00:45:48.660 --> 00:45:54.158
+So for right now, I plan on
+adding support for two because
+
+00:45:54.158 --> 00:45:59.038
+it actually maps very well to
+the size of an integer field,
+
+00:45:59.038 --> 00:46:03.098
+64 bits, and in the future, I
+will try to add more as well.
+
+00:46:03.558 --> 00:46:06.300
+So this actually is really
+useful for date range problems
+
+00:46:06.300 --> 00:46:11.720
+where you have a start and end
+date, you know, and you want to
+
+00:46:11.720 --> 00:46:13.740
+find everything that overlaps
+this other range for the start
+
+00:46:13.740 --> 00:46:19.658
+and end date, which is actually
+a very common problem.
+
+00:46:19.658 --> 00:46:30.940
+So those will be supported
+by two so we can do those.
+886
+00:46:30,94 --&gt; 00:46:30,26
+[READING___QUEST
+ION___FROM___SCREEN]
+
+00:46:30.260 --> 00:46:34.758
+ALFRED FULLER: Is it impossible
+to add MapReduce queries like
+
+00:46:34.758 --> 00:46:39.998
+in -- so the MapReduce
+frameworks should use cursors
+
+00:46:39.998 --> 00:46:42.898
+and cursors work with all these
+queries so you should be able
+
+00:46:42.898 --> 00:46:46.738
+to use MapReduce over an query.
+
+00:46:46.738 --> 00:46:50.448
+If you saw the talk earlier,
+if you didn't, it was very
+
+00:46:50.448 --> 00:46:52.798
+good, by Mike [? Atasky. ?]
+
+00:46:52.798 --> 00:47:03.598
+And I would recommend you watch
+it on YouTube if you haven't.
+
+00:47:03.598 --> 00:47:08.118
+I think it's much more
+closer to the arrows.
+
+00:47:08.118 --> 00:47:11.558
+You know, the NOT EQUALS
+when it's like less than,
+
+00:47:11.558 --> 00:47:12.458
+greater than because that's
+pretty much what it is.
+
+00:47:13.678 --> 00:47:18.458
+And before all this work, it
+wasn't really possible to do
+
+00:47:18.458 --> 00:47:21.678
+anything but what it does.
+
+00:47:21.678 --> 00:47:23.118
+And so it was kind of assumed
+that we should just put it in
+
+00:47:23.118 --> 00:47:25.318
+and since that's the only thing
+that's possible, then it
+
+00:47:25.318 --> 00:47:31.338
+wouldn't ever -- well, it would
+definitely cause confusion, but
+
+00:47:31.338 --> 00:47:33.278
+people testing their work would
+see that, and it would
+
+00:47:33.278 --> 00:47:34.298
+happen like that.
+
+00:47:34.298 --> 00:47:36.328
+And it's going to be difficult
+pushing into the future
+
+00:47:36.328 --> 00:47:39.518
+to decide when to
+switch them around.
+
+00:47:39.618 --> 00:47:43.238
+I think that way, if you
+specify NOT, if you specify NOT
+
+00:47:43.238 --> 00:47:46.618
+explicitly, we're going to use
+Zigzag every time, or if we
+
+00:47:46.618 --> 00:47:49.878
+can't do your query, we're
+going to use Zigzag, and in
+
+00:47:49.878 --> 00:47:51.518
+other cases, we're going to
+assume they're single-value
+
+00:47:51.518 --> 00:47:53.900
+properties and do that because
+that would be the most
+
+00:47:53.900 --> 00:48:08.320
+efficient way to do it.
+
+00:48:08.320 --> 00:48:11.860
+Well, this is all going to have
+to be -- apparently, there's
+
+00:48:11.860 --> 00:48:14.158
+differences between GQL and the
+programmatic query framework,
+
+00:48:14.158 --> 00:48:17.798
+and personally, I recommend you
+use the programmatic query
+
+00:48:17.798 --> 00:48:20.300
+framework because it's not
+string parsing and stuff.
+
+00:48:20.300 --> 00:48:22.578
+Why do that because Python
+is all about the string
+
+00:48:22.578 --> 00:48:25.378
+parsing and lookups.
+
+00:48:26.900 --> 00:48:29.880
+But we're going to have to
+rework all this to support the
+
+00:48:29.880 --> 00:48:35.618
+Next Gen so we definitely want
+parity between the two, future
+
+00:48:35.618 --> 00:48:40.478
+parity between this and Java,
+and Java has JDO and JPA, which
+
+00:48:40.478 --> 00:48:43.718
+have all their own query
+languages, which are much more
+
+00:48:43.718 --> 00:48:47.860
+rich than GQL and we'll
+definitely try also to support
+
+00:48:47.860 --> 00:48:50.678
+that natively, all these
+features natively
+
+00:48:50.678 --> 00:49:00.098
+in there as well.
+
+00:49:03.378 --> 00:49:05.218
+So none of this is
+really published.
+
+00:49:05.218 --> 00:49:09.378
+In fact, I don't think our
+internal documentation for it
+
+00:49:09.378 --> 00:49:13.878
+is very good either, as, Ryan
+probably hates me for, because
+
+00:49:13.878 --> 00:49:16.538
+he's always encouraged me to do
+that, and especially if a bus
+
+00:49:16.538 --> 00:49:18.800
+crashed and I was in it, I
+think you guys would
+
+00:49:18.800 --> 00:49:20.218
+be all out of luck.
+
+00:49:29.818 --> 00:49:31.358
+So I think this is the
+documentation, like
+
+00:49:31.358 --> 00:49:44.178
+you should watch the
+YouTube video for now.
+
+00:49:44.178 --> 00:49:45.278
+[INAUDIBLE]
+
+00:49:45.278 --> 00:49:46.678
+ALFRED FULLER: Yeah, we are
+definitely looking for
+
+00:49:46.678 --> 00:49:48.858
+people to add to the team.
+
+00:49:55.238 --> 00:49:56.898
+I don't know what that is.
+
+00:49:56.898 --> 00:49:57.878
+OLAP?
+
+00:50:00.678 --> 00:50:00.958
+[INAUDIBLE]
+
+00:50:00.958 --> 00:50:01.598
+ALFRED FULLER: Okay, cool.
+
+00:50:01.598 --> 00:50:02.960
+Well, thank you all for coming.
+
+00:50:02.960 --> 00:50:05.738
+If you have any more specific
+questions or anything like
+
+00:50:05.738 --> 00:50:06.578
+that, please come and see me.
+
+00:50:06.578 --> 00:50:09.758
+I am happy to answer
+any of your questions.
+
+00:50:10.598 --> 00:50:15.598
+Thank you very much.
+
