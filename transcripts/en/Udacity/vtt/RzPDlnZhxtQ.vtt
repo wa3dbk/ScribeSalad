@@ -1,0 +1,193 @@
+WEBVTT
+Kind: captions
+Language: en
+
+00:00:00.000 --> 00:00:03.015
+So now we've done all the preliminaries, so let's turn to some actual code.
+
+00:00:03.015 --> 00:00:06.837
+We're going to implement this twice with a similar strategy each time.
+
+00:00:06.837 --> 00:00:11.659
+In both we're going to implement a sum of a million--actually 2^20 elements,
+
+00:00:11.659 --> 00:00:13.963
+and we're going to do this in 2 stages.
+
+00:00:13.963 --> 00:00:17.706
+In the 1st stage we're going to launch 1024 blocks,
+
+00:00:17.706 --> 00:00:23.833
+each one of which will use 1024 threads to reduce 1024 elements.
+
+00:00:23.833 --> 00:00:28.082
+Each of those will produce 1 single item.
+
+00:00:28.082 --> 00:00:31.210
+So we're going to have 1024 items left when we're done.
+
+00:00:31.210 --> 00:00:37.327
+And we're going to launch 1 block to reduce the final 1024 elements into 1 single element.
+
+00:00:37.327 --> 00:00:41.055
+So I'll post all the code, of course. But the CPU side code is straightforward.
+
+00:00:41.055 --> 00:00:44.867
+Instead we're just going to take a look at the kernel. Let's see how that works.
+
+00:00:44.867 --> 00:00:50.164
+So each block is going to be responsible for a 1024 element chunk of floats,
+
+00:00:50.164 --> 00:00:53.630
+and we're going to run this loop within the kernel.
+
+00:00:53.630 --> 00:00:59.003
+On each iteration of this loop we're going to divide the active region in half.
+
+00:00:59.003 --> 00:01:02.678
+So on the 1st iteration, where we start with 1024 elements,
+
+00:01:02.678 --> 00:01:06.544
+we're going to have two 512-element regions.
+
+00:01:06.544 --> 00:01:13.209
+Then each of 512 threads will add its element in the 2nd half to its element in the 1st half,
+
+00:01:13.209 --> 00:01:15.561
+writing back to the 1st half.
+
+00:01:15.561 --> 00:01:19.407
+Now we're going to synchronize all threads, this syncthreads call right here,
+
+00:01:19.407 --> 00:01:21.231
+to make sure every one is done.
+
+00:01:21.231 --> 00:01:24.015
+We've got 512 elements remaining,
+
+00:01:24.015 --> 00:01:27.798
+and so we're going to loop again on this resulting region of 512 elements.
+
+00:01:27.798 --> 00:01:33.613
+Now we'll divide it into two 256-element chunks using 256 threads
+
+00:01:33.613 --> 00:01:37.971
+to sum these 256 items to these 256 items.
+
+00:01:37.971 --> 00:01:41.819
+And we're going to continue this loop, cutting it in half every time,
+
+00:01:41.819 --> 00:01:46.967
+until we have 1 element remaining at the very end of 10 iterations.
+
+00:01:46.967 --> 00:01:50.659
+And then we'll write that back out to global memory. So this works.
+
+00:01:50.659 --> 00:01:52.784
+We can run it on a computer in our lab.
+
+00:01:52.784 --> 00:01:58.933
+So we're doing that now, and we notice that it finishes in 0.65 milliseconds.
+
+00:01:58.933 --> 00:02:04.082
+Less than a millisecond. That's pretty great, but it's not as efficient as we might like.
+
+00:02:04.082 --> 00:02:06.786
+Specifically, if we take a look at the code again,
+
+00:02:06.786 --> 00:02:10.441
+we're going to global memory more often than we'd like.
+
+00:02:10.441 --> 00:02:16.117
+On each iteration of the loop, we read n items from global memory and we write back n/2 items.
+
+00:02:16.117 --> 00:02:20.479
+Then we read those n/2 items back from global memory and so on.
+
+00:02:20.479 --> 00:02:27.778
+In an ideal world, we'd do an original read where we read all of the 1024 items into the thread block,
+
+00:02:27.778 --> 00:02:31.286
+do all the reduction internally, and then write back the final value.
+
+00:02:31.286 --> 00:02:35.700
+And this should be faster because we would incur less memory traffic overall.
+
+00:02:35.700 --> 00:02:38.387
+The CUDA feature we use to do this is called shared memory
+
+00:02:38.387 --> 00:02:42.651
+and will store all intermediate values in shared memory where all threads can access them.
+
+00:02:42.651 --> 00:02:45.645
+Shared memory is considerably faster than global memory.
+
+00:02:45.645 --> 00:02:49.332
+So let's take a look at the kernel. It's going to look very similar.
+
+00:02:49.332 --> 00:02:53.117
+And in this kernel we're going to have the exact same loop structure.
+
+00:02:53.117 --> 00:02:56.389
+What's going to be different, though, is this little part right here.
+
+00:02:56.389 --> 00:03:01.134
+We have to 1st copy all the values from global memory into shared memory
+
+00:03:01.134 --> 00:03:03.387
+and that's done with this little block.
+
+00:03:03.387 --> 00:03:06.932
+And then all the further accesses here are from shared memory--
+
+00:03:06.932 --> 00:03:11.203
+this s data--as opposed to from global memory, which we did last time.
+
+00:03:11.203 --> 00:03:15.260
+And when we're done, we have to write this final value back to global memory again.
+
+00:03:15.260 --> 00:03:19.879
+The only other interesting part of this code is how we declare the amount of shared memory we need.
+
+00:03:19.879 --> 00:03:21.481
+And we do that here.
+
+00:03:21.481 --> 00:03:26.447
+We're declaring that we're going to have an externally defined amount of shared data.
+
+00:03:26.447 --> 00:03:28.559
+Now, we haven't actually said how much we do,
+
+00:03:28.559 --> 00:03:32.058
+so to do that, we're going to have to go down to where we actually call the kernel.
+
+00:03:32.058 --> 00:03:35.372
+So when we're calling the reduce kernel using the shared memory,
+
+00:03:35.372 --> 00:03:40.606
+we call it with now 3 arguments inside the triple chevrons, the normal blocks and the threads,
+
+00:03:40.606 --> 00:03:45.180
+but then we say how many bytes we need allocated in shared memory.
+
+00:03:45.180 --> 00:03:50.899
+In this case, every thread is going to ask for 1 float stored in shared memory.
+
+00:03:50.899 --> 00:03:55.414
+So the advantage of the shared memory version is that it saves global memory bandwidth.
+
+00:03:55.414 --> 00:03:58.679
+It's a good exercise to figure out how much memory bandwidth you'll save.
+
+00:03:58.679 --> 00:04:00.421
+So I'll ask that as a quiz.
+
+00:04:00.421 --> 00:04:03.389
+The global memory version uses how many times as much memory bandwidth
+
+00:04:03.389 --> 00:04:05.023
+as the shared memory version?
+
+00:04:05.023 --> 00:04:06.866
+Round to the nearest integer.
+

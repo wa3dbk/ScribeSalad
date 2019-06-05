@@ -1,0 +1,139 @@
+WEBVTT
+Kind: captions
+Language: en
+
+00:00:00.000 --> 00:00:03.906
+So, if we go through this analysis for all of these kernels, we'll see that our
+
+00:00:03.906 --> 00:00:07.808
+parallel per-element version of the code achieves 12.5 gigabytes per second,
+
+00:00:07.808 --> 00:00:13.122
+our parallel per-row version of the code gets about 1.8 gigabytes per second,
+
+00:00:13.122 --> 00:00:18.725
+and our serial version of the code gets an abysmal 0.018 gigabytes per second.
+
+00:00:18.725 --> 00:00:23.816
+This is roughly the speed of a carrier pigeon. And a better way to think about this, perhaps,
+
+00:00:23.816 --> 00:00:30.621
+is not in absolute numbers but as a percentage of what the particular GPU we're using can achieve.
+
+00:00:30.621 --> 00:00:33.717
+So, if we were to work out the percentages we're achieving,
+
+00:00:33.717 --> 00:00:39.051
+it's something like 31% of theoretical peak bandwidth with our highest performing kernel,
+
+00:00:39.051 --> 00:00:47.341
+4.5% peak bandwidth with our per-row kernel, and less than a 10th of a percent with our serial kernel.
+
+00:00:47.341 --> 00:00:49.965
+So, back to the question. Why is this number so low?
+
+00:00:49.965 --> 00:00:56.705
+Well, we can take a pretty shrewd guess that whenever you see really low DRAM utilization,
+
+00:00:56.705 --> 00:01:00.278
+really low percentage bandwidth, your first guess is always coalescing.
+
+00:01:00.278 --> 00:01:04.834
+A way to think about coalescing is that the GPU is always accessing global memory,
+
+00:01:04.834 --> 00:01:10.667
+accessing the DRAM in pretty large chunks, 32 or 128 bytes at a time.
+
+00:01:10.667 --> 00:01:14.120
+And this means that we are going to need the fewest
+
+00:01:14.120 --> 00:01:21.414
+total memory transactions when the threads in a warp access contiguous adjacent memory locations.
+
+00:01:21.414 --> 00:01:23.828
+So, this is an example of good coalescing.
+
+00:01:23.828 --> 00:01:27.004
+Every thread is either reading or writing an adjacent memory location.
+
+00:01:27.004 --> 00:01:32.608
+And clearly, if the threads in a warp are reading and writing completely random locations and memory,
+
+00:01:32.608 --> 00:01:35.879
+then you're going to get poor coalescing, right?
+
+00:01:35.879 --> 00:01:40.716
+So, if these accesses are spread out all over the memory,
+
+00:01:40.716 --> 00:01:47.990
+then the total number of chunks of memory that we have to read could be as large as the number of threads in the warp.
+
+00:01:47.990 --> 00:01:51.742
+So, a random access pattern clearly leads to bad coalescing.
+
+00:01:51.742 --> 00:01:57.348
+So, a much more common access pattern is what's called strided, and this is where threads access
+
+00:01:57.348 --> 00:02:02.620
+a location memory that's a function of their thread ID times some stride.
+
+00:02:02.620 --> 00:02:12.596
+So, for example, thread 0 might access location 0, thread 1 location 2, thread 2 location 4, thread 3 location 6, and so on.
+
+00:02:12.596 --> 00:02:17.284
+In that case, that would be a stride of 2 because there's two elements between thread accesses,
+
+00:02:17.284 --> 00:02:25.150
+and strided accesses range from, okay, like in this case where with the stride of 2 elements,
+
+00:02:25.150 --> 00:02:28.283
+I'm really only doubling the number of memory transactions.
+
+00:02:28.283 --> 00:02:34.230
+So, I'm sort of halving the quality of my coalescing all the way to really, really bad, right?
+
+00:02:34.230 --> 00:02:37.924
+So, you can imagine that if the stride between elements is large enough,
+
+00:02:37.924 --> 00:02:43.996
+then every thread in the warp is accessing a completely different 32- or 128-byte chunk of memory,
+
+00:02:43.996 --> 00:02:47.703
+and then you're guaranteed to get bad behavior.
+
+00:02:47.703 --> 00:02:51.941
+Guaranteed to be maximizing the number of memory transactions that you have to do.
+
+00:02:51.941 --> 00:02:56.212
+So, let's look at the code for our kernels. Here's where we're reading from the input matrix,
+
+00:02:56.212 --> 00:02:58.478
+and this actually works out pretty well.
+
+00:02:58.478 --> 00:03:04.885
+Every thread is reading a value in memory which is equal to some large offset; J times N plus I.
+
+00:03:04.885 --> 00:03:09.103
+And if you look at I, I is really the thread index plus some offset.
+
+00:03:09.103 --> 00:03:13.058
+So, adjacent threads, you know, threads with adjacent thread into season X
+
+00:03:13.058 --> 00:03:17.397
+are reading adjacent values of the input matrix. That's exactly what we want,
+
+00:03:17.397 --> 00:03:21.068
+so this is good coalescing. On the other hand, when we write the output matrix,
+
+00:03:21.068 --> 00:03:28.578
+adjacent threads, threads with adjacent values of I, are riding to places separated in memory by N, right?
+
+00:03:28.578 --> 00:03:36.217
+And N was like 1024. So, adjacent threads are running memory locations that are 1024 elements away from each other.
+
+00:03:36.217 --> 00:03:40.664
+This is clearly bad, this is bad coalescing. Bad, bad, bad, bad.
+
+00:03:40.664 --> 00:03:42.723
+This is, in fact, the root of our problem.
+

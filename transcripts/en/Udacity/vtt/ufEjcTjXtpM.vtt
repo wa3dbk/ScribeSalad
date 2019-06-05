@@ -1,0 +1,172 @@
+WEBVTT
+Kind: captions
+Language: en
+
+00:00:00.115 --> 00:00:02.231
+So now we're going to look at 3 different formulations
+
+00:00:02.231 --> 00:00:05.356
+of a workable parallel histogram implementation.
+
+00:00:05.356 --> 00:00:08.281
+Now you might be looking at this serial code and thinking,
+
+00:00:08.281 --> 00:00:13.180
+"Why can't we just unroll the serial loop n times and launch a thread for each iteration of the loop?"
+
+00:00:13.203 --> 00:00:15.226
+Note that if there's n measurements taken,
+
+00:00:15.226 --> 00:00:19.565
+we can consider launching n threads, each of which increments 1 bin count.
+
+00:00:19.565 --> 00:00:22.918
+It turns out this doesn't work, and it's important to understand why.
+
+00:00:22.918 --> 00:00:27.153
+Dave already covered this topic in the last unit, so you can feel free to zip through
+
+00:00:27.153 --> 00:00:29.641
+this part if you totally understand it already.
+
+00:00:29.641 --> 00:00:34.350
+Anyway, we're going to take a look at this particular kernel, this naive histo kernel.
+
+00:00:34.350 --> 00:00:38.193
+In this kernel, each thread will be responsible for classifying 1 element
+
+00:00:38.193 --> 00:00:41.357
+and incrementing the histogram bin corresponding to that element.
+
+00:00:41.357 --> 00:00:43.973
+So let's look at this very simple kernel.
+
+00:00:43.973 --> 00:00:47.428
+In this code, the first thing we're going to do is compute our global ID.
+
+00:00:47.428 --> 00:00:50.850
+Then we're going to fetch our item from global memory.
+
+00:00:50.850 --> 00:00:55.395
+Then we're going to calculate which bin our item is associated with,
+
+00:00:55.395 --> 00:00:58.856
+and in this case, we're just using a very simple mod operator to do it.
+
+00:00:58.856 --> 00:01:03.064
+And finally, we're going to increment the bin with which our item is associated.
+
+00:01:03.064 --> 00:01:05.414
+Though if we scroll down to the main routine here,
+
+00:01:05.414 --> 00:01:10.169
+we see that we have 65,000 elements that we're going to classify into 16 bins,
+
+00:01:10.169 --> 00:01:13.846
+so we would expect 4,096 items per bin.
+
+00:01:13.846 --> 00:01:15.789
+So what happens when we run this?
+
+00:01:15.789 --> 00:01:19.869
+I'm going to run this kernel on a work station that I'm connected to in our lab.
+
+00:01:19.885 --> 00:01:23.001
+So, let's run this histo executable.
+
+00:01:23.001 --> 00:01:26.510
+And what we're going to see are the bin counts that we see for each bin.
+
+00:01:26.510 --> 00:01:32.775
+We expected 4096 items per bin, and we're not getting anywhere close to 4,096 items per bin.
+
+00:01:32.775 --> 00:01:39.846
+In fact we'll run it again, and if you note, these bin counts are even changing from iteration to iteration.
+
+00:01:39.846 --> 00:01:42.187
+So what's going on here?
+
+00:01:42.187 --> 00:01:45.135
+Let's go back and look at the most important instruction in the kernel,
+
+00:01:45.135 --> 00:01:47.726
+the one where we increment the value in the bin.
+
+00:01:47.726 --> 00:01:50.086
+Let's look at what's actually going on here.
+
+00:01:50.086 --> 00:01:55.426
+What does each thread program actually do if we implement the simple serial algorithm in parallel?
+
+00:01:55.426 --> 00:01:57.769
+It does 3 separate operations.
+
+00:01:57.769 --> 00:02:03.727
+The first one is doing a global memory read to fetch the bin value into a register.
+
+00:02:03.727 --> 00:02:08.330
+The second thing is it increments the bin value within the register.
+
+00:02:08.330 --> 00:02:13.958
+And the third thing is storing the incremented value, back to global memory
+
+00:02:13.958 --> 00:02:16.303
+Let's illustrate how this could go wrong.
+
+00:02:16.303 --> 00:02:20.987
+Consider 2 threads running in parallel--1 the black thread, 2--the red thread.
+
+00:02:20.987 --> 00:02:25.925
+Both want to increment in the same bin--this blue bin here. It starts off with the value 5.
+
+00:02:25.925 --> 00:02:28.534
+Both threads happen to be running at the same time.
+
+00:02:28.534 --> 00:02:32.612
+So the first reads the value of the bin into its local register,
+
+00:02:32.612 --> 00:02:37.212
+then the second reads the value of the bin into its local register.
+
+00:02:37.212 --> 00:02:40.387
+Both increment the value in their own local registers,
+
+00:02:40.387 --> 00:02:44.252
+and the first writes its value back to global memory, storing a 6,
+
+00:02:44.252 --> 00:02:47.675
+and the second does the same, also a 6.
+
+00:02:47.675 --> 00:02:50.587
+And now we've got a problem since we'd really like the answer 7.
+
+00:02:50.587 --> 00:02:53.147
+The fundamental issue here is called a race condition.
+
+00:02:53.147 --> 00:02:56.949
+The problem is that incrementing the value in global memory takes multiple steps,
+
+00:02:56.949 --> 00:03:03.292
+and it's possible, as we've seen here, for 2 processors running simultaneously to interleave these steps.
+
+00:03:03.292 --> 00:03:06.352
+Note that this is not going to happen in the serial code
+
+00:03:06.352 --> 00:03:09.776
+because in the serial code each iteration of the loop runs separately,
+
+00:03:09.776 --> 00:03:14.137
+and there's no danger of one thread's code running at the same time as another thread's code.
+
+00:03:14.137 --> 00:03:16.415
+So the simple solution doesn't work.
+
+00:03:16.415 --> 00:03:20.175
+So now let's look at 3 different ways that we might implement this in parallel that will work.
+
+00:03:20.175 --> 00:03:22.414
+All 3 of these methods are good parallel methods.
+
+00:03:22.414 --> 00:03:26.689
+None are obviously better or worse, and we'll talk about their pros and cons as we describe them.
+
