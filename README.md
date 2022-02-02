@@ -19,8 +19,8 @@ In absence of searchable transcripts, many interesting YouTube videos, podcasts,
 
 * **W-Y :** [WhatIf](transcripts/en/WhatIf), [Wired](transcripts/en/Wired), [Wisecrack](transcripts/en/Wisecrack), [Wordporn](transcripts/en/Wordporn), [Yale Courses](transcripts/en/YaleCourses), [Your Mom's House Podcast](transcripts/en/YourMomsHousePodcast)
 
-## Supported languages 
-[Arabic (ar)](transcripts/ar/), [English (en)](transcripts/en/), [French (fr)](transcripts/fr/), [German (de)](transcripts/de/), [Spanish (sp)](transcripts/sp/), [Turkish (tr)](transcripts/tr/), [Portuguese (pt)](transcripts/pt/), [Italian (it)](transcripts/it/)
+## Other languages 
+[Arabic (ar)](transcripts/ar/), [French (fr)](transcripts/fr/), [German (de)](transcripts/de/), [Spanish (sp)](transcripts/sp/), [Turkish (tr)](transcripts/tr/), [Portuguese (pt)](transcripts/pt/), [Italian (it)](transcripts/it/)
 
 ## Transcription quality 
 Some of the transcriptions originate from YouTube (subtitles uploaded by the video's owner) while the rest are generated automatically using a high-accuracy large-vocabulary continuous speech recognition system (~90% of accuracy in clean conditions : no background noise, no heavy accents and good quality audio). 
