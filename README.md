@@ -1,9 +1,9 @@
 # ScribeSalad 
 
-In absence of searchable transcripts, many interesting YouTube videos, podcasts, lectures and talks are hard to explore, quote and summarize. **ScribeSalad** is an open data project regrouping over 110k YouTube video transcripts discussing social and political issues, psychology, history and scientific topics ranging from biology, mathematics to artificial intelligence : The Joe Rogan Experience, The Rubin Report, Jordan B. Peterson talks, Yale courses, MIT lectures and more. This project is a first step towards making great content more available and inspiring speakers, storytellers, interviewers and scientists better heard.
+In absence of searchable transcripts, many interesting YouTube videos, podcasts, lectures and talks are hard to explore, quote and summarize. **ScribeSalad** is a multi-lingual open data project regrouping over 110k YouTube video transcripts discussing social and political issues, psychology, history and scientific topics ranging from biology, mathematics to artificial intelligence : TedX, Yale courses, MIT lectures, National_Geographic, The Joe Rogan Experience, BigThink, IQsquared, Jordan B. Peterson talks, Tim Ferris, Jocko_Podcast and more. This project is a first step towards making great content more available and inspiring speakers, storytellers, interviewers and scientists better heard.
+         
 
-
-## Available transcripts 
+## Available transcripts (in english)
 
 * **A-C :** [Aba & Preach](transcripts/en/Aba_and_Preach), [AI lectures & talks](transcripts/en/AI_lectures_talks), [Alexander Amini](transcripts/en/Alexander_Amini), [Amanda Cerny](transcripts/en/AmandaCerny), [Answer the internet](transcripts/en/AnswerTheInternet), [Bill Burr](transcripts/en/Bill_Burr), [Big Think](transcripts/en/Big_Think), [Biographics](transcripts/en/Biographics), [Bite-sized Philosophy](transcripts/en/Bite-sized_Philosophy), [BrightInsight](transcripts/en/BrightInsight),  [Chris D'Elia](transcripts/en/ChrisDelia), [Coffee Break](transcripts/en/Coffee_Break), [Coffee Break](transcripts/en/Coffee_Break), [Coffeezilla](transcripts/en/Coffeezilla), [Comics explained](transcripts/en/ComicsExplained), [Conan O’Brien Needs A Friend](transcripts/en/Conan_OBrien_Needs_a_Friend), [Cracked](transcripts/en/Cracked), [CrashCourse](transcripts/en/CrashCourse)
 
@@ -18,6 +18,9 @@ In absence of searchable transcripts, many interesting YouTube videos, podcasts,
 * **S-V :** [Skavlan](transcripts/en/Skavlan), [Siraj Raval](transcripts/en/Siraj_Raval), [Storytellers](transcripts/en/Storytellers), [TED](transcripts/en/TED), [The Linguistics Channel](transcripts/en/The_Linguistics_Channel), [The Monday Morning Podcast](transcripts/en/TAMMP), [Theo Von](transcripts/en/TheoVon), [Theo Von Clips](transcripts/en/TheoVonClips), [TheSchoolOfLife](transcripts/en/TheSchoolOfLife), [ThinkBigAnimation](transcripts/en/ThinkBigAnimation), [TigerBellyClips](transcripts/en/TigerBellyClips), [Tim Ferris](transcripts/en/Tim_Ferris), [TFATK](transcripts/en/TFATK), [TwoCents](transcripts/en/TwoCents), [Visual politik](transcripts/en/Visual_politik)
 
 * **W-Y :** [WhatIf](transcripts/en/WhatIf), [Wired](transcripts/en/Wired), [Wisecrack](transcripts/en/Wisecrack), [Wordporn](transcripts/en/Wordporn), [Yale Courses](transcripts/en/YaleCourses), [Your Mom's House Podcast](transcripts/en/YourMomsHousePodcast)
+
+## Supported languages 
+[Arabic (ar)](transcripts/ar/), [English (en)](transcripts/en/), [French (fr)](transcripts/fr/), [German (de)](transcripts/de/), [Spanish (sp)](transcripts/sp/), [Turkish (tr)](transcripts/tr/), [Portuguese (pt)](transcripts/pt/), [Italian (it)](transcripts/it/)
 
 ## Transcription quality 
 Some of the transcriptions originate from YouTube (subtitles uploaded by the video's owner) while the rest are generated automatically using a high-accuracy large-vocabulary continuous speech recognition system (~90% of accuracy in clean conditions : no background noise, no heavy accents and good quality audio). 
