@@ -1,6 +1,6 @@
 # ScribeSalad 
 
-In absence of searchable transcripts, many interesting YouTube videos, podcasts, lectures and talks are hard to explore, quote and summarize. **ScribeSalad** is a multi-lingual open data project regrouping over 110k YouTube video transcripts discussing social and political issues, psychology, history and scientific topics ranging from biology, mathematics to artificial intelligence : TedX, Yale courses, MIT lectures, National_Geographic, The Joe Rogan Experience, BigThink, IQsquared, Jordan B. Peterson talks, Tim Ferris, Jocko_Podcast and more. This project is a first step towards making great content more available and inspiring speakers, storytellers, interviewers and scientists better heard.
+In absence of searchable transcripts, many interesting YouTube videos, podcasts, lectures and talks are hard to explore, quote and summarize. **ScribeSalad** is a multi-lingual open data project regrouping over 110k YouTube video transcripts discussing social and political issues, psychology, history and scientific topics ranging from biology, mathematics to artificial intelligence : TedX, Yale courses, MIT lectures, National Geographic, The Joe Rogan Experience, Big Think, IQ squared, Jordan B. Peterson talks, Tim Ferris, Jocko Podcast and more. This project is a first step towards making great content more available and inspiring speakers, storytellers, interviewers and scientists better heard.
          
 
 ## Available transcripts (in english)
