@@ -1,0 +1,2019 @@
+WEBVTT
+Kind: captions
+Language: en
+
+00:00:00.000 --> 00:00:02.922
+[MUSIC PLAYING]
+
+00:00:07.310 --> 00:00:08.760
+RAJESH MISHRA: Hello, everyone.
+
+00:00:08.760 --> 00:00:10.190
+My name is Rajesh Mishra.
+
+00:00:10.190 --> 00:00:15.500
+I'm an engineering lead on the
+GCE team doing control plane
+
+00:00:15.500 --> 00:00:16.590
+work.
+
+00:00:16.590 --> 00:00:19.430
+I'm joined here by
+my colleague, Vikas.
+
+00:00:19.430 --> 00:00:20.550
+VIKAS YADAV: Hi, everyone.
+
+00:00:20.550 --> 00:00:21.770
+I am Vikas Yadav.
+
+00:00:21.770 --> 00:00:27.640
+I am an engineer on GCP, and
+I support the storage solution
+
+00:00:27.640 --> 00:00:30.015
+for GCE.
+
+00:00:30.015 --> 00:00:31.640
+RAJESH MISHRA: So
+what we plan to cover
+
+00:00:31.640 --> 00:00:37.460
+is how we design our control
+plane to be highly available.
+
+00:00:37.460 --> 00:00:38.740
+So let's get started.
+
+00:00:43.170 --> 00:00:47.930
+So before we get started,
+let's talk about control plane
+
+00:00:47.930 --> 00:00:49.980
+at a very high level.
+
+00:00:49.980 --> 00:00:53.960
+So we have an extremely
+simplified version
+
+00:00:53.960 --> 00:00:56.390
+from a customer standpoint.
+
+00:00:56.390 --> 00:00:58.850
+So what you see
+over here, what it
+
+00:00:58.850 --> 00:01:03.790
+takes to orchestrate an API that
+you submit against our control
+
+00:01:03.790 --> 00:01:04.819
+plane.
+
+00:01:04.819 --> 00:01:08.990
+So I've picked a canonical
+example of submitting
+
+00:01:08.990 --> 00:01:11.210
+an instance creation request.
+
+00:01:11.210 --> 00:01:15.380
+So that API, we
+orchestrate that API.
+
+00:01:15.380 --> 00:01:18.690
+That API has many, many
+steps to be performed.
+
+00:01:18.690 --> 00:01:22.177
+So I just listed a
+few of the steps.
+
+00:01:22.177 --> 00:01:23.510
+We need to check the permission.
+
+00:01:23.510 --> 00:01:25.670
+We need to check the
+[? org ?] policy,
+
+00:01:25.670 --> 00:01:28.700
+[? coda, ?] so on and so forth.
+
+00:01:28.700 --> 00:01:30.380
+Any one of these
+steps could fail.
+
+00:01:33.240 --> 00:01:35.900
+And you can imagine
+control plane
+
+00:01:35.900 --> 00:01:39.500
+with many projects,
+many resources
+
+00:01:39.500 --> 00:01:41.990
+that we manage, many APIs
+that we need to process.
+
+00:01:44.570 --> 00:01:48.739
+We need to process and
+remember where we are exactly
+
+00:01:48.739 --> 00:01:50.030
+so we can recover our failures.
+
+00:01:54.880 --> 00:02:00.430
+And since this talk is
+about the availability,
+
+00:02:00.430 --> 00:02:03.060
+let's define what
+is availability.
+
+00:02:03.060 --> 00:02:06.490
+So our SRE reliability
+workbook defines availability
+
+00:02:06.490 --> 00:02:09.780
+as an uptime of a
+software service.
+
+00:02:09.780 --> 00:02:13.470
+And the way we calculate
+our availability
+
+00:02:13.470 --> 00:02:19.640
+is by accumulating all the
+unavailable periods of downtime
+
+00:02:19.640 --> 00:02:23.410
+over some window of time.
+
+00:02:23.410 --> 00:02:26.940
+So as an example,
+four-nines implies
+
+00:02:26.940 --> 00:02:31.542
+your service was unavailable
+over a 30-day for 4.3 minutes,
+
+00:02:31.542 --> 00:02:32.500
+and so on and so forth.
+
+00:02:39.800 --> 00:02:41.860
+There are a couple of
+dimensions to availability
+
+00:02:41.860 --> 00:02:42.940
+for a GCE system.
+
+00:02:47.190 --> 00:02:51.550
+The VN uptime availability,
+this is nothing
+
+00:02:51.550 --> 00:02:56.430
+but your VMs are programmed,
+the network is being configured,
+
+00:02:56.430 --> 00:03:00.790
+your PD is configured,
+and all the other stuff
+
+00:03:00.790 --> 00:03:04.180
+has been programmed
+by the control plane,
+
+00:03:04.180 --> 00:03:10.810
+and your resources are
+now serving live traffic.
+
+00:03:10.810 --> 00:03:13.547
+That we call VM
+uptime availability.
+
+00:03:16.680 --> 00:03:18.570
+Just to draw some
+distinction, we
+
+00:03:18.570 --> 00:03:23.580
+have control plane
+availability, which is basically
+
+00:03:23.580 --> 00:03:26.550
+an on-demand control plane
+programming that happens
+
+00:03:26.550 --> 00:03:30.240
+via one of our REST APIs.
+
+00:03:30.240 --> 00:03:34.890
+And at a very high level,
+the control plane programming
+
+00:03:34.890 --> 00:03:37.820
+centers are on three
+key resources--
+
+00:03:37.820 --> 00:03:42.780
+the VM-- the Virtual
+Machines; the PDs;
+
+00:03:42.780 --> 00:03:46.515
+and any kind of network
+access you configure.
+
+00:03:46.515 --> 00:03:48.390
+And there are many more
+resources, of course,
+
+00:03:48.390 --> 00:03:50.560
+and I haven't listed them.
+
+00:03:50.560 --> 00:03:53.500
+So it's important to remember
+the distinction about these two
+
+00:03:53.500 --> 00:03:54.580
+availability things.
+
+00:03:54.580 --> 00:03:58.470
+The first one is live
+traffic serving paths.
+
+00:03:58.470 --> 00:04:01.020
+The second is control paths.
+
+00:04:06.620 --> 00:04:09.470
+We're so proud of
+the availability
+
+00:04:09.470 --> 00:04:15.590
+work they have done that we have
+a published SLA for VM uptime.
+
+00:04:18.130 --> 00:04:23.540
+So for VMs that leverage
+our multiple region,
+
+00:04:23.540 --> 00:04:28.060
+so, for example, VMs placed in
+two or more zones in a region
+
+00:04:28.060 --> 00:04:31.240
+or it could be split
+across region--
+
+00:04:31.240 --> 00:04:36.820
+one can expect an aggregate
+uptime availability four-nines.
+
+00:04:36.820 --> 00:04:40.760
+And this would be with no
+loss of external connectivity
+
+00:04:40.760 --> 00:04:42.990
+or access to persistent disk.
+
+00:04:46.530 --> 00:04:51.300
+Most importantly, this will be
+without any kind of downtime,
+
+00:04:51.300 --> 00:04:54.930
+and will be transferring
+even if we carry out
+
+00:04:54.930 --> 00:04:56.800
+any kind of host maintenance.
+
+00:04:56.800 --> 00:05:00.300
+So if you have to carry out
+any kind of security patches,
+
+00:05:00.300 --> 00:05:05.582
+we'll do that transparently
+by live migrating your VMs.
+
+00:05:05.582 --> 00:05:07.290
+And in most cases,
+you won't notice that.
+
+00:05:10.510 --> 00:05:12.190
+VIKAS YADAV: So in
+the previous slide,
+
+00:05:12.190 --> 00:05:13.648
+the security patches
+we are talking
+
+00:05:13.648 --> 00:05:15.970
+about it is the
+underlying system on top
+
+00:05:15.970 --> 00:05:18.050
+of which the VMs run.
+
+00:05:18.050 --> 00:05:20.740
+And we do line migration
+when we are patching
+
+00:05:20.740 --> 00:05:22.810
+the host on which the VM run.
+
+00:05:26.530 --> 00:05:29.110
+RAJESH MISHRA: So while I
+talked about the VM uptime
+
+00:05:29.110 --> 00:05:33.750
+availability, we
+don't have an SLA
+
+00:05:33.750 --> 00:05:36.180
+that we published for
+our control plane,
+
+00:05:36.180 --> 00:05:38.310
+but the internal
+work they have done,
+
+00:05:38.310 --> 00:05:45.120
+we're very proud of what we have
+achieved, the designs that we
+
+00:05:45.120 --> 00:05:50.430
+have that we'll talk the rest of
+the presentation on our control
+
+00:05:50.430 --> 00:05:52.560
+plane availability.
+
+00:05:52.560 --> 00:05:53.610
+So as you guys know--
+
+00:05:57.670 --> 00:05:59.290
+sorry, before we
+get started, I need
+
+00:05:59.290 --> 00:06:04.780
+to introduce some
+key concepts that
+
+00:06:04.780 --> 00:06:11.340
+are important in the VM that are
+important in our control plane.
+
+00:06:11.340 --> 00:06:16.080
+So as you guys know, we
+serve 17 regions globally.
+
+00:06:16.080 --> 00:06:22.580
+Each region can have multiple
+zones, at least three or more.
+
+00:06:22.580 --> 00:06:25.100
+And they are spread globally.
+
+00:06:25.100 --> 00:06:28.820
+Regions are connected to
+extremely fast network
+
+00:06:28.820 --> 00:06:30.650
+and highly available network.
+
+00:06:30.650 --> 00:06:33.980
+So any given region will
+have at least multiple
+
+00:06:33.980 --> 00:06:40.020
+redundant network paths, which
+is, as Brad Calder pointed out
+
+00:06:40.020 --> 00:06:45.610
+earlier this morning, it's a
+pretty key point off Google
+
+00:06:45.610 --> 00:06:46.330
+Cloud Platform.
+
+00:06:49.570 --> 00:06:51.010
+The rest of the
+presentation we're
+
+00:06:51.010 --> 00:06:54.460
+going to talk through
+some of the design
+
+00:06:54.460 --> 00:06:56.710
+points that have
+worked really well
+
+00:06:56.710 --> 00:07:01.150
+as we work to offer a highly
+available control plane.
+
+00:07:01.150 --> 00:07:05.740
+And this is the system that
+offers all the API we serve.
+
+00:07:11.540 --> 00:07:16.530
+So I need to introduce some
+key building block foundations
+
+00:07:16.530 --> 00:07:18.680
+before we get started.
+
+00:07:18.680 --> 00:07:22.880
+So this is a GCE
+resource data model.
+
+00:07:27.680 --> 00:07:33.150
+Resources like VMs and
+disks are zonal resources.
+
+00:07:33.150 --> 00:07:36.200
+Sub-networks, static
+IPs, regional disks--
+
+00:07:36.200 --> 00:07:38.780
+these are shared
+resources, but they're
+
+00:07:38.780 --> 00:07:40.300
+shared across within a region.
+
+00:07:44.230 --> 00:07:47.680
+Global resources-- the
+most important ones
+
+00:07:47.680 --> 00:07:51.940
+are images, Snapshots,
+and InstanceTemplate.
+
+00:07:51.940 --> 00:07:57.200
+They are shared across
+globally by all the regions.
+
+00:07:57.200 --> 00:08:01.300
+So you can imagine this, in
+a very object-oriented sense,
+
+00:08:01.300 --> 00:08:05.394
+you have a hierarchical
+access pattern.
+
+00:08:05.394 --> 00:08:06.560
+And we'll talk through this.
+
+00:08:06.560 --> 00:08:08.880
+And we'll refer
+to this data model
+
+00:08:08.880 --> 00:08:11.297
+as we explain the
+kind of choices
+
+00:08:11.297 --> 00:08:13.380
+we made to build a highly
+available control plane.
+
+00:08:16.280 --> 00:08:18.380
+So Vikas, you should
+just jump in as--
+
+00:08:18.380 --> 00:08:21.840
+VIKAS YADAV: Yeah, I want to
+spend some more time here.
+
+00:08:21.840 --> 00:08:23.360
+So we have a
+concept of resources
+
+00:08:23.360 --> 00:08:25.110
+which are available globally.
+
+00:08:25.110 --> 00:08:29.460
+So what that means is if you
+have an instance template which
+
+00:08:29.460 --> 00:08:32.799
+you want to use to launch
+VMs in multiple regions,
+
+00:08:32.799 --> 00:08:35.280
+you are to define
+it only once, and it
+
+00:08:35.280 --> 00:08:39.690
+will be available in your entire
+project across all the regions.
+
+00:08:39.690 --> 00:08:42.330
+You don't have to create
+a separate template
+
+00:08:42.330 --> 00:08:44.130
+for a different region.
+
+00:08:44.130 --> 00:08:47.790
+So in some sense, this provide
+simplicity of management
+
+00:08:47.790 --> 00:08:51.450
+and a single pane of control.
+
+00:08:51.450 --> 00:08:53.130
+And similarly, there
+are some resources
+
+00:08:53.130 --> 00:08:55.080
+which are region
+specific, which are used
+
+00:08:55.080 --> 00:08:57.690
+by all the zones in the region.
+
+00:08:57.690 --> 00:08:59.250
+And they follow
+a natural pattern
+
+00:08:59.250 --> 00:09:03.390
+like IP addresses, which are
+local to the region, which
+
+00:09:03.390 --> 00:09:07.620
+can be used within the
+zones in the region.
+
+00:09:07.620 --> 00:09:14.385
+And this natural hierarchy
+of sharding of the data model
+
+00:09:14.385 --> 00:09:16.320
+helps us achieve
+high availability,
+
+00:09:16.320 --> 00:09:19.172
+as we will talk about in the
+rest of the presentation.
+
+00:09:19.172 --> 00:09:20.630
+RAJESH MISHRA: So
+some of this will
+
+00:09:20.630 --> 00:09:23.630
+start to make a lot of
+sense as we dive deeper
+
+00:09:23.630 --> 00:09:26.967
+into the rest of the discussion.
+
+00:09:29.830 --> 00:09:35.740
+So we could have chosen a design
+to have control plane sorted
+
+00:09:35.740 --> 00:09:38.430
+out of a single
+scope, have everything
+
+00:09:38.430 --> 00:09:40.020
+be global with a
+[? sorted out ?]
+
+00:09:40.020 --> 00:09:42.569
+global state database.
+
+00:09:42.569 --> 00:09:44.610
+But as we know, that's a
+single point of failure.
+
+00:09:47.190 --> 00:09:48.930
+This could work
+as an improvement
+
+00:09:48.930 --> 00:09:50.580
+over the previous design.
+
+00:09:50.580 --> 00:09:53.670
+So what you see is each
+individual scopes, all
+
+00:09:53.670 --> 00:09:57.970
+the scope data model
+that I talked about,
+
+00:09:57.970 --> 00:10:01.470
+resources that are in
+the individual scope,
+
+00:10:01.470 --> 00:10:04.780
+they're sorted out of the
+individual control planes.
+
+00:10:04.780 --> 00:10:07.930
+However, in this case,
+we're sharing a database.
+
+00:10:07.930 --> 00:10:12.510
+That, again, is a
+single point of failure.
+
+00:10:12.510 --> 00:10:14.580
+One key point here
+that I talk about
+
+00:10:14.580 --> 00:10:23.380
+from a topology standpoint,
+we have a frontend--
+
+00:10:23.380 --> 00:10:26.840
+we have our Google
+frontend, which
+
+00:10:26.840 --> 00:10:30.500
+is nothing but a service
+router, and there
+
+00:10:30.500 --> 00:10:32.480
+is a second level
+of router we have,
+
+00:10:32.480 --> 00:10:36.170
+which I've called it
+here as API dispatcher.
+
+00:10:36.170 --> 00:10:40.070
+And all it does is
+it's a scope parser.
+
+00:10:40.070 --> 00:10:44.270
+So in our URL path, all
+our resources are scoped.
+
+00:10:44.270 --> 00:10:47.450
+So you could reference,
+let's say, a disk.
+
+00:10:47.450 --> 00:10:50.710
+And a disk, as we know,
+is a [? zonoscope. ?]
+
+00:10:50.710 --> 00:10:53.360
+So based on the
+specific zonoscope
+
+00:10:53.360 --> 00:10:56.330
+that you are interested
+in, the right control plane
+
+00:10:56.330 --> 00:10:58.497
+will be involved here.
+
+00:10:58.497 --> 00:11:00.580
+It's important to also
+call out that there is only
+
+00:11:00.580 --> 00:11:03.100
+one singleton global scope.
+
+00:11:03.100 --> 00:11:07.690
+And we serve 17 regions, so
+there are 17 regional scopes.
+
+00:11:07.690 --> 00:11:10.910
+And likewise, there are--
+
+00:11:10.910 --> 00:11:12.965
+and I just made a very
+gross generalization
+
+00:11:12.965 --> 00:11:17.210
+that there are three
+zones per region,
+
+00:11:17.210 --> 00:11:23.422
+so about 51 independent control
+planes serving resources
+
+00:11:23.422 --> 00:11:24.130
+within the scope.
+
+00:11:27.000 --> 00:11:28.370
+So this is the final design.
+
+00:11:28.370 --> 00:11:30.630
+This is what we
+have in production.
+
+00:11:30.630 --> 00:11:32.000
+This is what we use.
+
+00:11:32.000 --> 00:11:33.980
+We have independent
+control plane
+
+00:11:33.980 --> 00:11:38.060
+with their own
+independent databases.
+
+00:11:38.060 --> 00:11:42.170
+VIKAS YADAV: So the theme here
+is if you want availability,
+
+00:11:42.170 --> 00:11:46.340
+you need to minimize
+shared point of failures.
+
+00:11:46.340 --> 00:11:50.210
+So the slide number one, there's
+a single stack, which is not
+
+00:11:50.210 --> 00:11:52.250
+going to work for availability.
+
+00:11:52.250 --> 00:11:55.070
+Second slide, things
+are independent,
+
+00:11:55.070 --> 00:11:58.160
+but there is a shared
+database, which,
+
+00:11:58.160 --> 00:12:01.280
+again, reduces availability.
+
+00:12:01.280 --> 00:12:04.620
+Having independent
+controls stacks increases
+
+00:12:04.620 --> 00:12:07.970
+the aggregate availability,
+because there is no shared
+
+00:12:07.970 --> 00:12:10.380
+fate between those stacks.
+
+00:12:10.380 --> 00:12:12.500
+And that's what we
+have zeroed in on,
+
+00:12:12.500 --> 00:12:14.750
+that we are not going
+to have shared fate
+
+00:12:14.750 --> 00:12:17.570
+across the different stacks, and
+have multiple different stacks
+
+00:12:17.570 --> 00:12:19.140
+for different scopes.
+
+00:12:23.580 --> 00:12:27.900
+RAJESH MISHRA: Another key
+point that we felt was sharing.
+
+00:12:27.900 --> 00:12:31.320
+As we design our system,
+what about config?
+
+00:12:31.320 --> 00:12:37.600
+And what about updating all the
+scope control plane binaries?
+
+00:12:37.600 --> 00:12:43.510
+The model we have chosen is we
+do multi-day phased rollout.
+
+00:12:43.510 --> 00:12:46.420
+And this is largely
+to limit blast radius.
+
+00:12:46.420 --> 00:12:48.130
+So there are some
+config that needs
+
+00:12:48.130 --> 00:12:52.240
+to be rolled out globally
+across all the control planes
+
+00:12:52.240 --> 00:12:55.960
+that we serve, and we do this
+in a very staged fashion.
+
+00:12:55.960 --> 00:12:59.870
+We have circuit
+breakers along the way,
+
+00:12:59.870 --> 00:13:04.090
+and we do a lot of monitoring
+as we tier the rollout.
+
+00:13:04.090 --> 00:13:06.990
+So we watch rollout.
+
+00:13:06.990 --> 00:13:09.300
+We do zone by zone roll out.
+
+00:13:09.300 --> 00:13:14.460
+And based on the success,
+we will take it forward.
+
+00:13:14.460 --> 00:13:19.020
+And over some short
+period of time,
+
+00:13:19.020 --> 00:13:20.440
+the rollouts are completed.
+
+00:13:20.440 --> 00:13:23.460
+And then you get a new
+version of control plane
+
+00:13:23.460 --> 00:13:26.010
+if there are any config changes.
+
+00:13:26.010 --> 00:13:28.980
+We do a lot of
+[? offerant ?] validation.
+
+00:13:28.980 --> 00:13:32.150
+We presubmit testing
+and staging testing.
+
+00:13:35.947 --> 00:13:37.530
+So that's our design
+point number two.
+
+00:13:41.980 --> 00:13:43.630
+Let's spend some
+time on something
+
+00:13:43.630 --> 00:13:46.780
+that we have internally
+started to call Rule of Nine.
+
+00:13:46.780 --> 00:13:49.690
+And what this, simply stated--
+
+00:13:49.690 --> 00:13:54.610
+assume you're trying to provide
+a service called Service A,
+
+00:13:54.610 --> 00:13:56.530
+and it's serving a critical API.
+
+00:13:56.530 --> 00:14:01.200
+This could be your GCE system
+serving CreateInstance API.
+
+00:14:04.380 --> 00:14:10.230
+And Service A is built on a lot
+of internal services we have--
+
+00:14:10.230 --> 00:14:14.520
+identity as an example,
+an access check.
+
+00:14:14.520 --> 00:14:17.070
+A lot of these
+underlying dependencies
+
+00:14:17.070 --> 00:14:19.992
+need to offer at
+least an availability
+
+00:14:19.992 --> 00:14:21.450
+that is higher than
+what I'm trying
+
+00:14:21.450 --> 00:14:24.270
+to provide to our customers.
+
+00:14:24.270 --> 00:14:27.290
+And you can imagine, end
+layer of dependencies
+
+00:14:27.290 --> 00:14:30.814
+and will go higher
+at every layer below.
+
+00:14:30.814 --> 00:14:31.980
+And that's the Rule of Nine.
+
+00:14:31.980 --> 00:14:34.629
+So we followed this very
+diligently by inspecting
+
+00:14:34.629 --> 00:14:36.420
+all the [? differences ?]
+across the board.
+
+00:14:40.280 --> 00:14:41.780
+So that's design
+point number three.
+
+00:14:45.240 --> 00:14:49.400
+The subsequent discussion--
+since this talk
+
+00:14:49.400 --> 00:14:53.320
+is about distributed systems
+and serving control plane
+
+00:14:53.320 --> 00:14:57.230
+availability, let's
+spend a minute
+
+00:14:57.230 --> 00:15:00.270
+to talk about CAP Theorem.
+
+00:15:00.270 --> 00:15:06.010
+So CAP Theorem stated there
+are three key factors or three
+
+00:15:06.010 --> 00:15:09.830
+key design consideration points
+in any distributed system
+
+00:15:09.830 --> 00:15:11.080
+design.
+
+00:15:11.080 --> 00:15:15.770
+So distributed systems
+are partitioned by nature.
+
+00:15:15.770 --> 00:15:18.080
+So that's how much
+partition tolerance
+
+00:15:18.080 --> 00:15:21.770
+you need to build
+for your use cases.
+
+00:15:21.770 --> 00:15:25.310
+Availability and consistency
+are the other two parameters
+
+00:15:25.310 --> 00:15:28.030
+that you can play with.
+
+00:15:28.030 --> 00:15:32.660
+CAP Theorem states that you
+can pick only two of these,
+
+00:15:32.660 --> 00:15:36.740
+and you're probably trading
+off on the third one.
+
+00:15:36.740 --> 00:15:41.050
+And that's what in the
+intersection of all three,
+
+00:15:41.050 --> 00:15:44.250
+that's almost an
+impossible thing to build.
+
+00:15:44.250 --> 00:15:47.270
+So you could either end
+up with a system that
+
+00:15:47.270 --> 00:15:48.782
+is either consistent
+and available
+
+00:15:48.782 --> 00:15:50.240
+at the same time--
+that's typically
+
+00:15:50.240 --> 00:15:56.810
+all the old-school single
+server model, or more than often
+
+00:15:56.810 --> 00:15:59.090
+in a distributed
+system, availability
+
+00:15:59.090 --> 00:16:04.070
+is extremely important, which
+has been the kind of choices
+
+00:16:04.070 --> 00:16:06.260
+that we made for a
+lot of our design.
+
+00:16:06.260 --> 00:16:09.140
+And we picked AP-based model.
+
+00:16:09.140 --> 00:16:11.870
+In some cases, you might have
+consistency and partition
+
+00:16:11.870 --> 00:16:16.940
+tolerance if it's a
+shared global object.
+
+00:16:16.940 --> 00:16:19.855
+And we'll talk about
+that subsequently.
+
+00:16:22.530 --> 00:16:26.970
+So here what I have,
+an example, where
+
+00:16:26.970 --> 00:16:31.050
+we do some kind of lazy
+state reconciliation.
+
+00:16:31.050 --> 00:16:35.030
+So imagine there is a
+critical API being served out
+
+00:16:35.030 --> 00:16:41.850
+of your service, and there is
+a dependency layer below it.
+
+00:16:41.850 --> 00:16:46.780
+You could pick a choice
+where you fail-close,
+
+00:16:46.780 --> 00:16:52.060
+and you need to reconcile
+the state synchronously.
+
+00:16:52.060 --> 00:16:56.460
+In a partitioned system
+this can be tricky.
+
+00:16:56.460 --> 00:16:59.360
+And for some cases,
+we felt instead
+
+00:16:59.360 --> 00:17:02.220
+of improving availability
+it was acceptable to just do
+
+00:17:02.220 --> 00:17:03.283
+a fail-open.
+
+00:17:03.283 --> 00:17:05.449
+VIKAS YADAV: Yeah, so one
+example I'll bring up here
+
+00:17:05.449 --> 00:17:08.460
+is, in your application
+as well, if you
+
+00:17:08.460 --> 00:17:10.819
+have high availability
+for your API,
+
+00:17:10.819 --> 00:17:16.319
+but you have a dependency which
+is not a critical dependency
+
+00:17:16.319 --> 00:17:18.826
+and you can live with
+fail-open semantics,
+
+00:17:18.826 --> 00:17:20.700
+then you don't have to
+force the Rule of Nine
+
+00:17:20.700 --> 00:17:22.530
+on the dependency downstream.
+
+00:17:22.530 --> 00:17:24.329
+For example, let's say, logging.
+
+00:17:24.329 --> 00:17:26.910
+You don't have to
+require logging
+
+00:17:26.910 --> 00:17:29.800
+have higher nines
+of availability
+
+00:17:29.800 --> 00:17:33.630
+if you can reconcile, build
+a reconcile in your system
+
+00:17:33.630 --> 00:17:36.990
+that if logging is not
+available you still continue
+
+00:17:36.990 --> 00:17:38.435
+and reconcile later.
+
+00:17:38.435 --> 00:17:39.810
+So that's some of
+the patterns we
+
+00:17:39.810 --> 00:17:44.020
+have used for non-critical
+dependency, where we continue
+
+00:17:44.020 --> 00:17:48.000
+the operation, continue the
+top level API available,
+
+00:17:48.000 --> 00:17:48.960
+and reconcile later.
+
+00:17:52.169 --> 00:17:54.460
+RAJESH MISHRA: So that's our
+design point number four--
+
+00:17:57.300 --> 00:18:00.830
+do a fail-open and do
+lazy reconciliation.
+
+00:18:00.830 --> 00:18:06.315
+So in some ways this is like
+an eventual reconciliation.
+
+00:18:09.050 --> 00:18:12.050
+Let's talk a bit about
+InstanceTemplate.
+
+00:18:12.050 --> 00:18:13.730
+Remember, in our
+data model, I talked
+
+00:18:13.730 --> 00:18:18.720
+about InstanceTemplate and
+Snapshots are global resources.
+
+00:18:18.720 --> 00:18:19.940
+So what about them?
+
+00:18:19.940 --> 00:18:23.130
+Does that pose a problem
+for a GCE system?
+
+00:18:23.130 --> 00:18:25.509
+So I did a deep dive
+on InstanceTemplate.
+
+00:18:25.509 --> 00:18:27.050
+VIKAS YADAV: Yeah,
+the reason we want
+
+00:18:27.050 --> 00:18:29.600
+to talk about
+InstanceTemplate is, earlier
+
+00:18:29.600 --> 00:18:32.840
+we showed you that we have
+a separate control stack
+
+00:18:32.840 --> 00:18:36.890
+for every scope, and there
+is a single global scope.
+
+00:18:36.890 --> 00:18:38.720
+So InstanceTemplate
+are global resources
+
+00:18:38.720 --> 00:18:40.860
+which are sorted out
+of a single stack.
+
+00:18:40.860 --> 00:18:43.340
+So it's important
+for us to explain
+
+00:18:43.340 --> 00:18:46.550
+how we achieve high availability
+for InstanceTemplate
+
+00:18:46.550 --> 00:18:47.190
+and Snapshot.
+
+00:18:47.190 --> 00:18:48.773
+So Rajesh is going
+to talk about that.
+
+00:18:52.150 --> 00:18:53.950
+RAJESH MISHRA: So
+InstanceTemplate
+
+00:18:53.950 --> 00:18:56.640
+is something that
+gets configured.
+
+00:18:56.640 --> 00:18:59.710
+So this is a typical workflow
+of an InstanceTemplate.
+
+00:18:59.710 --> 00:19:01.340
+You create an InstanceTemplate.
+
+00:19:01.340 --> 00:19:04.520
+It's a global resource.
+
+00:19:04.520 --> 00:19:08.750
+And typically a
+managed instance group
+
+00:19:08.750 --> 00:19:13.870
+depends on referencing an
+InstanceTemplate, which
+
+00:19:13.870 --> 00:19:17.974
+is then, in, turn
+used by VM creation
+
+00:19:17.974 --> 00:19:19.390
+within the managed
+instance group.
+
+00:19:22.570 --> 00:19:26.920
+So it's a global resource, and
+it creates a global dependency
+
+00:19:26.920 --> 00:19:31.630
+for something that is a
+regional API or a zonal API.
+
+00:19:31.630 --> 00:19:33.595
+This could be a problem.
+
+00:19:36.640 --> 00:19:39.040
+So how does autoscaling
+or auto healing
+
+00:19:39.040 --> 00:19:43.690
+within the context of a
+managed instance group work?
+
+00:19:43.690 --> 00:19:46.900
+So by the way, there is
+a managed instance group.
+
+00:19:46.900 --> 00:19:49.350
+Folks are doing a
+presentation later today.
+
+00:19:49.350 --> 00:19:51.100
+They will talk a little
+bit in more detail
+
+00:19:51.100 --> 00:19:54.310
+about regional scaling,
+regional autoscaling
+
+00:19:54.310 --> 00:19:58.420
+and regional managed
+instance group.
+
+00:19:58.420 --> 00:20:02.230
+What's very key for both
+autoscaling and auto healing,
+
+00:20:02.230 --> 00:20:04.690
+you need to be able to create
+instances and reference
+
+00:20:04.690 --> 00:20:07.240
+your template.
+
+00:20:07.240 --> 00:20:10.030
+So the solution
+we've arrived, we
+
+00:20:10.030 --> 00:20:12.400
+cache InstanceTemplate
+in all regions.
+
+00:20:12.400 --> 00:20:15.570
+We actually do two
+levels of caching.
+
+00:20:15.570 --> 00:20:17.950
+The intuition that
+we operated on
+
+00:20:17.950 --> 00:20:21.880
+is that it was acceptable to
+go with eventual consistency
+
+00:20:21.880 --> 00:20:23.690
+with an AP-based model.
+
+00:20:23.690 --> 00:20:27.550
+So we just talked about CAP,
+and this is the AP model
+
+00:20:27.550 --> 00:20:33.460
+that we could successfully
+apply for InstanceTemplate.
+
+00:20:33.460 --> 00:20:36.610
+VIKAS YADAV: So the
+availability of InstanceTemplate
+
+00:20:36.610 --> 00:20:39.110
+is high because we cache it.
+
+00:20:39.110 --> 00:20:43.410
+And what that means is
+if a single global scope
+
+00:20:43.410 --> 00:20:47.310
+or single global stack has a
+problem, the InstanceTemplates
+
+00:20:47.310 --> 00:20:49.680
+which are cached with
+the regions and zones,
+
+00:20:49.680 --> 00:20:52.491
+they are available for
+autoscaling and auto healing
+
+00:20:52.491 --> 00:20:52.990
+to work.
+
+00:20:56.230 --> 00:20:58.600
+RAJESH MISHRA: And there
+are more nuances to this.
+
+00:20:58.600 --> 00:21:00.890
+And I'm not talking
+about all the use cases.
+
+00:21:00.890 --> 00:21:02.980
+So there are nuances
+of, you're trying
+
+00:21:02.980 --> 00:21:07.840
+to delete an InstanceTemplate,
+so what then?
+
+00:21:07.840 --> 00:21:10.870
+And we can cover that
+if there is interest
+
+00:21:10.870 --> 00:21:12.835
+later in the presentation.
+
+00:21:17.530 --> 00:21:18.030
+OK.
+
+00:21:18.030 --> 00:21:19.740
+I built this twice.
+
+00:21:19.740 --> 00:21:20.980
+My apologies.
+
+00:21:26.160 --> 00:21:30.050
+So let's spend a
+minute on Snapshot.
+
+00:21:30.050 --> 00:21:31.980
+So Snapshot is another
+global resource.
+
+00:21:36.150 --> 00:21:38.362
+Snapshots are
+taken on your disk,
+
+00:21:38.362 --> 00:21:39.445
+which is a zonal resource.
+
+00:21:45.840 --> 00:21:48.990
+However, there is something
+that we did that we never
+
+00:21:48.990 --> 00:21:50.850
+exposed to customers.
+
+00:21:50.850 --> 00:21:54.540
+The underlying
+snapshot has always
+
+00:21:54.540 --> 00:21:59.370
+been a multiregional concept,
+except the Snapshot resource
+
+00:21:59.370 --> 00:22:01.395
+itself, the metadata has
+been a global resource.
+
+00:22:03.970 --> 00:22:07.710
+The GCS buckets where the
+physical raw snapshots
+
+00:22:07.710 --> 00:22:11.280
+are stored, it's a
+multiregional concept.
+
+00:22:11.280 --> 00:22:12.900
+VIKAS YADAV: So
+this is important.
+
+00:22:12.900 --> 00:22:17.760
+If you have a zonal disk,
+and you take a snapshot,
+
+00:22:17.760 --> 00:22:21.420
+you don't have to worry about
+that zone not being available
+
+00:22:21.420 --> 00:22:24.060
+and you not being able
+to access your snapshot.
+
+00:22:24.060 --> 00:22:27.780
+So the metadata for
+Snapshot is global,
+
+00:22:27.780 --> 00:22:30.490
+and it's available via
+eventual consistency
+
+00:22:30.490 --> 00:22:33.010
+in all the other regions.
+
+00:22:33.010 --> 00:22:36.720
+The GCE bucket where the
+snapshot data is stored,
+
+00:22:36.720 --> 00:22:39.990
+that is multiregional,
+and that provides
+
+00:22:39.990 --> 00:22:42.720
+higher availability for the
+actual Snapshot content,
+
+00:22:42.720 --> 00:22:45.750
+and high availability for
+the Snapshot metadata.
+
+00:22:45.750 --> 00:22:49.260
+So you can imagine a scenario
+where your zonal snapshot,
+
+00:22:49.260 --> 00:22:52.820
+once the zone has trouble,
+you can use the snapshot
+
+00:22:52.820 --> 00:22:54.620
+and utilize that in
+some of those zone.
+
+00:23:00.245 --> 00:23:02.120
+RAJESH MISHRA: So Vikas
+already covered this.
+
+00:23:05.430 --> 00:23:09.280
+There's another thing
+that we announced
+
+00:23:09.280 --> 00:23:16.710
+a GCP Next, which has
+been in an alpha mode
+
+00:23:16.710 --> 00:23:18.490
+for some of our customers.
+
+00:23:18.490 --> 00:23:22.920
+We're now going to expose
+the snapshot locality.
+
+00:23:22.920 --> 00:23:26.850
+So as I told you, the underlying
+multiregional locality
+
+00:23:26.850 --> 00:23:27.799
+will get exposed.
+
+00:23:27.799 --> 00:23:30.090
+There was a new parameter
+we're exposing called storage
+
+00:23:30.090 --> 00:23:32.700
+locations.
+
+00:23:32.700 --> 00:23:35.310
+So you'll be able to learn where
+your physical snapshots are
+
+00:23:35.310 --> 00:23:37.710
+getting stored.
+
+00:23:37.710 --> 00:23:40.400
+Additionally, we're
+going to follow--
+
+00:23:40.400 --> 00:23:44.760
+we're going to allow you
+providing choices for where
+
+00:23:44.760 --> 00:23:46.900
+your snapshot will get stored.
+
+00:23:46.900 --> 00:23:49.560
+So this can be done
+on your request body
+
+00:23:49.560 --> 00:23:54.000
+by specifying the specific
+multiregional place where
+
+00:23:54.000 --> 00:23:56.670
+you need to get
+your snapshot stored
+
+00:23:56.670 --> 00:24:00.540
+if you don't want
+us to choose, or you
+
+00:24:00.540 --> 00:24:02.874
+could specify specific regions.
+
+00:24:02.874 --> 00:24:04.290
+So you could have
+your source disk
+
+00:24:04.290 --> 00:24:07.730
+in the US in any
+one of the zonal--
+
+00:24:07.730 --> 00:24:09.300
+US zones.
+
+00:24:09.300 --> 00:24:13.560
+And you can pick your regional
+destination to be in Europe.
+
+00:24:16.136 --> 00:24:17.260
+This is what it looks like.
+
+00:24:20.850 --> 00:24:21.940
+That's a parameter.
+
+00:24:21.940 --> 00:24:24.920
+So I've given two examples--
+
+00:24:24.920 --> 00:24:27.750
+storage locations with
+just one location, or you
+
+00:24:27.750 --> 00:24:29.670
+pick a multiregional thing.
+
+00:24:29.670 --> 00:24:33.880
+So the multiregional
+is a GCS construct.
+
+00:24:33.880 --> 00:24:37.835
+EU simply implies it's
+one of the EU regions.
+
+00:24:40.860 --> 00:24:44.001
+As I explained in
+the previous thing,
+
+00:24:44.001 --> 00:24:50.490
+we will tell you what are the
+specific multiregional places
+
+00:24:50.490 --> 00:24:52.400
+where we place the snapshot on.
+
+00:24:55.160 --> 00:24:59.130
+So the design point in both
+Snapshot and InstanceTemplate
+
+00:24:59.130 --> 00:25:05.550
+that has worked for us is
+eventual consistency and UX.
+
+00:25:05.550 --> 00:25:10.590
+So let's take a moment
+and talk about the UX.
+
+00:25:10.590 --> 00:25:13.200
+The choice we
+could have taken is
+
+00:25:13.200 --> 00:25:15.900
+we could have converted this
+into a regional resource.
+
+00:25:15.900 --> 00:25:18.960
+We could have deprecated
+our existing global resource
+
+00:25:18.960 --> 00:25:22.320
+and offered regional
+equivalents of those.
+
+00:25:22.320 --> 00:25:25.560
+We felt this was a
+good user convenience
+
+00:25:25.560 --> 00:25:27.720
+to a lot of customers.
+
+00:25:27.720 --> 00:25:31.230
+Because oftentimes, you
+try to create a snapshot
+
+00:25:31.230 --> 00:25:33.935
+and make them available
+in multiple regions,
+
+00:25:33.935 --> 00:25:36.060
+and you're going to end up
+doing the work yourself.
+
+00:25:36.060 --> 00:25:40.230
+So we're just saving
+the burden by taking
+
+00:25:40.230 --> 00:25:44.070
+on a lot of that complexity
+as part of the GCE system.
+
+00:25:44.070 --> 00:25:46.170
+So the UX was a key point.
+
+00:25:46.170 --> 00:25:47.880
+So we didn't want
+to trade off on some
+
+00:25:47.880 --> 00:25:50.130
+of the user convenience.
+
+00:25:50.130 --> 00:25:52.350
+Meanwhile, we could achieve
+all the high availability
+
+00:25:52.350 --> 00:25:56.150
+characteristics by providing
+eventual consistency
+
+00:25:56.150 --> 00:25:59.330
+by caching those resources
+in each one of the regions.
+
+00:26:01.980 --> 00:26:04.370
+So that's our design
+point number five.
+
+00:26:04.370 --> 00:26:09.700
+So this a recap of all the
+five design points we covered.
+
+00:26:09.700 --> 00:26:14.710
+And above all, and
+most importantly--
+
+00:26:14.710 --> 00:26:17.570
+and it's an operational point--
+
+00:26:17.570 --> 00:26:20.600
+at Google, most services
+we carry out something
+
+00:26:20.600 --> 00:26:22.130
+we call DRT.
+
+00:26:22.130 --> 00:26:29.450
+DRT is disaster recovery,
+and we simulate failures.
+
+00:26:29.450 --> 00:26:31.390
+We simulate region
+unavailability.
+
+00:26:31.390 --> 00:26:34.100
+We simulate latency.
+
+00:26:34.100 --> 00:26:36.950
+And we want to make
+sure our APIs are well
+
+00:26:36.950 --> 00:26:39.290
+behaving across all
+those failures that
+
+00:26:39.290 --> 00:26:40.750
+could happen in the real world.
+
+00:26:45.474 --> 00:26:46.890
+VIKAS YADAV: And
+this DRT exercise
+
+00:26:46.890 --> 00:26:49.050
+is invisible to the customer.
+
+00:26:49.050 --> 00:26:50.380
+we do it internally.
+
+00:26:50.380 --> 00:26:53.170
+It's planned, and
+we prepare for it.
+
+00:26:53.170 --> 00:26:55.330
+And we want to see the
+system behavior when
+
+00:26:55.330 --> 00:26:58.100
+disaster recovery is going on.
+
+00:26:58.100 --> 00:27:00.200
+And this does not impact
+any of the external VMs
+
+00:27:00.200 --> 00:27:01.720
+or external line traffic.
+
+00:27:04.560 --> 00:27:09.660
+RAJESH MISHRA: So so far,
+we've discussed our data model
+
+00:27:09.660 --> 00:27:12.975
+and the fact that our
+resources are either--
+
+00:27:12.975 --> 00:27:15.540
+are scope resources,
+so either they're
+
+00:27:15.540 --> 00:27:18.870
+zonal, regional, or global.
+
+00:27:22.150 --> 00:27:26.800
+And you could use control plane
+to provision your resources.
+
+00:27:26.800 --> 00:27:30.030
+And you could do this
+on-demand, in real-time
+
+00:27:30.030 --> 00:27:33.150
+as you're serving traffic,
+or you could pre-provision.
+
+00:27:33.150 --> 00:27:34.710
+So let's apply some lessons.
+
+00:27:34.710 --> 00:27:36.210
+So there are two
+ways to approach
+
+00:27:36.210 --> 00:27:40.260
+this when it comes to
+serving real-time traffic
+
+00:27:40.260 --> 00:27:43.480
+for critical operations.
+
+00:27:43.480 --> 00:27:47.550
+So let's imagine you
+built this service.
+
+00:27:47.550 --> 00:27:53.390
+You built a GCE application
+that serves 1,000 QPS.
+
+00:27:53.390 --> 00:27:56.340
+And let's say you did one
+of those good best design
+
+00:27:56.340 --> 00:28:03.270
+practices that we advise on
+GCE, and you leverage two zones,
+
+00:28:03.270 --> 00:28:09.540
+in this case, US East
+1A and US East 1B.
+
+00:28:09.540 --> 00:28:12.360
+In my contrived
+example, each VM has
+
+00:28:12.360 --> 00:28:15.750
+been tested to serve
+100 QPS, and they've
+
+00:28:15.750 --> 00:28:17.130
+been tested for that.
+
+00:28:17.130 --> 00:28:22.830
+So you have five VMs on the
+either side on two zones served
+
+00:28:22.830 --> 00:28:25.590
+by isolated controlled planes.
+
+00:28:25.590 --> 00:28:31.280
+And even the VMs are completely
+isolated because they are
+
+00:28:31.280 --> 00:28:34.290
+in two different serving paths.
+
+00:28:37.110 --> 00:28:40.950
+Imagine you lose
+one of the zones.
+
+00:28:40.950 --> 00:28:44.290
+You're going to double
+their traffic on US East 1B.
+
+00:28:46.880 --> 00:28:49.470
+This may be not desirable,
+because you tested your service
+
+00:28:49.470 --> 00:28:51.570
+for 100 QPS.
+
+00:28:51.570 --> 00:28:54.540
+So the choices you have--
+
+00:28:54.540 --> 00:29:00.620
+you would go on-demand
+and ask for five more VMs.
+
+00:29:05.880 --> 00:29:08.700
+There is a possibility
+you may not get five VMs,
+
+00:29:08.700 --> 00:29:11.900
+because we may stock out.
+
+00:29:11.900 --> 00:29:16.520
+Maybe US West 1A is experiencing
+a zone-wide failure,
+
+00:29:16.520 --> 00:29:19.070
+and every other customer is
+trying to do the same thing.
+
+00:29:19.070 --> 00:29:20.478
+That could be problematic.
+
+00:29:26.170 --> 00:29:27.690
+So you could pre-provision.
+
+00:29:27.690 --> 00:29:33.920
+In pre-provisioning, you
+will pre-provision five more
+
+00:29:33.920 --> 00:29:35.690
+instances.
+
+00:29:35.690 --> 00:29:39.530
+So here you end up
+with 10 instances each.
+
+00:29:39.530 --> 00:29:41.690
+And in reality, the
+traffic will look
+
+00:29:41.690 --> 00:29:43.910
+like this in a steady state.
+
+00:29:43.910 --> 00:29:47.210
+So you're serving half
+what you tested for,
+
+00:29:47.210 --> 00:29:51.440
+and that may be a
+safe place to be.
+
+00:29:51.440 --> 00:29:56.260
+And in the event
+you lose a zone,
+
+00:29:56.260 --> 00:29:58.520
+you would be safely
+able to serve
+
+00:29:58.520 --> 00:30:00.800
+twice the amount of
+traffic, because that's
+
+00:30:00.800 --> 00:30:01.670
+what you tested for.
+
+00:30:05.040 --> 00:30:08.890
+So let's recap what we learned.
+
+00:30:08.890 --> 00:30:15.570
+So if you pre-provision, you're
+done with a control plane,
+
+00:30:15.570 --> 00:30:19.770
+configuring your VMs, the
+disks, and all the network
+
+00:30:19.770 --> 00:30:23.930
+programming that goes with
+it, and then, at that point,
+
+00:30:23.930 --> 00:30:26.340
+your VM is serving live traffic.
+
+00:30:26.340 --> 00:30:29.700
+And we have published
+SLA for that,
+
+00:30:29.700 --> 00:30:33.130
+and that works out really well.
+
+00:30:33.130 --> 00:30:39.350
+So the pros are, this
+pattern is predictable.
+
+00:30:39.350 --> 00:30:41.420
+It's simple.
+
+00:30:41.420 --> 00:30:44.270
+On the downside, it
+costs a little bit more,
+
+00:30:44.270 --> 00:30:47.930
+and in a steady state
+or in the average case,
+
+00:30:47.930 --> 00:30:51.330
+your system's a
+little less utilized.
+
+00:30:51.330 --> 00:30:53.360
+In the on-demand, you
+put the control plane
+
+00:30:53.360 --> 00:30:56.440
+on the critical path.
+
+00:30:56.440 --> 00:31:01.200
+So here you save on utilization,
+and that's an advantage.
+
+00:31:01.200 --> 00:31:06.870
+That could work out for
+some of your use cases.
+
+00:31:06.870 --> 00:31:10.190
+But this is unpredictable.
+
+00:31:10.190 --> 00:31:15.620
+If it's Black Friday, you
+may not get your instances.
+
+00:31:18.982 --> 00:31:20.440
+VIKAS YADAV: So
+the on-demand model
+
+00:31:20.440 --> 00:31:24.910
+is where if you run into a
+problem in one of your zones,
+
+00:31:24.910 --> 00:31:27.115
+you try to allocate
+in other zones
+
+00:31:27.115 --> 00:31:29.680
+an equal number of
+VMs which you need.
+
+00:31:29.680 --> 00:31:32.440
+And what Rajesh is pointing
+out, it's not a guaranteed
+
+00:31:32.440 --> 00:31:35.320
+unless they are
+reserved or provisioned
+
+00:31:35.320 --> 00:31:39.860
+that you need x amount of VMs,
+you'll get x amount of VMs.
+
+00:31:39.860 --> 00:31:42.060
+It could be a
+stock-out situation,
+
+00:31:42.060 --> 00:31:44.240
+it could be a
+thundering herd problem,
+
+00:31:44.240 --> 00:31:47.440
+that the zone you want
+that's over capacity,
+
+00:31:47.440 --> 00:31:51.046
+and nobody can get extra VMs.
+
+00:31:51.046 --> 00:31:53.170
+RAJESH MISHRA: So that
+concludes our presentations.
+
+00:31:53.170 --> 00:31:59.520
+[MUSIC PLAYING]
+

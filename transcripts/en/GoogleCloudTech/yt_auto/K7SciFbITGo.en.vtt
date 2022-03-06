@@ -1,0 +1,2468 @@
+WEBVTT
+Kind: captions
+Language: en
+
+00:00:04.640 --> 00:00:05.110 align:start position:0%
+ 
+hi  my name is alexa griffith yes my name  really is alexa but hopefully i want  echo today  and i'm presenting with my amazing tech  lead mike hurwitz who we call danger  we're both software engineers on the  data science infrastructure team at blue  core  and today we're going to talk about how  we use google cloud to serve tens of  thousands of personalized  recommendations  per second at blue core we have a saying  as simple as possible as powerful as  necessary this is one of our company  values  and we will keep this in mind as we  discuss the evolution of building our  robust recommendation service throughout  this talk  so gcp has enabled us to build a service  that has this value of being as simple  as possible and as powerful as necessary  in building the recommendation service  we're able to leverage the wide variety  of gcp  tools to store query and serve data  they all see some purpose but really  it's the breadth of their offerings that  make services like ours possible  while allowing us to maintain a low  operational overhead  so you might be wondering what is  bluecore  bluecore offers intelligent ecommerce  marketing as a service  we send you marketing emails that don't  suck and we aim to send you  better emails not more we're a company  that's around 7 years old we have around  250 employees  we serve hundreds of large retailers  including some you may have heard of  like nike and sephora  what makes us different is that we don't  send the same email to every person  almost all of our millions of emails  that we send every day are personalized  additionally we started providing  real-time recommendations on retailers  websites and we're going to refer to  this  as our on-site product  so let's discuss what even is a  recommendation  when we talk about a recommendation  we're talking about products that we  think  someone will like based on either a  product they've interacted with or  they may have a preference for given  their purchase and viewing history in  the past  essentially we map either an email or a  product id  to a list of recommended products for  example in these cases  two recipients of the same campaign  which is just the type of email send  left different items in their carts and  we call these abandoned cart emails  if we take a look at the email on the  left the person's left jeans in their  cart  it's possible that based on their past  purchasing and viewing history  we want to recommend to them a cami or a  t-shirt  on the other hand the in the right email  a person has left a collared shirt in  their cart  we may recommend other products similar  to the collar shirt as products the user  may also like  for example here we recommend other  types of collared shirts  but there are some things to consider  it's not just as easy as putting some  pictures in an email  and sending the email there are certain  things we need to take into account like  product exclusion rules which are  evaluated at run time  what a project exclusion rule could look  like is you say  in the email you don't want to show a  product that's on discount  or out of stock or maybe if you want to  show a product that's recently come back  into stock  since products update constantly it's  very important that we have an accurate  catalog  and don't show invalid products in the  email  this requirement definitely makes our  service a bit more interesting  and we'll talk about how we use our  product update listener to keep our  product catalog fresh  so marketers decided to send an email  and they create a campaign  a campaign has an audience and a  template a template has blocks which may  contain recommended products  the template is mixed with the audience  query that runs in bigquery and with  those we can generate the emails  products are then joined with the  audience in the query which means that  any decisions the template makes cannot  rely on anything that the query is  unaware of  generating audiences this way is very  flexible and we consider it to be a  competitive advantage  but applying recommendations at this  stage is very limiting  so you may be asking is this good enough  onsite was a new frontier for bluecore  that forced us to reevaluate our  architecture  latency became a primary driver not just  bandwidth  audience generation and personalization  are separate which means the templates  are limited to data appended to the rows  of the audience query we want to support  templates that are structurally dynamic  rather than just filling in blocks  and that means either making the  audience query aware of all of the  decisions that need to be made  which is pretty difficult or allowing  the template to pull the recommendations  it knows it needs at runtime on a per  email basis  a b testing is another example of a  personalized runtime decision that's  difficult to make in the database  previously we were copying some  recommendations into datastore to  support these use cases  and while datastore is great this is  really not what it was made for  and it got to be very expensive so we  had to build something new  pages on the web start to feel slow at  three to four hundred milliseconds  and recommendations is only part of the  on-site campaign process  there's also generating the template and  transiting all that data to and from the  browser  so we gave ourselves about 100  milliseconds to do all the work that we  needed to do on the recommendation side  we want to be able to serve about 50  million emails an hour  and if you do a little math that works  out to 13 000 emails a second  we targeted 20 000 emails a second  because we figured that would be enough  headroom  doing product filtering in the email  means that there must be enough products  returned  that the filters will be run across all  of them and they'll still be enough to  fill in the blocks  that means sending more products than  are actually required down into the  templating engine  we wanted to move those decisions up  into the recommendation service so that  we were only returning the products that  we needed  rather than returning too many or  potentially even worse too few  supporting recommendations via a b tests  is vital because frankly without testing  you can't improve  and we want to do all of this without  spending all of our money  so for the naive implementation we want  to change as little as possible  we know this probably won't be good  enough in the end but what it will do  is it will give us a good idea of what  areas we need to improve on  so if we want to change as little as  possible how would we do it  well we would choose to write a grpc  service to communicate with our  templating engine  and we want to go ahead and make use of  the data that we already have available  our recommendations data already lives  in bigquery along with our products data  that comes from datastore  so this would be the minimum we need for  our service to do runtime  personalization  the recommendation service makes up one  of three parts of personalization  with the other two being templating  which comes from datastore and the  audience  which is just all the people that  receive an email and is stored in  bigquery  the recommendation service runs in  kubernetes engine and is written in go  and the product's data lives in  datastore while the recommendations live  mainly in bigquery with some copied into  datastore  so now we've checked that as simple as  possible box but do we meet that as  powerful as necessary requirements  well when considering if our service  meets these requirements we're going to  evaluate the recommendations  and products components remember we now  have to consider  on-site or the recommendation on the  company's website  as part of the requirements bigquery is  great for bandwidth but now  latency is our problem we're failing to  meet our on-site latency requirements  even if we did export all of our  recommendations from bigquery to  datastore  we still might not hit our latency goals  and keep in mind for us using datasore  is expensive here  but we can't blame a hammer for being a  bad screwdriver we just need the right  tools  so first we're going to discuss how we  can liberate our recommendations  as i just mentioned bigquery cannot be  the source of recommendations at runtime  the latency is just  too high so we looked into bigtable  instead  why big table you may be asking well  caching's not a good option for us  because  the specific recommendation data for a  given recommendation type  email and namespace are often only read  once before they're invalidated in the  cache  and a cache miss would mean reading  directly from bigquery  which causes some latency or data sore  which is expensive  on the other hand they table latencies  around 15 to 20 milliseconds  and better the harder you hit it so if  we consolidate our data into bigtable we  can meet our latency's requirements  our recommendations including events and  our generated recommendations from our  data science models are still stored in  bigquery  additionally we started generating some  of our recommendations using dataproc  and these are stored in gcs we created a  service written in go that's a  kubernetes task running in airflow  just to migrate and consolidate our  recommendations data into bigtable  the gcs and bigquery api storage api  made loading data into bigtable fairly  easy with a small bigtable cluster of  just  three of three nodes we're able to load  read and write  150 to 200 000 rows per second  so now that we have our data into  bigtable let's talk a little bit about  how we deal with our data in bigtable  we have hundreds of namespaces but  bigtable has a thousand table quota  we can't have a per namespace table for  each of our recommendation models or  we're going to quickly reach that  thousand table quota limit  that's okay though they don't call it  medium table for a reason this is what  bigtable was made for  so instead we have a per table we have a  table per  recommendation model and our schema is  the key as the partner and id  which id could be like email and the  value is a list of product ids  so just to recap this is what we had  before  paying attention to the recommendations  coming from bigquery and datastore  which are now consolidated into bigtable  vr  via our bigquery to bigtable service and  we picked up literally  seconds of latency so now that we've  improved the recommendation component of  the service  are we good now are we meeting our  on-site latency requirements  well i mentioned previously on the  previous slide  that there are two areas where we can  improve our recommendation service  the recommendations portion and the  products now that we've improved  recommendations  we're still constantly fetching products  from data store causing it to burn a  hole in our wallets  additionally we're failing the on-site  latency requirements because of this too  so we measured data store latency from a  gke application written in python and  each of the products we fetch from  datastore are around two kilobytes per  entity  we found that the data store latencies  aren't great they're about 45  milliseconds to get started and then  an additional 4.2 milliseconds per key  so like i said not great but they aren't  totally disqualifying for our use of  datastore  using datastore didn't leave us a lot of  headroom so if datastore isn't going to  get us where we need to go  we need to find something else what we  need  is a latency smackdown  our objects are about 2 kilobytes and so  these are cacheable we found memory  store to be about two orders of  magnitude faster than datastore  fetching a single key out of datastore  costs about 50 milliseconds  but memory store for the same load costs  only 125  microseconds we're usually reading about  20 to 40 products per request so these  numbers are more realistic than you  might guess because memory stores  managed redis it was easy to find  clients that support all the features  that we need for performance  such as pipelining we need to avoid the  calls to datastore which means we need  to have a long ttl on our cache but  alexa already told us the products are  constantly changing  they're going in and out of stock prices  are changing images are changing  so we can't have a long ttl our product  ingest pipeline writes to datastore  as it always has but now it's also  notifying us of invalidation by pushing  product ids onto google cloud pub sub  we have a listener that reads those ids  from pub sub pulls the products from  datastore and writes them to our cache  you may be wondering why do we send ids  instead of just sending the product  bodies  well the product ingest is concurrent so  we can't know if any single update is  authoritative  by sending ids instead of bodies on pub  sub we can guarantee that the cache is  eventually consistent  rather than being potentially  inconsistent forever and we can have a  very long ttl  datastore natively returns protobufs and  those come out to about two kilobytes on  average now we could have come up with a  new  serialization format that does  everything that datastore's native  serialization format does  but there was really no reason to do  that because it's already doing it  but with about two kilobytes per product  and many many products we'd end up with  a huge cache which is both expensive and  slow  so how do we mitigate that the first  thing is that we don't  update products that aren't already in  the cash products get into the cash by  being used in a marketing product  which means that the only objects that  will be in the cache  are the objects that are actually being  sent out  so if a partner of ours happens to have  a catalog of a million products but  they're only sending out emails with a  thousand of those products  we only have to have a thousand in our  cash  the second thing we looked into was  compression but compressing small items  is hard  most compression algorithms learn as  they go  which means if you're compressing a book  the first page is going to compress  significantly worse than the 10th page  of the 100th page  and with only two kilobytes there really  isn't a lot of time to learn  by the time you get to the end of the  product and finally know how to compress  it  there's no more to compress so what did  we do  well first thing is that we downloaded  1858 products  from datastore for one of our partners  which came out to about 32 megabytes  and we then tried to compress them using  gzip and xz  and while the lcma compression of xz  is really too slow for runtime that's  kind of okay  because we're really just testing here  so we then found that we were unable to  do  better than two to one compression even  with a very slow xz  well that's not really good enough so  how good could it be  we took those same 1858 products and we  tarred them all together  effectively making one big book and  compressed again  and we found that gzip was able to do  better than five to one and xz was even  able to do better than eight to one  but we can't just tar these products at  runtime that doesn't make any sense  because we don't need all the products  we don't know which ones we need  so we needed something else fortunately  for us  z standard exists which allows you to  train its compression ahead of time  they call this dictionary compression  and that's exactly what we do  on a per partner basis we download a  sample of the products  compress them training the dictionary  and then we store those dictionaries  into datastore caching them in the  service as well  so anytime we read or write a product we  know exactly what dictionary to use  and the compression is fantastic as you  can see here  z standard with dictionary is better  than five to one  even on small two kilobyte courtroom  there are other high performance  and decompression algorithms such as  snappy and lz4  however those don't offer dictionary  compression which as we've seen is a big  factor  with such small bodies as a reminder  this is where we were before  and this is where we are now we have  products still stored in datastore as we  always have  but now they're being kept up to date in  a cache  with our product update listener which  is receiving invalidation messages over  google cloud pub sub  the recommendation service itself has a  small lru cache with a short ttl  just to keep the traffic to memory  stored down to a dull roar  and we think we're finally as powerful  as necessary  but how to be sure the only way is to  test it  and fortunately for us through the power  of gke this was  pretty straightforward we were able to  deploy our service  and the attacking client into google  kubernetes engine  and we could then scale both the service  and that client with a single command  the entire run including rescaling the  components was completely scripted  and hands off and how did we do well we  did pretty well  with 16 two core pods running the  service we were able to pull  between 56 and 60 kilohertz while still  staying within our latency budget  and we hit our target of 20 kilohertz  with just four pods  yes we are finally as powerful as  necessary  now that this code is out in production  well you know changes need to be made  and we need to live with it  one thing that we do a lot is when  changes are made we'll deploy a canary  into kubernetes  that allows us to validate that the new  code doesn't have a regression  in terms of correctness or performance  and then once that's proven we can scale  it up to the rest of our  pods logs are exported automatically  from gke into bigquery  and so we've got a one-stop shop for  when we need to look and see what  happened  and we're exporting all of our metrics  to datadog and because  this is a production service we've got  pagerduty to wake us up in the middle of  the night if something catastrophic  should happen  so what have we got well recommendations  are being written to bigquery and google  cloud storage  as they always have been but now they're  being copied into google cloud bigtable  products are stored in datastore again  as they always were but are now being  cached in memory store  and kept up to date using invalidation  triggered through google cloud pub sub  our clients hit us using either protobuf  over http 1.1  or grpc over http 2 and the whole thing  is deployed into google kubernetes  engine  i'd like to thank you all for listening  and thank you to google for giving us  the opportunity to speak to you today  you
+
+00:00:05.110 --> 00:00:07.269 align:start position:0%
+hi  my name is alexa griffith yes my name  really is alexa but hopefully i want  echo today  and i'm presenting with my amazing tech  lead mike hurwitz who we call danger  we're both software engineers on the  data science infrastructure team at blue  core  and today we're going to talk about how  we use google cloud to serve tens of  thousands of personalized  recommendations  per second at blue core we have a saying  as simple as possible as powerful as  necessary this is one of our company  values  and we will keep this in mind as we  discuss the evolution of building our  robust recommendation service throughout  this talk  so gcp has enabled us to build a service  that has this value of being as simple  as possible and as powerful as necessary  in building the recommendation service  we're able to leverage the wide variety  of gcp  tools to store query and serve data  they all see some purpose but really  it's the breadth of their offerings that  make services like ours possible  while allowing us to maintain a low  operational overhead  so you might be wondering what is  bluecore  bluecore offers intelligent ecommerce  marketing as a service  we send you marketing emails that don't  suck and we aim to send you  better emails not more we're a company  that's around 7 years old we have around  250 employees  we serve hundreds of large retailers  including some you may have heard of  like nike and sephora  what makes us different is that we don't  send the same email to every person  almost all of our millions of emails  that we send every day are personalized  additionally we started providing  real-time recommendations on retailers  websites and we're going to refer to  this  as our on-site product  so let's discuss what even is a  recommendation  when we talk about a recommendation  we're talking about products that we  think  someone will like based on either a  product they've interacted with or  they may have a preference for given  their purchase and viewing history in  the past  essentially we map either an email or a  product id  to a list of recommended products for  example in these cases  two recipients of the same campaign  which is just the type of email send  left different items in their carts and  we call these abandoned cart emails  if we take a look at the email on the  left the person's left jeans in their  cart  it's possible that based on their past  purchasing and viewing history  we want to recommend to them a cami or a  t-shirt  on the other hand the in the right email  a person has left a collared shirt in  their cart  we may recommend other products similar  to the collar shirt as products the user  may also like  for example here we recommend other  types of collared shirts  but there are some things to consider  it's not just as easy as putting some  pictures in an email  and sending the email there are certain  things we need to take into account like  product exclusion rules which are  evaluated at run time  what a project exclusion rule could look  like is you say  in the email you don't want to show a  product that's on discount  or out of stock or maybe if you want to  show a product that's recently come back  into stock  since products update constantly it's  very important that we have an accurate  catalog  and don't show invalid products in the  email  this requirement definitely makes our  service a bit more interesting  and we'll talk about how we use our  product update listener to keep our  product catalog fresh  so marketers decided to send an email  and they create a campaign  a campaign has an audience and a  template a template has blocks which may  contain recommended products  the template is mixed with the audience  query that runs in bigquery and with  those we can generate the emails  products are then joined with the  audience in the query which means that  any decisions the template makes cannot  rely on anything that the query is  unaware of  generating audiences this way is very  flexible and we consider it to be a  competitive advantage  but applying recommendations at this  stage is very limiting  so you may be asking is this good enough  onsite was a new frontier for bluecore  that forced us to reevaluate our  architecture  latency became a primary driver not just  bandwidth  audience generation and personalization  are separate which means the templates  are limited to data appended to the rows  of the audience query we want to support  templates that are structurally dynamic  rather than just filling in blocks  and that means either making the  audience query aware of all of the  decisions that need to be made  which is pretty difficult or allowing  the template to pull the recommendations  it knows it needs at runtime on a per  email basis  a b testing is another example of a  personalized runtime decision that's  difficult to make in the database  previously we were copying some  recommendations into datastore to  support these use cases  and while datastore is great this is  really not what it was made for  and it got to be very expensive so we  had to build something new  pages on the web start to feel slow at  three to four hundred milliseconds  and recommendations is only part of the  on-site campaign process  there's also generating the template and  transiting all that data to and from the  browser  so we gave ourselves about 100  milliseconds to do all the work that we  needed to do on the recommendation side  we want to be able to serve about 50  million emails an hour  and if you do a little math that works  out to 13 000 emails a second  we targeted 20 000 emails a second  because we figured that would be enough  headroom  doing product filtering in the email  means that there must be enough products  returned  that the filters will be run across all  of them and they'll still be enough to  fill in the blocks  that means sending more products than  are actually required down into the  templating engine  we wanted to move those decisions up  into the recommendation service so that  we were only returning the products that  we needed  rather than returning too many or  potentially even worse too few  supporting recommendations via a b tests  is vital because frankly without testing  you can't improve  and we want to do all of this without  spending all of our money  so for the naive implementation we want  to change as little as possible  we know this probably won't be good  enough in the end but what it will do  is it will give us a good idea of what  areas we need to improve on  so if we want to change as little as  possible how would we do it  well we would choose to write a grpc  service to communicate with our  templating engine  and we want to go ahead and make use of  the data that we already have available  our recommendations data already lives  in bigquery along with our products data  that comes from datastore  so this would be the minimum we need for  our service to do runtime  personalization  the recommendation service makes up one  of three parts of personalization  with the other two being templating  which comes from datastore and the  audience  which is just all the people that  receive an email and is stored in  bigquery  the recommendation service runs in  kubernetes engine and is written in go  and the product's data lives in  datastore while the recommendations live  mainly in bigquery with some copied into  datastore  so now we've checked that as simple as  possible box but do we meet that as  powerful as necessary requirements  well when considering if our service  meets these requirements we're going to  evaluate the recommendations  and products components remember we now  have to consider  on-site or the recommendation on the  company's website  as part of the requirements bigquery is  great for bandwidth but now  latency is our problem we're failing to  meet our on-site latency requirements  even if we did export all of our  recommendations from bigquery to  datastore  we still might not hit our latency goals  and keep in mind for us using datasore  is expensive here  but we can't blame a hammer for being a  bad screwdriver we just need the right  tools  so first we're going to discuss how we  can liberate our recommendations  as i just mentioned bigquery cannot be  the source of recommendations at runtime  the latency is just  too high so we looked into bigtable  instead  why big table you may be asking well  caching's not a good option for us  because  the specific recommendation data for a  given recommendation type  email and namespace are often only read  once before they're invalidated in the  cache  and a cache miss would mean reading  directly from bigquery  which causes some latency or data sore  which is expensive  on the other hand they table latencies  around 15 to 20 milliseconds  and better the harder you hit it so if  we consolidate our data into bigtable we  can meet our latency's requirements  our recommendations including events and  our generated recommendations from our  data science models are still stored in  bigquery  additionally we started generating some  of our recommendations using dataproc  and these are stored in gcs we created a  service written in go that's a  kubernetes task running in airflow  just to migrate and consolidate our  recommendations data into bigtable  the gcs and bigquery api storage api  made loading data into bigtable fairly  easy with a small bigtable cluster of  just  three of three nodes we're able to load  read and write  150 to 200 000 rows per second  so now that we have our data into  bigtable let's talk a little bit about  how we deal with our data in bigtable  we have hundreds of namespaces but  bigtable has a thousand table quota  we can't have a per namespace table for  each of our recommendation models or  we're going to quickly reach that  thousand table quota limit  that's okay though they don't call it  medium table for a reason this is what  bigtable was made for  so instead we have a per table we have a  table per  recommendation model and our schema is  the key as the partner and id  which id could be like email and the  value is a list of product ids  so just to recap this is what we had  before  paying attention to the recommendations  coming from bigquery and datastore  which are now consolidated into bigtable  vr  via our bigquery to bigtable service and  we picked up literally  seconds of latency so now that we've  improved the recommendation component of  the service  are we good now are we meeting our  on-site latency requirements  well i mentioned previously on the  previous slide  that there are two areas where we can  improve our recommendation service  the recommendations portion and the  products now that we've improved  recommendations  we're still constantly fetching products  from data store causing it to burn a  hole in our wallets  additionally we're failing the on-site  latency requirements because of this too  so we measured data store latency from a  gke application written in python and  each of the products we fetch from  datastore are around two kilobytes per  entity  we found that the data store latencies  aren't great they're about 45  milliseconds to get started and then  an additional 4.2 milliseconds per key  so like i said not great but they aren't  totally disqualifying for our use of  datastore  using datastore didn't leave us a lot of  headroom so if datastore isn't going to  get us where we need to go  we need to find something else what we  need  is a latency smackdown  our objects are about 2 kilobytes and so  these are cacheable we found memory  store to be about two orders of  magnitude faster than datastore  fetching a single key out of datastore  costs about 50 milliseconds  but memory store for the same load costs  only 125  microseconds we're usually reading about  20 to 40 products per request so these  numbers are more realistic than you  might guess because memory stores  managed redis it was easy to find  clients that support all the features  that we need for performance  such as pipelining we need to avoid the  calls to datastore which means we need  to have a long ttl on our cache but  alexa already told us the products are  constantly changing  they're going in and out of stock prices  are changing images are changing  so we can't have a long ttl our product  ingest pipeline writes to datastore  as it always has but now it's also  notifying us of invalidation by pushing  product ids onto google cloud pub sub  we have a listener that reads those ids  from pub sub pulls the products from  datastore and writes them to our cache  you may be wondering why do we send ids  instead of just sending the product  bodies  well the product ingest is concurrent so  we can't know if any single update is  authoritative  by sending ids instead of bodies on pub  sub we can guarantee that the cache is  eventually consistent  rather than being potentially  inconsistent forever and we can have a  very long ttl  datastore natively returns protobufs and  those come out to about two kilobytes on  average now we could have come up with a  new  serialization format that does  everything that datastore's native  serialization format does  but there was really no reason to do  that because it's already doing it  but with about two kilobytes per product  and many many products we'd end up with  a huge cache which is both expensive and  slow  so how do we mitigate that the first  thing is that we don't  update products that aren't already in  the cash products get into the cash by  being used in a marketing product  which means that the only objects that  will be in the cache  are the objects that are actually being  sent out  so if a partner of ours happens to have  a catalog of a million products but  they're only sending out emails with a  thousand of those products  we only have to have a thousand in our  cash  the second thing we looked into was  compression but compressing small items  is hard  most compression algorithms learn as  they go  which means if you're compressing a book  the first page is going to compress  significantly worse than the 10th page  of the 100th page  and with only two kilobytes there really  isn't a lot of time to learn  by the time you get to the end of the  product and finally know how to compress  it  there's no more to compress so what did  we do  well first thing is that we downloaded  1858 products  from datastore for one of our partners  which came out to about 32 megabytes  and we then tried to compress them using  gzip and xz  and while the lcma compression of xz  is really too slow for runtime that's  kind of okay  because we're really just testing here  so we then found that we were unable to  do  better than two to one compression even  with a very slow xz  well that's not really good enough so  how good could it be  we took those same 1858 products and we  tarred them all together  effectively making one big book and  compressed again  and we found that gzip was able to do  better than five to one and xz was even  able to do better than eight to one  but we can't just tar these products at  runtime that doesn't make any sense  because we don't need all the products  we don't know which ones we need  so we needed something else fortunately  for us  z standard exists which allows you to  train its compression ahead of time  they call this dictionary compression  and that's exactly what we do  on a per partner basis we download a  sample of the products  compress them training the dictionary  and then we store those dictionaries  into datastore caching them in the  service as well  so anytime we read or write a product we  know exactly what dictionary to use  and the compression is fantastic as you  can see here  z standard with dictionary is better  than five to one  even on small two kilobyte courtroom  there are other high performance  and decompression algorithms such as  snappy and lz4  however those don't offer dictionary  compression which as we've seen is a big  factor  with such small bodies as a reminder  this is where we were before  and this is where we are now we have  products still stored in datastore as we  always have  but now they're being kept up to date in  a cache  with our product update listener which  is receiving invalidation messages over  google cloud pub sub  the recommendation service itself has a  small lru cache with a short ttl  just to keep the traffic to memory  stored down to a dull roar  and we think we're finally as powerful  as necessary  but how to be sure the only way is to  test it  and fortunately for us through the power  of gke this was  pretty straightforward we were able to  deploy our service  and the attacking client into google  kubernetes engine  and we could then scale both the service  and that client with a single command  the entire run including rescaling the  components was completely scripted  and hands off and how did we do well we  did pretty well  with 16 two core pods running the  service we were able to pull  between 56 and 60 kilohertz while still  staying within our latency budget  and we hit our target of 20 kilohertz  with just four pods  yes we are finally as powerful as  necessary  now that this code is out in production  well you know changes need to be made  and we need to live with it  one thing that we do a lot is when  changes are made we'll deploy a canary  into kubernetes  that allows us to validate that the new  code doesn't have a regression  in terms of correctness or performance  and then once that's proven we can scale  it up to the rest of our  pods logs are exported automatically  from gke into bigquery  and so we've got a one-stop shop for  when we need to look and see what  happened  and we're exporting all of our metrics  to datadog and because  this is a production service we've got  pagerduty to wake us up in the middle of  the night if something catastrophic  should happen  so what have we got well recommendations  are being written to bigquery and google  cloud storage  as they always have been but now they're  being copied into google cloud bigtable  products are stored in datastore again  as they always were but are now being  cached in memory store  and kept up to date using invalidation  triggered through google cloud pub sub  our clients hit us using either protobuf  over http 1.1  or grpc over http 2 and the whole thing  is deployed into google kubernetes  engine  i'd like to thank you all for listening  and thank you to google for giving us  the opportunity to speak to you today  you
+ 
+
+00:00:07.269 --> 00:00:08.950 align:start position:0%
+ 
+ 
+
+00:00:08.950 --> 00:00:10.310 align:start position:0%
+ 
+ 
+
+00:00:10.310 --> 00:00:12.070 align:start position:0%
+ 
+ 
+
+00:00:12.070 --> 00:00:14.789 align:start position:0%
+ 
+ 
+
+00:00:14.789 --> 00:00:16.310 align:start position:0%
+ 
+ 
+
+00:00:16.310 --> 00:00:17.990 align:start position:0%
+ 
+ 
+
+00:00:17.990 --> 00:00:18.000 align:start position:0%
+ 
+ 
+
+00:00:18.000 --> 00:00:18.630 align:start position:0%
+ 
+
+
+00:00:18.630 --> 00:00:19.990 align:start position:0%
+ 
+ 
+
+00:00:19.990 --> 00:00:21.990 align:start position:0%
+ 
+ 
+
+00:00:21.990 --> 00:00:23.189 align:start position:0%
+ 
+ 
+
+00:00:23.189 --> 00:00:23.199 align:start position:0%
+ 
+ 
+
+00:00:23.199 --> 00:00:24.070 align:start position:0%
+ 
+
+
+00:00:24.070 --> 00:00:27.589 align:start position:0%
+ 
+ 
+
+00:00:27.589 --> 00:00:29.509 align:start position:0%
+ 
+ 
+
+00:00:29.509 --> 00:00:31.429 align:start position:0%
+ 
+ 
+
+00:00:31.429 --> 00:00:31.439 align:start position:0%
+ 
+ 
+
+00:00:31.439 --> 00:00:31.990 align:start position:0%
+ 
+
+
+00:00:31.990 --> 00:00:33.350 align:start position:0%
+ 
+ 
+
+00:00:33.350 --> 00:00:35.430 align:start position:0%
+ 
+ 
+
+00:00:35.430 --> 00:00:37.190 align:start position:0%
+ 
+ 
+
+00:00:37.190 --> 00:00:38.310 align:start position:0%
+ 
+ 
+
+00:00:38.310 --> 00:00:40.709 align:start position:0%
+ 
+ 
+
+00:00:40.709 --> 00:00:43.030 align:start position:0%
+ 
+ 
+
+00:00:43.030 --> 00:00:45.430 align:start position:0%
+ 
+ 
+
+00:00:45.430 --> 00:00:46.950 align:start position:0%
+ 
+ 
+
+00:00:46.950 --> 00:00:48.950 align:start position:0%
+ 
+ 
+
+00:00:48.950 --> 00:00:49.670 align:start position:0%
+ 
+ 
+
+00:00:49.670 --> 00:00:53.270 align:start position:0%
+ 
+ 
+
+00:00:53.270 --> 00:00:55.029 align:start position:0%
+ 
+ 
+
+00:00:55.029 --> 00:00:56.310 align:start position:0%
+ 
+ 
+
+00:00:56.310 --> 00:00:58.150 align:start position:0%
+ 
+ 
+
+00:00:58.150 --> 00:01:00.150 align:start position:0%
+ 
+ 
+
+00:01:00.150 --> 00:01:02.229 align:start position:0%
+ 
+ 
+
+00:01:02.229 --> 00:01:03.990 align:start position:0%
+ 
+ 
+
+00:01:03.990 --> 00:01:04.000 align:start position:0%
+ 
+ 
+
+00:01:04.000 --> 00:01:06.149 align:start position:0%
+ 
+
+
+00:01:06.149 --> 00:01:08.070 align:start position:0%
+ 
+ 
+
+00:01:08.070 --> 00:01:09.830 align:start position:0%
+ 
+ 
+
+00:01:09.830 --> 00:01:11.990 align:start position:0%
+ 
+ 
+
+00:01:11.990 --> 00:01:13.510 align:start position:0%
+ 
+ 
+
+00:01:13.510 --> 00:01:16.230 align:start position:0%
+ 
+ 
+
+00:01:16.230 --> 00:01:18.070 align:start position:0%
+ 
+ 
+
+00:01:18.070 --> 00:01:19.590 align:start position:0%
+ 
+ 
+
+00:01:19.590 --> 00:01:21.670 align:start position:0%
+ 
+ 
+
+00:01:21.670 --> 00:01:23.030 align:start position:0%
+ 
+ 
+
+00:01:23.030 --> 00:01:25.109 align:start position:0%
+ 
+ 
+
+00:01:25.109 --> 00:01:27.030 align:start position:0%
+ 
+ 
+
+00:01:27.030 --> 00:01:29.510 align:start position:0%
+ 
+ 
+
+00:01:29.510 --> 00:01:31.670 align:start position:0%
+ 
+ 
+
+00:01:31.670 --> 00:01:34.710 align:start position:0%
+ 
+ 
+
+00:01:34.710 --> 00:01:36.310 align:start position:0%
+ 
+ 
+
+00:01:36.310 --> 00:01:38.469 align:start position:0%
+ 
+ 
+
+00:01:38.469 --> 00:01:39.749 align:start position:0%
+ 
+ 
+
+00:01:39.749 --> 00:01:39.759 align:start position:0%
+ 
+ 
+
+00:01:39.759 --> 00:01:39.990 align:start position:0%
+ 
+
+
+00:01:39.990 --> 00:01:43.109 align:start position:0%
+ 
+ 
+
+00:01:43.109 --> 00:01:45.109 align:start position:0%
+ 
+ 
+
+00:01:45.109 --> 00:01:45.119 align:start position:0%
+ 
+ 
+
+00:01:45.119 --> 00:01:46.310 align:start position:0%
+ 
+
+
+00:01:46.310 --> 00:01:48.469 align:start position:0%
+ 
+ 
+
+00:01:48.469 --> 00:01:50.069 align:start position:0%
+ 
+ 
+
+00:01:50.069 --> 00:01:50.079 align:start position:0%
+ 
+ 
+
+00:01:50.079 --> 00:01:50.870 align:start position:0%
+ 
+
+
+00:01:50.870 --> 00:01:52.310 align:start position:0%
+ 
+ 
+
+00:01:52.310 --> 00:01:54.310 align:start position:0%
+ 
+ 
+
+00:01:54.310 --> 00:01:55.749 align:start position:0%
+ 
+ 
+
+00:01:55.749 --> 00:01:57.109 align:start position:0%
+ 
+ 
+
+00:01:57.109 --> 00:01:58.870 align:start position:0%
+ 
+ 
+
+00:01:58.870 --> 00:02:01.510 align:start position:0%
+ 
+ 
+
+00:02:01.510 --> 00:02:02.389 align:start position:0%
+ 
+ 
+
+00:02:02.389 --> 00:02:05.510 align:start position:0%
+ 
+ 
+
+00:02:05.510 --> 00:02:06.709 align:start position:0%
+ 
+ 
+
+00:02:06.709 --> 00:02:08.550 align:start position:0%
+ 
+ 
+
+00:02:08.550 --> 00:02:10.710 align:start position:0%
+ 
+ 
+
+00:02:10.710 --> 00:02:12.630 align:start position:0%
+ 
+ 
+
+00:02:12.630 --> 00:02:15.190 align:start position:0%
+ 
+ 
+
+00:02:15.190 --> 00:02:16.869 align:start position:0%
+ 
+ 
+
+00:02:16.869 --> 00:02:18.710 align:start position:0%
+ 
+ 
+
+00:02:18.710 --> 00:02:18.720 align:start position:0%
+ 
+ 
+
+00:02:18.720 --> 00:02:19.510 align:start position:0%
+ 
+
+
+00:02:19.510 --> 00:02:21.030 align:start position:0%
+ 
+ 
+
+00:02:21.030 --> 00:02:22.550 align:start position:0%
+ 
+ 
+
+00:02:22.550 --> 00:02:24.790 align:start position:0%
+ 
+ 
+
+00:02:24.790 --> 00:02:24.800 align:start position:0%
+ 
+ 
+
+00:02:24.800 --> 00:02:26.150 align:start position:0%
+ 
+
+
+00:02:26.150 --> 00:02:28.390 align:start position:0%
+ 
+ 
+
+00:02:28.390 --> 00:02:29.990 align:start position:0%
+ 
+ 
+
+00:02:29.990 --> 00:02:31.110 align:start position:0%
+ 
+ 
+
+00:02:31.110 --> 00:02:33.110 align:start position:0%
+ 
+ 
+
+00:02:33.110 --> 00:02:34.949 align:start position:0%
+ 
+ 
+
+00:02:34.949 --> 00:02:36.150 align:start position:0%
+ 
+ 
+
+00:02:36.150 --> 00:02:37.990 align:start position:0%
+ 
+ 
+
+00:02:37.990 --> 00:02:40.150 align:start position:0%
+ 
+ 
+
+00:02:40.150 --> 00:02:41.830 align:start position:0%
+ 
+ 
+
+00:02:41.830 --> 00:02:43.270 align:start position:0%
+ 
+ 
+
+00:02:43.270 --> 00:02:44.390 align:start position:0%
+ 
+ 
+
+00:02:44.390 --> 00:02:46.309 align:start position:0%
+ 
+ 
+
+00:02:46.309 --> 00:02:48.470 align:start position:0%
+ 
+ 
+
+00:02:48.470 --> 00:02:49.830 align:start position:0%
+ 
+ 
+
+00:02:49.830 --> 00:02:51.910 align:start position:0%
+ 
+ 
+
+00:02:51.910 --> 00:02:53.750 align:start position:0%
+ 
+ 
+
+00:02:53.750 --> 00:02:55.030 align:start position:0%
+ 
+ 
+
+00:02:55.030 --> 00:02:56.550 align:start position:0%
+ 
+ 
+
+00:02:56.550 --> 00:02:58.070 align:start position:0%
+ 
+ 
+
+00:02:58.070 --> 00:02:59.990 align:start position:0%
+ 
+ 
+
+00:02:59.990 --> 00:03:01.670 align:start position:0%
+ 
+ 
+
+00:03:01.670 --> 00:03:02.790 align:start position:0%
+ 
+ 
+
+00:03:02.790 --> 00:03:04.630 align:start position:0%
+ 
+ 
+
+00:03:04.630 --> 00:03:06.070 align:start position:0%
+ 
+ 
+
+00:03:06.070 --> 00:03:06.080 align:start position:0%
+ 
+ 
+
+00:03:06.080 --> 00:03:06.790 align:start position:0%
+ 
+
+
+00:03:06.790 --> 00:03:08.390 align:start position:0%
+ 
+ 
+
+00:03:08.390 --> 00:03:08.400 align:start position:0%
+ 
+ 
+
+00:03:08.400 --> 00:03:09.830 align:start position:0%
+ 
+
+
+00:03:09.830 --> 00:03:11.589 align:start position:0%
+ 
+ 
+
+00:03:11.589 --> 00:03:13.110 align:start position:0%
+ 
+ 
+
+00:03:13.110 --> 00:03:14.790 align:start position:0%
+ 
+ 
+
+00:03:14.790 --> 00:03:16.309 align:start position:0%
+ 
+ 
+
+00:03:16.309 --> 00:03:18.390 align:start position:0%
+ 
+ 
+
+00:03:18.390 --> 00:03:20.550 align:start position:0%
+ 
+ 
+
+00:03:20.550 --> 00:03:21.910 align:start position:0%
+ 
+ 
+
+00:03:21.910 --> 00:03:23.830 align:start position:0%
+ 
+ 
+
+00:03:23.830 --> 00:03:26.309 align:start position:0%
+ 
+ 
+
+00:03:26.309 --> 00:03:28.550 align:start position:0%
+ 
+ 
+
+00:03:28.550 --> 00:03:30.229 align:start position:0%
+ 
+ 
+
+00:03:30.229 --> 00:03:32.070 align:start position:0%
+ 
+ 
+
+00:03:32.070 --> 00:03:34.470 align:start position:0%
+ 
+ 
+
+00:03:34.470 --> 00:03:35.750 align:start position:0%
+ 
+ 
+
+00:03:35.750 --> 00:03:37.509 align:start position:0%
+ 
+ 
+
+00:03:37.509 --> 00:03:39.430 align:start position:0%
+ 
+ 
+
+00:03:39.430 --> 00:03:41.270 align:start position:0%
+ 
+ 
+
+00:03:41.270 --> 00:03:42.869 align:start position:0%
+ 
+ 
+
+00:03:42.869 --> 00:03:44.630 align:start position:0%
+ 
+ 
+
+00:03:44.630 --> 00:03:46.229 align:start position:0%
+ 
+ 
+
+00:03:46.229 --> 00:03:47.750 align:start position:0%
+ 
+ 
+
+00:03:47.750 --> 00:03:49.509 align:start position:0%
+ 
+ 
+
+00:03:49.509 --> 00:03:52.309 align:start position:0%
+ 
+ 
+
+00:03:52.309 --> 00:03:55.830 align:start position:0%
+ 
+ 
+
+00:03:55.830 --> 00:03:57.750 align:start position:0%
+ 
+ 
+
+00:03:57.750 --> 00:03:59.350 align:start position:0%
+ 
+ 
+
+00:03:59.350 --> 00:03:59.360 align:start position:0%
+ 
+ 
+
+00:03:59.360 --> 00:04:00.309 align:start position:0%
+ 
+
+
+00:04:00.309 --> 00:04:02.949 align:start position:0%
+ 
+ 
+
+00:04:02.949 --> 00:04:02.959 align:start position:0%
+ 
+ 
+
+00:04:02.959 --> 00:04:04.869 align:start position:0%
+ 
+
+
+00:04:04.869 --> 00:04:06.789 align:start position:0%
+ 
+ 
+
+00:04:06.789 --> 00:04:08.309 align:start position:0%
+ 
+ 
+
+00:04:08.309 --> 00:04:10.309 align:start position:0%
+ 
+ 
+
+00:04:10.309 --> 00:04:13.030 align:start position:0%
+ 
+ 
+
+00:04:13.030 --> 00:04:14.869 align:start position:0%
+ 
+ 
+
+00:04:14.869 --> 00:04:16.789 align:start position:0%
+ 
+ 
+
+00:04:16.789 --> 00:04:18.150 align:start position:0%
+ 
+ 
+
+00:04:18.150 --> 00:04:19.990 align:start position:0%
+ 
+ 
+
+00:04:19.990 --> 00:04:21.670 align:start position:0%
+ 
+ 
+
+00:04:21.670 --> 00:04:24.070 align:start position:0%
+ 
+ 
+
+00:04:24.070 --> 00:04:25.909 align:start position:0%
+ 
+ 
+
+00:04:25.909 --> 00:04:28.629 align:start position:0%
+ 
+ 
+
+00:04:28.629 --> 00:04:29.510 align:start position:0%
+ 
+ 
+
+00:04:29.510 --> 00:04:31.430 align:start position:0%
+ 
+ 
+
+00:04:31.430 --> 00:04:33.270 align:start position:0%
+ 
+ 
+
+00:04:33.270 --> 00:04:35.430 align:start position:0%
+ 
+ 
+
+00:04:35.430 --> 00:04:36.950 align:start position:0%
+ 
+ 
+
+00:04:36.950 --> 00:04:38.550 align:start position:0%
+ 
+ 
+
+00:04:38.550 --> 00:04:40.150 align:start position:0%
+ 
+ 
+
+00:04:40.150 --> 00:04:42.469 align:start position:0%
+ 
+ 
+
+00:04:42.469 --> 00:04:43.990 align:start position:0%
+ 
+ 
+
+00:04:43.990 --> 00:04:46.310 align:start position:0%
+ 
+ 
+
+00:04:46.310 --> 00:04:48.950 align:start position:0%
+ 
+ 
+
+00:04:48.950 --> 00:04:50.950 align:start position:0%
+ 
+ 
+
+00:04:50.950 --> 00:04:53.350 align:start position:0%
+ 
+ 
+
+00:04:53.350 --> 00:04:55.590 align:start position:0%
+ 
+ 
+
+00:04:55.590 --> 00:04:57.189 align:start position:0%
+ 
+ 
+
+00:04:57.189 --> 00:04:59.110 align:start position:0%
+ 
+ 
+
+00:04:59.110 --> 00:05:00.870 align:start position:0%
+ 
+ 
+
+00:05:00.870 --> 00:05:00.880 align:start position:0%
+ 
+ 
+
+00:05:00.880 --> 00:05:01.909 align:start position:0%
+ 
+
+
+00:05:01.909 --> 00:05:03.510 align:start position:0%
+ 
+ 
+
+00:05:03.510 --> 00:05:05.189 align:start position:0%
+ 
+ 
+
+00:05:05.189 --> 00:05:07.909 align:start position:0%
+ 
+ 
+
+00:05:07.909 --> 00:05:09.749 align:start position:0%
+ 
+ 
+
+00:05:09.749 --> 00:05:11.510 align:start position:0%
+ 
+ 
+
+00:05:11.510 --> 00:05:13.270 align:start position:0%
+ 
+ 
+
+00:05:13.270 --> 00:05:15.670 align:start position:0%
+ 
+ 
+
+00:05:15.670 --> 00:05:17.670 align:start position:0%
+ 
+ 
+
+00:05:17.670 --> 00:05:19.029 align:start position:0%
+ 
+ 
+
+00:05:19.029 --> 00:05:19.039 align:start position:0%
+ 
+ 
+
+00:05:19.039 --> 00:05:20.070 align:start position:0%
+ 
+
+
+00:05:20.070 --> 00:05:22.550 align:start position:0%
+ 
+ 
+
+00:05:22.550 --> 00:05:24.550 align:start position:0%
+ 
+ 
+
+00:05:24.550 --> 00:05:24.560 align:start position:0%
+ 
+ 
+
+00:05:24.560 --> 00:05:25.510 align:start position:0%
+ 
+
+
+00:05:25.510 --> 00:05:28.070 align:start position:0%
+ 
+ 
+
+00:05:28.070 --> 00:05:29.270 align:start position:0%
+ 
+ 
+
+00:05:29.270 --> 00:05:30.710 align:start position:0%
+ 
+ 
+
+00:05:30.710 --> 00:05:32.390 align:start position:0%
+ 
+ 
+
+00:05:32.390 --> 00:05:34.230 align:start position:0%
+ 
+ 
+
+00:05:34.230 --> 00:05:35.990 align:start position:0%
+ 
+ 
+
+00:05:35.990 --> 00:05:37.830 align:start position:0%
+ 
+ 
+
+00:05:37.830 --> 00:05:39.590 align:start position:0%
+ 
+ 
+
+00:05:39.590 --> 00:05:41.110 align:start position:0%
+ 
+ 
+
+00:05:41.110 --> 00:05:42.070 align:start position:0%
+ 
+ 
+
+00:05:42.070 --> 00:05:43.909 align:start position:0%
+ 
+ 
+
+00:05:43.909 --> 00:05:46.550 align:start position:0%
+ 
+ 
+
+00:05:46.550 --> 00:05:49.749 align:start position:0%
+ 
+ 
+
+00:05:49.749 --> 00:05:51.909 align:start position:0%
+ 
+ 
+
+00:05:51.909 --> 00:05:53.029 align:start position:0%
+ 
+ 
+
+00:05:53.029 --> 00:05:54.710 align:start position:0%
+ 
+ 
+
+00:05:54.710 --> 00:05:57.590 align:start position:0%
+ 
+ 
+
+00:05:57.590 --> 00:05:59.510 align:start position:0%
+ 
+ 
+
+00:05:59.510 --> 00:06:01.270 align:start position:0%
+ 
+ 
+
+00:06:01.270 --> 00:06:03.110 align:start position:0%
+ 
+ 
+
+00:06:03.110 --> 00:06:05.029 align:start position:0%
+ 
+ 
+
+00:06:05.029 --> 00:06:06.870 align:start position:0%
+ 
+ 
+
+00:06:06.870 --> 00:06:08.790 align:start position:0%
+ 
+ 
+
+00:06:08.790 --> 00:06:10.469 align:start position:0%
+ 
+ 
+
+00:06:10.469 --> 00:06:13.110 align:start position:0%
+ 
+ 
+
+00:06:13.110 --> 00:06:14.950 align:start position:0%
+ 
+ 
+
+00:06:14.950 --> 00:06:16.390 align:start position:0%
+ 
+ 
+
+00:06:16.390 --> 00:06:17.430 align:start position:0%
+ 
+ 
+
+00:06:17.430 --> 00:06:19.110 align:start position:0%
+ 
+ 
+
+00:06:19.110 --> 00:06:20.950 align:start position:0%
+ 
+ 
+
+00:06:20.950 --> 00:06:22.790 align:start position:0%
+ 
+ 
+
+00:06:22.790 --> 00:06:24.870 align:start position:0%
+ 
+ 
+
+00:06:24.870 --> 00:06:26.550 align:start position:0%
+ 
+ 
+
+00:06:26.550 --> 00:06:28.870 align:start position:0%
+ 
+ 
+
+00:06:28.870 --> 00:06:30.309 align:start position:0%
+ 
+ 
+
+00:06:30.309 --> 00:06:30.319 align:start position:0%
+ 
+ 
+
+00:06:30.319 --> 00:06:32.550 align:start position:0%
+ 
+
+
+00:06:32.550 --> 00:06:34.710 align:start position:0%
+ 
+ 
+
+00:06:34.710 --> 00:06:36.550 align:start position:0%
+ 
+ 
+
+00:06:36.550 --> 00:06:38.070 align:start position:0%
+ 
+ 
+
+00:06:38.070 --> 00:06:39.830 align:start position:0%
+ 
+ 
+
+00:06:39.830 --> 00:06:39.840 align:start position:0%
+ 
+ 
+
+00:06:39.840 --> 00:06:40.469 align:start position:0%
+ 
+
+
+00:06:40.469 --> 00:06:41.830 align:start position:0%
+ 
+ 
+
+00:06:41.830 --> 00:06:43.430 align:start position:0%
+ 
+ 
+
+00:06:43.430 --> 00:06:43.440 align:start position:0%
+ 
+ 
+
+00:06:43.440 --> 00:06:44.629 align:start position:0%
+ 
+
+
+00:06:44.629 --> 00:06:46.230 align:start position:0%
+ 
+ 
+
+00:06:46.230 --> 00:06:48.390 align:start position:0%
+ 
+ 
+
+00:06:48.390 --> 00:06:49.510 align:start position:0%
+ 
+ 
+
+00:06:49.510 --> 00:06:51.670 align:start position:0%
+ 
+ 
+
+00:06:51.670 --> 00:06:53.589 align:start position:0%
+ 
+ 
+
+00:06:53.589 --> 00:06:53.599 align:start position:0%
+ 
+ 
+
+00:06:53.599 --> 00:06:54.950 align:start position:0%
+ 
+
+
+00:06:54.950 --> 00:06:56.629 align:start position:0%
+ 
+ 
+
+00:06:56.629 --> 00:06:58.710 align:start position:0%
+ 
+ 
+
+00:06:58.710 --> 00:07:01.510 align:start position:0%
+ 
+ 
+
+00:07:01.510 --> 00:07:03.110 align:start position:0%
+ 
+ 
+
+00:07:03.110 --> 00:07:04.870 align:start position:0%
+ 
+ 
+
+00:07:04.870 --> 00:07:06.390 align:start position:0%
+ 
+ 
+
+00:07:06.390 --> 00:07:08.710 align:start position:0%
+ 
+ 
+
+00:07:08.710 --> 00:07:09.589 align:start position:0%
+ 
+ 
+
+00:07:09.589 --> 00:07:11.589 align:start position:0%
+ 
+ 
+
+00:07:11.589 --> 00:07:12.710 align:start position:0%
+ 
+ 
+
+00:07:12.710 --> 00:07:15.430 align:start position:0%
+ 
+ 
+
+00:07:15.430 --> 00:07:16.870 align:start position:0%
+ 
+ 
+
+00:07:16.870 --> 00:07:19.029 align:start position:0%
+ 
+ 
+
+00:07:19.029 --> 00:07:21.430 align:start position:0%
+ 
+ 
+
+00:07:21.430 --> 00:07:23.029 align:start position:0%
+ 
+ 
+
+00:07:23.029 --> 00:07:24.710 align:start position:0%
+ 
+ 
+
+00:07:24.710 --> 00:07:24.720 align:start position:0%
+ 
+ 
+
+00:07:24.720 --> 00:07:25.510 align:start position:0%
+ 
+
+
+00:07:25.510 --> 00:07:27.990 align:start position:0%
+ 
+ 
+
+00:07:27.990 --> 00:07:30.710 align:start position:0%
+ 
+ 
+
+00:07:30.710 --> 00:07:32.309 align:start position:0%
+ 
+ 
+
+00:07:32.309 --> 00:07:34.070 align:start position:0%
+ 
+ 
+
+00:07:34.070 --> 00:07:35.830 align:start position:0%
+ 
+ 
+
+00:07:35.830 --> 00:07:35.840 align:start position:0%
+ 
+ 
+
+00:07:35.840 --> 00:07:36.629 align:start position:0%
+ 
+
+
+00:07:36.629 --> 00:07:38.070 align:start position:0%
+ 
+ 
+
+00:07:38.070 --> 00:07:40.950 align:start position:0%
+ 
+ 
+
+00:07:40.950 --> 00:07:42.870 align:start position:0%
+ 
+ 
+
+00:07:42.870 --> 00:07:44.790 align:start position:0%
+ 
+ 
+
+00:07:44.790 --> 00:07:45.830 align:start position:0%
+ 
+ 
+
+00:07:45.830 --> 00:07:47.830 align:start position:0%
+ 
+ 
+
+00:07:47.830 --> 00:07:47.840 align:start position:0%
+ 
+ 
+
+00:07:47.840 --> 00:07:50.070 align:start position:0%
+ 
+
+
+00:07:50.070 --> 00:07:52.629 align:start position:0%
+ 
+ 
+
+00:07:52.629 --> 00:07:54.150 align:start position:0%
+ 
+ 
+
+00:07:54.150 --> 00:07:54.160 align:start position:0%
+ 
+ 
+
+00:07:54.160 --> 00:07:54.550 align:start position:0%
+ 
+
+
+00:07:54.550 --> 00:07:56.629 align:start position:0%
+ 
+ 
+
+00:07:56.629 --> 00:07:58.550 align:start position:0%
+ 
+ 
+
+00:07:58.550 --> 00:08:01.430 align:start position:0%
+ 
+ 
+
+00:08:01.430 --> 00:08:02.790 align:start position:0%
+ 
+ 
+
+00:08:02.790 --> 00:08:02.800 align:start position:0%
+ 
+ 
+
+00:08:02.800 --> 00:08:03.589 align:start position:0%
+ 
+
+
+00:08:03.589 --> 00:08:05.189 align:start position:0%
+ 
+ 
+
+00:08:05.189 --> 00:08:06.629 align:start position:0%
+ 
+ 
+
+00:08:06.629 --> 00:08:09.110 align:start position:0%
+ 
+ 
+
+00:08:09.110 --> 00:08:10.710 align:start position:0%
+ 
+ 
+
+00:08:10.710 --> 00:08:13.110 align:start position:0%
+ 
+ 
+
+00:08:13.110 --> 00:08:14.869 align:start position:0%
+ 
+ 
+
+00:08:14.869 --> 00:08:17.350 align:start position:0%
+ 
+ 
+
+00:08:17.350 --> 00:08:19.510 align:start position:0%
+ 
+ 
+
+00:08:19.510 --> 00:08:22.550 align:start position:0%
+ 
+ 
+
+00:08:22.550 --> 00:08:24.869 align:start position:0%
+ 
+ 
+
+00:08:24.869 --> 00:08:26.550 align:start position:0%
+ 
+ 
+
+00:08:26.550 --> 00:08:28.469 align:start position:0%
+ 
+ 
+
+00:08:28.469 --> 00:08:28.479 align:start position:0%
+ 
+ 
+
+00:08:28.479 --> 00:08:29.350 align:start position:0%
+ 
+
+
+00:08:29.350 --> 00:08:31.189 align:start position:0%
+ 
+ 
+
+00:08:31.189 --> 00:08:33.350 align:start position:0%
+ 
+ 
+
+00:08:33.350 --> 00:08:35.909 align:start position:0%
+ 
+ 
+
+00:08:35.909 --> 00:08:37.190 align:start position:0%
+ 
+ 
+
+00:08:37.190 --> 00:08:39.509 align:start position:0%
+ 
+ 
+
+00:08:39.509 --> 00:08:41.190 align:start position:0%
+ 
+ 
+
+00:08:41.190 --> 00:08:43.829 align:start position:0%
+ 
+ 
+
+00:08:43.829 --> 00:08:46.870 align:start position:0%
+ 
+ 
+
+00:08:46.870 --> 00:08:49.190 align:start position:0%
+ 
+ 
+
+00:08:49.190 --> 00:08:51.509 align:start position:0%
+ 
+ 
+
+00:08:51.509 --> 00:08:51.519 align:start position:0%
+ 
+ 
+
+00:08:51.519 --> 00:08:51.910 align:start position:0%
+ 
+
+
+00:08:51.910 --> 00:08:54.230 align:start position:0%
+ 
+ 
+
+00:08:54.230 --> 00:08:55.190 align:start position:0%
+ 
+ 
+
+00:08:55.190 --> 00:08:58.710 align:start position:0%
+ 
+ 
+
+00:08:58.710 --> 00:09:00.150 align:start position:0%
+ 
+ 
+
+00:09:00.150 --> 00:09:01.750 align:start position:0%
+ 
+ 
+
+00:09:01.750 --> 00:09:04.389 align:start position:0%
+ 
+ 
+
+00:09:04.389 --> 00:09:06.070 align:start position:0%
+ 
+ 
+
+00:09:06.070 --> 00:09:09.110 align:start position:0%
+ 
+ 
+
+00:09:09.110 --> 00:09:11.350 align:start position:0%
+ 
+ 
+
+00:09:11.350 --> 00:09:12.949 align:start position:0%
+ 
+ 
+
+00:09:12.949 --> 00:09:14.310 align:start position:0%
+ 
+ 
+
+00:09:14.310 --> 00:09:15.990 align:start position:0%
+ 
+ 
+
+00:09:15.990 --> 00:09:17.590 align:start position:0%
+ 
+ 
+
+00:09:17.590 --> 00:09:19.430 align:start position:0%
+ 
+ 
+
+00:09:19.430 --> 00:09:21.269 align:start position:0%
+ 
+ 
+
+00:09:21.269 --> 00:09:23.910 align:start position:0%
+ 
+ 
+
+00:09:23.910 --> 00:09:24.710 align:start position:0%
+ 
+ 
+
+00:09:24.710 --> 00:09:26.790 align:start position:0%
+ 
+ 
+
+00:09:26.790 --> 00:09:28.630 align:start position:0%
+ 
+ 
+
+00:09:28.630 --> 00:09:30.630 align:start position:0%
+ 
+ 
+
+00:09:30.630 --> 00:09:33.110 align:start position:0%
+ 
+ 
+
+00:09:33.110 --> 00:09:35.750 align:start position:0%
+ 
+ 
+
+00:09:35.750 --> 00:09:35.760 align:start position:0%
+ 
+ 
+
+00:09:35.760 --> 00:09:36.310 align:start position:0%
+ 
+
+
+00:09:36.310 --> 00:09:37.990 align:start position:0%
+ 
+ 
+
+00:09:37.990 --> 00:09:40.389 align:start position:0%
+ 
+ 
+
+00:09:40.389 --> 00:09:43.110 align:start position:0%
+ 
+ 
+
+00:09:43.110 --> 00:09:43.120 align:start position:0%
+ 
+ 
+
+00:09:43.120 --> 00:09:43.750 align:start position:0%
+ 
+
+
+00:09:43.750 --> 00:09:46.870 align:start position:0%
+ 
+ 
+
+00:09:46.870 --> 00:09:47.990 align:start position:0%
+ 
+ 
+
+00:09:47.990 --> 00:09:50.470 align:start position:0%
+ 
+ 
+
+00:09:50.470 --> 00:09:52.150 align:start position:0%
+ 
+ 
+
+00:09:52.150 --> 00:09:52.790 align:start position:0%
+ 
+ 
+
+00:09:52.790 --> 00:09:54.710 align:start position:0%
+ 
+ 
+
+00:09:54.710 --> 00:09:56.550 align:start position:0%
+ 
+ 
+
+00:09:56.550 --> 00:09:58.550 align:start position:0%
+ 
+ 
+
+00:09:58.550 --> 00:09:59.670 align:start position:0%
+ 
+ 
+
+00:09:59.670 --> 00:10:01.509 align:start position:0%
+ 
+ 
+
+00:10:01.509 --> 00:10:03.509 align:start position:0%
+ 
+ 
+
+00:10:03.509 --> 00:10:05.269 align:start position:0%
+ 
+ 
+
+00:10:05.269 --> 00:10:07.350 align:start position:0%
+ 
+ 
+
+00:10:07.350 --> 00:10:07.360 align:start position:0%
+ 
+ 
+
+00:10:07.360 --> 00:10:08.470 align:start position:0%
+ 
+
+
+00:10:08.470 --> 00:10:10.150 align:start position:0%
+ 
+ 
+
+00:10:10.150 --> 00:10:12.150 align:start position:0%
+ 
+ 
+
+00:10:12.150 --> 00:10:13.350 align:start position:0%
+ 
+ 
+
+00:10:13.350 --> 00:10:15.190 align:start position:0%
+ 
+ 
+
+00:10:15.190 --> 00:10:17.990 align:start position:0%
+ 
+ 
+
+00:10:17.990 --> 00:10:19.910 align:start position:0%
+ 
+ 
+
+00:10:19.910 --> 00:10:22.150 align:start position:0%
+ 
+ 
+
+00:10:22.150 --> 00:10:23.430 align:start position:0%
+ 
+ 
+
+00:10:23.430 --> 00:10:25.269 align:start position:0%
+ 
+ 
+
+00:10:25.269 --> 00:10:25.279 align:start position:0%
+ 
+ 
+
+00:10:25.279 --> 00:10:26.630 align:start position:0%
+ 
+
+
+00:10:26.630 --> 00:10:28.150 align:start position:0%
+ 
+ 
+
+00:10:28.150 --> 00:10:29.750 align:start position:0%
+ 
+ 
+
+00:10:29.750 --> 00:10:31.430 align:start position:0%
+ 
+ 
+
+00:10:31.430 --> 00:10:34.230 align:start position:0%
+ 
+ 
+
+00:10:34.230 --> 00:10:36.310 align:start position:0%
+ 
+ 
+
+00:10:36.310 --> 00:10:37.910 align:start position:0%
+ 
+ 
+
+00:10:37.910 --> 00:10:37.920 align:start position:0%
+ 
+ 
+
+00:10:37.920 --> 00:10:38.949 align:start position:0%
+ 
+
+
+00:10:38.949 --> 00:10:40.710 align:start position:0%
+ 
+ 
+
+00:10:40.710 --> 00:10:42.870 align:start position:0%
+ 
+ 
+
+00:10:42.870 --> 00:10:44.310 align:start position:0%
+ 
+ 
+
+00:10:44.310 --> 00:10:46.870 align:start position:0%
+ 
+ 
+
+00:10:46.870 --> 00:10:46.880 align:start position:0%
+ 
+ 
+
+00:10:46.880 --> 00:10:47.590 align:start position:0%
+ 
+
+
+00:10:47.590 --> 00:10:51.269 align:start position:0%
+ 
+ 
+
+00:10:51.269 --> 00:10:54.550 align:start position:0%
+ 
+ 
+
+00:10:54.550 --> 00:10:57.030 align:start position:0%
+ 
+ 
+
+00:10:57.030 --> 00:10:58.470 align:start position:0%
+ 
+ 
+
+00:10:58.470 --> 00:11:00.389 align:start position:0%
+ 
+ 
+
+00:11:00.389 --> 00:11:02.150 align:start position:0%
+ 
+ 
+
+00:11:02.150 --> 00:11:04.150 align:start position:0%
+ 
+ 
+
+00:11:04.150 --> 00:11:06.470 align:start position:0%
+ 
+ 
+
+00:11:06.470 --> 00:11:08.150 align:start position:0%
+ 
+ 
+
+00:11:08.150 --> 00:11:11.190 align:start position:0%
+ 
+ 
+
+00:11:11.190 --> 00:11:13.750 align:start position:0%
+ 
+ 
+
+00:11:13.750 --> 00:11:15.190 align:start position:0%
+ 
+ 
+
+00:11:15.190 --> 00:11:17.750 align:start position:0%
+ 
+ 
+
+00:11:17.750 --> 00:11:19.430 align:start position:0%
+ 
+ 
+
+00:11:19.430 --> 00:11:20.949 align:start position:0%
+ 
+ 
+
+00:11:20.949 --> 00:11:22.310 align:start position:0%
+ 
+ 
+
+00:11:22.310 --> 00:11:24.550 align:start position:0%
+ 
+ 
+
+00:11:24.550 --> 00:11:26.150 align:start position:0%
+ 
+ 
+
+00:11:26.150 --> 00:11:28.150 align:start position:0%
+ 
+ 
+
+00:11:28.150 --> 00:11:29.910 align:start position:0%
+ 
+ 
+
+00:11:29.910 --> 00:11:31.030 align:start position:0%
+ 
+ 
+
+00:11:31.030 --> 00:11:32.870 align:start position:0%
+ 
+ 
+
+00:11:32.870 --> 00:11:34.710 align:start position:0%
+ 
+ 
+
+00:11:34.710 --> 00:11:37.430 align:start position:0%
+ 
+ 
+
+00:11:37.430 --> 00:11:39.430 align:start position:0%
+ 
+ 
+
+00:11:39.430 --> 00:11:42.230 align:start position:0%
+ 
+ 
+
+00:11:42.230 --> 00:11:44.389 align:start position:0%
+ 
+ 
+
+00:11:44.389 --> 00:11:47.269 align:start position:0%
+ 
+ 
+
+00:11:47.269 --> 00:11:49.190 align:start position:0%
+ 
+ 
+
+00:11:49.190 --> 00:11:51.030 align:start position:0%
+ 
+ 
+
+00:11:51.030 --> 00:11:53.829 align:start position:0%
+ 
+ 
+
+00:11:53.829 --> 00:11:55.990 align:start position:0%
+ 
+ 
+
+00:11:55.990 --> 00:11:57.430 align:start position:0%
+ 
+ 
+
+00:11:57.430 --> 00:11:57.440 align:start position:0%
+ 
+ 
+
+00:11:57.440 --> 00:11:58.470 align:start position:0%
+ 
+
+
+00:11:58.470 --> 00:12:00.870 align:start position:0%
+ 
+ 
+
+00:12:00.870 --> 00:12:02.949 align:start position:0%
+ 
+ 
+
+00:12:02.949 --> 00:12:02.959 align:start position:0%
+ 
+ 
+
+00:12:02.959 --> 00:12:04.150 align:start position:0%
+ 
+
+
+00:12:04.150 --> 00:12:06.310 align:start position:0%
+ 
+ 
+
+00:12:06.310 --> 00:12:08.389 align:start position:0%
+ 
+ 
+
+00:12:08.389 --> 00:12:09.829 align:start position:0%
+ 
+ 
+
+00:12:09.829 --> 00:12:11.110 align:start position:0%
+ 
+ 
+
+00:12:11.110 --> 00:12:13.430 align:start position:0%
+ 
+ 
+
+00:12:13.430 --> 00:12:14.710 align:start position:0%
+ 
+ 
+
+00:12:14.710 --> 00:12:17.030 align:start position:0%
+ 
+ 
+
+00:12:17.030 --> 00:12:19.030 align:start position:0%
+ 
+ 
+
+00:12:19.030 --> 00:12:21.110 align:start position:0%
+ 
+ 
+
+00:12:21.110 --> 00:12:21.120 align:start position:0%
+ 
+ 
+
+00:12:21.120 --> 00:12:22.389 align:start position:0%
+ 
+
+
+00:12:22.389 --> 00:12:23.990 align:start position:0%
+ 
+ 
+
+00:12:23.990 --> 00:12:25.509 align:start position:0%
+ 
+ 
+
+00:12:25.509 --> 00:12:27.509 align:start position:0%
+ 
+ 
+
+00:12:27.509 --> 00:12:29.110 align:start position:0%
+ 
+ 
+
+00:12:29.110 --> 00:12:31.430 align:start position:0%
+ 
+ 
+
+00:12:31.430 --> 00:12:33.910 align:start position:0%
+ 
+ 
+
+00:12:33.910 --> 00:12:36.150 align:start position:0%
+ 
+ 
+
+00:12:36.150 --> 00:12:38.470 align:start position:0%
+ 
+ 
+
+00:12:38.470 --> 00:12:38.480 align:start position:0%
+ 
+ 
+
+00:12:38.480 --> 00:12:39.030 align:start position:0%
+ 
+
+
+00:12:39.030 --> 00:12:41.350 align:start position:0%
+ 
+ 
+
+00:12:41.350 --> 00:12:42.550 align:start position:0%
+ 
+ 
+
+00:12:42.550 --> 00:12:44.150 align:start position:0%
+ 
+ 
+
+00:12:44.150 --> 00:12:46.629 align:start position:0%
+ 
+ 
+
+00:12:46.629 --> 00:12:48.790 align:start position:0%
+ 
+ 
+
+00:12:48.790 --> 00:12:51.110 align:start position:0%
+ 
+ 
+
+00:12:51.110 --> 00:12:52.069 align:start position:0%
+ 
+ 
+
+00:12:52.069 --> 00:12:54.150 align:start position:0%
+ 
+ 
+
+00:12:54.150 --> 00:12:55.269 align:start position:0%
+ 
+ 
+
+00:12:55.269 --> 00:12:57.110 align:start position:0%
+ 
+ 
+
+00:12:57.110 --> 00:12:58.710 align:start position:0%
+ 
+ 
+
+00:12:58.710 --> 00:13:00.389 align:start position:0%
+ 
+ 
+
+00:13:00.389 --> 00:13:01.910 align:start position:0%
+ 
+ 
+
+00:13:01.910 --> 00:13:03.430 align:start position:0%
+ 
+ 
+
+00:13:03.430 --> 00:13:03.440 align:start position:0%
+ 
+ 
+
+00:13:03.440 --> 00:13:05.030 align:start position:0%
+ 
+
+
+00:13:05.030 --> 00:13:06.310 align:start position:0%
+ 
+ 
+
+00:13:06.310 --> 00:13:09.269 align:start position:0%
+ 
+ 
+
+00:13:09.269 --> 00:13:09.990 align:start position:0%
+ 
+ 
+
+00:13:09.990 --> 00:13:11.990 align:start position:0%
+ 
+ 
+
+00:13:11.990 --> 00:13:13.030 align:start position:0%
+ 
+ 
+
+00:13:13.030 --> 00:13:15.110 align:start position:0%
+ 
+ 
+
+00:13:15.110 --> 00:13:16.629 align:start position:0%
+ 
+ 
+
+00:13:16.629 --> 00:13:18.470 align:start position:0%
+ 
+ 
+
+00:13:18.470 --> 00:13:19.750 align:start position:0%
+ 
+ 
+
+00:13:19.750 --> 00:13:22.310 align:start position:0%
+ 
+ 
+
+00:13:22.310 --> 00:13:23.750 align:start position:0%
+ 
+ 
+
+00:13:23.750 --> 00:13:25.030 align:start position:0%
+ 
+ 
+
+00:13:25.030 --> 00:13:26.949 align:start position:0%
+ 
+ 
+
+00:13:26.949 --> 00:13:26.959 align:start position:0%
+ 
+ 
+
+00:13:26.959 --> 00:13:27.670 align:start position:0%
+ 
+
+
+00:13:27.670 --> 00:13:30.150 align:start position:0%
+ 
+ 
+
+00:13:30.150 --> 00:13:30.790 align:start position:0%
+ 
+ 
+
+00:13:30.790 --> 00:13:33.310 align:start position:0%
+ 
+ 
+
+00:13:33.310 --> 00:13:34.870 align:start position:0%
+ 
+ 
+
+00:13:34.870 --> 00:13:37.030 align:start position:0%
+ 
+ 
+
+00:13:37.030 --> 00:13:39.350 align:start position:0%
+ 
+ 
+
+00:13:39.350 --> 00:13:40.949 align:start position:0%
+ 
+ 
+
+00:13:40.949 --> 00:13:42.790 align:start position:0%
+ 
+ 
+
+00:13:42.790 --> 00:13:46.710 align:start position:0%
+ 
+ 
+
+00:13:46.710 --> 00:13:49.670 align:start position:0%
+ 
+ 
+
+00:13:49.670 --> 00:13:50.790 align:start position:0%
+ 
+ 
+
+00:13:50.790 --> 00:13:55.350 align:start position:0%
+ 
+ 
+
+00:13:55.350 --> 00:13:59.350 align:start position:0%
+ 
+ 
+
+00:13:59.350 --> 00:13:59.360 align:start position:0%
+ 
+ 
+
+00:13:59.360 --> 00:13:59.750 align:start position:0%
+ 
+
+
+00:13:59.750 --> 00:14:01.750 align:start position:0%
+ 
+ 
+
+00:14:01.750 --> 00:14:03.829 align:start position:0%
+ 
+ 
+
+00:14:03.829 --> 00:14:05.910 align:start position:0%
+ 
+ 
+
+00:14:05.910 --> 00:14:07.189 align:start position:0%
+ 
+ 
+
+00:14:07.189 --> 00:14:09.990 align:start position:0%
+ 
+ 
+
+00:14:09.990 --> 00:14:11.350 align:start position:0%
+ 
+ 
+
+00:14:11.350 --> 00:14:13.430 align:start position:0%
+ 
+ 
+
+00:14:13.430 --> 00:14:14.629 align:start position:0%
+ 
+ 
+
+00:14:14.629 --> 00:14:16.310 align:start position:0%
+ 
+ 
+
+00:14:16.310 --> 00:14:18.710 align:start position:0%
+ 
+ 
+
+00:14:18.710 --> 00:14:20.870 align:start position:0%
+ 
+ 
+
+00:14:20.870 --> 00:14:22.870 align:start position:0%
+ 
+ 
+
+00:14:22.870 --> 00:14:25.030 align:start position:0%
+ 
+ 
+
+00:14:25.030 --> 00:14:26.870 align:start position:0%
+ 
+ 
+
+00:14:26.870 --> 00:14:28.870 align:start position:0%
+ 
+ 
+
+00:14:28.870 --> 00:14:31.590 align:start position:0%
+ 
+ 
+
+00:14:31.590 --> 00:14:32.710 align:start position:0%
+ 
+ 
+
+00:14:32.710 --> 00:14:35.030 align:start position:0%
+ 
+ 
+
+00:14:35.030 --> 00:14:37.509 align:start position:0%
+ 
+ 
+
+00:14:37.509 --> 00:14:39.189 align:start position:0%
+ 
+ 
+
+00:14:39.189 --> 00:14:40.949 align:start position:0%
+ 
+ 
+
+00:14:40.949 --> 00:14:42.790 align:start position:0%
+ 
+ 
+
+00:14:42.790 --> 00:14:44.069 align:start position:0%
+ 
+ 
+
+00:14:44.069 --> 00:14:46.150 align:start position:0%
+ 
+ 
+
+00:14:46.150 --> 00:14:47.829 align:start position:0%
+ 
+ 
+
+00:14:47.829 --> 00:14:49.990 align:start position:0%
+ 
+ 
+
+00:14:49.990 --> 00:14:51.269 align:start position:0%
+ 
+ 
+
+00:14:51.269 --> 00:14:53.590 align:start position:0%
+ 
+ 
+
+00:14:53.590 --> 00:14:55.509 align:start position:0%
+ 
+ 
+
+00:14:55.509 --> 00:14:57.750 align:start position:0%
+ 
+ 
+
+00:14:57.750 --> 00:14:58.550 align:start position:0%
+ 
+ 
+
+00:14:58.550 --> 00:15:00.230 align:start position:0%
+ 
+ 
+
+00:15:00.230 --> 00:15:01.590 align:start position:0%
+ 
+ 
+
+00:15:01.590 --> 00:15:04.150 align:start position:0%
+ 
+ 
+
+00:15:04.150 --> 00:15:05.750 align:start position:0%
+ 
+ 
+
+00:15:05.750 --> 00:15:08.069 align:start position:0%
+ 
+ 
+
+00:15:08.069 --> 00:15:09.910 align:start position:0%
+ 
+ 
+
+00:15:09.910 --> 00:15:11.750 align:start position:0%
+ 
+ 
+
+00:15:11.750 --> 00:15:13.750 align:start position:0%
+ 
+ 
+
+00:15:13.750 --> 00:15:13.760 align:start position:0%
+ 
+ 
+
+00:15:13.760 --> 00:15:14.470 align:start position:0%
+ 
+
+
+00:15:14.470 --> 00:15:17.350 align:start position:0%
+ 
+ 
+
+00:15:17.350 --> 00:15:18.710 align:start position:0%
+ 
+ 
+
+00:15:18.710 --> 00:15:20.949 align:start position:0%
+ 
+ 
+
+00:15:20.949 --> 00:15:22.949 align:start position:0%
+ 
+ 
+
+00:15:22.949 --> 00:15:23.670 align:start position:0%
+ 
+ 
+
+00:15:23.670 --> 00:15:25.670 align:start position:0%
+ 
+ 
+
+00:15:25.670 --> 00:15:26.949 align:start position:0%
+ 
+ 
+
+00:15:26.949 --> 00:15:28.710 align:start position:0%
+ 
+ 
+
+00:15:28.710 --> 00:15:30.710 align:start position:0%
+ 
+ 
+
+00:15:30.710 --> 00:15:32.389 align:start position:0%
+ 
+ 
+
+00:15:32.389 --> 00:15:34.310 align:start position:0%
+ 
+ 
+
+00:15:34.310 --> 00:15:36.790 align:start position:0%
+ 
+ 
+
+00:15:36.790 --> 00:15:38.230 align:start position:0%
+ 
+ 
+
+00:15:38.230 --> 00:15:40.230 align:start position:0%
+ 
+ 
+
+00:15:40.230 --> 00:15:42.310 align:start position:0%
+ 
+ 
+
+00:15:42.310 --> 00:15:43.749 align:start position:0%
+ 
+ 
+
+00:15:43.749 --> 00:15:47.030 align:start position:0%
+ 
+ 
+
+00:15:47.030 --> 00:15:47.670 align:start position:0%
+ 
+ 
+
+00:15:47.670 --> 00:15:49.189 align:start position:0%
+ 
+ 
+
+00:15:49.189 --> 00:15:51.110 align:start position:0%
+ 
+ 
+
+00:15:51.110 --> 00:15:53.509 align:start position:0%
+ 
+ 
+
+00:15:53.509 --> 00:15:54.629 align:start position:0%
+ 
+ 
+
+00:15:54.629 --> 00:15:56.629 align:start position:0%
+ 
+ 
+
+00:15:56.629 --> 00:15:58.150 align:start position:0%
+ 
+ 
+
+00:15:58.150 --> 00:15:59.990 align:start position:0%
+ 
+ 
+
+00:15:59.990 --> 00:16:02.629 align:start position:0%
+ 
+ 
+
+00:16:02.629 --> 00:16:04.470 align:start position:0%
+ 
+ 
+
+00:16:04.470 --> 00:16:06.629 align:start position:0%
+ 
+ 
+
+00:16:06.629 --> 00:16:09.670 align:start position:0%
+ 
+ 
+
+00:16:09.670 --> 00:16:11.030 align:start position:0%
+ 
+ 
+
+00:16:11.030 --> 00:16:13.350 align:start position:0%
+ 
+ 
+
+00:16:13.350 --> 00:16:15.030 align:start position:0%
+ 
+ 
+
+00:16:15.030 --> 00:16:18.230 align:start position:0%
+ 
+ 
+
+00:16:18.230 --> 00:16:20.389 align:start position:0%
+ 
+ 
+
+00:16:20.389 --> 00:16:22.389 align:start position:0%
+ 
+ 
+
+00:16:22.389 --> 00:16:24.389 align:start position:0%
+ 
+ 
+
+00:16:24.389 --> 00:16:26.790 align:start position:0%
+ 
+ 
+
+00:16:26.790 --> 00:16:26.800 align:start position:0%
+ 
+ 
+
+00:16:26.800 --> 00:16:27.590 align:start position:0%
+ 
+
+
+00:16:27.590 --> 00:16:29.269 align:start position:0%
+ 
+ 
+
+00:16:29.269 --> 00:16:31.509 align:start position:0%
+ 
+ 
+
+00:16:31.509 --> 00:16:33.350 align:start position:0%
+ 
+ 
+
+00:16:33.350 --> 00:16:35.509 align:start position:0%
+ 
+ 
+
+00:16:35.509 --> 00:16:37.350 align:start position:0%
+ 
+ 
+
+00:16:37.350 --> 00:16:38.389 align:start position:0%
+ 
+ 
+
+00:16:38.389 --> 00:16:40.389 align:start position:0%
+ 
+ 
+
+00:16:40.389 --> 00:16:42.150 align:start position:0%
+ 
+ 
+
+00:16:42.150 --> 00:16:44.389 align:start position:0%
+ 
+ 
+
+00:16:44.389 --> 00:16:46.629 align:start position:0%
+ 
+ 
+
+00:16:46.629 --> 00:16:48.389 align:start position:0%
+ 
+ 
+
+00:16:48.389 --> 00:16:50.790 align:start position:0%
+ 
+ 
+
+00:16:50.790 --> 00:16:52.389 align:start position:0%
+ 
+ 
+
+00:16:52.389 --> 00:16:54.629 align:start position:0%
+ 
+ 
+
+00:16:54.629 --> 00:16:55.910 align:start position:0%
+ 
+ 
+
+00:16:55.910 --> 00:16:55.920 align:start position:0%
+ 
+ 
+
+00:16:55.920 --> 00:16:56.629 align:start position:0%
+ 
+
+
+00:16:56.629 --> 00:16:58.150 align:start position:0%
+ 
+ 
+
+00:16:58.150 --> 00:16:59.990 align:start position:0%
+ 
+ 
+
+00:16:59.990 --> 00:17:02.069 align:start position:0%
+ 
+ 
+
+00:17:02.069 --> 00:17:03.829 align:start position:0%
+ 
+ 
+
+00:17:03.829 --> 00:17:05.110 align:start position:0%
+ 
+ 
+
+00:17:05.110 --> 00:17:06.150 align:start position:0%
+ 
+ 
+
+00:17:06.150 --> 00:17:08.470 align:start position:0%
+ 
+ 
+
+00:17:08.470 --> 00:17:10.230 align:start position:0%
+ 
+ 
+
+00:17:10.230 --> 00:17:11.029 align:start position:0%
+ 
+ 
+
+00:17:11.029 --> 00:17:13.110 align:start position:0%
+ 
+ 
+
+00:17:13.110 --> 00:17:16.230 align:start position:0%
+ 
+ 
+
+00:17:16.230 --> 00:17:18.309 align:start position:0%
+ 
+ 
+
+00:17:18.309 --> 00:17:20.150 align:start position:0%
+ 
+ 
+
+00:17:20.150 --> 00:17:21.750 align:start position:0%
+ 
+ 
+
+00:17:21.750 --> 00:17:24.630 align:start position:0%
+ 
+ 
+
+00:17:24.630 --> 00:17:27.189 align:start position:0%
+ 
+ 
+
+00:17:27.189 --> 00:17:29.669 align:start position:0%
+ 
+ 
+
+00:17:29.669 --> 00:17:31.350 align:start position:0%
+ 
+ 
+
+00:17:31.350 --> 00:17:34.470 align:start position:0%
+ 
+ 
+
+00:17:34.470 --> 00:17:36.070 align:start position:0%
+ 
+ 
+
+00:17:36.070 --> 00:17:36.080 align:start position:0%
+ 
+ 
+
+00:17:36.080 --> 00:17:37.190 align:start position:0%
+ 
+
+
+00:17:37.190 --> 00:17:39.510 align:start position:0%
+ 
+ 
+
+00:17:39.510 --> 00:17:40.870 align:start position:0%
+ 
+ 
+
+00:17:40.870 --> 00:17:48.310 align:start position:0%
+ 
+ 
+
+00:17:48.310 --> 00:17:48.320 align:start position:0%
+ 
+ 
+
+00:17:48.320 --> 00:17:50.400 align:start position:0%
+ 
+
+

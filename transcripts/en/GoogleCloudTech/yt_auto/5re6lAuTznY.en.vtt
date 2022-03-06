@@ -1,0 +1,3404 @@
+WEBVTT
+Kind: captions
+Language: en
+
+00:00:00.360 --> 00:00:05.950 align:start position:0%
+ 
+[Music]  my name is roofin lakhs I'm a software  engineer on Google cloud platform and  we're here with our wonderful partners  at Scotiabank to talk about Google Cloud  dataflow streaming and how we auto scale  streaming pipelines and then we will  talk about how Scotiabank uses this  functionality so first a little bit of a  little bit of background on streaming  data flow pipelines as streaming  pipelines in general and why auto  scaling is important so unlike  traditional batch applications where you  just run once and then they're done if  your data later is if late later you  have more data you run it again with you  know larger larger set of inputs right  and more resources streaming pipelines  are always on you start usually start a  string in cluster a stringing pipeline  and just leave it running continuously  but in most cases the incoming load to  this stream pipeline varies over time  often these are daily diurnal variations  so you know and then twelve o'clock at  midnight you have much lower levels of  volume of data coming in then at peak  hours your volume increases and keeps  going up and down throughout the day and  so traditionally what people have had to  do to deal with this is to provision  their streaming pipelines for the peak  load figure out how much at how many  resources do I need to handle the  busiest time of day make sure my stream  pipeline has at least that many  resources sometimes even more because if  anything falls behind you need to  process even faster than that to catch  up and this is a this was this is very  expensive you know you're wasting my  many of the resources throughout most of  the day and one of the things we set out  to solve with data flows streaming auto  scaling so here's a quick agenda for  this talk I'm going to start off with a  quick overview of Apache beam and data  flow and how  execute stripping pipelines I'm gonna  talk a bit about what our primary  signals are for streaming auto-scaling  and how this works today and in our new  upcoming streaming engine which will  replace the current one and then finally  our representative from Scotiabank  will talk about how they are using data  flow and auto scaling to solve their  their problems so here we have a visual  about of a essentially the hello world  of data processing problem so the hello  world of data processing problem that  everybody likes to start with is count  words reading a bunch of reading a bunch  of lines and output how many words you  have so it's a fairly trivial problem  but it's it's the it's the getting  started guide that everybody uses so on  the right this is the code you would  write with the Apache beam API which is  the API to data flow to account words we  this is a stream pipeline so we read  words from a pub sub topic split split  every line into its component words and  here we've decided to window it by five  minutes so our output is every five  minutes how many how many words of each  how many of each unique words did we see  in that last five minutes and then  finally count them and write the data  out now it turns out that even though  this pipeline has one two three four  five steps in it the data flow has and  optimizers that optimizes this into a  smaller number of steps for execution  and what we actually end up with is two  steps separated by separated by actually  the component of this count will we have  to shuffle data around so we can  actually count to count the words  properly and that is the string shuffled  on the Left connecting that the two  steps and it turns out that when it  comes to auto-scaling we can usually  look at these two steps independently  and auto-scale each one separately and  also unlike batch pipeline  is where you you will have steps in a  sequence and usually once that finishes  completely and then when it's done the  next step starts in streaming pipeline  we're data it's constantly streaming  through all steps in the pipeline are  active at the same time so you have two  autos your auto scaling algorithms must  take an account everything in parallel  so how do I turn on auto scaling well  today you turn it on by by passing in a  cuff flag to your pipeline when you  launch it and say auto scaling out  within equals throughput based in the  future we plan for auto scaling to just  be the defaults are always on this is  but until then this is how you turn it  on for stringing pipelines and you can  also specify a max number workers flag  which will give us a ceiling on auto  scaling so if you say not some workers  equals a thousand then we will never  auto scale up above a thousand even if  even if it needs it to keep up with its  input so how how does this work under  the covers so to explain a little bit  about how our dos going works I have to  start off by explaining a little bit  about data flows execution model under  the covers how we take a data flow  program and actually schedule it and run  it on GCE workers and the first the  first thing I have to explain is that in  data flow are underlying runner  everything is done in the context of a  key so all data is really separated into  key value pairs that we then shuffle  around and process if you've done a  group by key or account by key or in  this case account words then the key is  obvious it's the key is just is just the  word you're counting if if you're not  doing any sort of aggregation and it  turns out we still have a key that we  just randomly assigned to all the  elements we take all the keys we then  hat we prefix each one with a hash so we  we take a hexadecimal hash of each key  and  put it at the beginning of every key and  that just which does two things first of  all it smears out the work so if you  have a lot of keys that are very similar  they don't end up together it tends to  spread them out across the hash space  and also gives us a nice way of chopping  this work up so since every key starts  with a 16 character hash we can then  just take ranges of these hashes and I  use that to divide up the work into  multiple charts so here is an example of  stage a we have taken all the keys based  off of an estimate of how large we think  the input is we have divided the key  ranges up into a certain number of  ranges a and started the pipeline so  next we actually start the workers that  will run these these stages and the  stream pipeline so here these little  blue icons are standard GCE icon we  started a number of GC workers and for  each GC worker we take some number of  these key ranges and assign it to that  worker so here we have you know  Kri ter J are signed to this one kxky  are assigned to that worker there are  more workers in between every worker has  some number of key ranges for this dream  pipeline assigned now how does this  actually work on our system today and  this is an exam this is something that  is actually explained either is changing  with the upcoming streaming engine but  the way the current system works is  everything runs on these GCE virtual  machines so every virtual machine that  has a key ranger scientist has  persistent disks attached to it to store  state for that key race so if you're  doing a say a 5-minute activation or an  one hour window degredation you need to  be able to constantly keep track  persistently of what your aggregations  are so far for this window if the worker  crashes and has to restart you don't  want to lose any data so currently we  use persistent disk and a key value  store on top of the persistent disk on  each VM to store this state as I'll  explain later we have a our new  streaming engine moves all of this into  the cloud and so all this work the  boozes off moves off these workers you  also need to shuffle data so pub/sub  pub/sub is a completely undone sorted  source which means i'm counting words  all the words might show up on all the  workers so if i want to take the word  next for instance and count how many  nexts i've seen over the past five  minutes i need to make sure all these  next counts end up on a unique worker so  i can do this count so we have a  streaming shuffle system that moves that  these records around between the workers  so we can do these concept alright so  now that i've talked a little bit about  how things work under the covers let's  move on to auto scaling for a second or  for the rest of rest of my talk in order  to scale a pipeline we need signals we  need something that tells us this  pipeline doesn't have enough workers  attached to it we're not keeping up and  also a signal that gives us an estimate  of how many workers we need in this  pipeline now your pipeline is not  keeping up you have 15 workers I  estimate that with 25 workers you'll be  able to keep up so what are our primary  signals for auto scaling the first one  is backlog is there data coming in if  data is coming in faster than we can  process it then the data is going to  start piling up and form a backlog so if  if this backlog is high and especially  if this backlog keeps growing that's a  sign that we don't have enough workers  and we need to auto scale up the second  one is throughput how fast how fast am I  currently processing the data I'm not  you know maybe I'm currently processing  the data at 10,000 GBS 100,000 QPS or a  million QPS  but then we have to contrast that with  the actual input rate so the input rate  is how fast the data is actually showing  up at my pipeline so if I'm processing  data at a million QPS and my input rate  is 1.2 million QPS clearly I'm not  processing fast enough and the input  rate what is we can always estimate the  input rate by taking the throughput that  we're currently processing data at and  since measuring how fast is our backlog  growing so if I'm processing data at say  10 gigabytes per second but then I can  measure my backlog and say okay but my  backlog keeps growing at a 1 gigabyte  per second a good estimate of your input  rate is 11 gigabytes per second that's  how much you know if I if I was able to  process that my backlog would stop  growing and finally we look at CPU  consumption to understand how much CPU  all these workers are using which is  another important signal for auto  scaling so let's talk for a second about  backlog so here we have cloud pub/sub so  a bunch of a bunch of data coming from  cloud pub/sub into our pipeline presume  and believe there is a publisher out  there that is pushing data into pal  cloud pub/sub and remember we had two  stages in this pipeline stage a and  stage be stage a is the stage that's  pulling data front pops up so the first  thing we want to measure is what is the  backlog for stage a if you're familiar  with Google cloud pub/sub but Google  cloud pub/sub will store a backlog for  you in fact it will store up to seven  days worth of backlog this can happen if  data is getting pushed to pups up and  nobody's pulling from it or if data is  getting pushed to pub/sub and you're  pulling from pub/sub slower than the  publishers are publishing so the first  thing we do for stage a is we we say  okay our source is pub/sub let's ask  google cloud pub/sub what the combat  so we have an internal API that gives us  the backlog it's also available through  staff driver so you can go to staff  drive for yourself and look at the UH  nacked messages metrics and see what the  signal is that we're looking at to know  that the backlog is building up in  pub/sub and faster than we're draining  it but then remember we have a streaming  shuffle between stage a and stage B  stage B is where we produce the final  counts the final windowed counts of for  these words so we need a measure about  the backlog between stage a and B as  well so if we're pulling data from  pub/sub and we're keeping up from pops  up and then we're pushing data to this  next stage to say hey count words and  the next stage can't keep up the backlog  for that next stage will grow as well so  that also means we don't have we don't  have enough workers running to maintain  our pipeline  so the first backlog tells us we  wouldn't have enough worker we don't  have enough workers running to pull from  pub/sub fast enough the second backlog  tells us we don't have enough workers  internally to do all these counts we're  trying to do so in this talk I'm going  to make a few simplifying assumptions to  make the auto scaling algorithm a little  bit simpler so the first assumption is  that every stage couldn't be sized  independently but I can go look at every  stage of my pipeline decide what the  appropriate number of workers is for  that stage and then I can decide based  off of all that how many workers I need  for my entire pipeline you know maybe I  take the max of all those and say that's  how many workers I mean I'm assuming  that that the load is distributed fairly  evenly between workers so if you  remember I said that we put a hash a  prefix on all the keys this actually  does a fairly good job of distributing  load fairly evenly among all workers and  finally in practice we apply smoothing  so as I'll explain in a minute there's  some cost to auto scaling so if you have  a sudden spike that lasts a second you  don't necessarily want your you know  your auto scar through like up down up  up down up down so we apply a smoothing  window which currently is in practice I  believe a two-minute smoothing window so  we have some sort of you know smoother  Auto scanning up and down so what if  this means that auto scaling works  fairly well when you have continuous  variations and load its if if your  problem is you know my load is usually  10 QPS and then once an hour it spikes  to a million QPS for 5 seconds now auto  scaling is gonna take some time to go up  and down for that you know for that for  that spikey so how do we use these  signals to actually decide we need to  auto scale up well when the backlog is  high or when we see the backlog is  growing which is a sure sign that we  don't have enough resources to prosper  on this pipeline we generally start  generating size recommendations and we  have the data flow service and our back  end has a loop that is constantly  generating size recommendations for a  pipeline so what is the size  recommendation well first of all we we  measure the input rate and if you  remember the input rate is the rate  we're currently processing at plus the  rate at which my backlog for the  pipeline is increasing and that's the  estimate of how how fast the data is  really arriving after we've measured the  input rate it turns out we're not quite  done because if my backlog is currently  one terabyte and I upscale until I can  handle the current input rate of data my  backlog will just stay frozen at one  terabyte because I now I have enough  workers to handle if the data is coming  in but not enough workers to drain that  backlog so we then have to add to that  how many workers do I need to consume  that backlog quickly while maintaining  the current input rate that eventually  we will you know drain that backlog on  be at a backlog of zero or close to zero  and at that point all we need is enough  workers to keep up with the input rate  and as I just mentioned we average this  recommendation over a sliding two-minute  window and so we have a little bit of  smoothing on these recommendations so  what do we do when the estimated backlog  is low so how do we decide that we have  too many workers and we can we can now  down scale this job  well I'll divide it into the current  world and the the new streaming engine  world which as which is actually  innovated can be tried now the current  world takes the takes a new  recommendation but actually has to be  very conservative and down scaling and  the reason why is if you remember the  the current architecture attaches  persistent disks to every worker and the  work ski ranges are tied to these  persistent disks empirically we found  that if you get an imbalance so you  start having like 10 persistent this on  this worker and to persistent this on  this worker it actually makes  performance worse because the workers  with a very small number of it's become  a bottleneck for all the other workers  so on the persistent disk architecture  we attempt to only downscale if we can  make sure that all the workers have an  even number of persistent disks which  often means that if we can down scale by  one VM we might hold off and say that'll  create an imbalance we're gonna way that  we can down still buy enough VMs to even  out the Briton disks and only then will  we down scale on a streaming engine  there are our new architecture there are  no persistent disks attached to the VMs  the VMS are stateless so we can download  continuously so as that we can just  monitor the CPU we target see are down  scaling a CPU utilization of 80% so you  do not want to target 100% CPU  utilization because that does not give  you enough wiggle room so often you  might have small spikes that are not  high enough to trigger up scaling and/or  not long enough to trickle up scaling  you want to actually have enough enough  wiggle room  to handle small variations in input so  this is what our worker instance looks  like if in the current world so this is  a GCE VM we run the SDK worker this is  the data flow or a beam code that you  have written so this is a Java or a  Python process that runs the data the  dataflow pipeline there is another  process that runs on this a VM called  that is our streaming engine worker this  is the process that knows how to  interpret the code you've written and  turn it into you know persistent shuffle  and so on and then there are a number of  persistent disks attached attached to  these workers this is the world we're  moving to so the new worlds all of the  GC workers are completely stateless  there is no persistent disk attached to  them which means we can just add more or  tear tear them down as we want there is  less cost associated if less complex we  don't have to detach disks move into  another VM and attach them and we also  do no longer have this restriction of  trying to keep an even number of disks  attached to each worker because there  are no dispatch in this world the  dataflow service and the streaming  engine service both from the cloud and  all the state storage and all the timers  and so on also running the cloud which  as a side note something I forgot to  mention earlier and when I was talking  about streaming signals we actually have  one more streaming signal the way  windowing works and data flow is under  under the covers our streaming engine  has a notion of timers or for every team  we're processing it can set timers at  the end of the current window and when  the window expires all these timers fire  and what the timers fire we say ok the  window is done for this key you know  process of the count and spit it out we  can measure timer backlog so we can  measure that a lot of timers are about  fire what this means practically is our  auto-scaling can see the future in a way  we can detect that hey the input rate is  still steady but we're about to hit the  end of a window and all these timers are  about to fire we better start  auto-scaling now so we don't hit the end  of the window and then somebody start  thrashing and you know wait two minutes  and then start auto-scaling up so this  allows window a window processing to  auto scale much more smoothly by be able  to use timers as part of our one of our  signals and as I said you know no  persistent disk here ages are fluid this  is in beta so you can try this today on  your pipe on your pipeline it is  currently only only launched in beta  right now in two regions so right now US  central one and you are Europe West one  I believe are the two regions where  we've launched us then but in one of  those two regions you can pass in this  experimental flag and it will run it on  the new beta engine and if you have any  issues right this engine please let us  know immediately this is why this is why  things aren't beta so we can shake out  all problems to the surface before we  launch it to GA so there's some cost to  resizing so in the persistent disk world  the cost is you know there's latency  detaching and moving discs around our  reattaching them there's some startup  latency for a virtual machine we have to  pause work while the wall the rebalances  and process you know you had a worker  you have to move some work from another  work to the new one and for all these  reasons after a resizing event you need  a stabilization window because so what  you don't want is a hysteresis problem  where I resize and move work around and  that temporarily slows things down  slightly and that makes me think that  I'm falling more behind so I scale up  more and scale up more you know you can  have a positive feedback loop that goes  out of control so after a resizing event  instead we introduce a stabilization  period to make sure the system can quiet  down after a resize before we  exam it again and decide to resize again  the hope is that our initial estimate on  the resize was accurate so we won't have  to resize again quickly but if we do we  need to wait slightly longer before  doing so  and finally low CPU with high backlog  there are cases in which the backlog  keeps going up we start adding more  workers adding more workers and then we  look at the workers and say all these  workers  none of these VMs are using more than  10% CPU all this auto scaling up is not  helping and the reason why could be that  your pipeline is maybe your pipeline is  talking to external service and you're  being throttled so adding more workers  is not helping matters it might making  matters worse because you're just  hammering that external service even  more and it's going to start throttling  you more it could also be due to a bug  in a pipeline maybe your pipeline is  throwing an exception and so that's why  it's not making progress we're not  helping matters by adding more workers  so more workers can throw exceptions in  parallel so for this reason we actually  have a CPU cap if the CPU is too low we  stop upscaling so I mentioned cloud  pub/sub so cloud pops up is natively  supported it's by our streaming engine  and there is an API currently an  internal API that we use to measure the  backlog and the watermark for cloud  pub/sub although this backlog api is  also available via a stack driver you  can go to stack driver and add an old  asan act metric to monitor the backlog  for your pub subtopic the beam SDK also  supports custom sources so if you have a  custom source there are you have to  implement these two methods which allow  you to report what the current backlog  of your custom sources and we can use  that to estimate backlog on the source  and upscale if you if you have a source  that doesn't report those upscaling will  still happen based off our internal  backlog measurement but it will  work as well because we cannot measure  what the back actual backlog on the  sources and pub/sub IO which I already  mentioned our Kafka source and our  Kinesis source support this out of the  box so if you use either Koffler Kinesis  backlog will be measured so in  conclusion I talked about our primary  signals for auto-scaling a bit about how  our Java SDK is supported for  auto-scaling Python streaming was just  currently in beta will be supporting  auto scaling very very soon and the new  streaming engine which is currently in  beta will take our existing auto scaling  and make it work that much better and  now I'm delighted to introduce Roy  Bryant from Scotiabank Scotiabank has  been one of the leaders in the financial  services industry of moving their  processing over to Google cloud platform  especially this type of data processing  and Roy is here to tell us a little bit  about what they've done and how they've  done it  [Applause]  thanks Ruben yeah so I'm going to bring  it up a little bit higher level Rubens  and talking about the details of of how  dataflow works and I'm just going to  talk a bit about the use cases we're  using we're trying to transform the bank  pub/sub and data flow are foundational  to that so I just wanted to talk a bit  about what we're doing a little bit  about Scotia Bank in case you don't know  anything about it the bank's been around  a long time it's a in the top 40 or 25  largest banks in the world depending on  how you measure that it's really  international it was founded in Nova  Scotia long ago and doing trade that  came into the ports so more than half  the business is outside Canada there's  business in 55 countries 23 million  customers which is getting close to the  population of Canada and so we've got a  few challenges in the infrastructure  part of it is we've got it's been around  a long time so we have you know legacy  back-end systems more than 50 years old  we're doing lots of digital banking and  transformation online stuff in many  regions many countries so we want to go  fast there we've also done a lot of  acquisitions so we went over one 10 year  period we acquired 30 banks each with  two data centers we have lots of data  centers as sort of this effort that  consolidate that and rationalize those  stacks so it's we've got some complexity  so the trust and the reputation is  foundational to the business as it is  with the financial services across  financial services and how we handle PII  is key to that so big step is moving the  PII to the cloud and making sure that's  entirely safe and we've got a lot of  stakeholders security and operations as  every large organization does we also  have in addition to legal we've got  internal and external auditing we've got  regulators and we're in 55 countries so  we've got 55 regulators and this and  there's a tension but the velocity for  the digital we want to go  fast and iterate and get features out  the customers moving agile and then we  also have a lot of back-end  infrastructure teams that you know we  care a lot about stability and  reliability and everything we actually  want both both places we want the  digital stuff to be stable and reliable  and we want to bring more velocity to  the to the core banking systems so we're  trying to do that using cloud when we  think about cloud we're thinking about  it more as a method rather than a  destination so we kind of we conflate  cloud as you know moving it to cloud  along with DevOps and C ICD and  test-driven development and all those  all those pieces so we've got two  production systems that are using  pub/sub and dataflow first one I'll talk  about is our log streaming so we've got  pulling in structured and unstructured  data and logs from stock stock driver  from many different sources from all the  projects running and then we publish  those to pub/sub and then use beta flow  to route those to secure it's a cops and  persist them for regulatory purposes  feed it back to ops all that kind of  thing and for this we found it's it  works you know pub/sub in and data flow  will work well and there you know  performant and they give us the  performance we need and we don't really  see any issue with that going forward so  we're happy with it this isn't really  transformational I think the second use  case I think is more interesting because  it's the foundation for how we're  transforming the bank so for this the  problem we're trying to solve is we've  got a lot of different back-end systems  with many data sources so in Canadian  banking we've got over 2000 production  databases all with data in different  formats and different different  representations no agreement on what a  customer is and what a first name of a  customer is and when the count is and so  forth so we're trying to rationalize  that and then so it's a 2000 and Canada  and we're  in 55 countries we're not going to in  place to start  refactoring all our databases it's just  not going to work so what we're doing is  we're using cloud as an opportunity to  to restructure the wave we we do all  this so on ingestion we're transforming  the data into a standard format so we've  got an enterprise data model and the  business glossary that you can define  what exactly is a customer what is the  customers first name and then we map  from local schemas in all the different  data sources we bring that in we map it  to the standard schema see in the you  know say this is the customers first  name this is an account number  all that bring the data all into one  place that does a bunch of things one is  that we can now it opens up it opens the  door for doing analytics and you can do  analytics across you know many data  sources all the performance and so forth  from that the other thing is that it  puts a cache of the data in cloud so  we've got banks you know we do a bunch  of Canadian banking and we've got you  know you're using your handset and  you're doing online banking and then  we've got backends in Toronto we've got  backends in Chile  everything's far apart so what we're  doing is we're taking a cache of things  in cloud so you can hit hit we can put  the computer close to the to the data so  so we're using this that we're calling  is the event layer this event layer  there's the two pieces that pub/sub and  dataflow are key in one is the ingesting  ingest in the data into the common  format so for here we're streaming from  back-end systems in its mq cobol  copybook whatever down there transform  that stream that up into cloud it comes  into pub/sub and then we use dataflow so  on ingestion we're transforming it to  the standard schema we're also using DLP  and and kms and in creating tokenizing  the data so we've got it in flight comes  in and then in data flow called DLP on  the fly as it flows through  tokenize that landed in spanner now it's  all encrypted safe there and then we  just and then we you know lockdown riad  notification separately so so there's  the standard format getting the cache  the other piece is moving to  event-driven so we're taking events that  can be you know infrastructure events or  security or operations also just changes  in back-end data we're detecting that  you know raising an event for that or a  transaction comes in and then we're  persisting the transactions so now  instead of the application needing to  figure out how to talk to you know many  back-end systems and having the business  logic in the application and in the  backend systems and the api's and api's  call other api's and it's really hard to  tell what the business logic is so  instead about changing it to the the  event flow and then that gives us all  the data in the cloud and then when we  start looking forward we can see what  are the changes in the backend system so  if we can understand the data and we've  we built up the history of exactly how  the data changes on events we can start  you know reversing out and making sure  that we've got the you know the business  logic right so if we're trying to  replace a back-end system we can run it  again you know we've got some code that  we assert works the same way you can run  it through all the you know the last  year's transactions and see if you get  the same answer every time so and then  the and then for the api's so we don't  get we're trying to break that we don't  want these all these layered api's on  the backend systems so what we do is we  we bring the data into the event layer  then you can either so applications can  either subscribe to the stream of events  and see transactions that way or can  query the storage or we also expose it  through API so we have a data as a  service API that that lets you access  API driven do the queries against the  data and then we have a bank as an API  level above that with Bank concepts you  can say you know what are the accounts  that this  customer has and then it'll use the data  API you can do the queries give a  structured way to to get out that so  what we've accomplished so we have these  these couple of things in production and  we've used and as I said the  transformation to standardize data and  event-driven is really foundational to  our strategy for transforming the bank  and then pops up and data flow or our  foundational to the implementation of  that strategy and we've been really  happy with you know the performance the  cost reliability of the systems they've  all worked really well in production the  other factor we considered in choosing  Google to do this is there's a really  strong relationship a collaborative  relationship we've got a lot of  engineering support so this is gone  really well thank you  [Music]
+
+00:00:05.950 --> 00:00:09.049 align:start position:0%
+[Music]  my name is roofin lakhs I'm a software  engineer on Google cloud platform and  we're here with our wonderful partners  at Scotiabank to talk about Google Cloud  dataflow streaming and how we auto scale  streaming pipelines and then we will  talk about how Scotiabank uses this  functionality so first a little bit of a  little bit of background on streaming  data flow pipelines as streaming  pipelines in general and why auto  scaling is important so unlike  traditional batch applications where you  just run once and then they're done if  your data later is if late later you  have more data you run it again with you  know larger larger set of inputs right  and more resources streaming pipelines  are always on you start usually start a  string in cluster a stringing pipeline  and just leave it running continuously  but in most cases the incoming load to  this stream pipeline varies over time  often these are daily diurnal variations  so you know and then twelve o'clock at  midnight you have much lower levels of  volume of data coming in then at peak  hours your volume increases and keeps  going up and down throughout the day and  so traditionally what people have had to  do to deal with this is to provision  their streaming pipelines for the peak  load figure out how much at how many  resources do I need to handle the  busiest time of day make sure my stream  pipeline has at least that many  resources sometimes even more because if  anything falls behind you need to  process even faster than that to catch  up and this is a this was this is very  expensive you know you're wasting my  many of the resources throughout most of  the day and one of the things we set out  to solve with data flows streaming auto  scaling so here's a quick agenda for  this talk I'm going to start off with a  quick overview of Apache beam and data  flow and how  execute stripping pipelines I'm gonna  talk a bit about what our primary  signals are for streaming auto-scaling  and how this works today and in our new  upcoming streaming engine which will  replace the current one and then finally  our representative from Scotiabank  will talk about how they are using data  flow and auto scaling to solve their  their problems so here we have a visual  about of a essentially the hello world  of data processing problem so the hello  world of data processing problem that  everybody likes to start with is count  words reading a bunch of reading a bunch  of lines and output how many words you  have so it's a fairly trivial problem  but it's it's the it's the getting  started guide that everybody uses so on  the right this is the code you would  write with the Apache beam API which is  the API to data flow to account words we  this is a stream pipeline so we read  words from a pub sub topic split split  every line into its component words and  here we've decided to window it by five  minutes so our output is every five  minutes how many how many words of each  how many of each unique words did we see  in that last five minutes and then  finally count them and write the data  out now it turns out that even though  this pipeline has one two three four  five steps in it the data flow has and  optimizers that optimizes this into a  smaller number of steps for execution  and what we actually end up with is two  steps separated by separated by actually  the component of this count will we have  to shuffle data around so we can  actually count to count the words  properly and that is the string shuffled  on the Left connecting that the two  steps and it turns out that when it  comes to auto-scaling we can usually  look at these two steps independently  and auto-scale each one separately and  also unlike batch pipeline  is where you you will have steps in a  sequence and usually once that finishes  completely and then when it's done the  next step starts in streaming pipeline  we're data it's constantly streaming  through all steps in the pipeline are  active at the same time so you have two  autos your auto scaling algorithms must  take an account everything in parallel  so how do I turn on auto scaling well  today you turn it on by by passing in a  cuff flag to your pipeline when you  launch it and say auto scaling out  within equals throughput based in the  future we plan for auto scaling to just  be the defaults are always on this is  but until then this is how you turn it  on for stringing pipelines and you can  also specify a max number workers flag  which will give us a ceiling on auto  scaling so if you say not some workers  equals a thousand then we will never  auto scale up above a thousand even if  even if it needs it to keep up with its  input so how how does this work under  the covers so to explain a little bit  about how our dos going works I have to  start off by explaining a little bit  about data flows execution model under  the covers how we take a data flow  program and actually schedule it and run  it on GCE workers and the first the  first thing I have to explain is that in  data flow are underlying runner  everything is done in the context of a  key so all data is really separated into  key value pairs that we then shuffle  around and process if you've done a  group by key or account by key or in  this case account words then the key is  obvious it's the key is just is just the  word you're counting if if you're not  doing any sort of aggregation and it  turns out we still have a key that we  just randomly assigned to all the  elements we take all the keys we then  hat we prefix each one with a hash so we  we take a hexadecimal hash of each key  and  put it at the beginning of every key and  that just which does two things first of  all it smears out the work so if you  have a lot of keys that are very similar  they don't end up together it tends to  spread them out across the hash space  and also gives us a nice way of chopping  this work up so since every key starts  with a 16 character hash we can then  just take ranges of these hashes and I  use that to divide up the work into  multiple charts so here is an example of  stage a we have taken all the keys based  off of an estimate of how large we think  the input is we have divided the key  ranges up into a certain number of  ranges a and started the pipeline so  next we actually start the workers that  will run these these stages and the  stream pipeline so here these little  blue icons are standard GCE icon we  started a number of GC workers and for  each GC worker we take some number of  these key ranges and assign it to that  worker so here we have you know  Kri ter J are signed to this one kxky  are assigned to that worker there are  more workers in between every worker has  some number of key ranges for this dream  pipeline assigned now how does this  actually work on our system today and  this is an exam this is something that  is actually explained either is changing  with the upcoming streaming engine but  the way the current system works is  everything runs on these GCE virtual  machines so every virtual machine that  has a key ranger scientist has  persistent disks attached to it to store  state for that key race so if you're  doing a say a 5-minute activation or an  one hour window degredation you need to  be able to constantly keep track  persistently of what your aggregations  are so far for this window if the worker  crashes and has to restart you don't  want to lose any data so currently we  use persistent disk and a key value  store on top of the persistent disk on  each VM to store this state as I'll  explain later we have a our new  streaming engine moves all of this into  the cloud and so all this work the  boozes off moves off these workers you  also need to shuffle data so pub/sub  pub/sub is a completely undone sorted  source which means i'm counting words  all the words might show up on all the  workers so if i want to take the word  next for instance and count how many  nexts i've seen over the past five  minutes i need to make sure all these  next counts end up on a unique worker so  i can do this count so we have a  streaming shuffle system that moves that  these records around between the workers  so we can do these concept alright so  now that i've talked a little bit about  how things work under the covers let's  move on to auto scaling for a second or  for the rest of rest of my talk in order  to scale a pipeline we need signals we  need something that tells us this  pipeline doesn't have enough workers  attached to it we're not keeping up and  also a signal that gives us an estimate  of how many workers we need in this  pipeline now your pipeline is not  keeping up you have 15 workers I  estimate that with 25 workers you'll be  able to keep up so what are our primary  signals for auto scaling the first one  is backlog is there data coming in if  data is coming in faster than we can  process it then the data is going to  start piling up and form a backlog so if  if this backlog is high and especially  if this backlog keeps growing that's a  sign that we don't have enough workers  and we need to auto scale up the second  one is throughput how fast how fast am I  currently processing the data I'm not  you know maybe I'm currently processing  the data at 10,000 GBS 100,000 QPS or a  million QPS  but then we have to contrast that with  the actual input rate so the input rate  is how fast the data is actually showing  up at my pipeline so if I'm processing  data at a million QPS and my input rate  is 1.2 million QPS clearly I'm not  processing fast enough and the input  rate what is we can always estimate the  input rate by taking the throughput that  we're currently processing data at and  since measuring how fast is our backlog  growing so if I'm processing data at say  10 gigabytes per second but then I can  measure my backlog and say okay but my  backlog keeps growing at a 1 gigabyte  per second a good estimate of your input  rate is 11 gigabytes per second that's  how much you know if I if I was able to  process that my backlog would stop  growing and finally we look at CPU  consumption to understand how much CPU  all these workers are using which is  another important signal for auto  scaling so let's talk for a second about  backlog so here we have cloud pub/sub so  a bunch of a bunch of data coming from  cloud pub/sub into our pipeline presume  and believe there is a publisher out  there that is pushing data into pal  cloud pub/sub and remember we had two  stages in this pipeline stage a and  stage be stage a is the stage that's  pulling data front pops up so the first  thing we want to measure is what is the  backlog for stage a if you're familiar  with Google cloud pub/sub but Google  cloud pub/sub will store a backlog for  you in fact it will store up to seven  days worth of backlog this can happen if  data is getting pushed to pups up and  nobody's pulling from it or if data is  getting pushed to pub/sub and you're  pulling from pub/sub slower than the  publishers are publishing so the first  thing we do for stage a is we we say  okay our source is pub/sub let's ask  google cloud pub/sub what the combat  so we have an internal API that gives us  the backlog it's also available through  staff driver so you can go to staff  drive for yourself and look at the UH  nacked messages metrics and see what the  signal is that we're looking at to know  that the backlog is building up in  pub/sub and faster than we're draining  it but then remember we have a streaming  shuffle between stage a and stage B  stage B is where we produce the final  counts the final windowed counts of for  these words so we need a measure about  the backlog between stage a and B as  well so if we're pulling data from  pub/sub and we're keeping up from pops  up and then we're pushing data to this  next stage to say hey count words and  the next stage can't keep up the backlog  for that next stage will grow as well so  that also means we don't have we don't  have enough workers running to maintain  our pipeline  so the first backlog tells us we  wouldn't have enough worker we don't  have enough workers running to pull from  pub/sub fast enough the second backlog  tells us we don't have enough workers  internally to do all these counts we're  trying to do so in this talk I'm going  to make a few simplifying assumptions to  make the auto scaling algorithm a little  bit simpler so the first assumption is  that every stage couldn't be sized  independently but I can go look at every  stage of my pipeline decide what the  appropriate number of workers is for  that stage and then I can decide based  off of all that how many workers I need  for my entire pipeline you know maybe I  take the max of all those and say that's  how many workers I mean I'm assuming  that that the load is distributed fairly  evenly between workers so if you  remember I said that we put a hash a  prefix on all the keys this actually  does a fairly good job of distributing  load fairly evenly among all workers and  finally in practice we apply smoothing  so as I'll explain in a minute there's  some cost to auto scaling so if you have  a sudden spike that lasts a second you  don't necessarily want your you know  your auto scar through like up down up  up down up down so we apply a smoothing  window which currently is in practice I  believe a two-minute smoothing window so  we have some sort of you know smoother  Auto scanning up and down so what if  this means that auto scaling works  fairly well when you have continuous  variations and load its if if your  problem is you know my load is usually  10 QPS and then once an hour it spikes  to a million QPS for 5 seconds now auto  scaling is gonna take some time to go up  and down for that you know for that for  that spikey so how do we use these  signals to actually decide we need to  auto scale up well when the backlog is  high or when we see the backlog is  growing which is a sure sign that we  don't have enough resources to prosper  on this pipeline we generally start  generating size recommendations and we  have the data flow service and our back  end has a loop that is constantly  generating size recommendations for a  pipeline so what is the size  recommendation well first of all we we  measure the input rate and if you  remember the input rate is the rate  we're currently processing at plus the  rate at which my backlog for the  pipeline is increasing and that's the  estimate of how how fast the data is  really arriving after we've measured the  input rate it turns out we're not quite  done because if my backlog is currently  one terabyte and I upscale until I can  handle the current input rate of data my  backlog will just stay frozen at one  terabyte because I now I have enough  workers to handle if the data is coming  in but not enough workers to drain that  backlog so we then have to add to that  how many workers do I need to consume  that backlog quickly while maintaining  the current input rate that eventually  we will you know drain that backlog on  be at a backlog of zero or close to zero  and at that point all we need is enough  workers to keep up with the input rate  and as I just mentioned we average this  recommendation over a sliding two-minute  window and so we have a little bit of  smoothing on these recommendations so  what do we do when the estimated backlog  is low so how do we decide that we have  too many workers and we can we can now  down scale this job  well I'll divide it into the current  world and the the new streaming engine  world which as which is actually  innovated can be tried now the current  world takes the takes a new  recommendation but actually has to be  very conservative and down scaling and  the reason why is if you remember the  the current architecture attaches  persistent disks to every worker and the  work ski ranges are tied to these  persistent disks empirically we found  that if you get an imbalance so you  start having like 10 persistent this on  this worker and to persistent this on  this worker it actually makes  performance worse because the workers  with a very small number of it's become  a bottleneck for all the other workers  so on the persistent disk architecture  we attempt to only downscale if we can  make sure that all the workers have an  even number of persistent disks which  often means that if we can down scale by  one VM we might hold off and say that'll  create an imbalance we're gonna way that  we can down still buy enough VMs to even  out the Briton disks and only then will  we down scale on a streaming engine  there are our new architecture there are  no persistent disks attached to the VMs  the VMS are stateless so we can download  continuously so as that we can just  monitor the CPU we target see are down  scaling a CPU utilization of 80% so you  do not want to target 100% CPU  utilization because that does not give  you enough wiggle room so often you  might have small spikes that are not  high enough to trigger up scaling and/or  not long enough to trickle up scaling  you want to actually have enough enough  wiggle room  to handle small variations in input so  this is what our worker instance looks  like if in the current world so this is  a GCE VM we run the SDK worker this is  the data flow or a beam code that you  have written so this is a Java or a  Python process that runs the data the  dataflow pipeline there is another  process that runs on this a VM called  that is our streaming engine worker this  is the process that knows how to  interpret the code you've written and  turn it into you know persistent shuffle  and so on and then there are a number of  persistent disks attached attached to  these workers this is the world we're  moving to so the new worlds all of the  GC workers are completely stateless  there is no persistent disk attached to  them which means we can just add more or  tear tear them down as we want there is  less cost associated if less complex we  don't have to detach disks move into  another VM and attach them and we also  do no longer have this restriction of  trying to keep an even number of disks  attached to each worker because there  are no dispatch in this world the  dataflow service and the streaming  engine service both from the cloud and  all the state storage and all the timers  and so on also running the cloud which  as a side note something I forgot to  mention earlier and when I was talking  about streaming signals we actually have  one more streaming signal the way  windowing works and data flow is under  under the covers our streaming engine  has a notion of timers or for every team  we're processing it can set timers at  the end of the current window and when  the window expires all these timers fire  and what the timers fire we say ok the  window is done for this key you know  process of the count and spit it out we  can measure timer backlog so we can  measure that a lot of timers are about  fire what this means practically is our  auto-scaling can see the future in a way  we can detect that hey the input rate is  still steady but we're about to hit the  end of a window and all these timers are  about to fire we better start  auto-scaling now so we don't hit the end  of the window and then somebody start  thrashing and you know wait two minutes  and then start auto-scaling up so this  allows window a window processing to  auto scale much more smoothly by be able  to use timers as part of our one of our  signals and as I said you know no  persistent disk here ages are fluid this  is in beta so you can try this today on  your pipe on your pipeline it is  currently only only launched in beta  right now in two regions so right now US  central one and you are Europe West one  I believe are the two regions where  we've launched us then but in one of  those two regions you can pass in this  experimental flag and it will run it on  the new beta engine and if you have any  issues right this engine please let us  know immediately this is why this is why  things aren't beta so we can shake out  all problems to the surface before we  launch it to GA so there's some cost to  resizing so in the persistent disk world  the cost is you know there's latency  detaching and moving discs around our  reattaching them there's some startup  latency for a virtual machine we have to  pause work while the wall the rebalances  and process you know you had a worker  you have to move some work from another  work to the new one and for all these  reasons after a resizing event you need  a stabilization window because so what  you don't want is a hysteresis problem  where I resize and move work around and  that temporarily slows things down  slightly and that makes me think that  I'm falling more behind so I scale up  more and scale up more you know you can  have a positive feedback loop that goes  out of control so after a resizing event  instead we introduce a stabilization  period to make sure the system can quiet  down after a resize before we  exam it again and decide to resize again  the hope is that our initial estimate on  the resize was accurate so we won't have  to resize again quickly but if we do we  need to wait slightly longer before  doing so  and finally low CPU with high backlog  there are cases in which the backlog  keeps going up we start adding more  workers adding more workers and then we  look at the workers and say all these  workers  none of these VMs are using more than  10% CPU all this auto scaling up is not  helping and the reason why could be that  your pipeline is maybe your pipeline is  talking to external service and you're  being throttled so adding more workers  is not helping matters it might making  matters worse because you're just  hammering that external service even  more and it's going to start throttling  you more it could also be due to a bug  in a pipeline maybe your pipeline is  throwing an exception and so that's why  it's not making progress we're not  helping matters by adding more workers  so more workers can throw exceptions in  parallel so for this reason we actually  have a CPU cap if the CPU is too low we  stop upscaling so I mentioned cloud  pub/sub so cloud pops up is natively  supported it's by our streaming engine  and there is an API currently an  internal API that we use to measure the  backlog and the watermark for cloud  pub/sub although this backlog api is  also available via a stack driver you  can go to stack driver and add an old  asan act metric to monitor the backlog  for your pub subtopic the beam SDK also  supports custom sources so if you have a  custom source there are you have to  implement these two methods which allow  you to report what the current backlog  of your custom sources and we can use  that to estimate backlog on the source  and upscale if you if you have a source  that doesn't report those upscaling will  still happen based off our internal  backlog measurement but it will  work as well because we cannot measure  what the back actual backlog on the  sources and pub/sub IO which I already  mentioned our Kafka source and our  Kinesis source support this out of the  box so if you use either Koffler Kinesis  backlog will be measured so in  conclusion I talked about our primary  signals for auto-scaling a bit about how  our Java SDK is supported for  auto-scaling Python streaming was just  currently in beta will be supporting  auto scaling very very soon and the new  streaming engine which is currently in  beta will take our existing auto scaling  and make it work that much better and  now I'm delighted to introduce Roy  Bryant from Scotiabank Scotiabank has  been one of the leaders in the financial  services industry of moving their  processing over to Google cloud platform  especially this type of data processing  and Roy is here to tell us a little bit  about what they've done and how they've  done it  [Applause]  thanks Ruben yeah so I'm going to bring  it up a little bit higher level Rubens  and talking about the details of of how  dataflow works and I'm just going to  talk a bit about the use cases we're  using we're trying to transform the bank  pub/sub and data flow are foundational  to that so I just wanted to talk a bit  about what we're doing a little bit  about Scotia Bank in case you don't know  anything about it the bank's been around  a long time it's a in the top 40 or 25  largest banks in the world depending on  how you measure that it's really  international it was founded in Nova  Scotia long ago and doing trade that  came into the ports so more than half  the business is outside Canada there's  business in 55 countries 23 million  customers which is getting close to the  population of Canada and so we've got a  few challenges in the infrastructure  part of it is we've got it's been around  a long time so we have you know legacy  back-end systems more than 50 years old  we're doing lots of digital banking and  transformation online stuff in many  regions many countries so we want to go  fast there we've also done a lot of  acquisitions so we went over one 10 year  period we acquired 30 banks each with  two data centers we have lots of data  centers as sort of this effort that  consolidate that and rationalize those  stacks so it's we've got some complexity  so the trust and the reputation is  foundational to the business as it is  with the financial services across  financial services and how we handle PII  is key to that so big step is moving the  PII to the cloud and making sure that's  entirely safe and we've got a lot of  stakeholders security and operations as  every large organization does we also  have in addition to legal we've got  internal and external auditing we've got  regulators and we're in 55 countries so  we've got 55 regulators and this and  there's a tension but the velocity for  the digital we want to go  fast and iterate and get features out  the customers moving agile and then we  also have a lot of back-end  infrastructure teams that you know we  care a lot about stability and  reliability and everything we actually  want both both places we want the  digital stuff to be stable and reliable  and we want to bring more velocity to  the to the core banking systems so we're  trying to do that using cloud when we  think about cloud we're thinking about  it more as a method rather than a  destination so we kind of we conflate  cloud as you know moving it to cloud  along with DevOps and C ICD and  test-driven development and all those  all those pieces so we've got two  production systems that are using  pub/sub and dataflow first one I'll talk  about is our log streaming so we've got  pulling in structured and unstructured  data and logs from stock stock driver  from many different sources from all the  projects running and then we publish  those to pub/sub and then use beta flow  to route those to secure it's a cops and  persist them for regulatory purposes  feed it back to ops all that kind of  thing and for this we found it's it  works you know pub/sub in and data flow  will work well and there you know  performant and they give us the  performance we need and we don't really  see any issue with that going forward so  we're happy with it this isn't really  transformational I think the second use  case I think is more interesting because  it's the foundation for how we're  transforming the bank so for this the  problem we're trying to solve is we've  got a lot of different back-end systems  with many data sources so in Canadian  banking we've got over 2000 production  databases all with data in different  formats and different different  representations no agreement on what a  customer is and what a first name of a  customer is and when the count is and so  forth so we're trying to rationalize  that and then so it's a 2000 and Canada  and we're  in 55 countries we're not going to in  place to start  refactoring all our databases it's just  not going to work so what we're doing is  we're using cloud as an opportunity to  to restructure the wave we we do all  this so on ingestion we're transforming  the data into a standard format so we've  got an enterprise data model and the  business glossary that you can define  what exactly is a customer what is the  customers first name and then we map  from local schemas in all the different  data sources we bring that in we map it  to the standard schema see in the you  know say this is the customers first  name this is an account number  all that bring the data all into one  place that does a bunch of things one is  that we can now it opens up it opens the  door for doing analytics and you can do  analytics across you know many data  sources all the performance and so forth  from that the other thing is that it  puts a cache of the data in cloud so  we've got banks you know we do a bunch  of Canadian banking and we've got you  know you're using your handset and  you're doing online banking and then  we've got backends in Toronto we've got  backends in Chile  everything's far apart so what we're  doing is we're taking a cache of things  in cloud so you can hit hit we can put  the computer close to the to the data so  so we're using this that we're calling  is the event layer this event layer  there's the two pieces that pub/sub and  dataflow are key in one is the ingesting  ingest in the data into the common  format so for here we're streaming from  back-end systems in its mq cobol  copybook whatever down there transform  that stream that up into cloud it comes  into pub/sub and then we use dataflow so  on ingestion we're transforming it to  the standard schema we're also using DLP  and and kms and in creating tokenizing  the data so we've got it in flight comes  in and then in data flow called DLP on  the fly as it flows through  tokenize that landed in spanner now it's  all encrypted safe there and then we  just and then we you know lockdown riad  notification separately so so there's  the standard format getting the cache  the other piece is moving to  event-driven so we're taking events that  can be you know infrastructure events or  security or operations also just changes  in back-end data we're detecting that  you know raising an event for that or a  transaction comes in and then we're  persisting the transactions so now  instead of the application needing to  figure out how to talk to you know many  back-end systems and having the business  logic in the application and in the  backend systems and the api's and api's  call other api's and it's really hard to  tell what the business logic is so  instead about changing it to the the  event flow and then that gives us all  the data in the cloud and then when we  start looking forward we can see what  are the changes in the backend system so  if we can understand the data and we've  we built up the history of exactly how  the data changes on events we can start  you know reversing out and making sure  that we've got the you know the business  logic right so if we're trying to  replace a back-end system we can run it  again you know we've got some code that  we assert works the same way you can run  it through all the you know the last  year's transactions and see if you get  the same answer every time so and then  the and then for the api's so we don't  get we're trying to break that we don't  want these all these layered api's on  the backend systems so what we do is we  we bring the data into the event layer  then you can either so applications can  either subscribe to the stream of events  and see transactions that way or can  query the storage or we also expose it  through API so we have a data as a  service API that that lets you access  API driven do the queries against the  data and then we have a bank as an API  level above that with Bank concepts you  can say you know what are the accounts  that this  customer has and then it'll use the data  API you can do the queries give a  structured way to to get out that so  what we've accomplished so we have these  these couple of things in production and  we've used and as I said the  transformation to standardize data and  event-driven is really foundational to  our strategy for transforming the bank  and then pops up and data flow or our  foundational to the implementation of  that strategy and we've been really  happy with you know the performance the  cost reliability of the systems they've  all worked really well in production the  other factor we considered in choosing  Google to do this is there's a really  strong relationship a collaborative  relationship we've got a lot of  engineering support so this is gone  really well thank you  [Music]
+ 
+
+00:00:09.049 --> 00:00:11.690 align:start position:0%
+ 
+ 
+
+00:00:11.690 --> 00:00:13.820 align:start position:0%
+ 
+ 
+
+00:00:13.820 --> 00:00:18.260 align:start position:0%
+ 
+ 
+
+00:00:18.260 --> 00:00:22.429 align:start position:0%
+ 
+ 
+
+00:00:22.429 --> 00:00:24.500 align:start position:0%
+ 
+ 
+
+00:00:24.500 --> 00:00:27.529 align:start position:0%
+ 
+ 
+
+00:00:27.529 --> 00:00:30.560 align:start position:0%
+ 
+ 
+
+00:00:30.560 --> 00:00:33.200 align:start position:0%
+ 
+ 
+
+00:00:33.200 --> 00:00:34.940 align:start position:0%
+ 
+ 
+
+00:00:34.940 --> 00:00:37.430 align:start position:0%
+ 
+ 
+
+00:00:37.430 --> 00:00:40.100 align:start position:0%
+ 
+ 
+
+00:00:40.100 --> 00:00:42.740 align:start position:0%
+ 
+ 
+
+00:00:42.740 --> 00:00:44.779 align:start position:0%
+ 
+ 
+
+00:00:44.779 --> 00:00:47.660 align:start position:0%
+ 
+ 
+
+00:00:47.660 --> 00:00:50.090 align:start position:0%
+ 
+ 
+
+00:00:50.090 --> 00:00:52.250 align:start position:0%
+ 
+ 
+
+00:00:52.250 --> 00:00:55.760 align:start position:0%
+ 
+ 
+
+00:00:55.760 --> 00:00:59.029 align:start position:0%
+ 
+ 
+
+00:00:59.029 --> 00:01:00.889 align:start position:0%
+ 
+ 
+
+00:01:00.889 --> 00:01:03.070 align:start position:0%
+ 
+ 
+
+00:01:03.070 --> 00:01:07.850 align:start position:0%
+ 
+ 
+
+00:01:07.850 --> 00:01:10.390 align:start position:0%
+ 
+ 
+
+00:01:10.390 --> 00:01:14.240 align:start position:0%
+ 
+ 
+
+00:01:14.240 --> 00:01:17.090 align:start position:0%
+ 
+ 
+
+00:01:17.090 --> 00:01:20.390 align:start position:0%
+ 
+ 
+
+00:01:20.390 --> 00:01:23.630 align:start position:0%
+ 
+ 
+
+00:01:23.630 --> 00:01:25.940 align:start position:0%
+ 
+ 
+
+00:01:25.940 --> 00:01:28.810 align:start position:0%
+ 
+ 
+
+00:01:28.810 --> 00:01:31.310 align:start position:0%
+ 
+ 
+
+00:01:31.310 --> 00:01:33.440 align:start position:0%
+ 
+ 
+
+00:01:33.440 --> 00:01:35.929 align:start position:0%
+ 
+ 
+
+00:01:35.929 --> 00:01:39.080 align:start position:0%
+ 
+ 
+
+00:01:39.080 --> 00:01:40.819 align:start position:0%
+ 
+ 
+
+00:01:40.819 --> 00:01:43.550 align:start position:0%
+ 
+ 
+
+00:01:43.550 --> 00:01:44.990 align:start position:0%
+ 
+ 
+
+00:01:44.990 --> 00:01:47.450 align:start position:0%
+ 
+ 
+
+00:01:47.450 --> 00:01:48.859 align:start position:0%
+ 
+ 
+
+00:01:48.859 --> 00:01:50.389 align:start position:0%
+ 
+ 
+
+00:01:50.389 --> 00:01:54.950 align:start position:0%
+ 
+ 
+
+00:01:54.950 --> 00:01:57.139 align:start position:0%
+ 
+ 
+
+00:01:57.139 --> 00:01:59.179 align:start position:0%
+ 
+ 
+
+00:01:59.179 --> 00:02:01.010 align:start position:0%
+ 
+ 
+
+00:02:01.010 --> 00:02:04.130 align:start position:0%
+ 
+ 
+
+00:02:04.130 --> 00:02:08.600 align:start position:0%
+ 
+ 
+
+00:02:08.600 --> 00:02:10.460 align:start position:0%
+ 
+ 
+
+00:02:10.460 --> 00:02:12.949 align:start position:0%
+ 
+ 
+
+00:02:12.949 --> 00:02:13.760 align:start position:0%
+ 
+ 
+
+00:02:13.760 --> 00:02:16.460 align:start position:0%
+ 
+ 
+
+00:02:16.460 --> 00:02:18.320 align:start position:0%
+ 
+ 
+
+00:02:18.320 --> 00:02:20.800 align:start position:0%
+ 
+ 
+
+00:02:20.800 --> 00:02:24.010 align:start position:0%
+ 
+ 
+
+00:02:24.010 --> 00:02:26.630 align:start position:0%
+ 
+ 
+
+00:02:26.630 --> 00:02:30.400 align:start position:0%
+ 
+ 
+
+00:02:30.400 --> 00:02:33.080 align:start position:0%
+ 
+ 
+
+00:02:33.080 --> 00:02:35.960 align:start position:0%
+ 
+ 
+
+00:02:35.960 --> 00:02:37.460 align:start position:0%
+ 
+ 
+
+00:02:37.460 --> 00:02:44.800 align:start position:0%
+ 
+ 
+
+00:02:44.800 --> 00:02:48.800 align:start position:0%
+ 
+ 
+
+00:02:48.800 --> 00:02:52.550 align:start position:0%
+ 
+ 
+
+00:02:52.550 --> 00:02:54.230 align:start position:0%
+ 
+ 
+
+00:02:54.230 --> 00:02:55.820 align:start position:0%
+ 
+ 
+
+00:02:55.820 --> 00:02:58.460 align:start position:0%
+ 
+ 
+
+00:02:58.460 --> 00:03:00.440 align:start position:0%
+ 
+ 
+
+00:03:00.440 --> 00:03:03.200 align:start position:0%
+ 
+ 
+
+00:03:03.200 --> 00:03:05.240 align:start position:0%
+ 
+ 
+
+00:03:05.240 --> 00:03:08.390 align:start position:0%
+ 
+ 
+
+00:03:08.390 --> 00:03:10.040 align:start position:0%
+ 
+ 
+
+00:03:10.040 --> 00:03:13.430 align:start position:0%
+ 
+ 
+
+00:03:13.430 --> 00:03:16.220 align:start position:0%
+ 
+ 
+
+00:03:16.220 --> 00:03:18.290 align:start position:0%
+ 
+ 
+
+00:03:18.290 --> 00:03:22.370 align:start position:0%
+ 
+ 
+
+00:03:22.370 --> 00:03:25.010 align:start position:0%
+ 
+ 
+
+00:03:25.010 --> 00:03:27.620 align:start position:0%
+ 
+ 
+
+00:03:27.620 --> 00:03:29.690 align:start position:0%
+ 
+ 
+
+00:03:29.690 --> 00:03:32.660 align:start position:0%
+ 
+ 
+
+00:03:32.660 --> 00:03:34.760 align:start position:0%
+ 
+ 
+
+00:03:34.760 --> 00:03:36.620 align:start position:0%
+ 
+ 
+
+00:03:36.620 --> 00:03:38.330 align:start position:0%
+ 
+ 
+
+00:03:38.330 --> 00:03:42.470 align:start position:0%
+ 
+ 
+
+00:03:42.470 --> 00:03:44.660 align:start position:0%
+ 
+ 
+
+00:03:44.660 --> 00:03:47.720 align:start position:0%
+ 
+ 
+
+00:03:47.720 --> 00:03:50.060 align:start position:0%
+ 
+ 
+
+00:03:50.060 --> 00:03:51.830 align:start position:0%
+ 
+ 
+
+00:03:51.830 --> 00:03:54.410 align:start position:0%
+ 
+ 
+
+00:03:54.410 --> 00:03:58.940 align:start position:0%
+ 
+ 
+
+00:03:58.940 --> 00:04:00.680 align:start position:0%
+ 
+ 
+
+00:04:00.680 --> 00:04:03.110 align:start position:0%
+ 
+ 
+
+00:04:03.110 --> 00:04:04.400 align:start position:0%
+ 
+ 
+
+00:04:04.400 --> 00:04:08.600 align:start position:0%
+ 
+ 
+
+00:04:08.600 --> 00:04:11.240 align:start position:0%
+ 
+ 
+
+00:04:11.240 --> 00:04:14.479 align:start position:0%
+ 
+ 
+
+00:04:14.479 --> 00:04:16.310 align:start position:0%
+ 
+ 
+
+00:04:16.310 --> 00:04:18.710 align:start position:0%
+ 
+ 
+
+00:04:18.710 --> 00:04:24.370 align:start position:0%
+ 
+ 
+
+00:04:24.370 --> 00:04:27.379 align:start position:0%
+ 
+ 
+
+00:04:27.379 --> 00:04:30.529 align:start position:0%
+ 
+ 
+
+00:04:30.529 --> 00:04:32.420 align:start position:0%
+ 
+ 
+
+00:04:32.420 --> 00:04:33.950 align:start position:0%
+ 
+ 
+
+00:04:33.950 --> 00:04:37.070 align:start position:0%
+ 
+ 
+
+00:04:37.070 --> 00:04:38.899 align:start position:0%
+ 
+ 
+
+00:04:38.899 --> 00:04:41.029 align:start position:0%
+ 
+ 
+
+00:04:41.029 --> 00:04:45.200 align:start position:0%
+ 
+ 
+
+00:04:45.200 --> 00:04:47.360 align:start position:0%
+ 
+ 
+
+00:04:47.360 --> 00:04:52.119 align:start position:0%
+ 
+ 
+
+00:04:52.119 --> 00:04:55.189 align:start position:0%
+ 
+ 
+
+00:04:55.189 --> 00:04:59.209 align:start position:0%
+ 
+ 
+
+00:04:59.209 --> 00:05:00.769 align:start position:0%
+ 
+ 
+
+00:05:00.769 --> 00:05:02.450 align:start position:0%
+ 
+ 
+
+00:05:02.450 --> 00:05:05.119 align:start position:0%
+ 
+ 
+
+00:05:05.119 --> 00:05:07.730 align:start position:0%
+ 
+ 
+
+00:05:07.730 --> 00:05:10.730 align:start position:0%
+ 
+ 
+
+00:05:10.730 --> 00:05:12.830 align:start position:0%
+ 
+ 
+
+00:05:12.830 --> 00:05:15.320 align:start position:0%
+ 
+ 
+
+00:05:15.320 --> 00:05:18.290 align:start position:0%
+ 
+ 
+
+00:05:18.290 --> 00:05:20.990 align:start position:0%
+ 
+ 
+
+00:05:20.990 --> 00:05:23.089 align:start position:0%
+ 
+ 
+
+00:05:23.089 --> 00:05:25.040 align:start position:0%
+ 
+ 
+
+00:05:25.040 --> 00:05:27.050 align:start position:0%
+ 
+ 
+
+00:05:27.050 --> 00:05:29.480 align:start position:0%
+ 
+ 
+
+00:05:29.480 --> 00:05:37.010 align:start position:0%
+ 
+ 
+
+00:05:37.010 --> 00:05:40.579 align:start position:0%
+ 
+ 
+
+00:05:40.579 --> 00:05:42.800 align:start position:0%
+ 
+ 
+
+00:05:42.800 --> 00:05:44.899 align:start position:0%
+ 
+ 
+
+00:05:44.899 --> 00:05:48.499 align:start position:0%
+ 
+ 
+
+00:05:48.499 --> 00:05:50.329 align:start position:0%
+ 
+ 
+
+00:05:50.329 --> 00:05:53.389 align:start position:0%
+ 
+ 
+
+00:05:53.389 --> 00:05:58.790 align:start position:0%
+ 
+ 
+
+00:05:58.790 --> 00:06:00.529 align:start position:0%
+ 
+ 
+
+00:06:00.529 --> 00:06:02.240 align:start position:0%
+ 
+ 
+
+00:06:02.240 --> 00:06:04.490 align:start position:0%
+ 
+ 
+
+00:06:04.490 --> 00:06:07.459 align:start position:0%
+ 
+ 
+
+00:06:07.459 --> 00:06:09.829 align:start position:0%
+ 
+ 
+
+00:06:09.829 --> 00:06:13.339 align:start position:0%
+ 
+ 
+
+00:06:13.339 --> 00:06:15.200 align:start position:0%
+ 
+ 
+
+00:06:15.200 --> 00:06:16.820 align:start position:0%
+ 
+ 
+
+00:06:16.820 --> 00:06:20.420 align:start position:0%
+ 
+ 
+
+00:06:20.420 --> 00:06:23.959 align:start position:0%
+ 
+ 
+
+00:06:23.959 --> 00:06:25.399 align:start position:0%
+ 
+ 
+
+00:06:25.399 --> 00:06:26.719 align:start position:0%
+ 
+ 
+
+00:06:26.719 --> 00:06:28.339 align:start position:0%
+ 
+ 
+
+00:06:28.339 --> 00:06:33.679 align:start position:0%
+ 
+ 
+
+00:06:33.679 --> 00:06:37.909 align:start position:0%
+ 
+ 
+
+00:06:37.909 --> 00:06:40.219 align:start position:0%
+ 
+ 
+
+00:06:40.219 --> 00:06:40.229 align:start position:0%
+ 
+ 
+
+00:06:40.229 --> 00:06:40.580 align:start position:0%
+ 
+
+
+00:06:40.580 --> 00:06:43.460 align:start position:0%
+ 
+ 
+
+00:06:43.460 --> 00:06:46.220 align:start position:0%
+ 
+ 
+
+00:06:46.220 --> 00:06:49.190 align:start position:0%
+ 
+ 
+
+00:06:49.190 --> 00:06:50.720 align:start position:0%
+ 
+ 
+
+00:06:50.720 --> 00:06:53.180 align:start position:0%
+ 
+ 
+
+00:06:53.180 --> 00:06:54.650 align:start position:0%
+ 
+ 
+
+00:06:54.650 --> 00:06:57.650 align:start position:0%
+ 
+ 
+
+00:06:57.650 --> 00:07:00.290 align:start position:0%
+ 
+ 
+
+00:07:00.290 --> 00:07:03.590 align:start position:0%
+ 
+ 
+
+00:07:03.590 --> 00:07:07.520 align:start position:0%
+ 
+ 
+
+00:07:07.520 --> 00:07:09.740 align:start position:0%
+ 
+ 
+
+00:07:09.740 --> 00:07:13.820 align:start position:0%
+ 
+ 
+
+00:07:13.820 --> 00:07:16.310 align:start position:0%
+ 
+ 
+
+00:07:16.310 --> 00:07:18.470 align:start position:0%
+ 
+ 
+
+00:07:18.470 --> 00:07:21.740 align:start position:0%
+ 
+ 
+
+00:07:21.740 --> 00:07:23.420 align:start position:0%
+ 
+ 
+
+00:07:23.420 --> 00:07:32.420 align:start position:0%
+ 
+ 
+
+00:07:32.420 --> 00:07:36.680 align:start position:0%
+ 
+ 
+
+00:07:36.680 --> 00:07:40.490 align:start position:0%
+ 
+ 
+
+00:07:40.490 --> 00:07:43.130 align:start position:0%
+ 
+ 
+
+00:07:43.130 --> 00:07:45.620 align:start position:0%
+ 
+ 
+
+00:07:45.620 --> 00:07:48.920 align:start position:0%
+ 
+ 
+
+00:07:48.920 --> 00:07:50.900 align:start position:0%
+ 
+ 
+
+00:07:50.900 --> 00:07:52.610 align:start position:0%
+ 
+ 
+
+00:07:52.610 --> 00:07:54.980 align:start position:0%
+ 
+ 
+
+00:07:54.980 --> 00:07:58.550 align:start position:0%
+ 
+ 
+
+00:07:58.550 --> 00:08:00.230 align:start position:0%
+ 
+ 
+
+00:08:00.230 --> 00:08:02.630 align:start position:0%
+ 
+ 
+
+00:08:02.630 --> 00:08:05.780 align:start position:0%
+ 
+ 
+
+00:08:05.780 --> 00:08:13.250 align:start position:0%
+ 
+ 
+
+00:08:13.250 --> 00:08:15.950 align:start position:0%
+ 
+ 
+
+00:08:15.950 --> 00:08:17.840 align:start position:0%
+ 
+ 
+
+00:08:17.840 --> 00:08:20.300 align:start position:0%
+ 
+ 
+
+00:08:20.300 --> 00:08:22.790 align:start position:0%
+ 
+ 
+
+00:08:22.790 --> 00:08:24.290 align:start position:0%
+ 
+ 
+
+00:08:24.290 --> 00:08:28.280 align:start position:0%
+ 
+ 
+
+00:08:28.280 --> 00:08:32.030 align:start position:0%
+ 
+ 
+
+00:08:32.030 --> 00:08:34.070 align:start position:0%
+ 
+ 
+
+00:08:34.070 --> 00:08:36.770 align:start position:0%
+ 
+ 
+
+00:08:36.770 --> 00:08:39.080 align:start position:0%
+ 
+ 
+
+00:08:39.080 --> 00:08:41.540 align:start position:0%
+ 
+ 
+
+00:08:41.540 --> 00:08:44.000 align:start position:0%
+ 
+ 
+
+00:08:44.000 --> 00:08:45.470 align:start position:0%
+ 
+ 
+
+00:08:45.470 --> 00:08:48.500 align:start position:0%
+ 
+ 
+
+00:08:48.500 --> 00:08:52.310 align:start position:0%
+ 
+ 
+
+00:08:52.310 --> 00:08:54.379 align:start position:0%
+ 
+ 
+
+00:08:54.379 --> 00:08:56.660 align:start position:0%
+ 
+ 
+
+00:08:56.660 --> 00:08:59.030 align:start position:0%
+ 
+ 
+
+00:08:59.030 --> 00:09:01.759 align:start position:0%
+ 
+ 
+
+00:09:01.759 --> 00:09:04.759 align:start position:0%
+ 
+ 
+
+00:09:04.759 --> 00:09:06.590 align:start position:0%
+ 
+ 
+
+00:09:06.590 --> 00:09:09.019 align:start position:0%
+ 
+ 
+
+00:09:09.019 --> 00:09:10.819 align:start position:0%
+ 
+ 
+
+00:09:10.819 --> 00:09:13.999 align:start position:0%
+ 
+ 
+
+00:09:13.999 --> 00:09:17.079 align:start position:0%
+ 
+ 
+
+00:09:17.079 --> 00:09:20.509 align:start position:0%
+ 
+ 
+
+00:09:20.509 --> 00:09:22.569 align:start position:0%
+ 
+ 
+
+00:09:22.569 --> 00:09:25.639 align:start position:0%
+ 
+ 
+
+00:09:25.639 --> 00:09:28.420 align:start position:0%
+ 
+ 
+
+00:09:28.420 --> 00:09:31.639 align:start position:0%
+ 
+ 
+
+00:09:31.639 --> 00:09:33.470 align:start position:0%
+ 
+ 
+
+00:09:33.470 --> 00:09:35.269 align:start position:0%
+ 
+ 
+
+00:09:35.269 --> 00:09:37.699 align:start position:0%
+ 
+ 
+
+00:09:37.699 --> 00:09:40.100 align:start position:0%
+ 
+ 
+
+00:09:40.100 --> 00:09:42.290 align:start position:0%
+ 
+ 
+
+00:09:42.290 --> 00:09:44.509 align:start position:0%
+ 
+ 
+
+00:09:44.509 --> 00:09:50.660 align:start position:0%
+ 
+ 
+
+00:09:50.660 --> 00:09:52.360 align:start position:0%
+ 
+ 
+
+00:09:52.360 --> 00:09:56.360 align:start position:0%
+ 
+ 
+
+00:09:56.360 --> 00:09:58.699 align:start position:0%
+ 
+ 
+
+00:09:58.699 --> 00:10:03.590 align:start position:0%
+ 
+ 
+
+00:10:03.590 --> 00:10:06.769 align:start position:0%
+ 
+ 
+
+00:10:06.769 --> 00:10:09.559 align:start position:0%
+ 
+ 
+
+00:10:09.559 --> 00:10:11.030 align:start position:0%
+ 
+ 
+
+00:10:11.030 --> 00:10:13.210 align:start position:0%
+ 
+ 
+
+00:10:13.210 --> 00:10:15.800 align:start position:0%
+ 
+ 
+
+00:10:15.800 --> 00:10:18.259 align:start position:0%
+ 
+ 
+
+00:10:18.259 --> 00:10:20.269 align:start position:0%
+ 
+ 
+
+00:10:20.269 --> 00:10:22.370 align:start position:0%
+ 
+ 
+
+00:10:22.370 --> 00:10:24.769 align:start position:0%
+ 
+ 
+
+00:10:24.769 --> 00:10:27.949 align:start position:0%
+ 
+ 
+
+00:10:27.949 --> 00:10:32.150 align:start position:0%
+ 
+ 
+
+00:10:32.150 --> 00:10:35.120 align:start position:0%
+ 
+ 
+
+00:10:35.120 --> 00:10:36.710 align:start position:0%
+ 
+ 
+
+00:10:36.710 --> 00:10:38.809 align:start position:0%
+ 
+ 
+
+00:10:38.809 --> 00:10:41.960 align:start position:0%
+ 
+ 
+
+00:10:41.960 --> 00:10:44.210 align:start position:0%
+ 
+ 
+
+00:10:44.210 --> 00:10:46.730 align:start position:0%
+ 
+ 
+
+00:10:46.730 --> 00:10:48.710 align:start position:0%
+ 
+ 
+
+00:10:48.710 --> 00:10:54.050 align:start position:0%
+ 
+ 
+
+00:10:54.050 --> 00:10:57.019 align:start position:0%
+ 
+ 
+
+00:10:57.019 --> 00:10:58.759 align:start position:0%
+ 
+ 
+
+00:10:58.759 --> 00:11:00.199 align:start position:0%
+ 
+ 
+
+00:11:00.199 --> 00:11:04.309 align:start position:0%
+ 
+ 
+
+00:11:04.309 --> 00:11:05.759 align:start position:0%
+ 
+ 
+
+00:11:05.759 --> 00:11:08.259 align:start position:0%
+ 
+ 
+
+00:11:08.259 --> 00:11:11.139 align:start position:0%
+ 
+ 
+
+00:11:11.139 --> 00:11:13.449 align:start position:0%
+ 
+ 
+
+00:11:13.449 --> 00:11:15.699 align:start position:0%
+ 
+ 
+
+00:11:15.699 --> 00:11:18.280 align:start position:0%
+ 
+ 
+
+00:11:18.280 --> 00:11:22.389 align:start position:0%
+ 
+ 
+
+00:11:22.389 --> 00:11:24.939 align:start position:0%
+ 
+ 
+
+00:11:24.939 --> 00:11:27.519 align:start position:0%
+ 
+ 
+
+00:11:27.519 --> 00:11:30.100 align:start position:0%
+ 
+ 
+
+00:11:30.100 --> 00:11:31.889 align:start position:0%
+ 
+ 
+
+00:11:31.889 --> 00:11:35.019 align:start position:0%
+ 
+ 
+
+00:11:35.019 --> 00:11:38.579 align:start position:0%
+ 
+ 
+
+00:11:38.579 --> 00:11:41.920 align:start position:0%
+ 
+ 
+
+00:11:41.920 --> 00:11:43.480 align:start position:0%
+ 
+ 
+
+00:11:43.480 --> 00:11:46.120 align:start position:0%
+ 
+ 
+
+00:11:46.120 --> 00:11:48.490 align:start position:0%
+ 
+ 
+
+00:11:48.490 --> 00:11:51.579 align:start position:0%
+ 
+ 
+
+00:11:51.579 --> 00:11:53.889 align:start position:0%
+ 
+ 
+
+00:11:53.889 --> 00:11:55.540 align:start position:0%
+ 
+ 
+
+00:11:55.540 --> 00:11:58.210 align:start position:0%
+ 
+ 
+
+00:11:58.210 --> 00:12:02.530 align:start position:0%
+ 
+ 
+
+00:12:02.530 --> 00:12:04.269 align:start position:0%
+ 
+ 
+
+00:12:04.269 --> 00:12:06.400 align:start position:0%
+ 
+ 
+
+00:12:06.400 --> 00:12:12.639 align:start position:0%
+ 
+ 
+
+00:12:12.639 --> 00:12:17.500 align:start position:0%
+ 
+ 
+
+00:12:17.500 --> 00:12:19.600 align:start position:0%
+ 
+ 
+
+00:12:19.600 --> 00:12:23.259 align:start position:0%
+ 
+ 
+
+00:12:23.259 --> 00:12:24.819 align:start position:0%
+ 
+ 
+
+00:12:24.819 --> 00:12:26.740 align:start position:0%
+ 
+ 
+
+00:12:26.740 --> 00:12:30.579 align:start position:0%
+ 
+ 
+
+00:12:30.579 --> 00:12:32.559 align:start position:0%
+ 
+ 
+
+00:12:32.559 --> 00:12:36.280 align:start position:0%
+ 
+ 
+
+00:12:36.280 --> 00:12:42.340 align:start position:0%
+ 
+ 
+
+00:12:42.340 --> 00:12:44.319 align:start position:0%
+ 
+ 
+
+00:12:44.319 --> 00:12:47.710 align:start position:0%
+ 
+ 
+
+00:12:47.710 --> 00:12:49.629 align:start position:0%
+ 
+ 
+
+00:12:49.629 --> 00:12:52.000 align:start position:0%
+ 
+ 
+
+00:12:52.000 --> 00:12:53.769 align:start position:0%
+ 
+ 
+
+00:12:53.769 --> 00:12:56.470 align:start position:0%
+ 
+ 
+
+00:12:56.470 --> 00:12:58.059 align:start position:0%
+ 
+ 
+
+00:12:58.059 --> 00:13:00.759 align:start position:0%
+ 
+ 
+
+00:13:00.759 --> 00:13:03.250 align:start position:0%
+ 
+ 
+
+00:13:03.250 --> 00:13:05.230 align:start position:0%
+ 
+ 
+
+00:13:05.230 --> 00:13:08.170 align:start position:0%
+ 
+ 
+
+00:13:08.170 --> 00:13:10.329 align:start position:0%
+ 
+ 
+
+00:13:10.329 --> 00:13:12.100 align:start position:0%
+ 
+ 
+
+00:13:12.100 --> 00:13:15.379 align:start position:0%
+ 
+ 
+
+00:13:15.379 --> 00:13:17.939 align:start position:0%
+ 
+ 
+
+00:13:17.939 --> 00:13:20.220 align:start position:0%
+ 
+ 
+
+00:13:20.220 --> 00:13:22.259 align:start position:0%
+ 
+ 
+
+00:13:22.259 --> 00:13:24.540 align:start position:0%
+ 
+ 
+
+00:13:24.540 --> 00:13:27.989 align:start position:0%
+ 
+ 
+
+00:13:27.989 --> 00:13:29.519 align:start position:0%
+ 
+ 
+
+00:13:29.519 --> 00:13:31.739 align:start position:0%
+ 
+ 
+
+00:13:31.739 --> 00:13:34.530 align:start position:0%
+ 
+ 
+
+00:13:34.530 --> 00:13:38.549 align:start position:0%
+ 
+ 
+
+00:13:38.549 --> 00:13:40.379 align:start position:0%
+ 
+ 
+
+00:13:40.379 --> 00:13:42.780 align:start position:0%
+ 
+ 
+
+00:13:42.780 --> 00:13:46.559 align:start position:0%
+ 
+ 
+
+00:13:46.559 --> 00:13:49.229 align:start position:0%
+ 
+ 
+
+00:13:49.229 --> 00:13:51.150 align:start position:0%
+ 
+ 
+
+00:13:51.150 --> 00:13:53.669 align:start position:0%
+ 
+ 
+
+00:13:53.669 --> 00:13:54.900 align:start position:0%
+ 
+ 
+
+00:13:54.900 --> 00:13:57.329 align:start position:0%
+ 
+ 
+
+00:13:57.329 --> 00:14:00.229 align:start position:0%
+ 
+ 
+
+00:14:00.229 --> 00:14:03.989 align:start position:0%
+ 
+ 
+
+00:14:03.989 --> 00:14:06.239 align:start position:0%
+ 
+ 
+
+00:14:06.239 --> 00:14:09.059 align:start position:0%
+ 
+ 
+
+00:14:09.059 --> 00:14:11.249 align:start position:0%
+ 
+ 
+
+00:14:11.249 --> 00:14:11.970 align:start position:0%
+ 
+ 
+
+00:14:11.970 --> 00:14:13.739 align:start position:0%
+ 
+ 
+
+00:14:13.739 --> 00:14:14.970 align:start position:0%
+ 
+ 
+
+00:14:14.970 --> 00:14:16.229 align:start position:0%
+ 
+ 
+
+00:14:16.229 --> 00:14:18.509 align:start position:0%
+ 
+ 
+
+00:14:18.509 --> 00:14:19.650 align:start position:0%
+ 
+ 
+
+00:14:19.650 --> 00:14:21.960 align:start position:0%
+ 
+ 
+
+00:14:21.960 --> 00:14:28.590 align:start position:0%
+ 
+ 
+
+00:14:28.590 --> 00:14:34.289 align:start position:0%
+ 
+ 
+
+00:14:34.289 --> 00:14:35.850 align:start position:0%
+ 
+ 
+
+00:14:35.850 --> 00:14:37.949 align:start position:0%
+ 
+ 
+
+00:14:37.949 --> 00:14:39.359 align:start position:0%
+ 
+ 
+
+00:14:39.359 --> 00:14:42.749 align:start position:0%
+ 
+ 
+
+00:14:42.749 --> 00:14:44.669 align:start position:0%
+ 
+ 
+
+00:14:44.669 --> 00:14:46.499 align:start position:0%
+ 
+ 
+
+00:14:46.499 --> 00:14:48.960 align:start position:0%
+ 
+ 
+
+00:14:48.960 --> 00:14:51.179 align:start position:0%
+ 
+ 
+
+00:14:51.179 --> 00:14:52.710 align:start position:0%
+ 
+ 
+
+00:14:52.710 --> 00:14:54.960 align:start position:0%
+ 
+ 
+
+00:14:54.960 --> 00:14:58.049 align:start position:0%
+ 
+ 
+
+00:14:58.049 --> 00:15:01.319 align:start position:0%
+ 
+ 
+
+00:15:01.319 --> 00:15:03.210 align:start position:0%
+ 
+ 
+
+00:15:03.210 --> 00:15:05.609 align:start position:0%
+ 
+ 
+
+00:15:05.609 --> 00:15:08.519 align:start position:0%
+ 
+ 
+
+00:15:08.519 --> 00:15:10.590 align:start position:0%
+ 
+ 
+
+00:15:10.590 --> 00:15:13.280 align:start position:0%
+ 
+ 
+
+00:15:13.280 --> 00:15:17.479 align:start position:0%
+ 
+ 
+
+00:15:17.479 --> 00:15:19.799 align:start position:0%
+ 
+ 
+
+00:15:19.799 --> 00:15:22.379 align:start position:0%
+ 
+ 
+
+00:15:22.379 --> 00:15:24.239 align:start position:0%
+ 
+ 
+
+00:15:24.239 --> 00:15:25.739 align:start position:0%
+ 
+ 
+
+00:15:25.739 --> 00:15:27.240 align:start position:0%
+ 
+ 
+
+00:15:27.240 --> 00:15:30.360 align:start position:0%
+ 
+ 
+
+00:15:30.360 --> 00:15:32.580 align:start position:0%
+ 
+ 
+
+00:15:32.580 --> 00:15:34.950 align:start position:0%
+ 
+ 
+
+00:15:34.950 --> 00:15:38.310 align:start position:0%
+ 
+ 
+
+00:15:38.310 --> 00:15:41.820 align:start position:0%
+ 
+ 
+
+00:15:41.820 --> 00:15:43.290 align:start position:0%
+ 
+ 
+
+00:15:43.290 --> 00:15:45.150 align:start position:0%
+ 
+ 
+
+00:15:45.150 --> 00:15:49.470 align:start position:0%
+ 
+ 
+
+00:15:49.470 --> 00:15:51.660 align:start position:0%
+ 
+ 
+
+00:15:51.660 --> 00:15:55.740 align:start position:0%
+ 
+ 
+
+00:15:55.740 --> 00:15:58.620 align:start position:0%
+ 
+ 
+
+00:15:58.620 --> 00:16:00.600 align:start position:0%
+ 
+ 
+
+00:16:00.600 --> 00:16:02.550 align:start position:0%
+ 
+ 
+
+00:16:02.550 --> 00:16:10.350 align:start position:0%
+ 
+ 
+
+00:16:10.350 --> 00:16:12.960 align:start position:0%
+ 
+ 
+
+00:16:12.960 --> 00:16:16.770 align:start position:0%
+ 
+ 
+
+00:16:16.770 --> 00:16:18.480 align:start position:0%
+ 
+ 
+
+00:16:18.480 --> 00:16:21.180 align:start position:0%
+ 
+ 
+
+00:16:21.180 --> 00:16:22.950 align:start position:0%
+ 
+ 
+
+00:16:22.950 --> 00:16:25.950 align:start position:0%
+ 
+ 
+
+00:16:25.950 --> 00:16:27.840 align:start position:0%
+ 
+ 
+
+00:16:27.840 --> 00:16:30.000 align:start position:0%
+ 
+ 
+
+00:16:30.000 --> 00:16:32.220 align:start position:0%
+ 
+ 
+
+00:16:32.220 --> 00:16:35.130 align:start position:0%
+ 
+ 
+
+00:16:35.130 --> 00:16:37.980 align:start position:0%
+ 
+ 
+
+00:16:37.980 --> 00:16:40.470 align:start position:0%
+ 
+ 
+
+00:16:40.470 --> 00:16:43.170 align:start position:0%
+ 
+ 
+
+00:16:43.170 --> 00:16:45.750 align:start position:0%
+ 
+ 
+
+00:16:45.750 --> 00:16:49.110 align:start position:0%
+ 
+ 
+
+00:16:49.110 --> 00:16:51.240 align:start position:0%
+ 
+ 
+
+00:16:51.240 --> 00:16:53.220 align:start position:0%
+ 
+ 
+
+00:16:53.220 --> 00:16:55.920 align:start position:0%
+ 
+ 
+
+00:16:55.920 --> 00:17:00.000 align:start position:0%
+ 
+ 
+
+00:17:00.000 --> 00:17:02.160 align:start position:0%
+ 
+ 
+
+00:17:02.160 --> 00:17:04.670 align:start position:0%
+ 
+ 
+
+00:17:04.670 --> 00:17:08.220 align:start position:0%
+ 
+ 
+
+00:17:08.220 --> 00:17:11.429 align:start position:0%
+ 
+ 
+
+00:17:11.429 --> 00:17:13.079 align:start position:0%
+ 
+ 
+
+00:17:13.079 --> 00:17:14.460 align:start position:0%
+ 
+ 
+
+00:17:14.460 --> 00:17:16.920 align:start position:0%
+ 
+ 
+
+00:17:16.920 --> 00:17:19.770 align:start position:0%
+ 
+ 
+
+00:17:19.770 --> 00:17:22.760 align:start position:0%
+ 
+ 
+
+00:17:22.760 --> 00:17:25.319 align:start position:0%
+ 
+ 
+
+00:17:25.319 --> 00:17:27.660 align:start position:0%
+ 
+ 
+
+00:17:27.660 --> 00:17:30.510 align:start position:0%
+ 
+ 
+
+00:17:30.510 --> 00:17:33.690 align:start position:0%
+ 
+ 
+
+00:17:33.690 --> 00:17:35.460 align:start position:0%
+ 
+ 
+
+00:17:35.460 --> 00:17:37.410 align:start position:0%
+ 
+ 
+
+00:17:37.410 --> 00:17:40.090 align:start position:0%
+ 
+ 
+
+00:17:40.090 --> 00:17:44.080 align:start position:0%
+ 
+ 
+
+00:17:44.080 --> 00:17:46.480 align:start position:0%
+ 
+ 
+
+00:17:46.480 --> 00:17:48.580 align:start position:0%
+ 
+ 
+
+00:17:48.580 --> 00:17:54.550 align:start position:0%
+ 
+ 
+
+00:17:54.550 --> 00:17:56.410 align:start position:0%
+ 
+ 
+
+00:17:56.410 --> 00:17:58.600 align:start position:0%
+ 
+ 
+
+00:17:58.600 --> 00:18:00.790 align:start position:0%
+ 
+ 
+
+00:18:00.790 --> 00:18:02.910 align:start position:0%
+ 
+ 
+
+00:18:02.910 --> 00:18:07.240 align:start position:0%
+ 
+ 
+
+00:18:07.240 --> 00:18:09.400 align:start position:0%
+ 
+ 
+
+00:18:09.400 --> 00:18:11.170 align:start position:0%
+ 
+ 
+
+00:18:11.170 --> 00:18:14.560 align:start position:0%
+ 
+ 
+
+00:18:14.560 --> 00:18:17.500 align:start position:0%
+ 
+ 
+
+00:18:17.500 --> 00:18:19.510 align:start position:0%
+ 
+ 
+
+00:18:19.510 --> 00:18:21.700 align:start position:0%
+ 
+ 
+
+00:18:21.700 --> 00:18:26.070 align:start position:0%
+ 
+ 
+
+00:18:26.070 --> 00:18:28.420 align:start position:0%
+ 
+ 
+
+00:18:28.420 --> 00:18:31.390 align:start position:0%
+ 
+ 
+
+00:18:31.390 --> 00:18:34.300 align:start position:0%
+ 
+ 
+
+00:18:34.300 --> 00:18:38.710 align:start position:0%
+ 
+ 
+
+00:18:38.710 --> 00:18:40.930 align:start position:0%
+ 
+ 
+
+00:18:40.930 --> 00:18:43.060 align:start position:0%
+ 
+ 
+
+00:18:43.060 --> 00:18:44.620 align:start position:0%
+ 
+ 
+
+00:18:44.620 --> 00:18:47.100 align:start position:0%
+ 
+ 
+
+00:18:47.100 --> 00:18:49.420 align:start position:0%
+ 
+ 
+
+00:18:49.420 --> 00:18:51.460 align:start position:0%
+ 
+ 
+
+00:18:51.460 --> 00:18:53.010 align:start position:0%
+ 
+ 
+
+00:18:53.010 --> 00:18:55.900 align:start position:0%
+ 
+ 
+
+00:18:55.900 --> 00:18:58.450 align:start position:0%
+ 
+ 
+
+00:18:58.450 --> 00:18:59.980 align:start position:0%
+ 
+ 
+
+00:18:59.980 --> 00:19:02.470 align:start position:0%
+ 
+ 
+
+00:19:02.470 --> 00:19:04.900 align:start position:0%
+ 
+ 
+
+00:19:04.900 --> 00:19:08.590 align:start position:0%
+ 
+ 
+
+00:19:08.590 --> 00:19:10.810 align:start position:0%
+ 
+ 
+
+00:19:10.810 --> 00:19:14.410 align:start position:0%
+ 
+ 
+
+00:19:14.410 --> 00:19:15.970 align:start position:0%
+ 
+ 
+
+00:19:15.970 --> 00:19:19.330 align:start position:0%
+ 
+ 
+
+00:19:19.330 --> 00:19:22.030 align:start position:0%
+ 
+ 
+
+00:19:22.030 --> 00:19:24.250 align:start position:0%
+ 
+ 
+
+00:19:24.250 --> 00:19:27.030 align:start position:0%
+ 
+ 
+
+00:19:27.030 --> 00:19:29.710 align:start position:0%
+ 
+ 
+
+00:19:29.710 --> 00:19:33.880 align:start position:0%
+ 
+ 
+
+00:19:33.880 --> 00:19:37.330 align:start position:0%
+ 
+ 
+
+00:19:37.330 --> 00:19:39.160 align:start position:0%
+ 
+ 
+
+00:19:39.160 --> 00:19:41.320 align:start position:0%
+ 
+ 
+
+00:19:41.320 --> 00:19:44.110 align:start position:0%
+ 
+ 
+
+00:19:44.110 --> 00:19:46.570 align:start position:0%
+ 
+ 
+
+00:19:46.570 --> 00:19:48.910 align:start position:0%
+ 
+ 
+
+00:19:48.910 --> 00:19:50.500 align:start position:0%
+ 
+ 
+
+00:19:50.500 --> 00:19:52.720 align:start position:0%
+ 
+ 
+
+00:19:52.720 --> 00:19:53.590 align:start position:0%
+ 
+ 
+
+00:19:53.590 --> 00:19:59.289 align:start position:0%
+ 
+ 
+
+00:19:59.289 --> 00:20:00.940 align:start position:0%
+ 
+ 
+
+00:20:00.940 --> 00:20:05.680 align:start position:0%
+ 
+ 
+
+00:20:05.680 --> 00:20:10.450 align:start position:0%
+ 
+ 
+
+00:20:10.450 --> 00:20:13.000 align:start position:0%
+ 
+ 
+
+00:20:13.000 --> 00:20:14.980 align:start position:0%
+ 
+ 
+
+00:20:14.980 --> 00:20:18.220 align:start position:0%
+ 
+ 
+
+00:20:18.220 --> 00:20:20.590 align:start position:0%
+ 
+ 
+
+00:20:20.590 --> 00:20:24.310 align:start position:0%
+ 
+ 
+
+00:20:24.310 --> 00:20:27.130 align:start position:0%
+ 
+ 
+
+00:20:27.130 --> 00:20:28.539 align:start position:0%
+ 
+ 
+
+00:20:28.539 --> 00:20:31.990 align:start position:0%
+ 
+ 
+
+00:20:31.990 --> 00:20:37.240 align:start position:0%
+ 
+ 
+
+00:20:37.240 --> 00:20:41.500 align:start position:0%
+ 
+ 
+
+00:20:41.500 --> 00:20:44.500 align:start position:0%
+ 
+ 
+
+00:20:44.500 --> 00:20:50.350 align:start position:0%
+ 
+ 
+
+00:20:50.350 --> 00:20:54.580 align:start position:0%
+ 
+ 
+
+00:20:54.580 --> 00:20:56.289 align:start position:0%
+ 
+ 
+
+00:20:56.289 --> 00:20:59.649 align:start position:0%
+ 
+ 
+
+00:20:59.649 --> 00:21:02.409 align:start position:0%
+ 
+ 
+
+00:21:02.409 --> 00:21:05.169 align:start position:0%
+ 
+ 
+
+00:21:05.169 --> 00:21:08.590 align:start position:0%
+ 
+ 
+
+00:21:08.590 --> 00:21:11.140 align:start position:0%
+ 
+ 
+
+00:21:11.140 --> 00:21:16.690 align:start position:0%
+ 
+ 
+
+00:21:16.690 --> 00:21:18.789 align:start position:0%
+ 
+ 
+
+00:21:18.789 --> 00:21:20.770 align:start position:0%
+ 
+ 
+
+00:21:20.770 --> 00:21:22.750 align:start position:0%
+ 
+ 
+
+00:21:22.750 --> 00:21:25.840 align:start position:0%
+ 
+ 
+
+00:21:25.840 --> 00:21:27.190 align:start position:0%
+ 
+ 
+
+00:21:27.190 --> 00:21:29.049 align:start position:0%
+ 
+ 
+
+00:21:29.049 --> 00:21:31.779 align:start position:0%
+ 
+ 
+
+00:21:31.779 --> 00:21:34.330 align:start position:0%
+ 
+ 
+
+00:21:34.330 --> 00:21:36.640 align:start position:0%
+ 
+ 
+
+00:21:36.640 --> 00:21:38.169 align:start position:0%
+ 
+ 
+
+00:21:38.169 --> 00:21:39.669 align:start position:0%
+ 
+ 
+
+00:21:39.669 --> 00:21:42.419 align:start position:0%
+ 
+ 
+
+00:21:42.419 --> 00:21:45.760 align:start position:0%
+ 
+ 
+
+00:21:45.760 --> 00:21:47.500 align:start position:0%
+ 
+ 
+
+00:21:47.500 --> 00:21:49.630 align:start position:0%
+ 
+ 
+
+00:21:49.630 --> 00:21:52.060 align:start position:0%
+ 
+ 
+
+00:21:52.060 --> 00:21:54.130 align:start position:0%
+ 
+ 
+
+00:21:54.130 --> 00:21:56.470 align:start position:0%
+ 
+ 
+
+00:21:56.470 --> 00:21:58.539 align:start position:0%
+ 
+ 
+
+00:21:58.539 --> 00:22:00.460 align:start position:0%
+ 
+ 
+
+00:22:00.460 --> 00:22:02.620 align:start position:0%
+ 
+ 
+
+00:22:02.620 --> 00:22:05.289 align:start position:0%
+ 
+ 
+
+00:22:05.289 --> 00:22:07.060 align:start position:0%
+ 
+ 
+
+00:22:07.060 --> 00:22:10.649 align:start position:0%
+ 
+ 
+
+00:22:10.649 --> 00:22:13.720 align:start position:0%
+ 
+ 
+
+00:22:13.720 --> 00:22:17.529 align:start position:0%
+ 
+ 
+
+00:22:17.529 --> 00:22:19.930 align:start position:0%
+ 
+ 
+
+00:22:19.930 --> 00:22:21.850 align:start position:0%
+ 
+ 
+
+00:22:21.850 --> 00:22:23.200 align:start position:0%
+ 
+ 
+
+00:22:23.200 --> 00:22:25.749 align:start position:0%
+ 
+ 
+
+00:22:25.749 --> 00:22:27.100 align:start position:0%
+ 
+ 
+
+00:22:27.100 --> 00:22:29.230 align:start position:0%
+ 
+ 
+
+00:22:29.230 --> 00:22:31.450 align:start position:0%
+ 
+ 
+
+00:22:31.450 --> 00:22:33.700 align:start position:0%
+ 
+ 
+
+00:22:33.700 --> 00:22:36.340 align:start position:0%
+ 
+ 
+
+00:22:36.340 --> 00:22:38.200 align:start position:0%
+ 
+ 
+
+00:22:38.200 --> 00:22:43.690 align:start position:0%
+ 
+ 
+
+00:22:43.690 --> 00:22:46.419 align:start position:0%
+ 
+ 
+
+00:22:46.419 --> 00:22:49.240 align:start position:0%
+ 
+ 
+
+00:22:49.240 --> 00:22:51.549 align:start position:0%
+ 
+ 
+
+00:22:51.549 --> 00:22:54.610 align:start position:0%
+ 
+ 
+
+00:22:54.610 --> 00:22:56.860 align:start position:0%
+ 
+ 
+
+00:22:56.860 --> 00:23:00.460 align:start position:0%
+ 
+ 
+
+00:23:00.460 --> 00:23:02.860 align:start position:0%
+ 
+ 
+
+00:23:02.860 --> 00:23:04.419 align:start position:0%
+ 
+ 
+
+00:23:04.419 --> 00:23:07.299 align:start position:0%
+ 
+ 
+
+00:23:07.299 --> 00:23:09.789 align:start position:0%
+ 
+ 
+
+00:23:09.789 --> 00:23:12.759 align:start position:0%
+ 
+ 
+
+00:23:12.759 --> 00:23:14.590 align:start position:0%
+ 
+ 
+
+00:23:14.590 --> 00:23:17.259 align:start position:0%
+ 
+ 
+
+00:23:17.259 --> 00:23:19.060 align:start position:0%
+ 
+ 
+
+00:23:19.060 --> 00:23:20.769 align:start position:0%
+ 
+ 
+
+00:23:20.769 --> 00:23:26.080 align:start position:0%
+ 
+ 
+
+00:23:26.080 --> 00:23:29.110 align:start position:0%
+ 
+ 
+
+00:23:29.110 --> 00:23:31.269 align:start position:0%
+ 
+ 
+
+00:23:31.269 --> 00:23:33.789 align:start position:0%
+ 
+ 
+
+00:23:33.789 --> 00:23:36.310 align:start position:0%
+ 
+ 
+
+00:23:36.310 --> 00:23:39.490 align:start position:0%
+ 
+ 
+
+00:23:39.490 --> 00:23:42.460 align:start position:0%
+ 
+ 
+
+00:23:42.460 --> 00:23:43.840 align:start position:0%
+ 
+ 
+
+00:23:43.840 --> 00:23:45.159 align:start position:0%
+ 
+ 
+
+00:23:45.159 --> 00:23:47.889 align:start position:0%
+ 
+ 
+
+00:23:47.889 --> 00:23:50.289 align:start position:0%
+ 
+ 
+
+00:23:50.289 --> 00:23:53.230 align:start position:0%
+ 
+ 
+
+00:23:53.230 --> 00:23:55.029 align:start position:0%
+ 
+ 
+
+00:23:55.029 --> 00:23:57.940 align:start position:0%
+ 
+ 
+
+00:23:57.940 --> 00:23:59.649 align:start position:0%
+ 
+ 
+
+00:23:59.649 --> 00:24:02.529 align:start position:0%
+ 
+ 
+
+00:24:02.529 --> 00:24:04.810 align:start position:0%
+ 
+ 
+
+00:24:04.810 --> 00:24:06.460 align:start position:0%
+ 
+ 
+
+00:24:06.460 --> 00:24:08.619 align:start position:0%
+ 
+ 
+
+00:24:08.619 --> 00:24:11.590 align:start position:0%
+ 
+ 
+
+00:24:11.590 --> 00:24:13.509 align:start position:0%
+ 
+ 
+
+00:24:13.509 --> 00:24:16.389 align:start position:0%
+ 
+ 
+
+00:24:16.389 --> 00:24:19.700 align:start position:0%
+ 
+ 
+
+00:24:19.700 --> 00:24:22.130 align:start position:0%
+ 
+ 
+
+00:24:22.130 --> 00:24:24.410 align:start position:0%
+ 
+ 
+
+00:24:24.410 --> 00:24:26.270 align:start position:0%
+ 
+ 
+
+00:24:26.270 --> 00:24:29.480 align:start position:0%
+ 
+ 
+
+00:24:29.480 --> 00:24:31.370 align:start position:0%
+ 
+ 
+
+00:24:31.370 --> 00:24:35.090 align:start position:0%
+ 
+ 
+
+00:24:35.090 --> 00:24:39.170 align:start position:0%
+ 
+ 
+
+00:24:39.170 --> 00:24:41.930 align:start position:0%
+ 
+ 
+
+00:24:41.930 --> 00:24:44.330 align:start position:0%
+ 
+ 
+
+00:24:44.330 --> 00:24:46.160 align:start position:0%
+ 
+ 
+
+00:24:46.160 --> 00:24:48.080 align:start position:0%
+ 
+ 
+
+00:24:48.080 --> 00:24:48.090 align:start position:0%
+ 
+ 
+
+00:24:48.090 --> 00:24:48.680 align:start position:0%
+ 
+
+
+00:24:48.680 --> 00:24:50.210 align:start position:0%
+ 
+ 
+
+00:24:50.210 --> 00:24:53.720 align:start position:0%
+ 
+ 
+
+00:24:53.720 --> 00:24:57.650 align:start position:0%
+ 
+ 
+
+00:24:57.650 --> 00:25:00.110 align:start position:0%
+ 
+ 
+
+00:25:00.110 --> 00:25:01.550 align:start position:0%
+ 
+ 
+
+00:25:01.550 --> 00:25:04.400 align:start position:0%
+ 
+ 
+
+00:25:04.400 --> 00:25:06.800 align:start position:0%
+ 
+ 
+
+00:25:06.800 --> 00:25:08.090 align:start position:0%
+ 
+ 
+
+00:25:08.090 --> 00:25:10.280 align:start position:0%
+ 
+ 
+
+00:25:10.280 --> 00:25:11.420 align:start position:0%
+ 
+ 
+
+00:25:11.420 --> 00:25:13.820 align:start position:0%
+ 
+ 
+
+00:25:13.820 --> 00:25:15.560 align:start position:0%
+ 
+ 
+
+00:25:15.560 --> 00:25:17.840 align:start position:0%
+ 
+ 
+
+00:25:17.840 --> 00:25:20.330 align:start position:0%
+ 
+ 
+
+00:25:20.330 --> 00:25:22.520 align:start position:0%
+ 
+ 
+
+00:25:22.520 --> 00:25:24.650 align:start position:0%
+ 
+ 
+
+00:25:24.650 --> 00:25:26.960 align:start position:0%
+ 
+ 
+
+00:25:26.960 --> 00:25:29.750 align:start position:0%
+ 
+ 
+
+00:25:29.750 --> 00:25:35.960 align:start position:0%
+ 
+ 
+
+00:25:35.960 --> 00:25:38.090 align:start position:0%
+ 
+ 
+
+00:25:38.090 --> 00:25:41.530 align:start position:0%
+ 
+ 
+
+00:25:41.530 --> 00:25:44.480 align:start position:0%
+ 
+ 
+
+00:25:44.480 --> 00:25:47.330 align:start position:0%
+ 
+ 
+
+00:25:47.330 --> 00:25:49.160 align:start position:0%
+ 
+ 
+
+00:25:49.160 --> 00:25:51.260 align:start position:0%
+ 
+ 
+
+00:25:51.260 --> 00:25:53.720 align:start position:0%
+ 
+ 
+
+00:25:53.720 --> 00:25:55.190 align:start position:0%
+ 
+ 
+
+00:25:55.190 --> 00:25:57.290 align:start position:0%
+ 
+ 
+
+00:25:57.290 --> 00:26:02.420 align:start position:0%
+ 
+ 
+
+00:26:02.420 --> 00:26:05.390 align:start position:0%
+ 
+ 
+
+00:26:05.390 --> 00:26:08.620 align:start position:0%
+ 
+ 
+
+00:26:08.620 --> 00:26:11.960 align:start position:0%
+ 
+ 
+
+00:26:11.960 --> 00:26:15.830 align:start position:0%
+ 
+ 
+
+00:26:15.830 --> 00:26:18.950 align:start position:0%
+ 
+ 
+
+00:26:18.950 --> 00:26:21.350 align:start position:0%
+ 
+ 
+
+00:26:21.350 --> 00:26:24.170 align:start position:0%
+ 
+ 
+
+00:26:24.170 --> 00:26:26.360 align:start position:0%
+ 
+ 
+
+00:26:26.360 --> 00:26:27.950 align:start position:0%
+ 
+ 
+
+00:26:27.950 --> 00:26:29.440 align:start position:0%
+ 
+ 
+
+00:26:29.440 --> 00:26:31.360 align:start position:0%
+ 
+ 
+
+00:26:31.360 --> 00:26:33.669 align:start position:0%
+ 
+ 
+
+00:26:33.669 --> 00:26:37.419 align:start position:0%
+ 
+ 
+
+00:26:37.419 --> 00:26:39.430 align:start position:0%
+ 
+ 
+
+00:26:39.430 --> 00:26:41.470 align:start position:0%
+ 
+ 
+
+00:26:41.470 --> 00:26:43.389 align:start position:0%
+ 
+ 
+
+00:26:43.389 --> 00:26:47.830 align:start position:0%
+ 
+ 
+
+00:26:47.830 --> 00:26:50.950 align:start position:0%
+ 
+ 
+
+00:26:50.950 --> 00:26:53.889 align:start position:0%
+ 
+ 
+
+00:26:53.889 --> 00:26:58.240 align:start position:0%
+ 
+ 
+
+00:26:58.240 --> 00:27:00.759 align:start position:0%
+ 
+ 
+
+00:27:00.759 --> 00:27:03.070 align:start position:0%
+ 
+ 
+
+00:27:03.070 --> 00:27:06.970 align:start position:0%
+ 
+ 
+
+00:27:06.970 --> 00:27:08.379 align:start position:0%
+ 
+ 
+
+00:27:08.379 --> 00:27:10.840 align:start position:0%
+ 
+ 
+
+00:27:10.840 --> 00:27:14.519 align:start position:0%
+ 
+ 
+
+00:27:14.519 --> 00:27:18.700 align:start position:0%
+ 
+ 
+
+00:27:18.700 --> 00:27:22.690 align:start position:0%
+ 
+ 
+
+00:27:22.690 --> 00:27:24.940 align:start position:0%
+ 
+ 
+
+00:27:24.940 --> 00:27:27.159 align:start position:0%
+ 
+ 
+
+00:27:27.159 --> 00:27:29.110 align:start position:0%
+ 
+ 
+
+00:27:29.110 --> 00:27:31.629 align:start position:0%
+ 
+ 
+
+00:27:31.629 --> 00:27:34.090 align:start position:0%
+ 
+ 
+
+00:27:34.090 --> 00:27:36.340 align:start position:0%
+ 
+ 
+
+00:27:36.340 --> 00:27:39.070 align:start position:0%
+ 
+ 
+
+00:27:39.070 --> 00:27:39.080 align:start position:0%
+ 
+ 
+
+00:27:39.080 --> 00:27:42.590 align:start position:0%
+ 
+
+
+00:27:42.590 --> 00:27:46.529 align:start position:0%
+ 
+ 
+
+00:27:46.529 --> 00:27:48.269 align:start position:0%
+ 
+ 
+
+00:27:48.269 --> 00:27:51.840 align:start position:0%
+ 
+ 
+
+00:27:51.840 --> 00:27:54.149 align:start position:0%
+ 
+ 
+
+00:27:54.149 --> 00:27:56.039 align:start position:0%
+ 
+ 
+
+00:27:56.039 --> 00:27:58.100 align:start position:0%
+ 
+ 
+
+00:27:58.100 --> 00:28:01.080 align:start position:0%
+ 
+ 
+
+00:28:01.080 --> 00:28:02.519 align:start position:0%
+ 
+ 
+
+00:28:02.519 --> 00:28:04.889 align:start position:0%
+ 
+ 
+
+00:28:04.889 --> 00:28:06.960 align:start position:0%
+ 
+ 
+
+00:28:06.960 --> 00:28:09.149 align:start position:0%
+ 
+ 
+
+00:28:09.149 --> 00:28:12.509 align:start position:0%
+ 
+ 
+
+00:28:12.509 --> 00:28:14.279 align:start position:0%
+ 
+ 
+
+00:28:14.279 --> 00:28:16.110 align:start position:0%
+ 
+ 
+
+00:28:16.110 --> 00:28:19.289 align:start position:0%
+ 
+ 
+
+00:28:19.289 --> 00:28:23.039 align:start position:0%
+ 
+ 
+
+00:28:23.039 --> 00:28:25.529 align:start position:0%
+ 
+ 
+
+00:28:25.529 --> 00:28:27.680 align:start position:0%
+ 
+ 
+
+00:28:27.680 --> 00:28:31.259 align:start position:0%
+ 
+ 
+
+00:28:31.259 --> 00:28:33.090 align:start position:0%
+ 
+ 
+
+00:28:33.090 --> 00:28:37.649 align:start position:0%
+ 
+ 
+
+00:28:37.649 --> 00:28:40.560 align:start position:0%
+ 
+ 
+
+00:28:40.560 --> 00:28:42.299 align:start position:0%
+ 
+ 
+
+00:28:42.299 --> 00:28:44.970 align:start position:0%
+ 
+ 
+
+00:28:44.970 --> 00:28:47.279 align:start position:0%
+ 
+ 
+
+00:28:47.279 --> 00:28:50.129 align:start position:0%
+ 
+ 
+
+00:28:50.129 --> 00:28:52.680 align:start position:0%
+ 
+ 
+
+00:28:52.680 --> 00:28:54.930 align:start position:0%
+ 
+ 
+
+00:28:54.930 --> 00:28:56.879 align:start position:0%
+ 
+ 
+
+00:28:56.879 --> 00:29:00.480 align:start position:0%
+ 
+ 
+
+00:29:00.480 --> 00:29:02.940 align:start position:0%
+ 
+ 
+
+00:29:02.940 --> 00:29:05.009 align:start position:0%
+ 
+ 
+
+00:29:05.009 --> 00:29:06.299 align:start position:0%
+ 
+ 
+
+00:29:06.299 --> 00:29:08.340 align:start position:0%
+ 
+ 
+
+00:29:08.340 --> 00:29:14.820 align:start position:0%
+ 
+ 
+
+00:29:14.820 --> 00:29:18.799 align:start position:0%
+ 
+ 
+
+00:29:18.799 --> 00:29:21.360 align:start position:0%
+ 
+ 
+
+00:29:21.360 --> 00:29:23.279 align:start position:0%
+ 
+ 
+
+00:29:23.279 --> 00:29:25.710 align:start position:0%
+ 
+ 
+
+00:29:25.710 --> 00:29:29.129 align:start position:0%
+ 
+ 
+
+00:29:29.129 --> 00:29:31.259 align:start position:0%
+ 
+ 
+
+00:29:31.259 --> 00:29:33.269 align:start position:0%
+ 
+ 
+
+00:29:33.269 --> 00:29:35.850 align:start position:0%
+ 
+ 
+
+00:29:35.850 --> 00:29:39.330 align:start position:0%
+ 
+ 
+
+00:29:39.330 --> 00:29:40.980 align:start position:0%
+ 
+ 
+
+00:29:40.980 --> 00:29:42.930 align:start position:0%
+ 
+ 
+
+00:29:42.930 --> 00:29:45.600 align:start position:0%
+ 
+ 
+
+00:29:45.600 --> 00:29:49.499 align:start position:0%
+ 
+ 
+
+00:29:49.499 --> 00:29:52.590 align:start position:0%
+ 
+ 
+
+00:29:52.590 --> 00:29:54.580 align:start position:0%
+ 
+ 
+
+00:29:54.580 --> 00:29:56.919 align:start position:0%
+ 
+ 
+
+00:29:56.919 --> 00:29:59.500 align:start position:0%
+ 
+ 
+
+00:29:59.500 --> 00:30:00.789 align:start position:0%
+ 
+ 
+
+00:30:00.789 --> 00:30:04.000 align:start position:0%
+ 
+ 
+
+00:30:04.000 --> 00:30:05.610 align:start position:0%
+ 
+ 
+
+00:30:05.610 --> 00:30:08.260 align:start position:0%
+ 
+ 
+
+00:30:08.260 --> 00:30:10.330 align:start position:0%
+ 
+ 
+
+00:30:10.330 --> 00:30:11.830 align:start position:0%
+ 
+ 
+
+00:30:11.830 --> 00:30:13.960 align:start position:0%
+ 
+ 
+
+00:30:13.960 --> 00:30:16.360 align:start position:0%
+ 
+ 
+
+00:30:16.360 --> 00:30:20.049 align:start position:0%
+ 
+ 
+
+00:30:20.049 --> 00:30:21.880 align:start position:0%
+ 
+ 
+
+00:30:21.880 --> 00:30:24.399 align:start position:0%
+ 
+ 
+
+00:30:24.399 --> 00:30:27.480 align:start position:0%
+ 
+ 
+
+00:30:27.480 --> 00:30:30.310 align:start position:0%
+ 
+ 
+
+00:30:30.310 --> 00:30:33.190 align:start position:0%
+ 
+ 
+
+00:30:33.190 --> 00:30:35.710 align:start position:0%
+ 
+ 
+
+00:30:35.710 --> 00:30:40.870 align:start position:0%
+ 
+ 
+
+00:30:40.870 --> 00:30:43.570 align:start position:0%
+ 
+ 
+
+00:30:43.570 --> 00:30:46.720 align:start position:0%
+ 
+ 
+
+00:30:46.720 --> 00:30:49.210 align:start position:0%
+ 
+ 
+
+00:30:49.210 --> 00:30:51.639 align:start position:0%
+ 
+ 
+
+00:30:51.639 --> 00:30:54.370 align:start position:0%
+ 
+ 
+
+00:30:54.370 --> 00:30:56.580 align:start position:0%
+ 
+ 
+
+00:30:56.580 --> 00:31:00.549 align:start position:0%
+ 
+ 
+
+00:31:00.549 --> 00:31:03.100 align:start position:0%
+ 
+ 
+
+00:31:03.100 --> 00:31:06.490 align:start position:0%
+ 
+ 
+
+00:31:06.490 --> 00:31:08.590 align:start position:0%
+ 
+ 
+
+00:31:08.590 --> 00:31:11.139 align:start position:0%
+ 
+ 
+
+00:31:11.139 --> 00:31:14.680 align:start position:0%
+ 
+ 
+
+00:31:14.680 --> 00:31:17.620 align:start position:0%
+ 
+ 
+
+00:31:17.620 --> 00:31:19.269 align:start position:0%
+ 
+ 
+
+00:31:19.269 --> 00:31:21.100 align:start position:0%
+ 
+ 
+
+00:31:21.100 --> 00:31:22.480 align:start position:0%
+ 
+ 
+
+00:31:22.480 --> 00:31:26.710 align:start position:0%
+ 
+ 
+
+00:31:26.710 --> 00:31:28.149 align:start position:0%
+ 
+ 
+
+00:31:28.149 --> 00:31:31.269 align:start position:0%
+ 
+ 
+
+00:31:31.269 --> 00:31:33.190 align:start position:0%
+ 
+ 
+
+00:31:33.190 --> 00:31:34.720 align:start position:0%
+ 
+ 
+
+00:31:34.720 --> 00:31:39.669 align:start position:0%
+ 
+ 
+
+00:31:39.669 --> 00:31:41.350 align:start position:0%
+ 
+ 
+
+00:31:41.350 --> 00:31:44.769 align:start position:0%
+ 
+ 
+
+00:31:44.769 --> 00:31:47.680 align:start position:0%
+ 
+ 
+
+00:31:47.680 --> 00:31:50.289 align:start position:0%
+ 
+ 
+
+00:31:50.289 --> 00:31:53.230 align:start position:0%
+ 
+ 
+
+00:31:53.230 --> 00:31:54.490 align:start position:0%
+ 
+ 
+
+00:31:54.490 --> 00:31:57.190 align:start position:0%
+ 
+ 
+
+00:31:57.190 --> 00:31:58.990 align:start position:0%
+ 
+ 
+
+00:31:58.990 --> 00:32:00.730 align:start position:0%
+ 
+ 
+
+00:32:00.730 --> 00:32:03.010 align:start position:0%
+ 
+ 
+
+00:32:03.010 --> 00:32:05.440 align:start position:0%
+ 
+ 
+
+00:32:05.440 --> 00:32:06.130 align:start position:0%
+ 
+ 
+
+00:32:06.130 --> 00:32:08.650 align:start position:0%
+ 
+ 
+
+00:32:08.650 --> 00:32:09.730 align:start position:0%
+ 
+ 
+
+00:32:09.730 --> 00:32:11.800 align:start position:0%
+ 
+ 
+
+00:32:11.800 --> 00:32:15.310 align:start position:0%
+ 
+ 
+
+00:32:15.310 --> 00:32:19.470 align:start position:0%
+ 
+ 
+
+00:32:19.470 --> 00:32:23.530 align:start position:0%
+ 
+ 
+
+00:32:23.530 --> 00:32:26.470 align:start position:0%
+ 
+ 
+
+00:32:26.470 --> 00:32:28.510 align:start position:0%
+ 
+ 
+
+00:32:28.510 --> 00:32:29.980 align:start position:0%
+ 
+ 
+
+00:32:29.980 --> 00:32:31.570 align:start position:0%
+ 
+ 
+
+00:32:31.570 --> 00:32:33.910 align:start position:0%
+ 
+ 
+
+00:32:33.910 --> 00:32:35.680 align:start position:0%
+ 
+ 
+
+00:32:35.680 --> 00:32:38.260 align:start position:0%
+ 
+ 
+
+00:32:38.260 --> 00:32:41.140 align:start position:0%
+ 
+ 
+
+00:32:41.140 --> 00:32:44.770 align:start position:0%
+ 
+ 
+
+00:32:44.770 --> 00:32:46.030 align:start position:0%
+ 
+ 
+
+00:32:46.030 --> 00:32:47.290 align:start position:0%
+ 
+ 
+
+00:32:47.290 --> 00:32:49.180 align:start position:0%
+ 
+ 
+
+00:32:49.180 --> 00:32:52.000 align:start position:0%
+ 
+ 
+
+00:32:52.000 --> 00:32:55.330 align:start position:0%
+ 
+ 
+
+00:32:55.330 --> 00:32:57.850 align:start position:0%
+ 
+ 
+
+00:32:57.850 --> 00:32:59.530 align:start position:0%
+ 
+ 
+
+00:32:59.530 --> 00:33:03.040 align:start position:0%
+ 
+ 
+
+00:33:03.040 --> 00:33:05.620 align:start position:0%
+ 
+ 
+
+00:33:05.620 --> 00:33:08.620 align:start position:0%
+ 
+ 
+
+00:33:08.620 --> 00:33:11.080 align:start position:0%
+ 
+ 
+
+00:33:11.080 --> 00:33:13.240 align:start position:0%
+ 
+ 
+
+00:33:13.240 --> 00:33:14.530 align:start position:0%
+ 
+ 
+
+00:33:14.530 --> 00:33:16.570 align:start position:0%
+ 
+ 
+
+00:33:16.570 --> 00:33:18.370 align:start position:0%
+ 
+ 
+
+00:33:18.370 --> 00:33:19.690 align:start position:0%
+ 
+ 
+
+00:33:19.690 --> 00:33:21.640 align:start position:0%
+ 
+ 
+
+00:33:21.640 --> 00:33:23.770 align:start position:0%
+ 
+ 
+
+00:33:23.770 --> 00:33:25.810 align:start position:0%
+ 
+ 
+
+00:33:25.810 --> 00:33:30.060 align:start position:0%
+ 
+ 
+
+00:33:30.060 --> 00:33:32.110 align:start position:0%
+ 
+ 
+
+00:33:32.110 --> 00:33:33.430 align:start position:0%
+ 
+ 
+
+00:33:33.430 --> 00:33:38.370 align:start position:0%
+ 
+ 
+
+00:33:38.370 --> 00:33:42.930 align:start position:0%
+ 
+ 
+
+00:33:42.930 --> 00:33:45.340 align:start position:0%
+ 
+ 
+
+00:33:45.340 --> 00:33:48.010 align:start position:0%
+ 
+ 
+
+00:33:48.010 --> 00:33:51.670 align:start position:0%
+ 
+ 
+
+00:33:51.670 --> 00:33:54.250 align:start position:0%
+ 
+ 
+
+00:33:54.250 --> 00:33:57.040 align:start position:0%
+ 
+ 
+
+00:33:57.040 --> 00:34:00.610 align:start position:0%
+ 
+ 
+
+00:34:00.610 --> 00:34:02.380 align:start position:0%
+ 
+ 
+
+00:34:02.380 --> 00:34:06.940 align:start position:0%
+ 
+ 
+
+00:34:06.940 --> 00:34:10.060 align:start position:0%
+ 
+ 
+
+00:34:10.060 --> 00:34:12.430 align:start position:0%
+ 
+ 
+
+00:34:12.430 --> 00:34:15.820 align:start position:0%
+ 
+ 
+
+00:34:15.820 --> 00:34:18.589 align:start position:0%
+ 
+ 
+
+00:34:18.589 --> 00:34:21.259 align:start position:0%
+ 
+ 
+
+00:34:21.259 --> 00:34:24.319 align:start position:0%
+ 
+ 
+
+00:34:24.319 --> 00:34:26.149 align:start position:0%
+ 
+ 
+
+00:34:26.149 --> 00:34:32.379 align:start position:0%
+ 
+ 
+
+00:34:32.379 --> 00:34:35.509 align:start position:0%
+ 
+ 
+
+00:34:35.509 --> 00:34:37.430 align:start position:0%
+ 
+ 
+
+00:34:37.430 --> 00:34:39.710 align:start position:0%
+ 
+ 
+
+00:34:39.710 --> 00:34:42.789 align:start position:0%
+ 
+ 
+
+00:34:42.789 --> 00:34:46.489 align:start position:0%
+ 
+ 
+
+00:34:46.489 --> 00:34:48.979 align:start position:0%
+ 
+ 
+
+00:34:48.979 --> 00:34:50.779 align:start position:0%
+ 
+ 
+
+00:34:50.779 --> 00:34:52.789 align:start position:0%
+ 
+ 
+
+00:34:52.789 --> 00:34:54.859 align:start position:0%
+ 
+ 
+
+00:34:54.859 --> 00:34:57.049 align:start position:0%
+ 
+ 
+
+00:34:57.049 --> 00:35:00.440 align:start position:0%
+ 
+ 
+
+00:35:00.440 --> 00:35:02.390 align:start position:0%
+ 
+ 
+
+00:35:02.390 --> 00:35:05.120 align:start position:0%
+ 
+ 
+
+00:35:05.120 --> 00:35:07.400 align:start position:0%
+ 
+ 
+
+00:35:07.400 --> 00:35:09.410 align:start position:0%
+ 
+ 
+
+00:35:09.410 --> 00:35:11.329 align:start position:0%
+ 
+ 
+
+00:35:11.329 --> 00:35:13.099 align:start position:0%
+ 
+ 
+
+00:35:13.099 --> 00:35:15.410 align:start position:0%
+ 
+ 
+
+00:35:15.410 --> 00:35:17.779 align:start position:0%
+ 
+ 
+
+00:35:17.779 --> 00:35:19.549 align:start position:0%
+ 
+ 
+
+00:35:19.549 --> 00:35:21.829 align:start position:0%
+ 
+ 
+
+00:35:21.829 --> 00:35:23.180 align:start position:0%
+ 
+ 
+
+00:35:23.180 --> 00:35:24.859 align:start position:0%
+ 
+ 
+
+00:35:24.859 --> 00:35:27.200 align:start position:0%
+ 
+ 
+
+00:35:27.200 --> 00:35:29.269 align:start position:0%
+ 
+ 
+
+00:35:29.269 --> 00:35:30.950 align:start position:0%
+ 
+ 
+
+00:35:30.950 --> 00:35:32.390 align:start position:0%
+ 
+ 
+
+00:35:32.390 --> 00:35:34.579 align:start position:0%
+ 
+ 
+
+00:35:34.579 --> 00:35:36.529 align:start position:0%
+ 
+ 
+
+00:35:36.529 --> 00:35:40.069 align:start position:0%
+ 
+ 
+
+00:35:40.069 --> 00:35:41.450 align:start position:0%
+ 
+ 
+
+00:35:41.450 --> 00:35:42.799 align:start position:0%
+ 
+ 
+
+00:35:42.799 --> 00:35:48.979 align:start position:0%
+ 
+ 
+
+00:35:48.979 --> 00:35:54.559 align:start position:0%
+ 
+ 
+
+00:35:54.559 --> 00:35:55.910 align:start position:0%
+ 
+ 
+
+00:35:55.910 --> 00:35:58.039 align:start position:0%
+ 
+ 
+
+00:35:58.039 --> 00:35:59.959 align:start position:0%
+ 
+ 
+
+00:35:59.959 --> 00:36:02.420 align:start position:0%
+ 
+ 
+
+00:36:02.420 --> 00:36:04.640 align:start position:0%
+ 
+ 
+
+00:36:04.640 --> 00:36:07.009 align:start position:0%
+ 
+ 
+
+00:36:07.009 --> 00:36:09.650 align:start position:0%
+ 
+ 
+
+00:36:09.650 --> 00:36:13.069 align:start position:0%
+ 
+ 
+
+00:36:13.069 --> 00:36:15.559 align:start position:0%
+ 
+ 
+
+00:36:15.559 --> 00:36:21.620 align:start position:0%
+ 
+ 
+
+00:36:21.620 --> 00:36:23.959 align:start position:0%
+ 
+ 
+
+00:36:23.959 --> 00:36:25.849 align:start position:0%
+ 
+ 
+
+00:36:25.849 --> 00:36:28.400 align:start position:0%
+ 
+ 
+
+00:36:28.400 --> 00:36:30.950 align:start position:0%
+ 
+ 
+
+00:36:30.950 --> 00:36:31.390 align:start position:0%
+ 
+ 
+
+00:36:31.390 --> 00:36:33.609 align:start position:0%
+ 
+ 
+
+00:36:33.609 --> 00:36:35.739 align:start position:0%
+ 
+ 
+
+00:36:35.739 --> 00:36:44.069 align:start position:0%
+ 
+ 
+
+00:36:44.069 --> 00:36:46.059 align:start position:0%
+ 
+ 
+
+00:36:46.059 --> 00:36:53.910 align:start position:0%
+ 
+ 
+
+00:36:53.910 --> 00:36:57.960 align:start position:0%
+ 
+ 
+
+00:36:57.960 --> 00:37:02.460 align:start position:0%
+ 
+ 
+
+00:37:02.460 --> 00:37:05.049 align:start position:0%
+ 
+ 
+
+00:37:05.049 --> 00:37:06.999 align:start position:0%
+ 
+ 
+
+00:37:06.999 --> 00:37:10.210 align:start position:0%
+ 
+ 
+
+00:37:10.210 --> 00:37:11.769 align:start position:0%
+ 
+ 
+
+00:37:11.769 --> 00:37:15.370 align:start position:0%
+ 
+ 
+
+00:37:15.370 --> 00:37:17.829 align:start position:0%
+ 
+ 
+
+00:37:17.829 --> 00:37:20.289 align:start position:0%
+ 
+ 
+
+00:37:20.289 --> 00:37:23.769 align:start position:0%
+ 
+ 
+
+00:37:23.769 --> 00:37:26.170 align:start position:0%
+ 
+ 
+
+00:37:26.170 --> 00:37:27.700 align:start position:0%
+ 
+ 
+
+00:37:27.700 --> 00:37:28.960 align:start position:0%
+ 
+ 
+
+00:37:28.960 --> 00:37:30.309 align:start position:0%
+ 
+ 
+
+00:37:30.309 --> 00:37:33.370 align:start position:0%
+ 
+ 
+
+00:37:33.370 --> 00:37:38.460 align:start position:0%
+ 
+ 
+
+00:37:38.460 --> 00:37:38.470 align:start position:0%
+ 
+ 
+
+00:37:38.470 --> 00:38:03.070 align:start position:0%
+ 
+
+

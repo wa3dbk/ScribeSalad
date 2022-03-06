@@ -1,0 +1,2416 @@
+WEBVTT
+Kind: captions
+Language: en
+
+00:00:00.340 --> 00:00:06.460 align:start position:0%
+ 
+[Music]  hello everyone my name is Rajesh Mishra  I'm an engineering lead on the GCE team  doing control plane work I'm joined here  by my colleague because hi everyone I am  Vikas yea though I am an engineer on GCP  and I support the storage solution for  GCE so what we plan to cover is how we  design our control plane to be highly  available so let's let's get started so  before we get started let's talk about  control plane at a very high low high  level so we have an extremely simplified  version from a customer standpoint so  what you see over here what it takes to  orchestrate an API that you submit  against our control plane so I've picked  a canonical example of submitting an  instance creation request so that API we  orchestrate that API that API has many  many steps to be performed so I I just  listed some few of the steps we need to  check the permission we need to check  the org policy quota so on and so forth  any one of these steps could fail so and  you can imagine control plane with many  projects many resources that we manage  many API so that we need to process they  we need to process and remember where we  are exactly  and so we can recover our failures  and since this talk is about the  availability let's define what's an  availability so s-sorry  reliability workbook defines  availability as an uptime of a software  service and the way we calculate our  availability is by accumulating all all  the unavailable periods of downtime or  or some window of time so as an example  for nine employees your service was  unavailable over a thirty day for four  point three minutes and so on so forth  there are a couple dimensions to  availability for a GC system the we  em-up time availability this is nothing  but your VMs our program the network's  being configured your PD is configured  and all all the other stuff has been  programmed by the control plane and your  in your resources are now serving  traffic live traffic that we call VM up  time availability just to draw some  distinction we have control plane  availability which is basically an  on-demand control plane programming that  happens we are one of our REST API s--  and at a very high level the control  plane programming centers around three  key resources the we M the virtual  machines the PDS and any kind of network  access you configure and there are many  more resources of course and I haven't  listed them so it's important to  remember the distinction about these two  availability things the first one is  live traffic serving paths the second is  control pads  we're so proud of the availability work  we have done that we published we have  published as a lay four VM uptime so  four VMs that leverage our multiple  region so for example VMs placed in two  or more zones in a region or it could be  split cross region one can expect an  aggregate uptime availability of four  nines and this would be with no loss of  external connectivity or access to  persistent disk most importantly this  will be without any kind of downtime and  will be transparent even if we carry out  any kind of hosts maintenance so if you  have to carry out any kind of security  patches will do that transparently by  live migrating your VMs and in most  cases you won't notice that so in the  previous slide the security patches we  are talking about is the underlying  system on top of which the VMS are on  and we do live migration when we are  patching the hosts on which the VM run  so while I talked about the VM uptime  availability we we don't have an SLA  that we published for our control plane  but the internal work we have done we're  very proud of what we achieve what we  have achieved  we are the designs that we have that  we'll talk rest of the presentation on  on our control plane availability so as  you guys now sorry before we get started  I need to introduce some key concepts  before we're that are important in the  VM of that are important in our control  plane so as you guys now we serve 17  regions globally each regions can have  multiple zones  at least three or more and they're  spread globally regions are connected to  extremely fast network and highly  available network so any given region  will have at least multiple redundant  network paths which is as Brad kalter  pointed out earlier this morning it's a  pretty key point of Google cloud  platform the rest of the presentation  we're going to talk through some of the  design points that has worked really  well as we work to offer a highly  available control plane and these are  these are this is the system that offers  all the API we serve so I need to  introduce some key building block  foundations on before we get started so  GC resources this is a GC resource data  model we resources like we M's and disks  are zonal resources sub networks static  IPS regional disks these are shared  resources but they're shared across  within a region global resources and the  most important ones are images snapshots  and instance template they're shared  across globally by all the regions so  you can imagine this in a very  object-oriented sense you have a  hierarchical access pattern and we'll  talk through this will refer to this  data model as we explain the kind of  choices we made to build a highly  available control plane so because you  should just jump in as yeah I want to  spend some more time here so we have a  concept of resources which are available  globally so what that means is if you  have instance template which you want to  use to launch VMs in multi  regions you to define it only once and  it will be available in your entire  project across all the regions you don't  have to create separate template for a  different regions so in some sense it's  provide simplicity of management and  single single pane of control and  similarly there are some resources which  are region specific which are used by  all the zones in the region and they  follow a natural pattern like IP  addresses which are local to the region  which are which can be used within the  within the zones within the region and  this natural hierarchy of sharding of  the data model helps us achieve high  availability as we will talk about in  the rest of the presentation so some of  this will start to make a lot of sense  as we dive deeper into the rest of the  discussion so we could have chosen a  model we could have chosen a design to  have control plane sir out of a single  scope have everything be global with the  sarado global state database but as we  know that's a single point of failure  this could work as an improvement or the  previous design so what you see is each  individual scopes all the the scope data  model that I talked about resources that  are in the individual scope there serd  out of the individual control planes  however in this case we're sharing a  database that again is a single point of  failure one key point here that I talked  about from a topology standpoint we have  we have a front-end we have our Google  front-end which is nothing but a service  router and there is a second level of  router we have which which I've called  it here as API dispatcher and all it  does is it's a scope parser so you know  you are all paths all our resources are  scoped so you could reference  let's say a disc and a disc as we know  is a zonal scope so based on the  specific zonal scope that you're  interested in the right control plane  will be involved here it's important to  also call out that there is only one  singleton global scope and we serve 17  regions so there are 17 Global's 17  regional scopes and likewise there are  and I just made a very gross  generalization that there are free zones  per region so about 51 independent  control planes serving resources within  the scope so this is the final design  this is what we have in production this  is what we use we have independent  control plane with their own independent  databases so then the theme here is if  you want availability you need to  minimize shared point of failures so the  slide number one there's a single stack  which not gonna work for availability  second slide things are independent but  there is a shared database which again  reduces availability having independent  control stacks increases the aggregate  availability because there is no shared  fate between those stacks and that's  what we have zeroed in on that we are  not gonna have shared fate across  different stacks and have multiple  different stacks for different scopes  another key point that we felt was  sharing as we design our system what  about config and what about updating all  the scope control plane binaries the  model we have chosen is we have we do  multi-day face rollout and this is  largely to limit blast radius so there  are some config that needs to be rolled  out globally across all the control  plane that we serve and we do this in a  very staged fashion we have circuit  breakers along the way  and we do a lot of monitoring as we tear  the rollout so we watch rollout we do  zone by zone rollout and based on the  success we will take it forward and or  or some short peat at a time  the rollouts are completed and then you  get a new version of control plane and  if there are any config changes we do a  lot of upfront validation we are Sabri  cement testing and staging testing so  that's our design point number two let's  spend some time on something that we've  internally started to call rule of 9 and  what this simply stated assume your  chiness provide a service called service  a and it's serving a critical API this  could be your GC system serving create  instance API and service a is now  dependent on is built on a lot of  internal services we have identity as an  example an access check so a lot of  these underlying dependencies need to  offer at least an availability that is  higher than what I'm trying to provide  to our customers and you can imagine n  layer of dependencies and we'll go  higher at every layer below and that's  the rule of 9 so we followed this very  diligently by inspecting all the  difference across the board  so that's design point number three the  subsequent discussion I need to since  this talk is about distributed systems  and control plane serving control plane  availability let's spend a minute to  talk about CAF theorem so cap theorem  stated there are three key factors or  three key design consideration points in  any distributed system design so  distributed systems are partitioned by  nature so that's how much partition  tolerance you need to bear for your use  cases availability and consistency are  the other two parameters that you can  play with what cap theorem states that  you can pick only two of these and you  have to  you're probably trading off on the third  one and that's what ami intersects the  intersection of all three that's almost  an impossible thing to build so you  could either end up with a system that  is either consistent and available at  the same time that's typically all the  old-school single server model or more  than often in a distributed system  availability is extremely important  which has been the kind of choices that  we made for a lot of our design and we  picked AP AP based model in some cases  you might have consistency and partition  tolerance when if it's a shared global  object and and we'll talk about that  subsequently so here what I have an  example where we do some kind of lazy  state reconciliation so imagine there is  a critical API being served out of your  service and there is a dependency layer  below it you could pick a choice where  you fail close and you need to reconcile  the state synchronously in a partition  system  this can be tricky and for some cases we  felt instead of improving availability  we it was acceptable to just do a fail  open yes one example I'll bring up here  is in your application as well if you  have high availability for your API but  you have a dependency which is not a  critical dependency and you can live  with fail open semantics then you don't  have to force the rule of nine on the  dependency downstream for example let's  say logging you don't have to require  logging be have higher nines of  availability if we can reconcile build a  reconcile in your system that if logging  is not available you still continue and  reconcile later so that's some of the  pattern we have used for non-critical  dependency where we continue the  operation continue the top-level API  available and reconcile later so that's  our design point number four do a fail  open and do lazy reconciliation so in  some ways this is some sort of like an  eventual reconciliation let's talk a bit  about instance template remember in our  data model I talked about instance  template and snapshots or global  resources so what about them does that  pose a problem for GC system so I did a  deep dive on instance template yeah the  reason we want to talk about instance  template is earlier we showed you that  we have separate control stack for every  scope and there is a single global scope  so instance template our global  resources which is sort out of a single  stack so it's important for us to  explain why how we achieve high  availability for instance template and  snapshot so Rajesh is gonna talk about  that  so instance template is something that  gets configured so you so this is a  typical workflow of an instance template  you create an instance template it's a  global resource and typically manage  instance group depends on a referencing  an instance template and which is then  in turn used by VM creation within the  managed instance group so it's a it's a  global resource and it creates a global  dependency for something that is a  regional API or a zonal API this this  could be a problem and so how does auto  scaling or auto healing within the  context of a managed instance through  port so by the way there is a managed  instance group folks are doing a  presentation later today they will talk  a little bit in more detail about  regional scaling regional auto scaling  and regional orders  sorry regional management group what's  very key for both auto scaling and auto  healing you need to be able to create an  instances and reference your template so  the solution we have arrived we cache  instance template in all regions we  actually do two levels of caching the  intuition that we operated on is that it  was acceptable to go with eventual  consistency we are an AP based model so  we just talked about cap and this is the  AP model that we were we could  successfully apply for instance template  so the availability of instance template  is high because we cache it and what  that means is if a single global scope  or single global stack has a problem the  instance templates which are cached with  the regions and zone they're available  for order scaling and auto healing to  work  and there are more nuances to this that  and I'm not talking about all the use  cases so there are nuances off you're  trying to delete an instance template so  what what then and we can cover that if  there is interest later in the  presentation okay I built this twice my  apologies  so let's spend some a minute on snapshot  so snapshots is another global resource  snapshots are taken on your disk which  is a zonal resource so however there's  something that we did that we never  exposed to customers the underlying  snapshot has always been a multi  regional concept except the snapshot  resource itself the metadata has been a  global resource it's stored the GCS  buckets where the physical Ross  snapshots are stored it's a multi  regional concept yeah so this is  important if you have a zonal disc and  you take a snapshot you don't have to  worry about that zone not being  available and you're not being able to  access your snapshot so the metadata for  snapshot is global and it's available  while eventual consistency in all the  other regions the GCS bucket where the  snapshot data is stored that is multi  regional and that provides higher  availability for the actual snapshot  content and high availability for the  snapshot metadata so you can imagine a  scenario where your zonal stopped short  once the zone has trouble you can use  the snapshot and utilize that in some  other zone  so Vikas already covered this there's  another thing that we we announced that  GCP next war genome or which has been in  alpha in an alpha mode for some of our  customers we're now going to expose the  snapshot locality so as I told you the  underlying multi-regional locality will  get exposed there's a new parameter  we're exposing called storage locations  so you'll be able to learn where your  physical snapshots are getting stored  additionally we're gonna follow we're  gonna allow you providing choices for  where your snapshot will get stored so  this can be done on there on your  request body by specifying the month the  specific multi-regional place where you  need to get your snapshot stored if you  don't want us to choose or you could  specify specific regions so you could  have your source disk in us in any one  of the zonal us zones and you could pick  your regional destination to be in  Europe this is what it looks like that's  the parameter so I've given two examples  you storage locations with just one  location or you pick a multi regional  thing so the multi-regional is a GCS  construct EU simply implies we it's one  of the EU regions and you could as I  explained in the previous thing you  could spit we will tell you where what  are the specific multi-regional what's  the specific multi-regional places where  we place the snapshot so the design  point in both snapshot and instance  template that has worked for us is if  show consistency and UX so let's let's  take a moment and talk about the UX we  could have the choice we could have  taken is we could have  worded this into a regional resource we  could have deprecated our existing  global resource and offered regionally  coulomb's of those and we felt this is a  good user user convenience to a lot of  customers because oftentimes you try to  create a snapshot and make them  available in multiple regions and you're  going to end up doing the work yourself  so we just saving the burden by taking  on a lot of the complexity as part of  the DC system so the UX was a key point  so we didn't want to trade off on some  of the user user convenience meanwhile  we could achieve all the high  availability characteristics by  providing eventual consistency by  caching those resources in in each one  of the regions so that's our design  point number five so this is a this is a  recap of all the five design points we  covered and above all and most  importantly and it's an operational  point at Google most services we carry  out something we call dirt dirt is  disaster recovery and we simulate  failures we simulate region  unavailability we simulate latency and  we want to make sure our api's are well  behaving across all those failures that  could happen in real world and this  third exercise is invisible to the  customer we do it internally it's  planned and we prepare for it and we  want to see the system behavior when  disaster recovery is going on and this  does not impact any of the external VM  so an external tool in traffic so so far  we've discussed our data model and the  fact that our resources are either arts  our scope resources so either they're  zonal regional or global so  and you could use control plane to  provision your resources and you could  do this on demand in real time as you're  serving traffic or you could prefer  vision so let's apply some lessons so  there are two ways to approach this when  it comes to serving real-time traffic  for critical operations so let's imagine  you built a service  you built a GCE application that serves  thousand QPS and let's say you did one  of those good best design practices that  we advise on GCE and you leverage two  zones in this case us East 1a and US  East one be in my contrived example each  we M has been tested to serve 100 QPS  and they've been tested for that so you  have five VMs on the either side on two  zones isolated served by isolated  control planes and even the VMS are  completely isolated because there are  two different serving serving pads  imagine you lose one of the zones you're  gonna double the traffic on us east 1b  this may be not desirable because you  tested your service for 100 QPS so the  choices you have you would go on demand  ask for five more resources or five more  VMs  there is a possibility you may not get 5  VMs because we may stock out maybe us  West 1a is experiencing a zone wide  failure and every other customer is  trying to do the same thing that could  be problematic so so you could pre  provision in pre provisioning you will  you will configure you will pre  provision 5 more instances so here you  end up with 10 instances each and in  reality the traffic will look like this  in a steady state so you're serving half  what you tested for and that may be a  safe place to be and in the event you  lose his own you you would be safely  able to serve twice the amount of  traffic because that's what you test it  for so let's recap what we learned so if  you pre provision your give you're done  with the control plane configuring your  VMs the disks and and all the network  programming that goes with it and then  at that point your VM is serving live  traffic and we have it published SLA for  that and that that works out really well  so the pros are this pattern is  predictable it's simple  on the downside it costs a little bit  more and in a steady state or in the  average case your systems are less  utilized in the on-demand you put the  control plane on the critical path so  here you save on utilization and that's  an advantage that could work out for  some of your use cases but this is  unpredictable if it's a Black Friday you  could it you know you may not get your  instances  so the on-demand model is where if you  run into a problem in one of your zone  you try to allocate in other zones equal  number of VMs which you need and what  Rajat is pointing out it's not a  guaranteed unless they're reserved or  provision that you need X amount of VMs  you'll get X amount of VM it it could be  a stock or situation it could be a  thundering hold problem that the zone  you want  that's over capacity and nobody can get  extra VMs so that concludes our  presentations  [Music]  you
+
+00:00:06.460 --> 00:00:09.980 align:start position:0%
+[Music]  hello everyone my name is Rajesh Mishra  I'm an engineering lead on the GCE team  doing control plane work I'm joined here  by my colleague because hi everyone I am  Vikas yea though I am an engineer on GCP  and I support the storage solution for  GCE so what we plan to cover is how we  design our control plane to be highly  available so let's let's get started so  before we get started let's talk about  control plane at a very high low high  level so we have an extremely simplified  version from a customer standpoint so  what you see over here what it takes to  orchestrate an API that you submit  against our control plane so I've picked  a canonical example of submitting an  instance creation request so that API we  orchestrate that API that API has many  many steps to be performed so I I just  listed some few of the steps we need to  check the permission we need to check  the org policy quota so on and so forth  any one of these steps could fail so and  you can imagine control plane with many  projects many resources that we manage  many API so that we need to process they  we need to process and remember where we  are exactly  and so we can recover our failures  and since this talk is about the  availability let's define what's an  availability so s-sorry  reliability workbook defines  availability as an uptime of a software  service and the way we calculate our  availability is by accumulating all all  the unavailable periods of downtime or  or some window of time so as an example  for nine employees your service was  unavailable over a thirty day for four  point three minutes and so on so forth  there are a couple dimensions to  availability for a GC system the we  em-up time availability this is nothing  but your VMs our program the network's  being configured your PD is configured  and all all the other stuff has been  programmed by the control plane and your  in your resources are now serving  traffic live traffic that we call VM up  time availability just to draw some  distinction we have control plane  availability which is basically an  on-demand control plane programming that  happens we are one of our REST API s--  and at a very high level the control  plane programming centers around three  key resources the we M the virtual  machines the PDS and any kind of network  access you configure and there are many  more resources of course and I haven't  listed them so it's important to  remember the distinction about these two  availability things the first one is  live traffic serving paths the second is  control pads  we're so proud of the availability work  we have done that we published we have  published as a lay four VM uptime so  four VMs that leverage our multiple  region so for example VMs placed in two  or more zones in a region or it could be  split cross region one can expect an  aggregate uptime availability of four  nines and this would be with no loss of  external connectivity or access to  persistent disk most importantly this  will be without any kind of downtime and  will be transparent even if we carry out  any kind of hosts maintenance so if you  have to carry out any kind of security  patches will do that transparently by  live migrating your VMs and in most  cases you won't notice that so in the  previous slide the security patches we  are talking about is the underlying  system on top of which the VMS are on  and we do live migration when we are  patching the hosts on which the VM run  so while I talked about the VM uptime  availability we we don't have an SLA  that we published for our control plane  but the internal work we have done we're  very proud of what we achieve what we  have achieved  we are the designs that we have that  we'll talk rest of the presentation on  on our control plane availability so as  you guys now sorry before we get started  I need to introduce some key concepts  before we're that are important in the  VM of that are important in our control  plane so as you guys now we serve 17  regions globally each regions can have  multiple zones  at least three or more and they're  spread globally regions are connected to  extremely fast network and highly  available network so any given region  will have at least multiple redundant  network paths which is as Brad kalter  pointed out earlier this morning it's a  pretty key point of Google cloud  platform the rest of the presentation  we're going to talk through some of the  design points that has worked really  well as we work to offer a highly  available control plane and these are  these are this is the system that offers  all the API we serve so I need to  introduce some key building block  foundations on before we get started so  GC resources this is a GC resource data  model we resources like we M's and disks  are zonal resources sub networks static  IPS regional disks these are shared  resources but they're shared across  within a region global resources and the  most important ones are images snapshots  and instance template they're shared  across globally by all the regions so  you can imagine this in a very  object-oriented sense you have a  hierarchical access pattern and we'll  talk through this will refer to this  data model as we explain the kind of  choices we made to build a highly  available control plane so because you  should just jump in as yeah I want to  spend some more time here so we have a  concept of resources which are available  globally so what that means is if you  have instance template which you want to  use to launch VMs in multi  regions you to define it only once and  it will be available in your entire  project across all the regions you don't  have to create separate template for a  different regions so in some sense it's  provide simplicity of management and  single single pane of control and  similarly there are some resources which  are region specific which are used by  all the zones in the region and they  follow a natural pattern like IP  addresses which are local to the region  which are which can be used within the  within the zones within the region and  this natural hierarchy of sharding of  the data model helps us achieve high  availability as we will talk about in  the rest of the presentation so some of  this will start to make a lot of sense  as we dive deeper into the rest of the  discussion so we could have chosen a  model we could have chosen a design to  have control plane sir out of a single  scope have everything be global with the  sarado global state database but as we  know that's a single point of failure  this could work as an improvement or the  previous design so what you see is each  individual scopes all the the scope data  model that I talked about resources that  are in the individual scope there serd  out of the individual control planes  however in this case we're sharing a  database that again is a single point of  failure one key point here that I talked  about from a topology standpoint we have  we have a front-end we have our Google  front-end which is nothing but a service  router and there is a second level of  router we have which which I've called  it here as API dispatcher and all it  does is it's a scope parser so you know  you are all paths all our resources are  scoped so you could reference  let's say a disc and a disc as we know  is a zonal scope so based on the  specific zonal scope that you're  interested in the right control plane  will be involved here it's important to  also call out that there is only one  singleton global scope and we serve 17  regions so there are 17 Global's 17  regional scopes and likewise there are  and I just made a very gross  generalization that there are free zones  per region so about 51 independent  control planes serving resources within  the scope so this is the final design  this is what we have in production this  is what we use we have independent  control plane with their own independent  databases so then the theme here is if  you want availability you need to  minimize shared point of failures so the  slide number one there's a single stack  which not gonna work for availability  second slide things are independent but  there is a shared database which again  reduces availability having independent  control stacks increases the aggregate  availability because there is no shared  fate between those stacks and that's  what we have zeroed in on that we are  not gonna have shared fate across  different stacks and have multiple  different stacks for different scopes  another key point that we felt was  sharing as we design our system what  about config and what about updating all  the scope control plane binaries the  model we have chosen is we have we do  multi-day face rollout and this is  largely to limit blast radius so there  are some config that needs to be rolled  out globally across all the control  plane that we serve and we do this in a  very staged fashion we have circuit  breakers along the way  and we do a lot of monitoring as we tear  the rollout so we watch rollout we do  zone by zone rollout and based on the  success we will take it forward and or  or some short peat at a time  the rollouts are completed and then you  get a new version of control plane and  if there are any config changes we do a  lot of upfront validation we are Sabri  cement testing and staging testing so  that's our design point number two let's  spend some time on something that we've  internally started to call rule of 9 and  what this simply stated assume your  chiness provide a service called service  a and it's serving a critical API this  could be your GC system serving create  instance API and service a is now  dependent on is built on a lot of  internal services we have identity as an  example an access check so a lot of  these underlying dependencies need to  offer at least an availability that is  higher than what I'm trying to provide  to our customers and you can imagine n  layer of dependencies and we'll go  higher at every layer below and that's  the rule of 9 so we followed this very  diligently by inspecting all the  difference across the board  so that's design point number three the  subsequent discussion I need to since  this talk is about distributed systems  and control plane serving control plane  availability let's spend a minute to  talk about CAF theorem so cap theorem  stated there are three key factors or  three key design consideration points in  any distributed system design so  distributed systems are partitioned by  nature so that's how much partition  tolerance you need to bear for your use  cases availability and consistency are  the other two parameters that you can  play with what cap theorem states that  you can pick only two of these and you  have to  you're probably trading off on the third  one and that's what ami intersects the  intersection of all three that's almost  an impossible thing to build so you  could either end up with a system that  is either consistent and available at  the same time that's typically all the  old-school single server model or more  than often in a distributed system  availability is extremely important  which has been the kind of choices that  we made for a lot of our design and we  picked AP AP based model in some cases  you might have consistency and partition  tolerance when if it's a shared global  object and and we'll talk about that  subsequently so here what I have an  example where we do some kind of lazy  state reconciliation so imagine there is  a critical API being served out of your  service and there is a dependency layer  below it you could pick a choice where  you fail close and you need to reconcile  the state synchronously in a partition  system  this can be tricky and for some cases we  felt instead of improving availability  we it was acceptable to just do a fail  open yes one example I'll bring up here  is in your application as well if you  have high availability for your API but  you have a dependency which is not a  critical dependency and you can live  with fail open semantics then you don't  have to force the rule of nine on the  dependency downstream for example let's  say logging you don't have to require  logging be have higher nines of  availability if we can reconcile build a  reconcile in your system that if logging  is not available you still continue and  reconcile later so that's some of the  pattern we have used for non-critical  dependency where we continue the  operation continue the top-level API  available and reconcile later so that's  our design point number four do a fail  open and do lazy reconciliation so in  some ways this is some sort of like an  eventual reconciliation let's talk a bit  about instance template remember in our  data model I talked about instance  template and snapshots or global  resources so what about them does that  pose a problem for GC system so I did a  deep dive on instance template yeah the  reason we want to talk about instance  template is earlier we showed you that  we have separate control stack for every  scope and there is a single global scope  so instance template our global  resources which is sort out of a single  stack so it's important for us to  explain why how we achieve high  availability for instance template and  snapshot so Rajesh is gonna talk about  that  so instance template is something that  gets configured so you so this is a  typical workflow of an instance template  you create an instance template it's a  global resource and typically manage  instance group depends on a referencing  an instance template and which is then  in turn used by VM creation within the  managed instance group so it's a it's a  global resource and it creates a global  dependency for something that is a  regional API or a zonal API this this  could be a problem and so how does auto  scaling or auto healing within the  context of a managed instance through  port so by the way there is a managed  instance group folks are doing a  presentation later today they will talk  a little bit in more detail about  regional scaling regional auto scaling  and regional orders  sorry regional management group what's  very key for both auto scaling and auto  healing you need to be able to create an  instances and reference your template so  the solution we have arrived we cache  instance template in all regions we  actually do two levels of caching the  intuition that we operated on is that it  was acceptable to go with eventual  consistency we are an AP based model so  we just talked about cap and this is the  AP model that we were we could  successfully apply for instance template  so the availability of instance template  is high because we cache it and what  that means is if a single global scope  or single global stack has a problem the  instance templates which are cached with  the regions and zone they're available  for order scaling and auto healing to  work  and there are more nuances to this that  and I'm not talking about all the use  cases so there are nuances off you're  trying to delete an instance template so  what what then and we can cover that if  there is interest later in the  presentation okay I built this twice my  apologies  so let's spend some a minute on snapshot  so snapshots is another global resource  snapshots are taken on your disk which  is a zonal resource so however there's  something that we did that we never  exposed to customers the underlying  snapshot has always been a multi  regional concept except the snapshot  resource itself the metadata has been a  global resource it's stored the GCS  buckets where the physical Ross  snapshots are stored it's a multi  regional concept yeah so this is  important if you have a zonal disc and  you take a snapshot you don't have to  worry about that zone not being  available and you're not being able to  access your snapshot so the metadata for  snapshot is global and it's available  while eventual consistency in all the  other regions the GCS bucket where the  snapshot data is stored that is multi  regional and that provides higher  availability for the actual snapshot  content and high availability for the  snapshot metadata so you can imagine a  scenario where your zonal stopped short  once the zone has trouble you can use  the snapshot and utilize that in some  other zone  so Vikas already covered this there's  another thing that we we announced that  GCP next war genome or which has been in  alpha in an alpha mode for some of our  customers we're now going to expose the  snapshot locality so as I told you the  underlying multi-regional locality will  get exposed there's a new parameter  we're exposing called storage locations  so you'll be able to learn where your  physical snapshots are getting stored  additionally we're gonna follow we're  gonna allow you providing choices for  where your snapshot will get stored so  this can be done on there on your  request body by specifying the month the  specific multi-regional place where you  need to get your snapshot stored if you  don't want us to choose or you could  specify specific regions so you could  have your source disk in us in any one  of the zonal us zones and you could pick  your regional destination to be in  Europe this is what it looks like that's  the parameter so I've given two examples  you storage locations with just one  location or you pick a multi regional  thing so the multi-regional is a GCS  construct EU simply implies we it's one  of the EU regions and you could as I  explained in the previous thing you  could spit we will tell you where what  are the specific multi-regional what's  the specific multi-regional places where  we place the snapshot so the design  point in both snapshot and instance  template that has worked for us is if  show consistency and UX so let's let's  take a moment and talk about the UX we  could have the choice we could have  taken is we could have  worded this into a regional resource we  could have deprecated our existing  global resource and offered regionally  coulomb's of those and we felt this is a  good user user convenience to a lot of  customers because oftentimes you try to  create a snapshot and make them  available in multiple regions and you're  going to end up doing the work yourself  so we just saving the burden by taking  on a lot of the complexity as part of  the DC system so the UX was a key point  so we didn't want to trade off on some  of the user user convenience meanwhile  we could achieve all the high  availability characteristics by  providing eventual consistency by  caching those resources in in each one  of the regions so that's our design  point number five so this is a this is a  recap of all the five design points we  covered and above all and most  importantly and it's an operational  point at Google most services we carry  out something we call dirt dirt is  disaster recovery and we simulate  failures we simulate region  unavailability we simulate latency and  we want to make sure our api's are well  behaving across all those failures that  could happen in real world and this  third exercise is invisible to the  customer we do it internally it's  planned and we prepare for it and we  want to see the system behavior when  disaster recovery is going on and this  does not impact any of the external VM  so an external tool in traffic so so far  we've discussed our data model and the  fact that our resources are either arts  our scope resources so either they're  zonal regional or global so  and you could use control plane to  provision your resources and you could  do this on demand in real time as you're  serving traffic or you could prefer  vision so let's apply some lessons so  there are two ways to approach this when  it comes to serving real-time traffic  for critical operations so let's imagine  you built a service  you built a GCE application that serves  thousand QPS and let's say you did one  of those good best design practices that  we advise on GCE and you leverage two  zones in this case us East 1a and US  East one be in my contrived example each  we M has been tested to serve 100 QPS  and they've been tested for that so you  have five VMs on the either side on two  zones isolated served by isolated  control planes and even the VMS are  completely isolated because there are  two different serving serving pads  imagine you lose one of the zones you're  gonna double the traffic on us east 1b  this may be not desirable because you  tested your service for 100 QPS so the  choices you have you would go on demand  ask for five more resources or five more  VMs  there is a possibility you may not get 5  VMs because we may stock out maybe us  West 1a is experiencing a zone wide  failure and every other customer is  trying to do the same thing that could  be problematic so so you could pre  provision in pre provisioning you will  you will configure you will pre  provision 5 more instances so here you  end up with 10 instances each and in  reality the traffic will look like this  in a steady state so you're serving half  what you tested for and that may be a  safe place to be and in the event you  lose his own you you would be safely  able to serve twice the amount of  traffic because that's what you test it  for so let's recap what we learned so if  you pre provision your give you're done  with the control plane configuring your  VMs the disks and and all the network  programming that goes with it and then  at that point your VM is serving live  traffic and we have it published SLA for  that and that that works out really well  so the pros are this pattern is  predictable it's simple  on the downside it costs a little bit  more and in a steady state or in the  average case your systems are less  utilized in the on-demand you put the  control plane on the critical path so  here you save on utilization and that's  an advantage that could work out for  some of your use cases but this is  unpredictable if it's a Black Friday you  could it you know you may not get your  instances  so the on-demand model is where if you  run into a problem in one of your zone  you try to allocate in other zones equal  number of VMs which you need and what  Rajat is pointing out it's not a  guaranteed unless they're reserved or  provision that you need X amount of VMs  you'll get X amount of VM it it could be  a stock or situation it could be a  thundering hold problem that the zone  you want  that's over capacity and nobody can get  extra VMs so that concludes our  presentations  [Music]  you
+ 
+
+00:00:09.980 --> 00:00:13.780 align:start position:0%
+ 
+ 
+
+00:00:13.780 --> 00:00:16.939 align:start position:0%
+ 
+ 
+
+00:00:16.939 --> 00:00:20.599 align:start position:0%
+ 
+ 
+
+00:00:20.599 --> 00:00:23.840 align:start position:0%
+ 
+ 
+
+00:00:23.840 --> 00:00:27.589 align:start position:0%
+ 
+ 
+
+00:00:27.589 --> 00:00:33.590 align:start position:0%
+ 
+ 
+
+00:00:33.590 --> 00:00:35.810 align:start position:0%
+ 
+ 
+
+00:00:35.810 --> 00:00:43.810 align:start position:0%
+ 
+ 
+
+00:00:43.810 --> 00:00:46.660 align:start position:0%
+ 
+ 
+
+00:00:46.660 --> 00:00:48.979 align:start position:0%
+ 
+ 
+
+00:00:48.979 --> 00:00:52.069 align:start position:0%
+ 
+ 
+
+00:00:52.069 --> 00:00:56.479 align:start position:0%
+ 
+ 
+
+00:00:56.479 --> 00:00:59.299 align:start position:0%
+ 
+ 
+
+00:00:59.299 --> 00:01:03.080 align:start position:0%
+ 
+ 
+
+00:01:03.080 --> 00:01:05.390 align:start position:0%
+ 
+ 
+
+00:01:05.390 --> 00:01:09.050 align:start position:0%
+ 
+ 
+
+00:01:09.050 --> 00:01:13.280 align:start position:0%
+ 
+ 
+
+00:01:13.280 --> 00:01:16.520 align:start position:0%
+ 
+ 
+
+00:01:16.520 --> 00:01:19.190 align:start position:0%
+ 
+ 
+
+00:01:19.190 --> 00:01:22.520 align:start position:0%
+ 
+ 
+
+00:01:22.520 --> 00:01:23.929 align:start position:0%
+ 
+ 
+
+00:01:23.929 --> 00:01:27.789 align:start position:0%
+ 
+ 
+
+00:01:27.789 --> 00:01:33.020 align:start position:0%
+ 
+ 
+
+00:01:33.020 --> 00:01:37.249 align:start position:0%
+ 
+ 
+
+00:01:37.249 --> 00:01:40.039 align:start position:0%
+ 
+ 
+
+00:01:40.039 --> 00:01:43.719 align:start position:0%
+ 
+ 
+
+00:01:43.719 --> 00:01:47.749 align:start position:0%
+ 
+ 
+
+00:01:47.749 --> 00:01:48.499 align:start position:0%
+ 
+ 
+
+00:01:48.499 --> 00:01:54.320 align:start position:0%
+ 
+ 
+
+00:01:54.320 --> 00:01:56.720 align:start position:0%
+ 
+ 
+
+00:01:56.720 --> 00:02:01.340 align:start position:0%
+ 
+ 
+
+00:02:01.340 --> 00:02:03.890 align:start position:0%
+ 
+ 
+
+00:02:03.890 --> 00:02:05.690 align:start position:0%
+ 
+ 
+
+00:02:05.690 --> 00:02:07.850 align:start position:0%
+ 
+ 
+
+00:02:07.850 --> 00:02:11.720 align:start position:0%
+ 
+ 
+
+00:02:11.720 --> 00:02:16.070 align:start position:0%
+ 
+ 
+
+00:02:16.070 --> 00:02:19.520 align:start position:0%
+ 
+ 
+
+00:02:19.520 --> 00:02:23.870 align:start position:0%
+ 
+ 
+
+00:02:23.870 --> 00:02:27.740 align:start position:0%
+ 
+ 
+
+00:02:27.740 --> 00:02:30.260 align:start position:0%
+ 
+ 
+
+00:02:30.260 --> 00:02:38.770 align:start position:0%
+ 
+ 
+
+00:02:38.770 --> 00:02:41.060 align:start position:0%
+ 
+ 
+
+00:02:41.060 --> 00:02:47.450 align:start position:0%
+ 
+ 
+
+00:02:47.450 --> 00:02:51.500 align:start position:0%
+ 
+ 
+
+00:02:51.500 --> 00:02:54.800 align:start position:0%
+ 
+ 
+
+00:02:54.800 --> 00:02:57.830 align:start position:0%
+ 
+ 
+
+00:02:57.830 --> 00:03:01.479 align:start position:0%
+ 
+ 
+
+00:03:01.479 --> 00:03:05.930 align:start position:0%
+ 
+ 
+
+00:03:05.930 --> 00:03:07.699 align:start position:0%
+ 
+ 
+
+00:03:07.699 --> 00:03:12.199 align:start position:0%
+ 
+ 
+
+00:03:12.199 --> 00:03:17.390 align:start position:0%
+ 
+ 
+
+00:03:17.390 --> 00:03:19.490 align:start position:0%
+ 
+ 
+
+00:03:19.490 --> 00:03:23.660 align:start position:0%
+ 
+ 
+
+00:03:23.660 --> 00:03:26.060 align:start position:0%
+ 
+ 
+
+00:03:26.060 --> 00:03:28.449 align:start position:0%
+ 
+ 
+
+00:03:28.449 --> 00:03:33.890 align:start position:0%
+ 
+ 
+
+00:03:33.890 --> 00:03:36.050 align:start position:0%
+ 
+ 
+
+00:03:36.050 --> 00:03:39.410 align:start position:0%
+ 
+ 
+
+00:03:39.410 --> 00:03:44.570 align:start position:0%
+ 
+ 
+
+00:03:44.570 --> 00:03:47.000 align:start position:0%
+ 
+ 
+
+00:03:47.000 --> 00:03:48.860 align:start position:0%
+ 
+ 
+
+00:03:48.860 --> 00:03:51.170 align:start position:0%
+ 
+ 
+
+00:03:51.170 --> 00:03:53.390 align:start position:0%
+ 
+ 
+
+00:03:53.390 --> 00:03:55.190 align:start position:0%
+ 
+ 
+
+00:03:55.190 --> 00:03:59.560 align:start position:0%
+ 
+ 
+
+00:03:59.560 --> 00:04:06.160 align:start position:0%
+ 
+ 
+
+00:04:06.160 --> 00:04:09.610 align:start position:0%
+ 
+ 
+
+00:04:09.610 --> 00:04:13.510 align:start position:0%
+ 
+ 
+
+00:04:13.510 --> 00:04:18.250 align:start position:0%
+ 
+ 
+
+00:04:18.250 --> 00:04:21.880 align:start position:0%
+ 
+ 
+
+00:04:21.880 --> 00:04:25.870 align:start position:0%
+ 
+ 
+
+00:04:25.870 --> 00:04:28.660 align:start position:0%
+ 
+ 
+
+00:04:28.660 --> 00:04:32.380 align:start position:0%
+ 
+ 
+
+00:04:32.380 --> 00:04:34.630 align:start position:0%
+ 
+ 
+
+00:04:34.630 --> 00:04:38.770 align:start position:0%
+ 
+ 
+
+00:04:38.770 --> 00:04:41.950 align:start position:0%
+ 
+ 
+
+00:04:41.950 --> 00:04:48.280 align:start position:0%
+ 
+ 
+
+00:04:48.280 --> 00:04:50.710 align:start position:0%
+ 
+ 
+
+00:04:50.710 --> 00:04:54.850 align:start position:0%
+ 
+ 
+
+00:04:54.850 --> 00:04:56.950 align:start position:0%
+ 
+ 
+
+00:04:56.950 --> 00:04:59.200 align:start position:0%
+ 
+ 
+
+00:04:59.200 --> 00:05:01.990 align:start position:0%
+ 
+ 
+
+00:05:01.990 --> 00:05:06.130 align:start position:0%
+ 
+ 
+
+00:05:06.130 --> 00:05:11.230 align:start position:0%
+ 
+ 
+
+00:05:11.230 --> 00:05:13.120 align:start position:0%
+ 
+ 
+
+00:05:13.120 --> 00:05:14.170 align:start position:0%
+ 
+ 
+
+00:05:14.170 --> 00:05:17.020 align:start position:0%
+ 
+ 
+
+00:05:17.020 --> 00:05:20.320 align:start position:0%
+ 
+ 
+
+00:05:20.320 --> 00:05:25.650 align:start position:0%
+ 
+ 
+
+00:05:25.650 --> 00:05:29.020 align:start position:0%
+ 
+ 
+
+00:05:29.020 --> 00:05:33.640 align:start position:0%
+ 
+ 
+
+00:05:33.640 --> 00:05:35.280 align:start position:0%
+ 
+ 
+
+00:05:35.280 --> 00:05:38.409 align:start position:0%
+ 
+ 
+
+00:05:38.409 --> 00:05:42.070 align:start position:0%
+ 
+ 
+
+00:05:42.070 --> 00:05:42.640 align:start position:0%
+ 
+ 
+
+00:05:42.640 --> 00:05:45.610 align:start position:0%
+ 
+ 
+
+00:05:45.610 --> 00:05:48.420 align:start position:0%
+ 
+ 
+
+00:05:48.420 --> 00:05:52.870 align:start position:0%
+ 
+ 
+
+00:05:52.870 --> 00:05:58.690 align:start position:0%
+ 
+ 
+
+00:05:58.690 --> 00:06:02.590 align:start position:0%
+ 
+ 
+
+00:06:02.590 --> 00:06:05.890 align:start position:0%
+ 
+ 
+
+00:06:05.890 --> 00:06:09.130 align:start position:0%
+ 
+ 
+
+00:06:09.130 --> 00:06:14.020 align:start position:0%
+ 
+ 
+
+00:06:14.020 --> 00:06:17.020 align:start position:0%
+ 
+ 
+
+00:06:17.020 --> 00:06:19.020 align:start position:0%
+ 
+ 
+
+00:06:19.020 --> 00:06:22.899 align:start position:0%
+ 
+ 
+
+00:06:22.899 --> 00:06:27.010 align:start position:0%
+ 
+ 
+
+00:06:27.010 --> 00:06:29.230 align:start position:0%
+ 
+ 
+
+00:06:29.230 --> 00:06:31.719 align:start position:0%
+ 
+ 
+
+00:06:31.719 --> 00:06:34.420 align:start position:0%
+ 
+ 
+
+00:06:34.420 --> 00:06:39.490 align:start position:0%
+ 
+ 
+
+00:06:39.490 --> 00:06:41.379 align:start position:0%
+ 
+ 
+
+00:06:41.379 --> 00:06:45.850 align:start position:0%
+ 
+ 
+
+00:06:45.850 --> 00:06:50.800 align:start position:0%
+ 
+ 
+
+00:06:50.800 --> 00:06:53.350 align:start position:0%
+ 
+ 
+
+00:06:53.350 --> 00:06:55.570 align:start position:0%
+ 
+ 
+
+00:06:55.570 --> 00:06:59.050 align:start position:0%
+ 
+ 
+
+00:06:59.050 --> 00:07:01.600 align:start position:0%
+ 
+ 
+
+00:07:01.600 --> 00:07:04.360 align:start position:0%
+ 
+ 
+
+00:07:04.360 --> 00:07:11.830 align:start position:0%
+ 
+ 
+
+00:07:11.830 --> 00:07:13.930 align:start position:0%
+ 
+ 
+
+00:07:13.930 --> 00:07:18.760 align:start position:0%
+ 
+ 
+
+00:07:18.760 --> 00:07:22.420 align:start position:0%
+ 
+ 
+
+00:07:22.420 --> 00:07:29.769 align:start position:0%
+ 
+ 
+
+00:07:29.769 --> 00:07:34.779 align:start position:0%
+ 
+ 
+
+00:07:34.779 --> 00:07:36.790 align:start position:0%
+ 
+ 
+
+00:07:36.790 --> 00:07:39.249 align:start position:0%
+ 
+ 
+
+00:07:39.249 --> 00:07:46.749 align:start position:0%
+ 
+ 
+
+00:07:46.749 --> 00:07:49.360 align:start position:0%
+ 
+ 
+
+00:07:49.360 --> 00:07:52.809 align:start position:0%
+ 
+ 
+
+00:07:52.809 --> 00:07:57.159 align:start position:0%
+ 
+ 
+
+00:07:57.159 --> 00:07:59.980 align:start position:0%
+ 
+ 
+
+00:07:59.980 --> 00:08:02.490 align:start position:0%
+ 
+ 
+
+00:08:02.490 --> 00:08:05.830 align:start position:0%
+ 
+ 
+
+00:08:05.830 --> 00:08:07.300 align:start position:0%
+ 
+ 
+
+00:08:07.300 --> 00:08:10.990 align:start position:0%
+ 
+ 
+
+00:08:10.990 --> 00:08:12.430 align:start position:0%
+ 
+ 
+
+00:08:12.430 --> 00:08:16.779 align:start position:0%
+ 
+ 
+
+00:08:16.779 --> 00:08:19.149 align:start position:0%
+ 
+ 
+
+00:08:19.149 --> 00:08:22.180 align:start position:0%
+ 
+ 
+
+00:08:22.180 --> 00:08:23.680 align:start position:0%
+ 
+ 
+
+00:08:23.680 --> 00:08:27.909 align:start position:0%
+ 
+ 
+
+00:08:27.909 --> 00:08:29.860 align:start position:0%
+ 
+ 
+
+00:08:29.860 --> 00:08:31.810 align:start position:0%
+ 
+ 
+
+00:08:31.810 --> 00:08:34.300 align:start position:0%
+ 
+ 
+
+00:08:34.300 --> 00:08:37.540 align:start position:0%
+ 
+ 
+
+00:08:37.540 --> 00:08:39.880 align:start position:0%
+ 
+ 
+
+00:08:39.880 --> 00:08:42.460 align:start position:0%
+ 
+ 
+
+00:08:42.460 --> 00:08:44.860 align:start position:0%
+ 
+ 
+
+00:08:44.860 --> 00:08:47.580 align:start position:0%
+ 
+ 
+
+00:08:47.580 --> 00:08:51.000 align:start position:0%
+ 
+ 
+
+00:08:51.000 --> 00:08:53.260 align:start position:0%
+ 
+ 
+
+00:08:53.260 --> 00:08:55.150 align:start position:0%
+ 
+ 
+
+00:08:55.150 --> 00:08:58.120 align:start position:0%
+ 
+ 
+
+00:08:58.120 --> 00:08:59.620 align:start position:0%
+ 
+ 
+
+00:08:59.620 --> 00:09:01.750 align:start position:0%
+ 
+ 
+
+00:09:01.750 --> 00:09:04.720 align:start position:0%
+ 
+ 
+
+00:09:04.720 --> 00:09:06.990 align:start position:0%
+ 
+ 
+
+00:09:06.990 --> 00:09:12.310 align:start position:0%
+ 
+ 
+
+00:09:12.310 --> 00:09:15.490 align:start position:0%
+ 
+ 
+
+00:09:15.490 --> 00:09:17.200 align:start position:0%
+ 
+ 
+
+00:09:17.200 --> 00:09:20.050 align:start position:0%
+ 
+ 
+
+00:09:20.050 --> 00:09:21.670 align:start position:0%
+ 
+ 
+
+00:09:21.670 --> 00:09:25.960 align:start position:0%
+ 
+ 
+
+00:09:25.960 --> 00:09:31.240 align:start position:0%
+ 
+ 
+
+00:09:31.240 --> 00:09:33.970 align:start position:0%
+ 
+ 
+
+00:09:33.970 --> 00:09:36.790 align:start position:0%
+ 
+ 
+
+00:09:36.790 --> 00:09:39.400 align:start position:0%
+ 
+ 
+
+00:09:39.400 --> 00:09:43.270 align:start position:0%
+ 
+ 
+
+00:09:43.270 --> 00:09:46.230 align:start position:0%
+ 
+ 
+
+00:09:46.230 --> 00:09:49.150 align:start position:0%
+ 
+ 
+
+00:09:49.150 --> 00:09:51.790 align:start position:0%
+ 
+ 
+
+00:09:51.790 --> 00:09:55.480 align:start position:0%
+ 
+ 
+
+00:09:55.480 --> 00:09:58.810 align:start position:0%
+ 
+ 
+
+00:09:58.810 --> 00:10:01.870 align:start position:0%
+ 
+ 
+
+00:10:01.870 --> 00:10:03.840 align:start position:0%
+ 
+ 
+
+00:10:03.840 --> 00:10:06.370 align:start position:0%
+ 
+ 
+
+00:10:06.370 --> 00:10:09.970 align:start position:0%
+ 
+ 
+
+00:10:09.970 --> 00:10:14.200 align:start position:0%
+ 
+ 
+
+00:10:14.200 --> 00:10:18.210 align:start position:0%
+ 
+ 
+
+00:10:18.210 --> 00:10:24.760 align:start position:0%
+ 
+ 
+
+00:10:24.760 --> 00:10:28.120 align:start position:0%
+ 
+ 
+
+00:10:28.120 --> 00:10:31.540 align:start position:0%
+ 
+ 
+
+00:10:31.540 --> 00:10:33.760 align:start position:0%
+ 
+ 
+
+00:10:33.760 --> 00:10:36.550 align:start position:0%
+ 
+ 
+
+00:10:36.550 --> 00:10:40.360 align:start position:0%
+ 
+ 
+
+00:10:40.360 --> 00:10:43.180 align:start position:0%
+ 
+ 
+
+00:10:43.180 --> 00:10:45.580 align:start position:0%
+ 
+ 
+
+00:10:45.580 --> 00:10:48.730 align:start position:0%
+ 
+ 
+
+00:10:48.730 --> 00:10:52.030 align:start position:0%
+ 
+ 
+
+00:10:52.030 --> 00:10:53.650 align:start position:0%
+ 
+ 
+
+00:10:53.650 --> 00:10:56.230 align:start position:0%
+ 
+ 
+
+00:10:56.230 --> 00:10:59.080 align:start position:0%
+ 
+ 
+
+00:10:59.080 --> 00:11:00.850 align:start position:0%
+ 
+ 
+
+00:11:00.850 --> 00:11:04.030 align:start position:0%
+ 
+ 
+
+00:11:04.030 --> 00:11:06.190 align:start position:0%
+ 
+ 
+
+00:11:06.190 --> 00:11:09.720 align:start position:0%
+ 
+ 
+
+00:11:09.720 --> 00:11:12.340 align:start position:0%
+ 
+ 
+
+00:11:12.340 --> 00:11:14.650 align:start position:0%
+ 
+ 
+
+00:11:14.650 --> 00:11:19.900 align:start position:0%
+ 
+ 
+
+00:11:19.900 --> 00:11:23.560 align:start position:0%
+ 
+ 
+
+00:11:23.560 --> 00:11:28.030 align:start position:0%
+ 
+ 
+
+00:11:28.030 --> 00:11:30.610 align:start position:0%
+ 
+ 
+
+00:11:30.610 --> 00:11:33.160 align:start position:0%
+ 
+ 
+
+00:11:33.160 --> 00:11:35.579 align:start position:0%
+ 
+ 
+
+00:11:35.579 --> 00:11:40.450 align:start position:0%
+ 
+ 
+
+00:11:40.450 --> 00:11:42.640 align:start position:0%
+ 
+ 
+
+00:11:42.640 --> 00:11:46.600 align:start position:0%
+ 
+ 
+
+00:11:46.600 --> 00:11:48.880 align:start position:0%
+ 
+ 
+
+00:11:48.880 --> 00:11:51.630 align:start position:0%
+ 
+ 
+
+00:11:51.630 --> 00:11:55.240 align:start position:0%
+ 
+ 
+
+00:11:55.240 --> 00:11:58.420 align:start position:0%
+ 
+ 
+
+00:11:58.420 --> 00:12:02.079 align:start position:0%
+ 
+ 
+
+00:12:02.079 --> 00:12:05.020 align:start position:0%
+ 
+ 
+
+00:12:05.020 --> 00:12:07.840 align:start position:0%
+ 
+ 
+
+00:12:07.840 --> 00:12:10.510 align:start position:0%
+ 
+ 
+
+00:12:10.510 --> 00:12:13.090 align:start position:0%
+ 
+ 
+
+00:12:13.090 --> 00:12:15.010 align:start position:0%
+ 
+ 
+
+00:12:15.010 --> 00:12:16.960 align:start position:0%
+ 
+ 
+
+00:12:16.960 --> 00:12:22.740 align:start position:0%
+ 
+ 
+
+00:12:22.740 --> 00:12:25.630 align:start position:0%
+ 
+ 
+
+00:12:25.630 --> 00:12:29.980 align:start position:0%
+ 
+ 
+
+00:12:29.980 --> 00:12:34.060 align:start position:0%
+ 
+ 
+
+00:12:34.060 --> 00:12:37.630 align:start position:0%
+ 
+ 
+
+00:12:37.630 --> 00:12:40.870 align:start position:0%
+ 
+ 
+
+00:12:40.870 --> 00:12:43.960 align:start position:0%
+ 
+ 
+
+00:12:43.960 --> 00:12:46.660 align:start position:0%
+ 
+ 
+
+00:12:46.660 --> 00:12:48.460 align:start position:0%
+ 
+ 
+
+00:12:48.460 --> 00:12:51.220 align:start position:0%
+ 
+ 
+
+00:12:51.220 --> 00:12:53.890 align:start position:0%
+ 
+ 
+
+00:12:53.890 --> 00:12:57.579 align:start position:0%
+ 
+ 
+
+00:12:57.579 --> 00:12:59.470 align:start position:0%
+ 
+ 
+
+00:12:59.470 --> 00:13:02.890 align:start position:0%
+ 
+ 
+
+00:13:02.890 --> 00:13:07.180 align:start position:0%
+ 
+ 
+
+00:13:07.180 --> 00:13:11.230 align:start position:0%
+ 
+ 
+
+00:13:11.230 --> 00:13:15.580 align:start position:0%
+ 
+ 
+
+00:13:15.580 --> 00:13:18.460 align:start position:0%
+ 
+ 
+
+00:13:18.460 --> 00:13:20.650 align:start position:0%
+ 
+ 
+
+00:13:20.650 --> 00:13:22.390 align:start position:0%
+ 
+ 
+
+00:13:22.390 --> 00:13:26.230 align:start position:0%
+ 
+ 
+
+00:13:26.230 --> 00:13:30.040 align:start position:0%
+ 
+ 
+
+00:13:30.040 --> 00:13:36.040 align:start position:0%
+ 
+ 
+
+00:13:36.040 --> 00:13:42.070 align:start position:0%
+ 
+ 
+
+00:13:42.070 --> 00:13:43.900 align:start position:0%
+ 
+ 
+
+00:13:43.900 --> 00:13:46.090 align:start position:0%
+ 
+ 
+
+00:13:46.090 --> 00:13:50.770 align:start position:0%
+ 
+ 
+
+00:13:50.770 --> 00:13:53.710 align:start position:0%
+ 
+ 
+
+00:13:53.710 --> 00:13:56.620 align:start position:0%
+ 
+ 
+
+00:13:56.620 --> 00:14:00.430 align:start position:0%
+ 
+ 
+
+00:14:00.430 --> 00:14:05.470 align:start position:0%
+ 
+ 
+
+00:14:05.470 --> 00:14:08.440 align:start position:0%
+ 
+ 
+
+00:14:08.440 --> 00:14:10.870 align:start position:0%
+ 
+ 
+
+00:14:10.870 --> 00:14:14.800 align:start position:0%
+ 
+ 
+
+00:14:14.800 --> 00:14:17.500 align:start position:0%
+ 
+ 
+
+00:14:17.500 --> 00:14:20.380 align:start position:0%
+ 
+ 
+
+00:14:20.380 --> 00:14:21.760 align:start position:0%
+ 
+ 
+
+00:14:21.760 --> 00:14:25.750 align:start position:0%
+ 
+ 
+
+00:14:25.750 --> 00:14:27.730 align:start position:0%
+ 
+ 
+
+00:14:27.730 --> 00:14:31.180 align:start position:0%
+ 
+ 
+
+00:14:31.180 --> 00:14:32.950 align:start position:0%
+ 
+ 
+
+00:14:32.950 --> 00:14:35.260 align:start position:0%
+ 
+ 
+
+00:14:35.260 --> 00:14:39.920 align:start position:0%
+ 
+ 
+
+00:14:39.920 --> 00:14:45.260 align:start position:0%
+ 
+ 
+
+00:14:45.260 --> 00:14:48.830 align:start position:0%
+ 
+ 
+
+00:14:48.830 --> 00:14:50.690 align:start position:0%
+ 
+ 
+
+00:14:50.690 --> 00:14:53.210 align:start position:0%
+ 
+ 
+
+00:14:53.210 --> 00:14:57.350 align:start position:0%
+ 
+ 
+
+00:14:57.350 --> 00:15:00.830 align:start position:0%
+ 
+ 
+
+00:15:00.830 --> 00:15:04.960 align:start position:0%
+ 
+ 
+
+00:15:04.960 --> 00:15:08.540 align:start position:0%
+ 
+ 
+
+00:15:08.540 --> 00:15:11.240 align:start position:0%
+ 
+ 
+
+00:15:11.240 --> 00:15:13.910 align:start position:0%
+ 
+ 
+
+00:15:13.910 --> 00:15:17.570 align:start position:0%
+ 
+ 
+
+00:15:17.570 --> 00:15:20.030 align:start position:0%
+ 
+ 
+
+00:15:20.030 --> 00:15:23.600 align:start position:0%
+ 
+ 
+
+00:15:23.600 --> 00:15:25.670 align:start position:0%
+ 
+ 
+
+00:15:25.670 --> 00:15:29.350 align:start position:0%
+ 
+ 
+
+00:15:29.350 --> 00:15:32.030 align:start position:0%
+ 
+ 
+
+00:15:32.030 --> 00:15:33.410 align:start position:0%
+ 
+ 
+
+00:15:33.410 --> 00:15:35.120 align:start position:0%
+ 
+ 
+
+00:15:35.120 --> 00:15:39.080 align:start position:0%
+ 
+ 
+
+00:15:39.080 --> 00:15:41.450 align:start position:0%
+ 
+ 
+
+00:15:41.450 --> 00:15:44.300 align:start position:0%
+ 
+ 
+
+00:15:44.300 --> 00:15:47.060 align:start position:0%
+ 
+ 
+
+00:15:47.060 --> 00:15:48.830 align:start position:0%
+ 
+ 
+
+00:15:48.830 --> 00:15:50.510 align:start position:0%
+ 
+ 
+
+00:15:50.510 --> 00:15:55.460 align:start position:0%
+ 
+ 
+
+00:15:55.460 --> 00:15:57.850 align:start position:0%
+ 
+ 
+
+00:15:57.850 --> 00:16:00.080 align:start position:0%
+ 
+ 
+
+00:16:00.080 --> 00:16:04.070 align:start position:0%
+ 
+ 
+
+00:16:04.070 --> 00:16:06.500 align:start position:0%
+ 
+ 
+
+00:16:06.500 --> 00:16:09.650 align:start position:0%
+ 
+ 
+
+00:16:09.650 --> 00:16:11.810 align:start position:0%
+ 
+ 
+
+00:16:11.810 --> 00:16:15.230 align:start position:0%
+ 
+ 
+
+00:16:15.230 --> 00:16:18.310 align:start position:0%
+ 
+ 
+
+00:16:18.310 --> 00:16:24.110 align:start position:0%
+ 
+ 
+
+00:16:24.110 --> 00:16:28.120 align:start position:0%
+ 
+ 
+
+00:16:28.120 --> 00:16:33.350 align:start position:0%
+ 
+ 
+
+00:16:33.350 --> 00:16:35.210 align:start position:0%
+ 
+ 
+
+00:16:35.210 --> 00:16:39.290 align:start position:0%
+ 
+ 
+
+00:16:39.290 --> 00:16:43.930 align:start position:0%
+ 
+ 
+
+00:16:43.930 --> 00:16:49.130 align:start position:0%
+ 
+ 
+
+00:16:49.130 --> 00:16:52.730 align:start position:0%
+ 
+ 
+
+00:16:52.730 --> 00:16:52.740 align:start position:0%
+ 
+ 
+
+00:16:52.740 --> 00:16:54.159 align:start position:0%
+ 
+
+
+00:16:54.159 --> 00:16:58.489 align:start position:0%
+ 
+ 
+
+00:16:58.489 --> 00:17:00.379 align:start position:0%
+ 
+ 
+
+00:17:00.379 --> 00:17:02.569 align:start position:0%
+ 
+ 
+
+00:17:02.569 --> 00:17:05.329 align:start position:0%
+ 
+ 
+
+00:17:05.329 --> 00:17:08.179 align:start position:0%
+ 
+ 
+
+00:17:08.179 --> 00:17:10.939 align:start position:0%
+ 
+ 
+
+00:17:10.939 --> 00:17:14.179 align:start position:0%
+ 
+ 
+
+00:17:14.179 --> 00:17:17.000 align:start position:0%
+ 
+ 
+
+00:17:17.000 --> 00:17:19.340 align:start position:0%
+ 
+ 
+
+00:17:19.340 --> 00:17:20.899 align:start position:0%
+ 
+ 
+
+00:17:20.899 --> 00:17:23.149 align:start position:0%
+ 
+ 
+
+00:17:23.149 --> 00:17:25.250 align:start position:0%
+ 
+ 
+
+00:17:25.250 --> 00:17:28.279 align:start position:0%
+ 
+ 
+
+00:17:28.279 --> 00:17:31.490 align:start position:0%
+ 
+ 
+
+00:17:31.490 --> 00:17:35.210 align:start position:0%
+ 
+ 
+
+00:17:35.210 --> 00:17:37.039 align:start position:0%
+ 
+ 
+
+00:17:37.039 --> 00:17:38.960 align:start position:0%
+ 
+ 
+
+00:17:38.960 --> 00:17:41.509 align:start position:0%
+ 
+ 
+
+00:17:41.509 --> 00:17:44.090 align:start position:0%
+ 
+ 
+
+00:17:44.090 --> 00:17:46.940 align:start position:0%
+ 
+ 
+
+00:17:46.940 --> 00:17:52.970 align:start position:0%
+ 
+ 
+
+00:17:52.970 --> 00:17:57.830 align:start position:0%
+ 
+ 
+
+00:17:57.830 --> 00:18:01.070 align:start position:0%
+ 
+ 
+
+00:18:01.070 --> 00:18:04.250 align:start position:0%
+ 
+ 
+
+00:18:04.250 --> 00:18:09.560 align:start position:0%
+ 
+ 
+
+00:18:09.560 --> 00:18:12.740 align:start position:0%
+ 
+ 
+
+00:18:12.740 --> 00:18:15.289 align:start position:0%
+ 
+ 
+
+00:18:15.289 --> 00:18:16.940 align:start position:0%
+ 
+ 
+
+00:18:16.940 --> 00:18:20.060 align:start position:0%
+ 
+ 
+
+00:18:20.060 --> 00:18:23.570 align:start position:0%
+ 
+ 
+
+00:18:23.570 --> 00:18:26.360 align:start position:0%
+ 
+ 
+
+00:18:26.360 --> 00:18:27.769 align:start position:0%
+ 
+ 
+
+00:18:27.769 --> 00:18:30.440 align:start position:0%
+ 
+ 
+
+00:18:30.440 --> 00:18:33.350 align:start position:0%
+ 
+ 
+
+00:18:33.350 --> 00:18:36.110 align:start position:0%
+ 
+ 
+
+00:18:36.110 --> 00:18:38.090 align:start position:0%
+ 
+ 
+
+00:18:38.090 --> 00:18:39.799 align:start position:0%
+ 
+ 
+
+00:18:39.799 --> 00:18:41.680 align:start position:0%
+ 
+ 
+
+00:18:41.680 --> 00:18:44.419 align:start position:0%
+ 
+ 
+
+00:18:44.419 --> 00:18:46.639 align:start position:0%
+ 
+ 
+
+00:18:46.639 --> 00:18:48.259 align:start position:0%
+ 
+ 
+
+00:18:48.259 --> 00:18:48.269 align:start position:0%
+ 
+ 
+
+00:18:48.269 --> 00:18:51.260 align:start position:0%
+ 
+
+
+00:18:51.260 --> 00:18:54.570 align:start position:0%
+ 
+ 
+
+00:18:54.570 --> 00:18:57.600 align:start position:0%
+ 
+ 
+
+00:18:57.600 --> 00:18:59.340 align:start position:0%
+ 
+ 
+
+00:18:59.340 --> 00:19:01.410 align:start position:0%
+ 
+ 
+
+00:19:01.410 --> 00:19:06.720 align:start position:0%
+ 
+ 
+
+00:19:06.720 --> 00:19:10.710 align:start position:0%
+ 
+ 
+
+00:19:10.710 --> 00:19:14.130 align:start position:0%
+ 
+ 
+
+00:19:14.130 --> 00:19:18.570 align:start position:0%
+ 
+ 
+
+00:19:18.570 --> 00:19:23.370 align:start position:0%
+ 
+ 
+
+00:19:23.370 --> 00:19:26.280 align:start position:0%
+ 
+ 
+
+00:19:26.280 --> 00:19:28.050 align:start position:0%
+ 
+ 
+
+00:19:28.050 --> 00:19:32.820 align:start position:0%
+ 
+ 
+
+00:19:32.820 --> 00:19:37.320 align:start position:0%
+ 
+ 
+
+00:19:37.320 --> 00:19:39.720 align:start position:0%
+ 
+ 
+
+00:19:39.720 --> 00:19:41.550 align:start position:0%
+ 
+ 
+
+00:19:41.550 --> 00:19:44.790 align:start position:0%
+ 
+ 
+
+00:19:44.790 --> 00:19:47.670 align:start position:0%
+ 
+ 
+
+00:19:47.670 --> 00:19:49.770 align:start position:0%
+ 
+ 
+
+00:19:49.770 --> 00:19:51.270 align:start position:0%
+ 
+ 
+
+00:19:51.270 --> 00:19:54.090 align:start position:0%
+ 
+ 
+
+00:19:54.090 --> 00:19:55.140 align:start position:0%
+ 
+ 
+
+00:19:55.140 --> 00:19:58.590 align:start position:0%
+ 
+ 
+
+00:19:58.590 --> 00:20:01.290 align:start position:0%
+ 
+ 
+
+00:20:01.290 --> 00:20:03.210 align:start position:0%
+ 
+ 
+
+00:20:03.210 --> 00:20:07.320 align:start position:0%
+ 
+ 
+
+00:20:07.320 --> 00:20:10.230 align:start position:0%
+ 
+ 
+
+00:20:10.230 --> 00:20:12.480 align:start position:0%
+ 
+ 
+
+00:20:12.480 --> 00:20:15.560 align:start position:0%
+ 
+ 
+
+00:20:15.560 --> 00:20:18.630 align:start position:0%
+ 
+ 
+
+00:20:18.630 --> 00:20:20.520 align:start position:0%
+ 
+ 
+
+00:20:20.520 --> 00:20:23.720 align:start position:0%
+ 
+ 
+
+00:20:23.720 --> 00:20:26.940 align:start position:0%
+ 
+ 
+
+00:20:26.940 --> 00:20:30.060 align:start position:0%
+ 
+ 
+
+00:20:30.060 --> 00:20:32.570 align:start position:0%
+ 
+ 
+
+00:20:32.570 --> 00:20:35.700 align:start position:0%
+ 
+ 
+
+00:20:35.700 --> 00:20:40.410 align:start position:0%
+ 
+ 
+
+00:20:40.410 --> 00:20:43.110 align:start position:0%
+ 
+ 
+
+00:20:43.110 --> 00:20:46.530 align:start position:0%
+ 
+ 
+
+00:20:46.530 --> 00:20:48.120 align:start position:0%
+ 
+ 
+
+00:20:48.120 --> 00:20:50.220 align:start position:0%
+ 
+ 
+
+00:20:50.220 --> 00:20:52.740 align:start position:0%
+ 
+ 
+
+00:20:52.740 --> 00:20:52.750 align:start position:0%
+ 
+ 
+
+00:20:52.750 --> 00:20:55.110 align:start position:0%
+ 
+
+
+00:20:55.110 --> 00:20:58.360 align:start position:0%
+ 
+ 
+
+00:20:58.360 --> 00:21:00.009 align:start position:0%
+ 
+ 
+
+00:21:00.009 --> 00:21:02.740 align:start position:0%
+ 
+ 
+
+00:21:02.740 --> 00:21:05.950 align:start position:0%
+ 
+ 
+
+00:21:05.950 --> 00:21:09.879 align:start position:0%
+ 
+ 
+
+00:21:09.879 --> 00:21:11.320 align:start position:0%
+ 
+ 
+
+00:21:11.320 --> 00:21:19.840 align:start position:0%
+ 
+ 
+
+00:21:19.840 --> 00:21:19.850 align:start position:0%
+ 
+ 
+
+00:21:19.850 --> 00:21:25.670 align:start position:0%
+ 
+
+
+00:21:25.670 --> 00:21:29.930 align:start position:0%
+ 
+ 
+
+00:21:29.930 --> 00:21:35.680 align:start position:0%
+ 
+ 
+
+00:21:35.680 --> 00:21:38.570 align:start position:0%
+ 
+ 
+
+00:21:38.570 --> 00:21:47.090 align:start position:0%
+ 
+ 
+
+00:21:47.090 --> 00:21:48.830 align:start position:0%
+ 
+ 
+
+00:21:48.830 --> 00:21:51.290 align:start position:0%
+ 
+ 
+
+00:21:51.290 --> 00:21:55.100 align:start position:0%
+ 
+ 
+
+00:21:55.100 --> 00:21:58.730 align:start position:0%
+ 
+ 
+
+00:21:58.730 --> 00:22:00.800 align:start position:0%
+ 
+ 
+
+00:22:00.800 --> 00:22:04.670 align:start position:0%
+ 
+ 
+
+00:22:04.670 --> 00:22:07.040 align:start position:0%
+ 
+ 
+
+00:22:07.040 --> 00:22:09.050 align:start position:0%
+ 
+ 
+
+00:22:09.050 --> 00:22:11.540 align:start position:0%
+ 
+ 
+
+00:22:11.540 --> 00:22:15.950 align:start position:0%
+ 
+ 
+
+00:22:15.950 --> 00:22:18.260 align:start position:0%
+ 
+ 
+
+00:22:18.260 --> 00:22:20.720 align:start position:0%
+ 
+ 
+
+00:22:20.720 --> 00:22:22.280 align:start position:0%
+ 
+ 
+
+00:22:22.280 --> 00:22:24.920 align:start position:0%
+ 
+ 
+
+00:22:24.920 --> 00:22:29.000 align:start position:0%
+ 
+ 
+
+00:22:29.000 --> 00:22:31.100 align:start position:0%
+ 
+ 
+
+00:22:31.100 --> 00:22:34.100 align:start position:0%
+ 
+ 
+
+00:22:34.100 --> 00:22:38.570 align:start position:0%
+ 
+ 
+
+00:22:38.570 --> 00:22:40.070 align:start position:0%
+ 
+ 
+
+00:22:40.070 --> 00:22:41.960 align:start position:0%
+ 
+ 
+
+00:22:41.960 --> 00:22:44.210 align:start position:0%
+ 
+ 
+
+00:22:44.210 --> 00:22:46.790 align:start position:0%
+ 
+ 
+
+00:22:46.790 --> 00:22:49.250 align:start position:0%
+ 
+ 
+
+00:22:49.250 --> 00:22:51.890 align:start position:0%
+ 
+ 
+
+00:22:51.890 --> 00:22:53.930 align:start position:0%
+ 
+ 
+
+00:22:53.930 --> 00:23:00.140 align:start position:0%
+ 
+ 
+
+00:23:00.140 --> 00:23:05.510 align:start position:0%
+ 
+ 
+
+00:23:05.510 --> 00:23:09.320 align:start position:0%
+ 
+ 
+
+00:23:09.320 --> 00:23:13.480 align:start position:0%
+ 
+ 
+
+00:23:13.480 --> 00:23:17.210 align:start position:0%
+ 
+ 
+
+00:23:17.210 --> 00:23:19.850 align:start position:0%
+ 
+ 
+
+00:23:19.850 --> 00:23:24.080 align:start position:0%
+ 
+ 
+
+00:23:24.080 --> 00:23:26.990 align:start position:0%
+ 
+ 
+
+00:23:26.990 --> 00:23:28.760 align:start position:0%
+ 
+ 
+
+00:23:28.760 --> 00:23:31.750 align:start position:0%
+ 
+ 
+
+00:23:31.750 --> 00:23:34.040 align:start position:0%
+ 
+ 
+
+00:23:34.040 --> 00:23:37.270 align:start position:0%
+ 
+ 
+
+00:23:37.270 --> 00:23:40.820 align:start position:0%
+ 
+ 
+
+00:23:40.820 --> 00:23:44.330 align:start position:0%
+ 
+ 
+
+00:23:44.330 --> 00:23:46.880 align:start position:0%
+ 
+ 
+
+00:23:46.880 --> 00:23:48.740 align:start position:0%
+ 
+ 
+
+00:23:48.740 --> 00:23:52.010 align:start position:0%
+ 
+ 
+
+00:23:52.010 --> 00:23:54.020 align:start position:0%
+ 
+ 
+
+00:23:54.020 --> 00:23:56.840 align:start position:0%
+ 
+ 
+
+00:23:56.840 --> 00:24:00.620 align:start position:0%
+ 
+ 
+
+00:24:00.620 --> 00:24:03.320 align:start position:0%
+ 
+ 
+
+00:24:03.320 --> 00:24:06.380 align:start position:0%
+ 
+ 
+
+00:24:06.380 --> 00:24:10.100 align:start position:0%
+ 
+ 
+
+00:24:10.100 --> 00:24:13.160 align:start position:0%
+ 
+ 
+
+00:24:13.160 --> 00:24:20.900 align:start position:0%
+ 
+ 
+
+00:24:20.900 --> 00:24:23.120 align:start position:0%
+ 
+ 
+
+00:24:23.120 --> 00:24:26.360 align:start position:0%
+ 
+ 
+
+00:24:26.360 --> 00:24:28.700 align:start position:0%
+ 
+ 
+
+00:24:28.700 --> 00:24:31.690 align:start position:0%
+ 
+ 
+
+00:24:31.690 --> 00:24:36.710 align:start position:0%
+ 
+ 
+
+00:24:36.710 --> 00:24:40.940 align:start position:0%
+ 
+ 
+
+00:24:40.940 --> 00:24:42.590 align:start position:0%
+ 
+ 
+
+00:24:42.590 --> 00:24:45.800 align:start position:0%
+ 
+ 
+
+00:24:45.800 --> 00:24:48.770 align:start position:0%
+ 
+ 
+
+00:24:48.770 --> 00:24:50.630 align:start position:0%
+ 
+ 
+
+00:24:50.630 --> 00:24:55.670 align:start position:0%
+ 
+ 
+
+00:24:55.670 --> 00:24:58.700 align:start position:0%
+ 
+ 
+
+00:24:58.700 --> 00:25:02.180 align:start position:0%
+ 
+ 
+
+00:25:02.180 --> 00:25:06.440 align:start position:0%
+ 
+ 
+
+00:25:06.440 --> 00:25:09.230 align:start position:0%
+ 
+ 
+
+00:25:09.230 --> 00:25:11.930 align:start position:0%
+ 
+ 
+
+00:25:11.930 --> 00:25:14.060 align:start position:0%
+ 
+ 
+
+00:25:14.060 --> 00:25:15.950 align:start position:0%
+ 
+ 
+
+00:25:15.950 --> 00:25:17.510 align:start position:0%
+ 
+ 
+
+00:25:17.510 --> 00:25:20.330 align:start position:0%
+ 
+ 
+
+00:25:20.330 --> 00:25:23.000 align:start position:0%
+ 
+ 
+
+00:25:23.000 --> 00:25:26.000 align:start position:0%
+ 
+ 
+
+00:25:26.000 --> 00:25:29.060 align:start position:0%
+ 
+ 
+
+00:25:29.060 --> 00:25:31.670 align:start position:0%
+ 
+ 
+
+00:25:31.670 --> 00:25:34.280 align:start position:0%
+ 
+ 
+
+00:25:34.280 --> 00:25:35.510 align:start position:0%
+ 
+ 
+
+00:25:35.510 --> 00:25:40.160 align:start position:0%
+ 
+ 
+
+00:25:40.160 --> 00:25:42.020 align:start position:0%
+ 
+ 
+
+00:25:42.020 --> 00:25:45.320 align:start position:0%
+ 
+ 
+
+00:25:45.320 --> 00:25:47.840 align:start position:0%
+ 
+ 
+
+00:25:47.840 --> 00:25:50.510 align:start position:0%
+ 
+ 
+
+00:25:50.510 --> 00:25:51.800 align:start position:0%
+ 
+ 
+
+00:25:51.800 --> 00:25:54.200 align:start position:0%
+ 
+ 
+
+00:25:54.200 --> 00:25:56.240 align:start position:0%
+ 
+ 
+
+00:25:56.240 --> 00:25:58.610 align:start position:0%
+ 
+ 
+
+00:25:58.610 --> 00:26:02.510 align:start position:0%
+ 
+ 
+
+00:26:02.510 --> 00:26:05.450 align:start position:0%
+ 
+ 
+
+00:26:05.450 --> 00:26:08.300 align:start position:0%
+ 
+ 
+
+00:26:08.300 --> 00:26:13.130 align:start position:0%
+ 
+ 
+
+00:26:13.130 --> 00:26:15.950 align:start position:0%
+ 
+ 
+
+00:26:15.950 --> 00:26:19.970 align:start position:0%
+ 
+ 
+
+00:26:19.970 --> 00:26:24.010 align:start position:0%
+ 
+ 
+
+00:26:24.010 --> 00:26:28.310 align:start position:0%
+ 
+ 
+
+00:26:28.310 --> 00:26:30.530 align:start position:0%
+ 
+ 
+
+00:26:30.530 --> 00:26:33.350 align:start position:0%
+ 
+ 
+
+00:26:33.350 --> 00:26:36.890 align:start position:0%
+ 
+ 
+
+00:26:36.890 --> 00:26:39.230 align:start position:0%
+ 
+ 
+
+00:26:39.230 --> 00:26:45.620 align:start position:0%
+ 
+ 
+
+00:26:45.620 --> 00:26:47.690 align:start position:0%
+ 
+ 
+
+00:26:47.690 --> 00:26:50.450 align:start position:0%
+ 
+ 
+
+00:26:50.450 --> 00:26:53.390 align:start position:0%
+ 
+ 
+
+00:26:53.390 --> 00:26:55.250 align:start position:0%
+ 
+ 
+
+00:26:55.250 --> 00:26:58.400 align:start position:0%
+ 
+ 
+
+00:26:58.400 --> 00:27:00.110 align:start position:0%
+ 
+ 
+
+00:27:00.110 --> 00:27:04.850 align:start position:0%
+ 
+ 
+
+00:27:04.850 --> 00:27:10.130 align:start position:0%
+ 
+ 
+
+00:27:10.130 --> 00:27:12.890 align:start position:0%
+ 
+ 
+
+00:27:12.890 --> 00:27:15.470 align:start position:0%
+ 
+ 
+
+00:27:15.470 --> 00:27:21.629 align:start position:0%
+ 
+ 
+
+00:27:21.629 --> 00:27:23.639 align:start position:0%
+ 
+ 
+
+00:27:23.639 --> 00:27:27.060 align:start position:0%
+ 
+ 
+
+00:27:27.060 --> 00:27:30.269 align:start position:0%
+ 
+ 
+
+00:27:30.269 --> 00:27:32.009 align:start position:0%
+ 
+ 
+
+00:27:32.009 --> 00:27:34.769 align:start position:0%
+ 
+ 
+
+00:27:34.769 --> 00:27:37.649 align:start position:0%
+ 
+ 
+
+00:27:37.649 --> 00:27:39.349 align:start position:0%
+ 
+ 
+
+00:27:39.349 --> 00:27:43.829 align:start position:0%
+ 
+ 
+
+00:27:43.829 --> 00:27:47.159 align:start position:0%
+ 
+ 
+
+00:27:47.159 --> 00:27:50.699 align:start position:0%
+ 
+ 
+
+00:27:50.699 --> 00:27:55.109 align:start position:0%
+ 
+ 
+
+00:27:55.109 --> 00:27:56.940 align:start position:0%
+ 
+ 
+
+00:27:56.940 --> 00:28:01.409 align:start position:0%
+ 
+ 
+
+00:28:01.409 --> 00:28:06.629 align:start position:0%
+ 
+ 
+
+00:28:06.629 --> 00:28:11.519 align:start position:0%
+ 
+ 
+
+00:28:11.519 --> 00:28:14.249 align:start position:0%
+ 
+ 
+
+00:28:14.249 --> 00:28:17.249 align:start position:0%
+ 
+ 
+
+00:28:17.249 --> 00:28:19.619 align:start position:0%
+ 
+ 
+
+00:28:19.619 --> 00:28:23.579 align:start position:0%
+ 
+ 
+
+00:28:23.579 --> 00:28:27.479 align:start position:0%
+ 
+ 
+
+00:28:27.479 --> 00:28:31.319 align:start position:0%
+ 
+ 
+
+00:28:31.319 --> 00:28:36.499 align:start position:0%
+ 
+ 
+
+00:28:36.499 --> 00:28:41.039 align:start position:0%
+ 
+ 
+
+00:28:41.039 --> 00:28:45.889 align:start position:0%
+ 
+ 
+
+00:28:45.889 --> 00:28:48.509 align:start position:0%
+ 
+ 
+
+00:28:48.509 --> 00:28:51.779 align:start position:0%
+ 
+ 
+
+00:28:51.779 --> 00:28:56.909 align:start position:0%
+ 
+ 
+
+00:28:56.909 --> 00:29:00.269 align:start position:0%
+ 
+ 
+
+00:29:00.269 --> 00:29:00.279 align:start position:0%
+ 
+ 
+
+00:29:00.279 --> 00:29:05.350 align:start position:0%
+ 
+
+
+00:29:05.350 --> 00:29:07.630 align:start position:0%
+ 
+ 
+
+00:29:07.630 --> 00:29:12.520 align:start position:0%
+ 
+ 
+
+00:29:12.520 --> 00:29:15.310 align:start position:0%
+ 
+ 
+
+00:29:15.310 --> 00:29:17.500 align:start position:0%
+ 
+ 
+
+00:29:17.500 --> 00:29:19.330 align:start position:0%
+ 
+ 
+
+00:29:19.330 --> 00:29:26.710 align:start position:0%
+ 
+ 
+
+00:29:26.710 --> 00:29:29.860 align:start position:0%
+ 
+ 
+
+00:29:29.860 --> 00:29:32.530 align:start position:0%
+ 
+ 
+
+00:29:32.530 --> 00:29:36.220 align:start position:0%
+ 
+ 
+
+00:29:36.220 --> 00:29:40.030 align:start position:0%
+ 
+ 
+
+00:29:40.030 --> 00:29:41.980 align:start position:0%
+ 
+ 
+
+00:29:41.980 --> 00:29:45.220 align:start position:0%
+ 
+ 
+
+00:29:45.220 --> 00:29:48.010 align:start position:0%
+ 
+ 
+
+00:29:48.010 --> 00:29:53.470 align:start position:0%
+ 
+ 
+
+00:29:53.470 --> 00:29:57.010 align:start position:0%
+ 
+ 
+
+00:29:57.010 --> 00:29:59.230 align:start position:0%
+ 
+ 
+
+00:29:59.230 --> 00:30:01.330 align:start position:0%
+ 
+ 
+
+00:30:01.330 --> 00:30:08.980 align:start position:0%
+ 
+ 
+
+00:30:08.980 --> 00:30:13.810 align:start position:0%
+ 
+ 
+
+00:30:13.810 --> 00:30:16.299 align:start position:0%
+ 
+ 
+
+00:30:16.299 --> 00:30:19.720 align:start position:0%
+ 
+ 
+
+00:30:19.720 --> 00:30:23.140 align:start position:0%
+ 
+ 
+
+00:30:23.140 --> 00:30:25.090 align:start position:0%
+ 
+ 
+
+00:30:25.090 --> 00:30:28.240 align:start position:0%
+ 
+ 
+
+00:30:28.240 --> 00:30:30.940 align:start position:0%
+ 
+ 
+
+00:30:30.940 --> 00:30:38.320 align:start position:0%
+ 
+ 
+
+00:30:38.320 --> 00:30:40.120 align:start position:0%
+ 
+ 
+
+00:30:40.120 --> 00:30:43.299 align:start position:0%
+ 
+ 
+
+00:30:43.299 --> 00:30:46.930 align:start position:0%
+ 
+ 
+
+00:30:46.930 --> 00:30:48.789 align:start position:0%
+ 
+ 
+
+00:30:48.789 --> 00:30:52.659 align:start position:0%
+ 
+ 
+
+00:30:52.659 --> 00:30:56.409 align:start position:0%
+ 
+ 
+
+00:30:56.409 --> 00:30:59.890 align:start position:0%
+ 
+ 
+
+00:30:59.890 --> 00:31:03.690 align:start position:0%
+ 
+ 
+
+00:31:03.690 --> 00:31:07.510 align:start position:0%
+ 
+ 
+
+00:31:07.510 --> 00:31:12.430 align:start position:0%
+ 
+ 
+
+00:31:12.430 --> 00:31:14.770 align:start position:0%
+ 
+ 
+
+00:31:14.770 --> 00:31:14.780 align:start position:0%
+ 
+ 
+
+00:31:14.780 --> 00:31:18.039 align:start position:0%
+ 
+
+
+00:31:18.039 --> 00:31:22.399 align:start position:0%
+ 
+ 
+
+00:31:22.399 --> 00:31:24.710 align:start position:0%
+ 
+ 
+
+00:31:24.710 --> 00:31:27.620 align:start position:0%
+ 
+ 
+
+00:31:27.620 --> 00:31:29.840 align:start position:0%
+ 
+ 
+
+00:31:29.840 --> 00:31:31.820 align:start position:0%
+ 
+ 
+
+00:31:31.820 --> 00:31:34.269 align:start position:0%
+ 
+ 
+
+00:31:34.269 --> 00:31:37.610 align:start position:0%
+ 
+ 
+
+00:31:37.610 --> 00:31:40.850 align:start position:0%
+ 
+ 
+
+00:31:40.850 --> 00:31:42.460 align:start position:0%
+ 
+ 
+
+00:31:42.460 --> 00:31:45.320 align:start position:0%
+ 
+ 
+
+00:31:45.320 --> 00:31:45.980 align:start position:0%
+ 
+ 
+
+00:31:45.980 --> 00:31:48.769 align:start position:0%
+ 
+ 
+
+00:31:48.769 --> 00:31:52.519 align:start position:0%
+ 
+ 
+
+00:31:52.519 --> 00:31:52.529 align:start position:0%
+ 
+ 
+
+00:31:52.529 --> 00:31:53.180 align:start position:0%
+ 
+
+
+00:31:53.180 --> 00:31:53.190 align:start position:0%
+ 
+ 
+
+00:31:53.190 --> 00:32:15.160 align:start position:0%
+ 
+
+
+00:32:15.160 --> 00:32:15.170 align:start position:0%
+ 
+ 
+
+00:32:15.170 --> 00:32:17.230 align:start position:0%
+ 
+
+

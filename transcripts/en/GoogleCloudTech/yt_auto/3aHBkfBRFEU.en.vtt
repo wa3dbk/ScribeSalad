@@ -1,0 +1,3472 @@
+WEBVTT
+Kind: captions
+Language: en
+
+00:00:00.050 --> 00:00:05.889 align:start position:0%
+ 
+[Music]  my name is Fred wolf this is our Pitta  and we are from streak which is a  start-up of about 40 people based here  in San Francisco  and yeah we're basically this talk we're  really talking about two things one is  this host of managed databases on Google  cloud and the second is sort of how  we're building our business on top of  them and so it's probably helpful to  start with like what our business what  our product is so basically streak is an  organizational tool on top of Gmail so  the way this works behind the scenes is  we ship a Chrome extension that just  modifies the Gmail UI to add in sort of  organization on top of it we have what's  called a pipeline which might be if  you're in sales might be a list of your  sales deals and the stage they're in  whether they're leads whether they're  closed that kind of thing if you're in  support might be support tickets you  know people use this for hiring business  development basically the key thing here  is it's organization on top of email and  like why is that important  so there's a bunch of different tools  within your organization for sort of  making an organization better there's  things like hangouts chatter slack  there's things like project management  tools but once you get outside of an  organization basically everybody uses  email just because everybody has it and  so this the key things that streak adds  so we have what's called a pipeline and  you add boxes which might be sales deals  or support tickets and in addition to  just like organizing your emails so it  when you look at your emails in your  inbox you can sort of see which deals or  support tickets they're associated with  we can also add sort of structured  metadata so things like you know what  stage the deals in who's involved who's  like the point of contact how long it's  been since the last follow-up and all of  that kind of stuff so we're moves to  talk about technology here rather than a  product demo but I just sort of want to  give like a motivating example of sort  of what we're storing in these databases  well and so here we're gonna be talking  about  our database journey and just to give  you a like a little bit of preview sort  of situate everything we started off on  the cloud datastore we're going to be  talking about cloud fire store which is  datastore sort of spiritual successor  and then we're gonna focus in on sort of  one particular problem that we call the  email metadata problem and how we're  building some new product features that  caused us to reach for cloud spanner and  cloud BigTable sort of some of the newer  hosted database technologies so now I  want to give it over to our pita to chat  about our use of cloud datastore and  cloud fire store all right that's a cut  datastore the way we're going to be  talking about the databases is just give  you a little bit of an introduction why  we chose that database service our  takeaways from using that service and  how are our data needs evolved to want a  newer solution so datastore it's a no  sequel document store your data is  organized into documents call entities  which are basically objects that are  accessed via a key or an index value and  the entities similar entities are  grouped as kinds which is like a table  in a relational model entities have  fields called properties and which are  basically the fields the values you get  in built to and built indexes on each of  the properties for an entity there are  no joins or aggregate queries for  datastore  there's the gql which is a query  language for for datastore but the  complex are joints and aggregate  operations are not supported but there's  a simple filtering is it's possible why  we chose it so back when streak was  started it was started on App Engine so  the only database offering at the time  was on Google Cloud was datastore so it  made sense to co-locate our database  with our server stack on Google Cloud  but even so we think it's an excellent  choice for if you're starting out with a  new product or service and that is  because it gives you a lot of  flexibility to evolve your schema and  what that means what data store is with  entities as I said they have different  properties you have you can have the  same properties across entities can be  completely different the number of  properties the even the data types for  the same properties can be different so  it gives you a lot of freedom to just  just build your features and evolve your  schema as you go of course the other  reason we we love datastore is it's a  managed service no ops it Auto scales  Auto replicates Google's SRS handle  availability you don't have to worry  about provisioning capacity upfront and  you just really just throw data at it  and it would just grow with your service  and so back that back then there was one  candidate and over ten years later we  have about 15 terabytes of data on  datastore all our application data is on  it and we found it to be do perform  predictably and have predictable kind of  challenges and solutions so working with  datastore so some concepts that we found  our key to to work most effectively with  datastore one is entity groups so as I  was saying your data is organized into  entities and multiple entities if they  belong to one entity group you can have  a transaction across multiple entities  so you basically want to have your most  highly correlated data in one entity  group so it can be a user profile and so  on at Streak we have the smallest unit  of work is a box so a box can have  different threads of emails notes  comments and a lot of other custom  fields  and so a boxes can be put into pipelines  which are shared across teams and the  teams belong to an organization so the  way you design your energy groups will  have consequences on throughput and  consistency so with for our case we have  four if you want to update boxes we have  our Energy Group set to organization  level which is which means we have a lot  a lower number of energy groups what  that does is so energy groups are also  units of consistency which means a query  against a energy group will always give  you strongly consistent results also  with the transaction  they will always you know your asset  transaction properties will be applied  when you're using energy groups they're  also stored all entities within an  entity group Google stores them  physically close together so your  minimal i/o reads are really fast so  when in our example with boxes when the  energy group is set to an organization  level with one query against an entity  group you get a high volume of entities  but their limit their limits on how many  entity groups  how many writes you can have per entity  group per second which is set to you can  only have one right currently in  datastore per second per entity group  and I'll talk about the consequences of  that in a second the other things that  we found useful working with datastore  as we use objectify which is a Java data  access API that that makes using  datastore really easy the example at the  bottom where you have annotations to  work with entities indexes and so on has  been really useful we use JSON and  Jackson annotations for a serialization  and deserialization then some of the  challenges as I was saying at the write  throughput rate for entity groups is  in datastore is set to one per second so  ideally you want to have really small  entity groups so that you are not  writing more than one per once per  second in our case organizations  pipelines can have hundreds and  thousands of boxes so for example if  you're trying to update multiple boxes  in our case in a pipeline then it can be  tens of thousands of writes against one  entity group so it can cause a lot of  contention and again something to keep  in mind entity group relationships are  are permanent you cannot change them  unless you delete all the entities and  recreate them in a new entity group so  that is a challenge contention as we're  growing we have larger and larger  customers that has been a big challenge  again boxes the way our schema has  evolved there's a lot of child objects  that we have with boxes and now that  they all belong to the same entity group  but transactions are limited to 500  entities per transaction so when you  have cascading rights that also becomes  kind of a performance bottleneck also  another limit to keep in mind there's  you transactions can be are limited only  to twenty-five entity groups so again  you want to figure out your key design  so that you're finding the right balance  between your consistency and throughput  and then client side views so as you saw  in the first graphic we have we present  this spreadsheet layout to your users  and we we offer complex filtering  grouping and sorting and not being able  to do that data store not providing that  out of the box we have to shift this  responsibility to the application code  which of course increases the complexity  and debugging complexity and so on so  not having joints as we as we grow  larger we really miss having all those  features  out of the box which will be which would  be part of a relational database cloud  fire store fire store is the latest  latest version of data store there's two  modes here real-time and data store mode  data store mode fire store and data  store mode is backwards compatible with  cloud data store but it doesn't have  some of the newer features that  real-time fire store has like real-time  updates there's rich mobile and web  client libraries so fire store is  supposed to be a drop-in replacement for  data store and and the migration to it  to fire store is supposed to be  automatic without any downtime so we're  really excited about that basically fire  store has a spanner back in which so  with the say it with the data store  features in the front end so you get a  strongly consistent layer in the back  end and this eliminates some of our  biggest pain points with data store one  we have strongly consistent results  throughout and the entity group  restrictions that I talked about 25  entity groups per transaction and the  write throughput limit of one per second  we don't have we don't have that with  fire store anymore we're hoping to  upgrade soon and yeah all right so we  talked about how we felt the need for a  fully relational model for our  application data and there's a new  feature that that would work we worked  on and it we call it the metadata  problem so I'm sure all of you had this  problem where somebody forgot to hit  reply all in an email and then you got  forward of that email and then now you  have a lot of redundant emails and  emails just in reverse chronological  order and it's just it's it's just not  very elegant so and also there can be  problems with permission sensitive email  that you were not supposed to receive  ends up in your inbox  so strict solution to that is having a  unified unified view of of emails across  a team so in this example you have the  top three emails were not addressed to  me but as you can see they're shared  from my co-workers inboxes so you get  kind of this elegant view of the email  and which is controlled by a permission  model so this looks really good in the  UI but on the back end it's kind of a  complex graph traversal problem so we  want to answer questions like which  which co-workers of mine have interacted  with this particular prospect over email  or for this email what are the other  emails on this thread that are not in my  inbox but in my co-workers and boxes so  the solution to that we came up with  with a graph solution where your nodes  are either a person or an email an  organization or a domain or an email  message and the the email messages are  connected if they're on the same thread  so if I emailed you and then you  forwarded the email to somebody else we  can trace those emails and give you a  unified view and then two emails are  also connected if they are if they are  the same email but they're the part of  different people's inboxes they're  connected by something that is called an  RFC ID with with Gmail so same message  but different inboxes so this this  obviously helps us to answer the  questions and create a unified view that  can be shared across a team to talk  about how we we approach this problem  solving this and the relational model  needs that friend great real quick  before I go on to our solution  I just want to yeah like build on what  are Peter was saying so this is like a  pretty challenging graph database  problem like you have to really  understand  this like sort of course of an email  thread or a course of like connected  email threads across different people's  inboxes your organization you might have  to hit hundreds of different inboxes  I'm sure you've all been on these like  horrible reply-all threads that have  like you're not just hundreds of people  on the company in the company but like  you know thousands of you know emails  one should count although it'll you know  some email chains and so there's kind of  this graph database problem but it's  also pretty challenging for a couple  reasons technically so one is you have  to be able to do all of these edge  traversals quickly you there may be a  lot of you know emails are sort of nodes  from the graph problem and as our pet I  mentioned permissions are a huge deal  right email can be really sensitive you  could have password reset emails you can  have manager giving you know targeted  feedback to a report that might not be  you know generally consumable they're  just like all these ways they can go  horribly wrong if you don't have a  strong permissions model and the kind of  what this means is we have to traverse  this graph and there's pretty there's  pretty big challenges if we try and pre  compute a lot of this stuff you know  that that's served normally the sort of  distributed systems way out is you just  like denormalize a bunch of stuff in  advance and in this case we both you  know really needed to compute it it read  time to make sure that we're getting  permissions right even if somebody just  changed some permissions and this is all  happening within the context of viewing  emails in Gmail and you know the whole  premise of Gmail is that it's really  fast people expect their emails to just  like load quickly even if they're  searching their whole inbox and we're  expanding that to like letting you  search you know parts of not just your  inbox but your everybody in your  company's inbox possibly so challenging  technical problem looking at the backend  this is actually across our entire user  base we have about 30 terabytes of just  email metadata so that's like we're not  looking at the contents of email we  don't really want to but just looking at  like who the emails from who it's to the  sort of information we need to compute  these edges  and so we evaluated a bunch of different  database products there's a lot of  graphs specific database products on the  market but we really you know all else  being equal we wanted something that had  this property where it was managed by  Google we have a very small operational  team we basically have roughly three  infrastructure engineers depending on  how you slice different people's time  and being able to offload some of that  like availability and sharding work to  Google s re really seems like a good  trade-off dummest so we looked at a  bunch of different options and we ended  up this was our first use case for cloud  spanner  so cloud spanner I think it's about a  year old at this point maybe a little  bit more but the key things about it  sort of looking at just the product in  general it is a globally consistent  relational database and so what does  that mean it supports you know the  sequel language that you you don't know  and possibly love or hate depending on  what you've done with it and it has what  I affectionately call the magic clock  thing and the magic clock is basically  you know for years and years and years  sort of there was always this sort of  introductory paragraph in every  distributed systems paper which  basically said something like we know  clocks are unreliable and go back in  time and have jumps you know and the  network's unreliable and may have you  know horrible latency and everybody just  sort of took it as a premise that you  sort of couldn't rely on clocks and they  were you know trying to lead you astray  and so the the spanner white paper that  came out a while back and now the cloud  spanner product is built on this idea of  hey what if instead of like sort of  accepting this as a premise we just made  the clocks roughly reliable and there's  like a bunch of a bunch of effort in  terms of installing in atomic clocks and  all the data centers there's a bunch of  effort in terms of like setting up the  networking and there's a bunch of effort  in terms of the statistics of like  setting error bars on timing but the  outcome of it is the cloud spanner you  know says on the tin and it's actually  true like we're using it and anger it is  globally consistent so  basically this means that you know going  back to the stuff that are patted about  with datastore you don't have to  pre-select particular entity groups you  don't have to say these are the things  that I'd like to do transactions on  beforehand you just when you go to  actually update entities it looks at  what in these you've queried and you  only have transactional conflicts if if  you are actually modifying things that  we wrought that were all so you know  queried by other queries so it's like  just a set of stuff that our actual real  transaction conflicts so you know this  is great  globally consistent sequel you know it  has you know really great transactions  and you know some of you who are sort of  thinking this through might say you know  but wait you know email itself isn't  consistent why do you care about  consistency you know I might send you an  email and you know all the time we see  emails taking you know ten minutes  thirty minutes to get delivered why do  we care about the database being  consistent and the answer is it's it  goes back to that sort of operational  ease it means that when we have our  syncing logic we can you know sync the  data we can we can build these indexes  to power these graph queries and we  don't have to worry that you know just  think it's partially committed we can  just say hey all of this should be  committed in the transaction and it just  like you know it's either all committed  or not committed and this just means  that our you know indexing pipeline  that's processing a lot of email was  basically written by you know it  basically took one engineer about half  time working on it for a month or so it  was like really for the scale of  distributed system you know when we were  planning out the work we're like hey we  probably need to you know have at least  two people on this for a quarter and  just by you know relying on the spanner  transactionality to deal with a lot of  the edge cases we were able to just like  get it out and get it you know in  customers hands much more quickly and so  building  that operational ease there's a lot of  other sort of really nice features in  that area around spanner so in a  previous life I've managed a couple of  like on premise sequel databases and  sort of all of those operational things  that just sort of fill DBAs with carer  things like adding or removing columns  adding and removing indexes both they're  like pretty easy to do and and and  they're also there's a pretty good sort  of task planner that makes sure that  even if you add and remove a bunch of  columns it doesn't interfere with your  actual transactional workload so that's  you know all pretty nice things to have  even if our underlying data isn't  necessarily super dependent on this  strong consistency and so let's you know  I've been singing its praises generally  let's talk about how it actually works  in practice so this is in the cloud  console the schema for one of our tables  in production and this table is what we  call message mailboxes and so that's if  you remember the sort of graph nodes  there were some things that are  dependent on the message itself you know  which Gmail threads and which other  messages have the same sort of message  ID header to figure it out between  inboxes but there's also stuff that's  dependent on who the message is  addressed to or who it's from or who's  on the CC list and message mailboxes has  one row per person on a message so if I  send a message to you the message the  version of the message in my inbox would  have two message mail boxes rows one for  me and one for you and key things here  so you see at the top it says that this  this table is interleaved in messages  interleaved tables is this feature in  cloud spanner that lets you sort of have  really great performance for stuff that  you know should be co-located together  and so here most of the time that we're  querying you know who's on a particular  message we also care about what message  they're on and so here we've interleaved  message mailboxes and messages and that  means  if I want to do an index filter on you  know all the messages that correspond to  a particular email address you know that  a particular email address was part of  so let's say in the street product we  want to be able to show all of your  communication with a particular Sales  Lead across the organization  I can query on mailbox email and then do  a very quick join a very performant join  with the messages table to get things  like what was the subject of that email  or like these other these other  properties that sort of if you were  doing a more traditional distributed  system you might have to denormalize and  waste a lot of space to sort of get  performant and then and so you know we  use interleaved rows a bunch we one  other interesting things so there's  you'll see these sort of weird is BCC or  is CC boolean fields at the bottom and  so that's basically saying hey is this  particular email address in the BCC line  is it in the CC line like how are they  connected to this message and the the  interesting thing there those rows  actually have two values which you might  expect from a boolean but those values  are actually true or null and so like  why are we doing this  so spanner actually has this ability to  have what are called null filtered  indexes so if you're coming from like  Postgres or I'm sure Microsoft sequel  server has the similar thing you might  be familiar with this concept of partial  indexes and there that means that we can  create an index that's just you know is  this person on the from line or are they  on the to line and it doesn't actually  use up any space for the message mailbox  rows they don't have the correspondent  boolean set to true rather than null it  filters out all the null entries so yeah  so lessons learned with cloud spanner  setting up your schema is super  important particularly if you're putting  a lot of data into it you know it's  pretty easy to build and remove  secondary indexes but you are stuck with  your primary key index like you have to  rewrite  if you're changing your primary key it's  not magic like that and it's pretty  important to just sort of play around  with the schema to figure it out  so what challenges have we run into so  far I've been like singing its praises  and yeah you know no plan survives  contact with the enemy or the database  query planner so one challenge we ran  into is actually a spanner is too smart  for its own good for our use case I  guess your your use case may vary so  spanner has a lot of things or smarts in  the query planner to balance running a  lot of small transactional queries so  this is like the kind of thing that is  probably the you know ninety percent use  case it does things like if you run a  really big query it assumes that this  must be like an analytical query or  maybe like a you know back-end bulk task  indeed it will will be prioritize that  query and make sure that that query  takes a long time to run so it doesn't  get in the way of your transactional  queries but going back to our use case  as we mentioned the you know you've all  been on these horrible huge reply-all  threads and a lot of times you know  fortunately or unfortunately those  threads are the most important because  you know they're the ones where it's  like the collaboration story it really  gets tricky and you need to be able to  share some stuff but not other stuff and  we really need those to be answerable in  sort of a short enough amount of time  that it doesn't degrade the Gmail  experience and so what we were running  into was when we did the queries to span  out to fan out on those really big  threads it was you know not overwhelming  anything else but it was taking a long  time and there wasn't really a great way  to tell the query plan or hey this query  is really important you know go ahead  and do it and we tried some experiments  with you know finding out if they need a  bunch of queries we tried some  experiments with  you're doing like a little bit of  cashing in like Redis or something like  that using cloud memory store but we  just didn't find a thing that really  delivered the user experience we wanted  so that led us to our next database that  we're gonna chat about cloud BigTable  so cloud BigTable is actually it's based  on BigTable which is like you know right  now at this point a you know very  well-established Google technology it  has it sort of has a lot less  functionality than cloud span or cloud  datastore it's really just a key value  store or a sort of key value store let's  say and basically that means that  there's really two queries you can do to  it you can query for this particular  primary key give me the value or you can  do sort of lexicographic I'll have you  put off that word range queries and it  basically say hey give me all values for  keys between a and B or a a and a B and  so there it's like a pretty limited  query interface but the trade-off you  get here is that it's really really  simple and really really fast and so  they're basically each node you add to  cloud BigTable and it's another managed  database you can just like add and  remove nodes to your heart's desire and  you pay for more nodes get more  performance when it's night time you can  just like decrease the number of nodes  and sort of not pay for what you're not  using but basically each node you add  gives you ten thousand reads or writes a  second which is a lot of reads or writes  a second and basically the queries just  look like either put some data in for  this key or read some data for this key  or set of keys there's currently two  modes the mode that we use for this just  because it's like for our use case it's  it's you know not great if the feature  is unavailable but it's not like  business ending people can still get it  their action their streak box data which  is stored safely in cloud datastore by  there's one there's one mode that is  single zone availability has the concept  of a transaction within a particular row  and then there's another mode that is  multi zone replication you forego  transactions but even if one zone goes  down which is infrequent but happens you  can just access the data in another zone  and that it'll a synchronously replicate  after the zone comes back up so yeah so  cloud BigTable not a great tool for  every job but the best tool for some  jobs and we're actually using this in  production for querying this email  metadata index and let me show you sort  of what that looks like so here we've  got the output of CBT is the cloud  BigTable console and this is our  messages table and you can see there's  this concept of a a column family which  is sort of a set of data that's stored  together and we have one column family  for sort of each of those indexes that  we need to first the graph and so  they're you know for instance I was  showing you the message mailboxes table  and so we've got one column family  that's sort of this index for looking up  message mailboxes by the domain or by  the email and then also messages are  indexed by the message ID the RFC  message ID or the thread ID which lets  us do that sort of graph traversal and  the cool thing here is the big table API  is like completely asynchronous so we  basically when we're doing this graph  query we can just have a queue that's  just as soon as information comes back  sending out the next set of fetches and  that's all pipelined and can be you know  very much like sub-second so each lookup  is about 6 milliseconds so you can do a  lot of lookups before somebody notices  the delay other things here this is very  much sort of build it yourself so the  model in BigTable is just a string of  bytes to a string of bytes and so  we had to you know figure out our own  encoding that does lexicographic  encoding the way that we want there  there's a few libraries out there  there's one called orderly there's one  there's lens it's sort of partially  factored out at the HBase library so so  there's some tooling there but you still  need to like very much figure out your  own schema in your own encoding this was  a bit more developer intensive so  definitely don't recommend reaching for  this from the get-go but it is very very  fast and it really does what it says on  the tin so you know we're using a big  table for those lookups in production  six milliseconds you can do a whole  bunch of reads all at once  and it's like providing what we need and  so then sort of at the end of the day  just wanted to summarize sort of what we  already talked about in a convenient  flow chart flow chart and so kind of the  first question I'd ask if I were  reaching for a new database is how  developed is your project schema product  sort of whatever you want to however you  want to think about it if it's if you're  still in that sort of you know finding  you know product market fit or  experimenting with the with the project  then I think either cloud datastore  cloud fire stores probably where you  want to go basically they're you know  key things here it's got very flexible  schemas you just like set up the  documents and then you can you know  index a bunch of different ways after  the fact it's very easy to work with if  you're using a cloud fire store for a  new project you can actually use it in  firestorm mode get most of the same  thing or sorry in real-time mode get  most of the same benefits that we're  talking about and get sort of being able  to send stuff directly to your mobile or  web clients so I think that they're you  know if you're still figuring that out  that's a great choice oh also cloud fire  store and cloud datastore just have a  per operation billing model so if you're  not using it you're only paying for  storage which is like pretty cheap if  you're just getting started  whereas cloud BigTable or cloud spanner  are a per node pricing model so you're  paying hourly for each node that you  have setup so if you're just sort of  it's real cheap to get started with like  cloud firestore cloud datastore and then  yeah on the difference between those two  I start to jokingly put is it 2019 or  later but yeah really  cloud firestore datastore mode is just  cloud datastore but better they've  announced that they're gonna move  everybody to cloud firestore so if  you're starting a new project just start  with cloud firestore like it's I have  trouble envisioning a case in which you  actively want to go to datastore if  you're starting a new project so yeah so  if you're more certain of the needs for  your project if this is something where  either you know you're it's a new  technology for an established company or  product or if you're you're really  really certain of like your performance  needs and you've tested it out and have  a really good idea then that's when you  should probably reach for a cloud  BigTable or cloud spanner cloud spanner  is a lot nicer to work with if it has  data types it at sequel it has these  globally consistent transactions so  generally unless you know you're gonna  need to really really optimize those  like key value lookups and sort of build  things like this horrible reply-all  thread case definitely go with cloud  spanner or we actually built out this  index entirely on clouds or this  metadata indexing system entirely on  cloud spanner to start with I'm super  happy that we did even though we ended  up moving some of the workload to a  cloud BigTable because it informed a lot  of our decisions sort of gave us more  information on the use case and then  yeah if you just like really really need  that one specific tool then cloud  BigTable is probably what you should  reach for  [Music]
+
+00:00:05.889 --> 00:00:08.500 align:start position:0%
+[Music]  my name is Fred wolf this is our Pitta  and we are from streak which is a  start-up of about 40 people based here  in San Francisco  and yeah we're basically this talk we're  really talking about two things one is  this host of managed databases on Google  cloud and the second is sort of how  we're building our business on top of  them and so it's probably helpful to  start with like what our business what  our product is so basically streak is an  organizational tool on top of Gmail so  the way this works behind the scenes is  we ship a Chrome extension that just  modifies the Gmail UI to add in sort of  organization on top of it we have what's  called a pipeline which might be if  you're in sales might be a list of your  sales deals and the stage they're in  whether they're leads whether they're  closed that kind of thing if you're in  support might be support tickets you  know people use this for hiring business  development basically the key thing here  is it's organization on top of email and  like why is that important  so there's a bunch of different tools  within your organization for sort of  making an organization better there's  things like hangouts chatter slack  there's things like project management  tools but once you get outside of an  organization basically everybody uses  email just because everybody has it and  so this the key things that streak adds  so we have what's called a pipeline and  you add boxes which might be sales deals  or support tickets and in addition to  just like organizing your emails so it  when you look at your emails in your  inbox you can sort of see which deals or  support tickets they're associated with  we can also add sort of structured  metadata so things like you know what  stage the deals in who's involved who's  like the point of contact how long it's  been since the last follow-up and all of  that kind of stuff so we're moves to  talk about technology here rather than a  product demo but I just sort of want to  give like a motivating example of sort  of what we're storing in these databases  well and so here we're gonna be talking  about  our database journey and just to give  you a like a little bit of preview sort  of situate everything we started off on  the cloud datastore we're going to be  talking about cloud fire store which is  datastore sort of spiritual successor  and then we're gonna focus in on sort of  one particular problem that we call the  email metadata problem and how we're  building some new product features that  caused us to reach for cloud spanner and  cloud BigTable sort of some of the newer  hosted database technologies so now I  want to give it over to our pita to chat  about our use of cloud datastore and  cloud fire store all right that's a cut  datastore the way we're going to be  talking about the databases is just give  you a little bit of an introduction why  we chose that database service our  takeaways from using that service and  how are our data needs evolved to want a  newer solution so datastore it's a no  sequel document store your data is  organized into documents call entities  which are basically objects that are  accessed via a key or an index value and  the entities similar entities are  grouped as kinds which is like a table  in a relational model entities have  fields called properties and which are  basically the fields the values you get  in built to and built indexes on each of  the properties for an entity there are  no joins or aggregate queries for  datastore  there's the gql which is a query  language for for datastore but the  complex are joints and aggregate  operations are not supported but there's  a simple filtering is it's possible why  we chose it so back when streak was  started it was started on App Engine so  the only database offering at the time  was on Google Cloud was datastore so it  made sense to co-locate our database  with our server stack on Google Cloud  but even so we think it's an excellent  choice for if you're starting out with a  new product or service and that is  because it gives you a lot of  flexibility to evolve your schema and  what that means what data store is with  entities as I said they have different  properties you have you can have the  same properties across entities can be  completely different the number of  properties the even the data types for  the same properties can be different so  it gives you a lot of freedom to just  just build your features and evolve your  schema as you go of course the other  reason we we love datastore is it's a  managed service no ops it Auto scales  Auto replicates Google's SRS handle  availability you don't have to worry  about provisioning capacity upfront and  you just really just throw data at it  and it would just grow with your service  and so back that back then there was one  candidate and over ten years later we  have about 15 terabytes of data on  datastore all our application data is on  it and we found it to be do perform  predictably and have predictable kind of  challenges and solutions so working with  datastore so some concepts that we found  our key to to work most effectively with  datastore one is entity groups so as I  was saying your data is organized into  entities and multiple entities if they  belong to one entity group you can have  a transaction across multiple entities  so you basically want to have your most  highly correlated data in one entity  group so it can be a user profile and so  on at Streak we have the smallest unit  of work is a box so a box can have  different threads of emails notes  comments and a lot of other custom  fields  and so a boxes can be put into pipelines  which are shared across teams and the  teams belong to an organization so the  way you design your energy groups will  have consequences on throughput and  consistency so with for our case we have  four if you want to update boxes we have  our Energy Group set to organization  level which is which means we have a lot  a lower number of energy groups what  that does is so energy groups are also  units of consistency which means a query  against a energy group will always give  you strongly consistent results also  with the transaction  they will always you know your asset  transaction properties will be applied  when you're using energy groups they're  also stored all entities within an  entity group Google stores them  physically close together so your  minimal i/o reads are really fast so  when in our example with boxes when the  energy group is set to an organization  level with one query against an entity  group you get a high volume of entities  but their limit their limits on how many  entity groups  how many writes you can have per entity  group per second which is set to you can  only have one right currently in  datastore per second per entity group  and I'll talk about the consequences of  that in a second the other things that  we found useful working with datastore  as we use objectify which is a Java data  access API that that makes using  datastore really easy the example at the  bottom where you have annotations to  work with entities indexes and so on has  been really useful we use JSON and  Jackson annotations for a serialization  and deserialization then some of the  challenges as I was saying at the write  throughput rate for entity groups is  in datastore is set to one per second so  ideally you want to have really small  entity groups so that you are not  writing more than one per once per  second in our case organizations  pipelines can have hundreds and  thousands of boxes so for example if  you're trying to update multiple boxes  in our case in a pipeline then it can be  tens of thousands of writes against one  entity group so it can cause a lot of  contention and again something to keep  in mind entity group relationships are  are permanent you cannot change them  unless you delete all the entities and  recreate them in a new entity group so  that is a challenge contention as we're  growing we have larger and larger  customers that has been a big challenge  again boxes the way our schema has  evolved there's a lot of child objects  that we have with boxes and now that  they all belong to the same entity group  but transactions are limited to 500  entities per transaction so when you  have cascading rights that also becomes  kind of a performance bottleneck also  another limit to keep in mind there's  you transactions can be are limited only  to twenty-five entity groups so again  you want to figure out your key design  so that you're finding the right balance  between your consistency and throughput  and then client side views so as you saw  in the first graphic we have we present  this spreadsheet layout to your users  and we we offer complex filtering  grouping and sorting and not being able  to do that data store not providing that  out of the box we have to shift this  responsibility to the application code  which of course increases the complexity  and debugging complexity and so on so  not having joints as we as we grow  larger we really miss having all those  features  out of the box which will be which would  be part of a relational database cloud  fire store fire store is the latest  latest version of data store there's two  modes here real-time and data store mode  data store mode fire store and data  store mode is backwards compatible with  cloud data store but it doesn't have  some of the newer features that  real-time fire store has like real-time  updates there's rich mobile and web  client libraries so fire store is  supposed to be a drop-in replacement for  data store and and the migration to it  to fire store is supposed to be  automatic without any downtime so we're  really excited about that basically fire  store has a spanner back in which so  with the say it with the data store  features in the front end so you get a  strongly consistent layer in the back  end and this eliminates some of our  biggest pain points with data store one  we have strongly consistent results  throughout and the entity group  restrictions that I talked about 25  entity groups per transaction and the  write throughput limit of one per second  we don't have we don't have that with  fire store anymore we're hoping to  upgrade soon and yeah all right so we  talked about how we felt the need for a  fully relational model for our  application data and there's a new  feature that that would work we worked  on and it we call it the metadata  problem so I'm sure all of you had this  problem where somebody forgot to hit  reply all in an email and then you got  forward of that email and then now you  have a lot of redundant emails and  emails just in reverse chronological  order and it's just it's it's just not  very elegant so and also there can be  problems with permission sensitive email  that you were not supposed to receive  ends up in your inbox  so strict solution to that is having a  unified unified view of of emails across  a team so in this example you have the  top three emails were not addressed to  me but as you can see they're shared  from my co-workers inboxes so you get  kind of this elegant view of the email  and which is controlled by a permission  model so this looks really good in the  UI but on the back end it's kind of a  complex graph traversal problem so we  want to answer questions like which  which co-workers of mine have interacted  with this particular prospect over email  or for this email what are the other  emails on this thread that are not in my  inbox but in my co-workers and boxes so  the solution to that we came up with  with a graph solution where your nodes  are either a person or an email an  organization or a domain or an email  message and the the email messages are  connected if they're on the same thread  so if I emailed you and then you  forwarded the email to somebody else we  can trace those emails and give you a  unified view and then two emails are  also connected if they are if they are  the same email but they're the part of  different people's inboxes they're  connected by something that is called an  RFC ID with with Gmail so same message  but different inboxes so this this  obviously helps us to answer the  questions and create a unified view that  can be shared across a team to talk  about how we we approach this problem  solving this and the relational model  needs that friend great real quick  before I go on to our solution  I just want to yeah like build on what  are Peter was saying so this is like a  pretty challenging graph database  problem like you have to really  understand  this like sort of course of an email  thread or a course of like connected  email threads across different people's  inboxes your organization you might have  to hit hundreds of different inboxes  I'm sure you've all been on these like  horrible reply-all threads that have  like you're not just hundreds of people  on the company in the company but like  you know thousands of you know emails  one should count although it'll you know  some email chains and so there's kind of  this graph database problem but it's  also pretty challenging for a couple  reasons technically so one is you have  to be able to do all of these edge  traversals quickly you there may be a  lot of you know emails are sort of nodes  from the graph problem and as our pet I  mentioned permissions are a huge deal  right email can be really sensitive you  could have password reset emails you can  have manager giving you know targeted  feedback to a report that might not be  you know generally consumable they're  just like all these ways they can go  horribly wrong if you don't have a  strong permissions model and the kind of  what this means is we have to traverse  this graph and there's pretty there's  pretty big challenges if we try and pre  compute a lot of this stuff you know  that that's served normally the sort of  distributed systems way out is you just  like denormalize a bunch of stuff in  advance and in this case we both you  know really needed to compute it it read  time to make sure that we're getting  permissions right even if somebody just  changed some permissions and this is all  happening within the context of viewing  emails in Gmail and you know the whole  premise of Gmail is that it's really  fast people expect their emails to just  like load quickly even if they're  searching their whole inbox and we're  expanding that to like letting you  search you know parts of not just your  inbox but your everybody in your  company's inbox possibly so challenging  technical problem looking at the backend  this is actually across our entire user  base we have about 30 terabytes of just  email metadata so that's like we're not  looking at the contents of email we  don't really want to but just looking at  like who the emails from who it's to the  sort of information we need to compute  these edges  and so we evaluated a bunch of different  database products there's a lot of  graphs specific database products on the  market but we really you know all else  being equal we wanted something that had  this property where it was managed by  Google we have a very small operational  team we basically have roughly three  infrastructure engineers depending on  how you slice different people's time  and being able to offload some of that  like availability and sharding work to  Google s re really seems like a good  trade-off dummest so we looked at a  bunch of different options and we ended  up this was our first use case for cloud  spanner  so cloud spanner I think it's about a  year old at this point maybe a little  bit more but the key things about it  sort of looking at just the product in  general it is a globally consistent  relational database and so what does  that mean it supports you know the  sequel language that you you don't know  and possibly love or hate depending on  what you've done with it and it has what  I affectionately call the magic clock  thing and the magic clock is basically  you know for years and years and years  sort of there was always this sort of  introductory paragraph in every  distributed systems paper which  basically said something like we know  clocks are unreliable and go back in  time and have jumps you know and the  network's unreliable and may have you  know horrible latency and everybody just  sort of took it as a premise that you  sort of couldn't rely on clocks and they  were you know trying to lead you astray  and so the the spanner white paper that  came out a while back and now the cloud  spanner product is built on this idea of  hey what if instead of like sort of  accepting this as a premise we just made  the clocks roughly reliable and there's  like a bunch of a bunch of effort in  terms of installing in atomic clocks and  all the data centers there's a bunch of  effort in terms of like setting up the  networking and there's a bunch of effort  in terms of the statistics of like  setting error bars on timing but the  outcome of it is the cloud spanner you  know says on the tin and it's actually  true like we're using it and anger it is  globally consistent so  basically this means that you know going  back to the stuff that are patted about  with datastore you don't have to  pre-select particular entity groups you  don't have to say these are the things  that I'd like to do transactions on  beforehand you just when you go to  actually update entities it looks at  what in these you've queried and you  only have transactional conflicts if if  you are actually modifying things that  we wrought that were all so you know  queried by other queries so it's like  just a set of stuff that our actual real  transaction conflicts so you know this  is great  globally consistent sequel you know it  has you know really great transactions  and you know some of you who are sort of  thinking this through might say you know  but wait you know email itself isn't  consistent why do you care about  consistency you know I might send you an  email and you know all the time we see  emails taking you know ten minutes  thirty minutes to get delivered why do  we care about the database being  consistent and the answer is it's it  goes back to that sort of operational  ease it means that when we have our  syncing logic we can you know sync the  data we can we can build these indexes  to power these graph queries and we  don't have to worry that you know just  think it's partially committed we can  just say hey all of this should be  committed in the transaction and it just  like you know it's either all committed  or not committed and this just means  that our you know indexing pipeline  that's processing a lot of email was  basically written by you know it  basically took one engineer about half  time working on it for a month or so it  was like really for the scale of  distributed system you know when we were  planning out the work we're like hey we  probably need to you know have at least  two people on this for a quarter and  just by you know relying on the spanner  transactionality to deal with a lot of  the edge cases we were able to just like  get it out and get it you know in  customers hands much more quickly and so  building  that operational ease there's a lot of  other sort of really nice features in  that area around spanner so in a  previous life I've managed a couple of  like on premise sequel databases and  sort of all of those operational things  that just sort of fill DBAs with carer  things like adding or removing columns  adding and removing indexes both they're  like pretty easy to do and and and  they're also there's a pretty good sort  of task planner that makes sure that  even if you add and remove a bunch of  columns it doesn't interfere with your  actual transactional workload so that's  you know all pretty nice things to have  even if our underlying data isn't  necessarily super dependent on this  strong consistency and so let's you know  I've been singing its praises generally  let's talk about how it actually works  in practice so this is in the cloud  console the schema for one of our tables  in production and this table is what we  call message mailboxes and so that's if  you remember the sort of graph nodes  there were some things that are  dependent on the message itself you know  which Gmail threads and which other  messages have the same sort of message  ID header to figure it out between  inboxes but there's also stuff that's  dependent on who the message is  addressed to or who it's from or who's  on the CC list and message mailboxes has  one row per person on a message so if I  send a message to you the message the  version of the message in my inbox would  have two message mail boxes rows one for  me and one for you and key things here  so you see at the top it says that this  this table is interleaved in messages  interleaved tables is this feature in  cloud spanner that lets you sort of have  really great performance for stuff that  you know should be co-located together  and so here most of the time that we're  querying you know who's on a particular  message we also care about what message  they're on and so here we've interleaved  message mailboxes and messages and that  means  if I want to do an index filter on you  know all the messages that correspond to  a particular email address you know that  a particular email address was part of  so let's say in the street product we  want to be able to show all of your  communication with a particular Sales  Lead across the organization  I can query on mailbox email and then do  a very quick join a very performant join  with the messages table to get things  like what was the subject of that email  or like these other these other  properties that sort of if you were  doing a more traditional distributed  system you might have to denormalize and  waste a lot of space to sort of get  performant and then and so you know we  use interleaved rows a bunch we one  other interesting things so there's  you'll see these sort of weird is BCC or  is CC boolean fields at the bottom and  so that's basically saying hey is this  particular email address in the BCC line  is it in the CC line like how are they  connected to this message and the the  interesting thing there those rows  actually have two values which you might  expect from a boolean but those values  are actually true or null and so like  why are we doing this  so spanner actually has this ability to  have what are called null filtered  indexes so if you're coming from like  Postgres or I'm sure Microsoft sequel  server has the similar thing you might  be familiar with this concept of partial  indexes and there that means that we can  create an index that's just you know is  this person on the from line or are they  on the to line and it doesn't actually  use up any space for the message mailbox  rows they don't have the correspondent  boolean set to true rather than null it  filters out all the null entries so yeah  so lessons learned with cloud spanner  setting up your schema is super  important particularly if you're putting  a lot of data into it you know it's  pretty easy to build and remove  secondary indexes but you are stuck with  your primary key index like you have to  rewrite  if you're changing your primary key it's  not magic like that and it's pretty  important to just sort of play around  with the schema to figure it out  so what challenges have we run into so  far I've been like singing its praises  and yeah you know no plan survives  contact with the enemy or the database  query planner so one challenge we ran  into is actually a spanner is too smart  for its own good for our use case I  guess your your use case may vary so  spanner has a lot of things or smarts in  the query planner to balance running a  lot of small transactional queries so  this is like the kind of thing that is  probably the you know ninety percent use  case it does things like if you run a  really big query it assumes that this  must be like an analytical query or  maybe like a you know back-end bulk task  indeed it will will be prioritize that  query and make sure that that query  takes a long time to run so it doesn't  get in the way of your transactional  queries but going back to our use case  as we mentioned the you know you've all  been on these horrible huge reply-all  threads and a lot of times you know  fortunately or unfortunately those  threads are the most important because  you know they're the ones where it's  like the collaboration story it really  gets tricky and you need to be able to  share some stuff but not other stuff and  we really need those to be answerable in  sort of a short enough amount of time  that it doesn't degrade the Gmail  experience and so what we were running  into was when we did the queries to span  out to fan out on those really big  threads it was you know not overwhelming  anything else but it was taking a long  time and there wasn't really a great way  to tell the query plan or hey this query  is really important you know go ahead  and do it and we tried some experiments  with you know finding out if they need a  bunch of queries we tried some  experiments with  you're doing like a little bit of  cashing in like Redis or something like  that using cloud memory store but we  just didn't find a thing that really  delivered the user experience we wanted  so that led us to our next database that  we're gonna chat about cloud BigTable  so cloud BigTable is actually it's based  on BigTable which is like you know right  now at this point a you know very  well-established Google technology it  has it sort of has a lot less  functionality than cloud span or cloud  datastore it's really just a key value  store or a sort of key value store let's  say and basically that means that  there's really two queries you can do to  it you can query for this particular  primary key give me the value or you can  do sort of lexicographic I'll have you  put off that word range queries and it  basically say hey give me all values for  keys between a and B or a a and a B and  so there it's like a pretty limited  query interface but the trade-off you  get here is that it's really really  simple and really really fast and so  they're basically each node you add to  cloud BigTable and it's another managed  database you can just like add and  remove nodes to your heart's desire and  you pay for more nodes get more  performance when it's night time you can  just like decrease the number of nodes  and sort of not pay for what you're not  using but basically each node you add  gives you ten thousand reads or writes a  second which is a lot of reads or writes  a second and basically the queries just  look like either put some data in for  this key or read some data for this key  or set of keys there's currently two  modes the mode that we use for this just  because it's like for our use case it's  it's you know not great if the feature  is unavailable but it's not like  business ending people can still get it  their action their streak box data which  is stored safely in cloud datastore by  there's one there's one mode that is  single zone availability has the concept  of a transaction within a particular row  and then there's another mode that is  multi zone replication you forego  transactions but even if one zone goes  down which is infrequent but happens you  can just access the data in another zone  and that it'll a synchronously replicate  after the zone comes back up so yeah so  cloud BigTable not a great tool for  every job but the best tool for some  jobs and we're actually using this in  production for querying this email  metadata index and let me show you sort  of what that looks like so here we've  got the output of CBT is the cloud  BigTable console and this is our  messages table and you can see there's  this concept of a a column family which  is sort of a set of data that's stored  together and we have one column family  for sort of each of those indexes that  we need to first the graph and so  they're you know for instance I was  showing you the message mailboxes table  and so we've got one column family  that's sort of this index for looking up  message mailboxes by the domain or by  the email and then also messages are  indexed by the message ID the RFC  message ID or the thread ID which lets  us do that sort of graph traversal and  the cool thing here is the big table API  is like completely asynchronous so we  basically when we're doing this graph  query we can just have a queue that's  just as soon as information comes back  sending out the next set of fetches and  that's all pipelined and can be you know  very much like sub-second so each lookup  is about 6 milliseconds so you can do a  lot of lookups before somebody notices  the delay other things here this is very  much sort of build it yourself so the  model in BigTable is just a string of  bytes to a string of bytes and so  we had to you know figure out our own  encoding that does lexicographic  encoding the way that we want there  there's a few libraries out there  there's one called orderly there's one  there's lens it's sort of partially  factored out at the HBase library so so  there's some tooling there but you still  need to like very much figure out your  own schema in your own encoding this was  a bit more developer intensive so  definitely don't recommend reaching for  this from the get-go but it is very very  fast and it really does what it says on  the tin so you know we're using a big  table for those lookups in production  six milliseconds you can do a whole  bunch of reads all at once  and it's like providing what we need and  so then sort of at the end of the day  just wanted to summarize sort of what we  already talked about in a convenient  flow chart flow chart and so kind of the  first question I'd ask if I were  reaching for a new database is how  developed is your project schema product  sort of whatever you want to however you  want to think about it if it's if you're  still in that sort of you know finding  you know product market fit or  experimenting with the with the project  then I think either cloud datastore  cloud fire stores probably where you  want to go basically they're you know  key things here it's got very flexible  schemas you just like set up the  documents and then you can you know  index a bunch of different ways after  the fact it's very easy to work with if  you're using a cloud fire store for a  new project you can actually use it in  firestorm mode get most of the same  thing or sorry in real-time mode get  most of the same benefits that we're  talking about and get sort of being able  to send stuff directly to your mobile or  web clients so I think that they're you  know if you're still figuring that out  that's a great choice oh also cloud fire  store and cloud datastore just have a  per operation billing model so if you're  not using it you're only paying for  storage which is like pretty cheap if  you're just getting started  whereas cloud BigTable or cloud spanner  are a per node pricing model so you're  paying hourly for each node that you  have setup so if you're just sort of  it's real cheap to get started with like  cloud firestore cloud datastore and then  yeah on the difference between those two  I start to jokingly put is it 2019 or  later but yeah really  cloud firestore datastore mode is just  cloud datastore but better they've  announced that they're gonna move  everybody to cloud firestore so if  you're starting a new project just start  with cloud firestore like it's I have  trouble envisioning a case in which you  actively want to go to datastore if  you're starting a new project so yeah so  if you're more certain of the needs for  your project if this is something where  either you know you're it's a new  technology for an established company or  product or if you're you're really  really certain of like your performance  needs and you've tested it out and have  a really good idea then that's when you  should probably reach for a cloud  BigTable or cloud spanner cloud spanner  is a lot nicer to work with if it has  data types it at sequel it has these  globally consistent transactions so  generally unless you know you're gonna  need to really really optimize those  like key value lookups and sort of build  things like this horrible reply-all  thread case definitely go with cloud  spanner or we actually built out this  index entirely on clouds or this  metadata indexing system entirely on  cloud spanner to start with I'm super  happy that we did even though we ended  up moving some of the workload to a  cloud BigTable because it informed a lot  of our decisions sort of gave us more  information on the use case and then  yeah if you just like really really need  that one specific tool then cloud  BigTable is probably what you should  reach for  [Music]
+ 
+
+00:00:08.500 --> 00:00:11.330 align:start position:0%
+ 
+ 
+
+00:00:11.330 --> 00:00:13.669 align:start position:0%
+ 
+ 
+
+00:00:13.669 --> 00:00:15.279 align:start position:0%
+ 
+ 
+
+00:00:15.279 --> 00:00:18.470 align:start position:0%
+ 
+ 
+
+00:00:18.470 --> 00:00:21.050 align:start position:0%
+ 
+ 
+
+00:00:21.050 --> 00:00:24.259 align:start position:0%
+ 
+ 
+
+00:00:24.259 --> 00:00:26.359 align:start position:0%
+ 
+ 
+
+00:00:26.359 --> 00:00:28.310 align:start position:0%
+ 
+ 
+
+00:00:28.310 --> 00:00:30.589 align:start position:0%
+ 
+ 
+
+00:00:30.589 --> 00:00:32.359 align:start position:0%
+ 
+ 
+
+00:00:32.359 --> 00:00:37.190 align:start position:0%
+ 
+ 
+
+00:00:37.190 --> 00:00:39.459 align:start position:0%
+ 
+ 
+
+00:00:39.459 --> 00:00:41.720 align:start position:0%
+ 
+ 
+
+00:00:41.720 --> 00:00:43.880 align:start position:0%
+ 
+ 
+
+00:00:43.880 --> 00:00:47.150 align:start position:0%
+ 
+ 
+
+00:00:47.150 --> 00:00:49.760 align:start position:0%
+ 
+ 
+
+00:00:49.760 --> 00:00:51.650 align:start position:0%
+ 
+ 
+
+00:00:51.650 --> 00:00:53.510 align:start position:0%
+ 
+ 
+
+00:00:53.510 --> 00:00:55.100 align:start position:0%
+ 
+ 
+
+00:00:55.100 --> 00:00:56.600 align:start position:0%
+ 
+ 
+
+00:00:56.600 --> 00:00:58.340 align:start position:0%
+ 
+ 
+
+00:00:58.340 --> 00:01:01.490 align:start position:0%
+ 
+ 
+
+00:01:01.490 --> 00:01:03.290 align:start position:0%
+ 
+ 
+
+00:01:03.290 --> 00:01:05.450 align:start position:0%
+ 
+ 
+
+00:01:05.450 --> 00:01:07.880 align:start position:0%
+ 
+ 
+
+00:01:07.880 --> 00:01:09.170 align:start position:0%
+ 
+ 
+
+00:01:09.170 --> 00:01:11.510 align:start position:0%
+ 
+ 
+
+00:01:11.510 --> 00:01:14.870 align:start position:0%
+ 
+ 
+
+00:01:14.870 --> 00:01:16.910 align:start position:0%
+ 
+ 
+
+00:01:16.910 --> 00:01:18.649 align:start position:0%
+ 
+ 
+
+00:01:18.649 --> 00:01:19.880 align:start position:0%
+ 
+ 
+
+00:01:19.880 --> 00:01:22.280 align:start position:0%
+ 
+ 
+
+00:01:22.280 --> 00:01:24.320 align:start position:0%
+ 
+ 
+
+00:01:24.320 --> 00:01:27.230 align:start position:0%
+ 
+ 
+
+00:01:27.230 --> 00:01:30.140 align:start position:0%
+ 
+ 
+
+00:01:30.140 --> 00:01:33.230 align:start position:0%
+ 
+ 
+
+00:01:33.230 --> 00:01:34.999 align:start position:0%
+ 
+ 
+
+00:01:34.999 --> 00:01:38.569 align:start position:0%
+ 
+ 
+
+00:01:38.569 --> 00:01:40.640 align:start position:0%
+ 
+ 
+
+00:01:40.640 --> 00:01:41.899 align:start position:0%
+ 
+ 
+
+00:01:41.899 --> 00:01:45.980 align:start position:0%
+ 
+ 
+
+00:01:45.980 --> 00:01:48.109 align:start position:0%
+ 
+ 
+
+00:01:48.109 --> 00:01:50.030 align:start position:0%
+ 
+ 
+
+00:01:50.030 --> 00:01:52.399 align:start position:0%
+ 
+ 
+
+00:01:52.399 --> 00:01:55.700 align:start position:0%
+ 
+ 
+
+00:01:55.700 --> 00:01:57.560 align:start position:0%
+ 
+ 
+
+00:01:57.560 --> 00:01:59.780 align:start position:0%
+ 
+ 
+
+00:01:59.780 --> 00:02:01.340 align:start position:0%
+ 
+ 
+
+00:02:01.340 --> 00:02:02.749 align:start position:0%
+ 
+ 
+
+00:02:02.749 --> 00:02:04.280 align:start position:0%
+ 
+ 
+
+00:02:04.280 --> 00:02:07.010 align:start position:0%
+ 
+ 
+
+00:02:07.010 --> 00:02:10.690 align:start position:0%
+ 
+ 
+
+00:02:10.690 --> 00:02:13.369 align:start position:0%
+ 
+ 
+
+00:02:13.369 --> 00:02:13.379 align:start position:0%
+ 
+ 
+
+00:02:13.379 --> 00:02:13.580 align:start position:0%
+ 
+
+
+00:02:13.580 --> 00:02:15.199 align:start position:0%
+ 
+ 
+
+00:02:15.199 --> 00:02:16.520 align:start position:0%
+ 
+ 
+
+00:02:16.520 --> 00:02:19.250 align:start position:0%
+ 
+ 
+
+00:02:19.250 --> 00:02:21.559 align:start position:0%
+ 
+ 
+
+00:02:21.559 --> 00:02:22.940 align:start position:0%
+ 
+ 
+
+00:02:22.940 --> 00:02:24.940 align:start position:0%
+ 
+ 
+
+00:02:24.940 --> 00:02:28.250 align:start position:0%
+ 
+ 
+
+00:02:28.250 --> 00:02:29.990 align:start position:0%
+ 
+ 
+
+00:02:29.990 --> 00:02:32.780 align:start position:0%
+ 
+ 
+
+00:02:32.780 --> 00:02:34.460 align:start position:0%
+ 
+ 
+
+00:02:34.460 --> 00:02:37.250 align:start position:0%
+ 
+ 
+
+00:02:37.250 --> 00:02:39.650 align:start position:0%
+ 
+ 
+
+00:02:39.650 --> 00:02:44.690 align:start position:0%
+ 
+ 
+
+00:02:44.690 --> 00:02:47.180 align:start position:0%
+ 
+ 
+
+00:02:47.180 --> 00:02:49.069 align:start position:0%
+ 
+ 
+
+00:02:49.069 --> 00:02:53.300 align:start position:0%
+ 
+ 
+
+00:02:53.300 --> 00:02:56.839 align:start position:0%
+ 
+ 
+
+00:02:56.839 --> 00:02:59.089 align:start position:0%
+ 
+ 
+
+00:02:59.089 --> 00:03:01.430 align:start position:0%
+ 
+ 
+
+00:03:01.430 --> 00:03:04.520 align:start position:0%
+ 
+ 
+
+00:03:04.520 --> 00:03:06.380 align:start position:0%
+ 
+ 
+
+00:03:06.380 --> 00:03:11.780 align:start position:0%
+ 
+ 
+
+00:03:11.780 --> 00:03:15.680 align:start position:0%
+ 
+ 
+
+00:03:15.680 --> 00:03:18.080 align:start position:0%
+ 
+ 
+
+00:03:18.080 --> 00:03:20.870 align:start position:0%
+ 
+ 
+
+00:03:20.870 --> 00:03:22.970 align:start position:0%
+ 
+ 
+
+00:03:22.970 --> 00:03:28.629 align:start position:0%
+ 
+ 
+
+00:03:28.629 --> 00:03:31.069 align:start position:0%
+ 
+ 
+
+00:03:31.069 --> 00:03:33.559 align:start position:0%
+ 
+ 
+
+00:03:33.559 --> 00:03:35.839 align:start position:0%
+ 
+ 
+
+00:03:35.839 --> 00:03:41.059 align:start position:0%
+ 
+ 
+
+00:03:41.059 --> 00:03:43.879 align:start position:0%
+ 
+ 
+
+00:03:43.879 --> 00:03:46.370 align:start position:0%
+ 
+ 
+
+00:03:46.370 --> 00:03:49.159 align:start position:0%
+ 
+ 
+
+00:03:49.159 --> 00:03:51.370 align:start position:0%
+ 
+ 
+
+00:03:51.370 --> 00:03:51.380 align:start position:0%
+ 
+ 
+
+00:03:51.380 --> 00:03:53.120 align:start position:0%
+ 
+
+
+00:03:53.120 --> 00:03:55.490 align:start position:0%
+ 
+ 
+
+00:03:55.490 --> 00:03:58.909 align:start position:0%
+ 
+ 
+
+00:03:58.909 --> 00:04:00.800 align:start position:0%
+ 
+ 
+
+00:04:00.800 --> 00:04:03.379 align:start position:0%
+ 
+ 
+
+00:04:03.379 --> 00:04:07.580 align:start position:0%
+ 
+ 
+
+00:04:07.580 --> 00:04:09.770 align:start position:0%
+ 
+ 
+
+00:04:09.770 --> 00:04:13.120 align:start position:0%
+ 
+ 
+
+00:04:13.120 --> 00:04:15.800 align:start position:0%
+ 
+ 
+
+00:04:15.800 --> 00:04:18.800 align:start position:0%
+ 
+ 
+
+00:04:18.800 --> 00:04:21.409 align:start position:0%
+ 
+ 
+
+00:04:21.409 --> 00:04:24.670 align:start position:0%
+ 
+ 
+
+00:04:24.670 --> 00:04:27.400 align:start position:0%
+ 
+ 
+
+00:04:27.400 --> 00:04:29.740 align:start position:0%
+ 
+ 
+
+00:04:29.740 --> 00:04:32.230 align:start position:0%
+ 
+ 
+
+00:04:32.230 --> 00:04:33.880 align:start position:0%
+ 
+ 
+
+00:04:33.880 --> 00:04:37.980 align:start position:0%
+ 
+ 
+
+00:04:37.980 --> 00:04:41.170 align:start position:0%
+ 
+ 
+
+00:04:41.170 --> 00:04:43.360 align:start position:0%
+ 
+ 
+
+00:04:43.360 --> 00:04:46.540 align:start position:0%
+ 
+ 
+
+00:04:46.540 --> 00:04:48.610 align:start position:0%
+ 
+ 
+
+00:04:48.610 --> 00:04:50.140 align:start position:0%
+ 
+ 
+
+00:04:50.140 --> 00:04:52.570 align:start position:0%
+ 
+ 
+
+00:04:52.570 --> 00:04:54.580 align:start position:0%
+ 
+ 
+
+00:04:54.580 --> 00:04:57.100 align:start position:0%
+ 
+ 
+
+00:04:57.100 --> 00:05:00.070 align:start position:0%
+ 
+ 
+
+00:05:00.070 --> 00:05:03.160 align:start position:0%
+ 
+ 
+
+00:05:03.160 --> 00:05:06.760 align:start position:0%
+ 
+ 
+
+00:05:06.760 --> 00:05:09.190 align:start position:0%
+ 
+ 
+
+00:05:09.190 --> 00:05:13.090 align:start position:0%
+ 
+ 
+
+00:05:13.090 --> 00:05:16.570 align:start position:0%
+ 
+ 
+
+00:05:16.570 --> 00:05:19.290 align:start position:0%
+ 
+ 
+
+00:05:19.290 --> 00:05:22.780 align:start position:0%
+ 
+ 
+
+00:05:22.780 --> 00:05:24.160 align:start position:0%
+ 
+ 
+
+00:05:24.160 --> 00:05:28.480 align:start position:0%
+ 
+ 
+
+00:05:28.480 --> 00:05:31.900 align:start position:0%
+ 
+ 
+
+00:05:31.900 --> 00:05:34.120 align:start position:0%
+ 
+ 
+
+00:05:34.120 --> 00:05:36.400 align:start position:0%
+ 
+ 
+
+00:05:36.400 --> 00:05:40.510 align:start position:0%
+ 
+ 
+
+00:05:40.510 --> 00:05:43.990 align:start position:0%
+ 
+ 
+
+00:05:43.990 --> 00:05:49.540 align:start position:0%
+ 
+ 
+
+00:05:49.540 --> 00:05:52.480 align:start position:0%
+ 
+ 
+
+00:05:52.480 --> 00:05:56.200 align:start position:0%
+ 
+ 
+
+00:05:56.200 --> 00:05:59.680 align:start position:0%
+ 
+ 
+
+00:05:59.680 --> 00:06:02.290 align:start position:0%
+ 
+ 
+
+00:06:02.290 --> 00:06:06.850 align:start position:0%
+ 
+ 
+
+00:06:06.850 --> 00:06:10.210 align:start position:0%
+ 
+ 
+
+00:06:10.210 --> 00:06:12.820 align:start position:0%
+ 
+ 
+
+00:06:12.820 --> 00:06:16.510 align:start position:0%
+ 
+ 
+
+00:06:16.510 --> 00:06:19.990 align:start position:0%
+ 
+ 
+
+00:06:19.990 --> 00:06:22.480 align:start position:0%
+ 
+ 
+
+00:06:22.480 --> 00:06:26.200 align:start position:0%
+ 
+ 
+
+00:06:26.200 --> 00:06:28.900 align:start position:0%
+ 
+ 
+
+00:06:28.900 --> 00:06:31.180 align:start position:0%
+ 
+ 
+
+00:06:31.180 --> 00:06:33.460 align:start position:0%
+ 
+ 
+
+00:06:33.460 --> 00:06:33.470 align:start position:0%
+ 
+ 
+
+00:06:33.470 --> 00:06:34.540 align:start position:0%
+ 
+
+
+00:06:34.540 --> 00:06:39.430 align:start position:0%
+ 
+ 
+
+00:06:39.430 --> 00:06:42.280 align:start position:0%
+ 
+ 
+
+00:06:42.280 --> 00:06:45.340 align:start position:0%
+ 
+ 
+
+00:06:45.340 --> 00:06:48.130 align:start position:0%
+ 
+ 
+
+00:06:48.130 --> 00:06:50.980 align:start position:0%
+ 
+ 
+
+00:06:50.980 --> 00:06:55.000 align:start position:0%
+ 
+ 
+
+00:06:55.000 --> 00:06:57.880 align:start position:0%
+ 
+ 
+
+00:06:57.880 --> 00:07:00.400 align:start position:0%
+ 
+ 
+
+00:07:00.400 --> 00:07:03.010 align:start position:0%
+ 
+ 
+
+00:07:03.010 --> 00:07:05.470 align:start position:0%
+ 
+ 
+
+00:07:05.470 --> 00:07:08.910 align:start position:0%
+ 
+ 
+
+00:07:08.910 --> 00:07:12.940 align:start position:0%
+ 
+ 
+
+00:07:12.940 --> 00:07:15.100 align:start position:0%
+ 
+ 
+
+00:07:15.100 --> 00:07:18.790 align:start position:0%
+ 
+ 
+
+00:07:18.790 --> 00:07:21.400 align:start position:0%
+ 
+ 
+
+00:07:21.400 --> 00:07:23.560 align:start position:0%
+ 
+ 
+
+00:07:23.560 --> 00:07:25.300 align:start position:0%
+ 
+ 
+
+00:07:25.300 --> 00:07:28.210 align:start position:0%
+ 
+ 
+
+00:07:28.210 --> 00:07:30.550 align:start position:0%
+ 
+ 
+
+00:07:30.550 --> 00:07:32.050 align:start position:0%
+ 
+ 
+
+00:07:32.050 --> 00:07:36.070 align:start position:0%
+ 
+ 
+
+00:07:36.070 --> 00:07:39.370 align:start position:0%
+ 
+ 
+
+00:07:39.370 --> 00:07:42.820 align:start position:0%
+ 
+ 
+
+00:07:42.820 --> 00:07:45.010 align:start position:0%
+ 
+ 
+
+00:07:45.010 --> 00:07:48.460 align:start position:0%
+ 
+ 
+
+00:07:48.460 --> 00:07:51.670 align:start position:0%
+ 
+ 
+
+00:07:51.670 --> 00:07:55.390 align:start position:0%
+ 
+ 
+
+00:07:55.390 --> 00:07:56.740 align:start position:0%
+ 
+ 
+
+00:07:56.740 --> 00:07:58.720 align:start position:0%
+ 
+ 
+
+00:07:58.720 --> 00:08:01.780 align:start position:0%
+ 
+ 
+
+00:08:01.780 --> 00:08:03.850 align:start position:0%
+ 
+ 
+
+00:08:03.850 --> 00:08:05.530 align:start position:0%
+ 
+ 
+
+00:08:05.530 --> 00:08:08.380 align:start position:0%
+ 
+ 
+
+00:08:08.380 --> 00:08:12.340 align:start position:0%
+ 
+ 
+
+00:08:12.340 --> 00:08:14.380 align:start position:0%
+ 
+ 
+
+00:08:14.380 --> 00:08:18.430 align:start position:0%
+ 
+ 
+
+00:08:18.430 --> 00:08:22.350 align:start position:0%
+ 
+ 
+
+00:08:22.350 --> 00:08:26.020 align:start position:0%
+ 
+ 
+
+00:08:26.020 --> 00:08:28.600 align:start position:0%
+ 
+ 
+
+00:08:28.600 --> 00:08:31.570 align:start position:0%
+ 
+ 
+
+00:08:31.570 --> 00:08:33.820 align:start position:0%
+ 
+ 
+
+00:08:33.820 --> 00:08:36.370 align:start position:0%
+ 
+ 
+
+00:08:36.370 --> 00:08:41.650 align:start position:0%
+ 
+ 
+
+00:08:41.650 --> 00:08:46.150 align:start position:0%
+ 
+ 
+
+00:08:46.150 --> 00:08:48.810 align:start position:0%
+ 
+ 
+
+00:08:48.810 --> 00:08:51.720 align:start position:0%
+ 
+ 
+
+00:08:51.720 --> 00:08:54.080 align:start position:0%
+ 
+ 
+
+00:08:54.080 --> 00:08:57.810 align:start position:0%
+ 
+ 
+
+00:08:57.810 --> 00:09:00.060 align:start position:0%
+ 
+ 
+
+00:09:00.060 --> 00:09:04.260 align:start position:0%
+ 
+ 
+
+00:09:04.260 --> 00:09:05.850 align:start position:0%
+ 
+ 
+
+00:09:05.850 --> 00:09:08.010 align:start position:0%
+ 
+ 
+
+00:09:08.010 --> 00:09:10.440 align:start position:0%
+ 
+ 
+
+00:09:10.440 --> 00:09:14.190 align:start position:0%
+ 
+ 
+
+00:09:14.190 --> 00:09:16.260 align:start position:0%
+ 
+ 
+
+00:09:16.260 --> 00:09:17.940 align:start position:0%
+ 
+ 
+
+00:09:17.940 --> 00:09:21.120 align:start position:0%
+ 
+ 
+
+00:09:21.120 --> 00:09:23.330 align:start position:0%
+ 
+ 
+
+00:09:23.330 --> 00:09:25.800 align:start position:0%
+ 
+ 
+
+00:09:25.800 --> 00:09:27.990 align:start position:0%
+ 
+ 
+
+00:09:27.990 --> 00:09:31.590 align:start position:0%
+ 
+ 
+
+00:09:31.590 --> 00:09:33.870 align:start position:0%
+ 
+ 
+
+00:09:33.870 --> 00:09:35.070 align:start position:0%
+ 
+ 
+
+00:09:35.070 --> 00:09:39.740 align:start position:0%
+ 
+ 
+
+00:09:39.740 --> 00:09:44.880 align:start position:0%
+ 
+ 
+
+00:09:44.880 --> 00:09:47.520 align:start position:0%
+ 
+ 
+
+00:09:47.520 --> 00:09:51.510 align:start position:0%
+ 
+ 
+
+00:09:51.510 --> 00:09:53.010 align:start position:0%
+ 
+ 
+
+00:09:53.010 --> 00:09:56.130 align:start position:0%
+ 
+ 
+
+00:09:56.130 --> 00:09:58.230 align:start position:0%
+ 
+ 
+
+00:09:58.230 --> 00:10:00.480 align:start position:0%
+ 
+ 
+
+00:10:00.480 --> 00:10:05.340 align:start position:0%
+ 
+ 
+
+00:10:05.340 --> 00:10:06.630 align:start position:0%
+ 
+ 
+
+00:10:06.630 --> 00:10:09.390 align:start position:0%
+ 
+ 
+
+00:10:09.390 --> 00:10:11.520 align:start position:0%
+ 
+ 
+
+00:10:11.520 --> 00:10:14.010 align:start position:0%
+ 
+ 
+
+00:10:14.010 --> 00:10:15.870 align:start position:0%
+ 
+ 
+
+00:10:15.870 --> 00:10:20.450 align:start position:0%
+ 
+ 
+
+00:10:20.450 --> 00:10:25.590 align:start position:0%
+ 
+ 
+
+00:10:25.590 --> 00:10:27.630 align:start position:0%
+ 
+ 
+
+00:10:27.630 --> 00:10:29.940 align:start position:0%
+ 
+ 
+
+00:10:29.940 --> 00:10:34.980 align:start position:0%
+ 
+ 
+
+00:10:34.980 --> 00:10:38.820 align:start position:0%
+ 
+ 
+
+00:10:38.820 --> 00:10:41.610 align:start position:0%
+ 
+ 
+
+00:10:41.610 --> 00:10:44.220 align:start position:0%
+ 
+ 
+
+00:10:44.220 --> 00:10:46.530 align:start position:0%
+ 
+ 
+
+00:10:46.530 --> 00:10:48.870 align:start position:0%
+ 
+ 
+
+00:10:48.870 --> 00:10:52.770 align:start position:0%
+ 
+ 
+
+00:10:52.770 --> 00:10:56.940 align:start position:0%
+ 
+ 
+
+00:10:56.940 --> 00:11:01.110 align:start position:0%
+ 
+ 
+
+00:11:01.110 --> 00:11:01.120 align:start position:0%
+ 
+ 
+
+00:11:01.120 --> 00:11:01.769 align:start position:0%
+ 
+
+
+00:11:01.769 --> 00:11:03.540 align:start position:0%
+ 
+ 
+
+00:11:03.540 --> 00:11:09.660 align:start position:0%
+ 
+ 
+
+00:11:09.660 --> 00:11:13.199 align:start position:0%
+ 
+ 
+
+00:11:13.199 --> 00:11:17.009 align:start position:0%
+ 
+ 
+
+00:11:17.009 --> 00:11:19.499 align:start position:0%
+ 
+ 
+
+00:11:19.499 --> 00:11:22.530 align:start position:0%
+ 
+ 
+
+00:11:22.530 --> 00:11:24.900 align:start position:0%
+ 
+ 
+
+00:11:24.900 --> 00:11:27.660 align:start position:0%
+ 
+ 
+
+00:11:27.660 --> 00:11:29.600 align:start position:0%
+ 
+ 
+
+00:11:29.600 --> 00:11:33.269 align:start position:0%
+ 
+ 
+
+00:11:33.269 --> 00:11:35.579 align:start position:0%
+ 
+ 
+
+00:11:35.579 --> 00:11:39.150 align:start position:0%
+ 
+ 
+
+00:11:39.150 --> 00:11:41.970 align:start position:0%
+ 
+ 
+
+00:11:41.970 --> 00:11:46.139 align:start position:0%
+ 
+ 
+
+00:11:46.139 --> 00:11:48.350 align:start position:0%
+ 
+ 
+
+00:11:48.350 --> 00:11:51.420 align:start position:0%
+ 
+ 
+
+00:11:51.420 --> 00:11:54.720 align:start position:0%
+ 
+ 
+
+00:11:54.720 --> 00:11:56.970 align:start position:0%
+ 
+ 
+
+00:11:56.970 --> 00:11:58.350 align:start position:0%
+ 
+ 
+
+00:11:58.350 --> 00:11:59.939 align:start position:0%
+ 
+ 
+
+00:11:59.939 --> 00:12:01.590 align:start position:0%
+ 
+ 
+
+00:12:01.590 --> 00:12:04.619 align:start position:0%
+ 
+ 
+
+00:12:04.619 --> 00:12:07.079 align:start position:0%
+ 
+ 
+
+00:12:07.079 --> 00:12:09.780 align:start position:0%
+ 
+ 
+
+00:12:09.780 --> 00:12:13.079 align:start position:0%
+ 
+ 
+
+00:12:13.079 --> 00:12:15.569 align:start position:0%
+ 
+ 
+
+00:12:15.569 --> 00:12:17.819 align:start position:0%
+ 
+ 
+
+00:12:17.819 --> 00:12:20.100 align:start position:0%
+ 
+ 
+
+00:12:20.100 --> 00:12:21.869 align:start position:0%
+ 
+ 
+
+00:12:21.869 --> 00:12:24.480 align:start position:0%
+ 
+ 
+
+00:12:24.480 --> 00:12:31.920 align:start position:0%
+ 
+ 
+
+00:12:31.920 --> 00:12:34.490 align:start position:0%
+ 
+ 
+
+00:12:34.490 --> 00:12:36.540 align:start position:0%
+ 
+ 
+
+00:12:36.540 --> 00:12:38.790 align:start position:0%
+ 
+ 
+
+00:12:38.790 --> 00:12:42.299 align:start position:0%
+ 
+ 
+
+00:12:42.299 --> 00:12:45.660 align:start position:0%
+ 
+ 
+
+00:12:45.660 --> 00:12:48.990 align:start position:0%
+ 
+ 
+
+00:12:48.990 --> 00:12:52.170 align:start position:0%
+ 
+ 
+
+00:12:52.170 --> 00:12:55.499 align:start position:0%
+ 
+ 
+
+00:12:55.499 --> 00:12:58.679 align:start position:0%
+ 
+ 
+
+00:12:58.679 --> 00:13:00.780 align:start position:0%
+ 
+ 
+
+00:13:00.780 --> 00:13:02.970 align:start position:0%
+ 
+ 
+
+00:13:02.970 --> 00:13:05.939 align:start position:0%
+ 
+ 
+
+00:13:05.939 --> 00:13:09.720 align:start position:0%
+ 
+ 
+
+00:13:09.720 --> 00:13:12.090 align:start position:0%
+ 
+ 
+
+00:13:12.090 --> 00:13:13.710 align:start position:0%
+ 
+ 
+
+00:13:13.710 --> 00:13:15.500 align:start position:0%
+ 
+ 
+
+00:13:15.500 --> 00:13:19.550 align:start position:0%
+ 
+ 
+
+00:13:19.550 --> 00:13:24.019 align:start position:0%
+ 
+ 
+
+00:13:24.019 --> 00:13:26.900 align:start position:0%
+ 
+ 
+
+00:13:26.900 --> 00:13:29.629 align:start position:0%
+ 
+ 
+
+00:13:29.629 --> 00:13:31.850 align:start position:0%
+ 
+ 
+
+00:13:31.850 --> 00:13:34.850 align:start position:0%
+ 
+ 
+
+00:13:34.850 --> 00:13:37.340 align:start position:0%
+ 
+ 
+
+00:13:37.340 --> 00:13:39.410 align:start position:0%
+ 
+ 
+
+00:13:39.410 --> 00:13:43.250 align:start position:0%
+ 
+ 
+
+00:13:43.250 --> 00:13:46.850 align:start position:0%
+ 
+ 
+
+00:13:46.850 --> 00:13:51.110 align:start position:0%
+ 
+ 
+
+00:13:51.110 --> 00:13:54.889 align:start position:0%
+ 
+ 
+
+00:13:54.889 --> 00:13:58.939 align:start position:0%
+ 
+ 
+
+00:13:58.939 --> 00:14:03.170 align:start position:0%
+ 
+ 
+
+00:14:03.170 --> 00:14:07.460 align:start position:0%
+ 
+ 
+
+00:14:07.460 --> 00:14:09.230 align:start position:0%
+ 
+ 
+
+00:14:09.230 --> 00:14:12.079 align:start position:0%
+ 
+ 
+
+00:14:12.079 --> 00:14:14.900 align:start position:0%
+ 
+ 
+
+00:14:14.900 --> 00:14:19.040 align:start position:0%
+ 
+ 
+
+00:14:19.040 --> 00:14:21.579 align:start position:0%
+ 
+ 
+
+00:14:21.579 --> 00:14:25.430 align:start position:0%
+ 
+ 
+
+00:14:25.430 --> 00:14:30.019 align:start position:0%
+ 
+ 
+
+00:14:30.019 --> 00:14:32.600 align:start position:0%
+ 
+ 
+
+00:14:32.600 --> 00:14:36.050 align:start position:0%
+ 
+ 
+
+00:14:36.050 --> 00:14:37.939 align:start position:0%
+ 
+ 
+
+00:14:37.939 --> 00:14:40.250 align:start position:0%
+ 
+ 
+
+00:14:40.250 --> 00:14:42.769 align:start position:0%
+ 
+ 
+
+00:14:42.769 --> 00:14:45.710 align:start position:0%
+ 
+ 
+
+00:14:45.710 --> 00:14:47.870 align:start position:0%
+ 
+ 
+
+00:14:47.870 --> 00:14:50.030 align:start position:0%
+ 
+ 
+
+00:14:50.030 --> 00:14:52.400 align:start position:0%
+ 
+ 
+
+00:14:52.400 --> 00:14:56.000 align:start position:0%
+ 
+ 
+
+00:14:56.000 --> 00:14:58.670 align:start position:0%
+ 
+ 
+
+00:14:58.670 --> 00:15:01.189 align:start position:0%
+ 
+ 
+
+00:15:01.189 --> 00:15:05.629 align:start position:0%
+ 
+ 
+
+00:15:05.629 --> 00:15:07.639 align:start position:0%
+ 
+ 
+
+00:15:07.639 --> 00:15:10.519 align:start position:0%
+ 
+ 
+
+00:15:10.519 --> 00:15:12.290 align:start position:0%
+ 
+ 
+
+00:15:12.290 --> 00:15:17.900 align:start position:0%
+ 
+ 
+
+00:15:17.900 --> 00:15:20.600 align:start position:0%
+ 
+ 
+
+00:15:20.600 --> 00:15:22.340 align:start position:0%
+ 
+ 
+
+00:15:22.340 --> 00:15:24.679 align:start position:0%
+ 
+ 
+
+00:15:24.679 --> 00:15:26.900 align:start position:0%
+ 
+ 
+
+00:15:26.900 --> 00:15:28.610 align:start position:0%
+ 
+ 
+
+00:15:28.610 --> 00:15:28.620 align:start position:0%
+ 
+ 
+
+00:15:28.620 --> 00:15:29.390 align:start position:0%
+ 
+
+
+00:15:29.390 --> 00:15:31.370 align:start position:0%
+ 
+ 
+
+00:15:31.370 --> 00:15:33.110 align:start position:0%
+ 
+ 
+
+00:15:33.110 --> 00:15:35.030 align:start position:0%
+ 
+ 
+
+00:15:35.030 --> 00:15:37.430 align:start position:0%
+ 
+ 
+
+00:15:37.430 --> 00:15:39.680 align:start position:0%
+ 
+ 
+
+00:15:39.680 --> 00:15:41.060 align:start position:0%
+ 
+ 
+
+00:15:41.060 --> 00:15:43.190 align:start position:0%
+ 
+ 
+
+00:15:43.190 --> 00:15:45.020 align:start position:0%
+ 
+ 
+
+00:15:45.020 --> 00:15:46.850 align:start position:0%
+ 
+ 
+
+00:15:46.850 --> 00:15:49.760 align:start position:0%
+ 
+ 
+
+00:15:49.760 --> 00:15:51.350 align:start position:0%
+ 
+ 
+
+00:15:51.350 --> 00:15:56.510 align:start position:0%
+ 
+ 
+
+00:15:56.510 --> 00:15:58.340 align:start position:0%
+ 
+ 
+
+00:15:58.340 --> 00:16:00.950 align:start position:0%
+ 
+ 
+
+00:16:00.950 --> 00:16:03.800 align:start position:0%
+ 
+ 
+
+00:16:03.800 --> 00:16:05.780 align:start position:0%
+ 
+ 
+
+00:16:05.780 --> 00:16:09.830 align:start position:0%
+ 
+ 
+
+00:16:09.830 --> 00:16:11.720 align:start position:0%
+ 
+ 
+
+00:16:11.720 --> 00:16:15.500 align:start position:0%
+ 
+ 
+
+00:16:15.500 --> 00:16:17.870 align:start position:0%
+ 
+ 
+
+00:16:17.870 --> 00:16:20.120 align:start position:0%
+ 
+ 
+
+00:16:20.120 --> 00:16:22.100 align:start position:0%
+ 
+ 
+
+00:16:22.100 --> 00:16:24.860 align:start position:0%
+ 
+ 
+
+00:16:24.860 --> 00:16:27.550 align:start position:0%
+ 
+ 
+
+00:16:27.550 --> 00:16:30.290 align:start position:0%
+ 
+ 
+
+00:16:30.290 --> 00:16:31.730 align:start position:0%
+ 
+ 
+
+00:16:31.730 --> 00:16:33.350 align:start position:0%
+ 
+ 
+
+00:16:33.350 --> 00:16:36.140 align:start position:0%
+ 
+ 
+
+00:16:36.140 --> 00:16:38.570 align:start position:0%
+ 
+ 
+
+00:16:38.570 --> 00:16:42.350 align:start position:0%
+ 
+ 
+
+00:16:42.350 --> 00:16:44.090 align:start position:0%
+ 
+ 
+
+00:16:44.090 --> 00:16:45.380 align:start position:0%
+ 
+ 
+
+00:16:45.380 --> 00:16:46.880 align:start position:0%
+ 
+ 
+
+00:16:46.880 --> 00:16:48.470 align:start position:0%
+ 
+ 
+
+00:16:48.470 --> 00:16:50.120 align:start position:0%
+ 
+ 
+
+00:16:50.120 --> 00:16:52.760 align:start position:0%
+ 
+ 
+
+00:16:52.760 --> 00:16:54.380 align:start position:0%
+ 
+ 
+
+00:16:54.380 --> 00:16:56.180 align:start position:0%
+ 
+ 
+
+00:16:56.180 --> 00:16:58.070 align:start position:0%
+ 
+ 
+
+00:16:58.070 --> 00:17:01.850 align:start position:0%
+ 
+ 
+
+00:17:01.850 --> 00:17:03.410 align:start position:0%
+ 
+ 
+
+00:17:03.410 --> 00:17:05.210 align:start position:0%
+ 
+ 
+
+00:17:05.210 --> 00:17:07.040 align:start position:0%
+ 
+ 
+
+00:17:07.040 --> 00:17:09.230 align:start position:0%
+ 
+ 
+
+00:17:09.230 --> 00:17:10.820 align:start position:0%
+ 
+ 
+
+00:17:10.820 --> 00:17:12.530 align:start position:0%
+ 
+ 
+
+00:17:12.530 --> 00:17:13.850 align:start position:0%
+ 
+ 
+
+00:17:13.850 --> 00:17:16.310 align:start position:0%
+ 
+ 
+
+00:17:16.310 --> 00:17:18.140 align:start position:0%
+ 
+ 
+
+00:17:18.140 --> 00:17:21.710 align:start position:0%
+ 
+ 
+
+00:17:21.710 --> 00:17:23.980 align:start position:0%
+ 
+ 
+
+00:17:23.980 --> 00:17:27.949 align:start position:0%
+ 
+ 
+
+00:17:27.949 --> 00:17:31.910 align:start position:0%
+ 
+ 
+
+00:17:31.910 --> 00:17:33.680 align:start position:0%
+ 
+ 
+
+00:17:33.680 --> 00:17:35.150 align:start position:0%
+ 
+ 
+
+00:17:35.150 --> 00:17:37.310 align:start position:0%
+ 
+ 
+
+00:17:37.310 --> 00:17:40.280 align:start position:0%
+ 
+ 
+
+00:17:40.280 --> 00:17:41.690 align:start position:0%
+ 
+ 
+
+00:17:41.690 --> 00:17:42.739 align:start position:0%
+ 
+ 
+
+00:17:42.739 --> 00:17:44.989 align:start position:0%
+ 
+ 
+
+00:17:44.989 --> 00:17:46.940 align:start position:0%
+ 
+ 
+
+00:17:46.940 --> 00:17:49.129 align:start position:0%
+ 
+ 
+
+00:17:49.129 --> 00:17:52.399 align:start position:0%
+ 
+ 
+
+00:17:52.399 --> 00:17:54.169 align:start position:0%
+ 
+ 
+
+00:17:54.169 --> 00:17:56.570 align:start position:0%
+ 
+ 
+
+00:17:56.570 --> 00:17:58.729 align:start position:0%
+ 
+ 
+
+00:17:58.729 --> 00:18:01.279 align:start position:0%
+ 
+ 
+
+00:18:01.279 --> 00:18:02.810 align:start position:0%
+ 
+ 
+
+00:18:02.810 --> 00:18:04.299 align:start position:0%
+ 
+ 
+
+00:18:04.299 --> 00:18:06.739 align:start position:0%
+ 
+ 
+
+00:18:06.739 --> 00:18:08.659 align:start position:0%
+ 
+ 
+
+00:18:08.659 --> 00:18:12.469 align:start position:0%
+ 
+ 
+
+00:18:12.469 --> 00:18:15.049 align:start position:0%
+ 
+ 
+
+00:18:15.049 --> 00:18:17.450 align:start position:0%
+ 
+ 
+
+00:18:17.450 --> 00:18:19.820 align:start position:0%
+ 
+ 
+
+00:18:19.820 --> 00:18:19.830 align:start position:0%
+ 
+ 
+
+00:18:19.830 --> 00:18:21.109 align:start position:0%
+ 
+
+
+00:18:21.109 --> 00:18:23.210 align:start position:0%
+ 
+ 
+
+00:18:23.210 --> 00:18:25.249 align:start position:0%
+ 
+ 
+
+00:18:25.249 --> 00:18:27.979 align:start position:0%
+ 
+ 
+
+00:18:27.979 --> 00:18:29.930 align:start position:0%
+ 
+ 
+
+00:18:29.930 --> 00:18:33.259 align:start position:0%
+ 
+ 
+
+00:18:33.259 --> 00:18:35.599 align:start position:0%
+ 
+ 
+
+00:18:35.599 --> 00:18:37.879 align:start position:0%
+ 
+ 
+
+00:18:37.879 --> 00:18:40.070 align:start position:0%
+ 
+ 
+
+00:18:40.070 --> 00:18:42.379 align:start position:0%
+ 
+ 
+
+00:18:42.379 --> 00:18:46.129 align:start position:0%
+ 
+ 
+
+00:18:46.129 --> 00:18:48.529 align:start position:0%
+ 
+ 
+
+00:18:48.529 --> 00:18:52.099 align:start position:0%
+ 
+ 
+
+00:18:52.099 --> 00:18:54.649 align:start position:0%
+ 
+ 
+
+00:18:54.649 --> 00:18:56.509 align:start position:0%
+ 
+ 
+
+00:18:56.509 --> 00:18:58.489 align:start position:0%
+ 
+ 
+
+00:18:58.489 --> 00:19:00.830 align:start position:0%
+ 
+ 
+
+00:19:00.830 --> 00:19:02.570 align:start position:0%
+ 
+ 
+
+00:19:02.570 --> 00:19:05.060 align:start position:0%
+ 
+ 
+
+00:19:05.060 --> 00:19:07.190 align:start position:0%
+ 
+ 
+
+00:19:07.190 --> 00:19:09.080 align:start position:0%
+ 
+ 
+
+00:19:09.080 --> 00:19:11.690 align:start position:0%
+ 
+ 
+
+00:19:11.690 --> 00:19:14.149 align:start position:0%
+ 
+ 
+
+00:19:14.149 --> 00:19:16.399 align:start position:0%
+ 
+ 
+
+00:19:16.399 --> 00:19:18.190 align:start position:0%
+ 
+ 
+
+00:19:18.190 --> 00:19:21.560 align:start position:0%
+ 
+ 
+
+00:19:21.560 --> 00:19:23.029 align:start position:0%
+ 
+ 
+
+00:19:23.029 --> 00:19:25.099 align:start position:0%
+ 
+ 
+
+00:19:25.099 --> 00:19:27.739 align:start position:0%
+ 
+ 
+
+00:19:27.739 --> 00:19:29.599 align:start position:0%
+ 
+ 
+
+00:19:29.599 --> 00:19:31.879 align:start position:0%
+ 
+ 
+
+00:19:31.879 --> 00:19:34.009 align:start position:0%
+ 
+ 
+
+00:19:34.009 --> 00:19:35.509 align:start position:0%
+ 
+ 
+
+00:19:35.509 --> 00:19:37.129 align:start position:0%
+ 
+ 
+
+00:19:37.129 --> 00:19:38.690 align:start position:0%
+ 
+ 
+
+00:19:38.690 --> 00:19:40.639 align:start position:0%
+ 
+ 
+
+00:19:40.639 --> 00:19:42.169 align:start position:0%
+ 
+ 
+
+00:19:42.169 --> 00:19:45.169 align:start position:0%
+ 
+ 
+
+00:19:45.169 --> 00:19:48.349 align:start position:0%
+ 
+ 
+
+00:19:48.349 --> 00:19:50.269 align:start position:0%
+ 
+ 
+
+00:19:50.269 --> 00:19:53.389 align:start position:0%
+ 
+ 
+
+00:19:53.389 --> 00:19:56.630 align:start position:0%
+ 
+ 
+
+00:19:56.630 --> 00:19:58.760 align:start position:0%
+ 
+ 
+
+00:19:58.760 --> 00:20:00.920 align:start position:0%
+ 
+ 
+
+00:20:00.920 --> 00:20:03.799 align:start position:0%
+ 
+ 
+
+00:20:03.799 --> 00:20:06.440 align:start position:0%
+ 
+ 
+
+00:20:06.440 --> 00:20:08.210 align:start position:0%
+ 
+ 
+
+00:20:08.210 --> 00:20:09.590 align:start position:0%
+ 
+ 
+
+00:20:09.590 --> 00:20:11.930 align:start position:0%
+ 
+ 
+
+00:20:11.930 --> 00:20:14.060 align:start position:0%
+ 
+ 
+
+00:20:14.060 --> 00:20:16.580 align:start position:0%
+ 
+ 
+
+00:20:16.580 --> 00:20:20.120 align:start position:0%
+ 
+ 
+
+00:20:20.120 --> 00:20:22.760 align:start position:0%
+ 
+ 
+
+00:20:22.760 --> 00:20:24.440 align:start position:0%
+ 
+ 
+
+00:20:24.440 --> 00:20:26.510 align:start position:0%
+ 
+ 
+
+00:20:26.510 --> 00:20:28.490 align:start position:0%
+ 
+ 
+
+00:20:28.490 --> 00:20:33.950 align:start position:0%
+ 
+ 
+
+00:20:33.950 --> 00:20:35.150 align:start position:0%
+ 
+ 
+
+00:20:35.150 --> 00:20:39.549 align:start position:0%
+ 
+ 
+
+00:20:39.549 --> 00:20:42.260 align:start position:0%
+ 
+ 
+
+00:20:42.260 --> 00:20:44.810 align:start position:0%
+ 
+ 
+
+00:20:44.810 --> 00:20:46.700 align:start position:0%
+ 
+ 
+
+00:20:46.700 --> 00:20:49.160 align:start position:0%
+ 
+ 
+
+00:20:49.160 --> 00:20:50.480 align:start position:0%
+ 
+ 
+
+00:20:50.480 --> 00:20:53.330 align:start position:0%
+ 
+ 
+
+00:20:53.330 --> 00:20:55.910 align:start position:0%
+ 
+ 
+
+00:20:55.910 --> 00:20:58.130 align:start position:0%
+ 
+ 
+
+00:20:58.130 --> 00:21:00.110 align:start position:0%
+ 
+ 
+
+00:21:00.110 --> 00:21:01.419 align:start position:0%
+ 
+ 
+
+00:21:01.419 --> 00:21:04.010 align:start position:0%
+ 
+ 
+
+00:21:04.010 --> 00:21:05.600 align:start position:0%
+ 
+ 
+
+00:21:05.600 --> 00:21:08.090 align:start position:0%
+ 
+ 
+
+00:21:08.090 --> 00:21:12.049 align:start position:0%
+ 
+ 
+
+00:21:12.049 --> 00:21:14.299 align:start position:0%
+ 
+ 
+
+00:21:14.299 --> 00:21:17.180 align:start position:0%
+ 
+ 
+
+00:21:17.180 --> 00:21:19.880 align:start position:0%
+ 
+ 
+
+00:21:19.880 --> 00:21:21.950 align:start position:0%
+ 
+ 
+
+00:21:21.950 --> 00:21:24.830 align:start position:0%
+ 
+ 
+
+00:21:24.830 --> 00:21:28.460 align:start position:0%
+ 
+ 
+
+00:21:28.460 --> 00:21:30.919 align:start position:0%
+ 
+ 
+
+00:21:30.919 --> 00:21:33.500 align:start position:0%
+ 
+ 
+
+00:21:33.500 --> 00:21:35.660 align:start position:0%
+ 
+ 
+
+00:21:35.660 --> 00:21:38.750 align:start position:0%
+ 
+ 
+
+00:21:38.750 --> 00:21:41.330 align:start position:0%
+ 
+ 
+
+00:21:41.330 --> 00:21:44.120 align:start position:0%
+ 
+ 
+
+00:21:44.120 --> 00:21:46.760 align:start position:0%
+ 
+ 
+
+00:21:46.760 --> 00:21:48.530 align:start position:0%
+ 
+ 
+
+00:21:48.530 --> 00:21:50.840 align:start position:0%
+ 
+ 
+
+00:21:50.840 --> 00:21:52.220 align:start position:0%
+ 
+ 
+
+00:21:52.220 --> 00:21:54.350 align:start position:0%
+ 
+ 
+
+00:21:54.350 --> 00:21:56.480 align:start position:0%
+ 
+ 
+
+00:21:56.480 --> 00:21:58.340 align:start position:0%
+ 
+ 
+
+00:21:58.340 --> 00:22:00.470 align:start position:0%
+ 
+ 
+
+00:22:00.470 --> 00:22:02.600 align:start position:0%
+ 
+ 
+
+00:22:02.600 --> 00:22:04.820 align:start position:0%
+ 
+ 
+
+00:22:04.820 --> 00:22:10.070 align:start position:0%
+ 
+ 
+
+00:22:10.070 --> 00:22:10.080 align:start position:0%
+ 
+ 
+
+00:22:10.080 --> 00:22:10.400 align:start position:0%
+ 
+
+
+00:22:10.400 --> 00:22:12.350 align:start position:0%
+ 
+ 
+
+00:22:12.350 --> 00:22:14.660 align:start position:0%
+ 
+ 
+
+00:22:14.660 --> 00:22:17.630 align:start position:0%
+ 
+ 
+
+00:22:17.630 --> 00:22:19.940 align:start position:0%
+ 
+ 
+
+00:22:19.940 --> 00:22:22.550 align:start position:0%
+ 
+ 
+
+00:22:22.550 --> 00:22:24.590 align:start position:0%
+ 
+ 
+
+00:22:24.590 --> 00:22:26.810 align:start position:0%
+ 
+ 
+
+00:22:26.810 --> 00:22:29.270 align:start position:0%
+ 
+ 
+
+00:22:29.270 --> 00:22:33.080 align:start position:0%
+ 
+ 
+
+00:22:33.080 --> 00:22:37.430 align:start position:0%
+ 
+ 
+
+00:22:37.430 --> 00:22:40.340 align:start position:0%
+ 
+ 
+
+00:22:40.340 --> 00:22:43.750 align:start position:0%
+ 
+ 
+
+00:22:43.750 --> 00:22:46.040 align:start position:0%
+ 
+ 
+
+00:22:46.040 --> 00:22:47.990 align:start position:0%
+ 
+ 
+
+00:22:47.990 --> 00:22:50.780 align:start position:0%
+ 
+ 
+
+00:22:50.780 --> 00:22:53.660 align:start position:0%
+ 
+ 
+
+00:22:53.660 --> 00:22:55.550 align:start position:0%
+ 
+ 
+
+00:22:55.550 --> 00:22:58.070 align:start position:0%
+ 
+ 
+
+00:22:58.070 --> 00:23:02.780 align:start position:0%
+ 
+ 
+
+00:23:02.780 --> 00:23:04.910 align:start position:0%
+ 
+ 
+
+00:23:04.910 --> 00:23:06.560 align:start position:0%
+ 
+ 
+
+00:23:06.560 --> 00:23:10.490 align:start position:0%
+ 
+ 
+
+00:23:10.490 --> 00:23:14.090 align:start position:0%
+ 
+ 
+
+00:23:14.090 --> 00:23:17.450 align:start position:0%
+ 
+ 
+
+00:23:17.450 --> 00:23:20.120 align:start position:0%
+ 
+ 
+
+00:23:20.120 --> 00:23:21.830 align:start position:0%
+ 
+ 
+
+00:23:21.830 --> 00:23:23.090 align:start position:0%
+ 
+ 
+
+00:23:23.090 --> 00:23:25.220 align:start position:0%
+ 
+ 
+
+00:23:25.220 --> 00:23:27.950 align:start position:0%
+ 
+ 
+
+00:23:27.950 --> 00:23:29.720 align:start position:0%
+ 
+ 
+
+00:23:29.720 --> 00:23:32.330 align:start position:0%
+ 
+ 
+
+00:23:32.330 --> 00:23:34.430 align:start position:0%
+ 
+ 
+
+00:23:34.430 --> 00:23:37.340 align:start position:0%
+ 
+ 
+
+00:23:37.340 --> 00:23:39.470 align:start position:0%
+ 
+ 
+
+00:23:39.470 --> 00:23:43.070 align:start position:0%
+ 
+ 
+
+00:23:43.070 --> 00:23:46.640 align:start position:0%
+ 
+ 
+
+00:23:46.640 --> 00:23:49.430 align:start position:0%
+ 
+ 
+
+00:23:49.430 --> 00:23:51.110 align:start position:0%
+ 
+ 
+
+00:23:51.110 --> 00:23:53.600 align:start position:0%
+ 
+ 
+
+00:23:53.600 --> 00:23:57.530 align:start position:0%
+ 
+ 
+
+00:23:57.530 --> 00:23:59.750 align:start position:0%
+ 
+ 
+
+00:23:59.750 --> 00:24:02.560 align:start position:0%
+ 
+ 
+
+00:24:02.560 --> 00:24:04.730 align:start position:0%
+ 
+ 
+
+00:24:04.730 --> 00:24:07.780 align:start position:0%
+ 
+ 
+
+00:24:07.780 --> 00:24:10.070 align:start position:0%
+ 
+ 
+
+00:24:10.070 --> 00:24:11.990 align:start position:0%
+ 
+ 
+
+00:24:11.990 --> 00:24:14.030 align:start position:0%
+ 
+ 
+
+00:24:14.030 --> 00:24:17.030 align:start position:0%
+ 
+ 
+
+00:24:17.030 --> 00:24:18.800 align:start position:0%
+ 
+ 
+
+00:24:18.800 --> 00:24:21.860 align:start position:0%
+ 
+ 
+
+00:24:21.860 --> 00:24:23.750 align:start position:0%
+ 
+ 
+
+00:24:23.750 --> 00:24:23.760 align:start position:0%
+ 
+ 
+
+00:24:23.760 --> 00:24:24.560 align:start position:0%
+ 
+
+
+00:24:24.560 --> 00:24:27.860 align:start position:0%
+ 
+ 
+
+00:24:27.860 --> 00:24:29.630 align:start position:0%
+ 
+ 
+
+00:24:29.630 --> 00:24:32.450 align:start position:0%
+ 
+ 
+
+00:24:32.450 --> 00:24:34.160 align:start position:0%
+ 
+ 
+
+00:24:34.160 --> 00:24:36.200 align:start position:0%
+ 
+ 
+
+00:24:36.200 --> 00:24:38.720 align:start position:0%
+ 
+ 
+
+00:24:38.720 --> 00:24:40.880 align:start position:0%
+ 
+ 
+
+00:24:40.880 --> 00:24:43.460 align:start position:0%
+ 
+ 
+
+00:24:43.460 --> 00:24:45.710 align:start position:0%
+ 
+ 
+
+00:24:45.710 --> 00:24:48.520 align:start position:0%
+ 
+ 
+
+00:24:48.520 --> 00:24:51.260 align:start position:0%
+ 
+ 
+
+00:24:51.260 --> 00:24:53.180 align:start position:0%
+ 
+ 
+
+00:24:53.180 --> 00:24:54.740 align:start position:0%
+ 
+ 
+
+00:24:54.740 --> 00:24:56.750 align:start position:0%
+ 
+ 
+
+00:24:56.750 --> 00:24:58.850 align:start position:0%
+ 
+ 
+
+00:24:58.850 --> 00:25:00.620 align:start position:0%
+ 
+ 
+
+00:25:00.620 --> 00:25:02.750 align:start position:0%
+ 
+ 
+
+00:25:02.750 --> 00:25:08.660 align:start position:0%
+ 
+ 
+
+00:25:08.660 --> 00:25:13.760 align:start position:0%
+ 
+ 
+
+00:25:13.760 --> 00:25:15.170 align:start position:0%
+ 
+ 
+
+00:25:15.170 --> 00:25:19.280 align:start position:0%
+ 
+ 
+
+00:25:19.280 --> 00:25:23.870 align:start position:0%
+ 
+ 
+
+00:25:23.870 --> 00:25:26.600 align:start position:0%
+ 
+ 
+
+00:25:26.600 --> 00:25:29.150 align:start position:0%
+ 
+ 
+
+00:25:29.150 --> 00:25:31.280 align:start position:0%
+ 
+ 
+
+00:25:31.280 --> 00:25:34.430 align:start position:0%
+ 
+ 
+
+00:25:34.430 --> 00:25:36.230 align:start position:0%
+ 
+ 
+
+00:25:36.230 --> 00:25:39.050 align:start position:0%
+ 
+ 
+
+00:25:39.050 --> 00:25:41.180 align:start position:0%
+ 
+ 
+
+00:25:41.180 --> 00:25:44.390 align:start position:0%
+ 
+ 
+
+00:25:44.390 --> 00:25:46.070 align:start position:0%
+ 
+ 
+
+00:25:46.070 --> 00:25:48.370 align:start position:0%
+ 
+ 
+
+00:25:48.370 --> 00:25:50.420 align:start position:0%
+ 
+ 
+
+00:25:50.420 --> 00:25:51.770 align:start position:0%
+ 
+ 
+
+00:25:51.770 --> 00:25:53.870 align:start position:0%
+ 
+ 
+
+00:25:53.870 --> 00:25:55.700 align:start position:0%
+ 
+ 
+
+00:25:55.700 --> 00:25:57.230 align:start position:0%
+ 
+ 
+
+00:25:57.230 --> 00:26:00.530 align:start position:0%
+ 
+ 
+
+00:26:00.530 --> 00:26:03.050 align:start position:0%
+ 
+ 
+
+00:26:03.050 --> 00:26:07.430 align:start position:0%
+ 
+ 
+
+00:26:07.430 --> 00:26:08.870 align:start position:0%
+ 
+ 
+
+00:26:08.870 --> 00:26:11.570 align:start position:0%
+ 
+ 
+
+00:26:11.570 --> 00:26:14.330 align:start position:0%
+ 
+ 
+
+00:26:14.330 --> 00:26:17.000 align:start position:0%
+ 
+ 
+
+00:26:17.000 --> 00:26:21.560 align:start position:0%
+ 
+ 
+
+00:26:21.560 --> 00:26:23.090 align:start position:0%
+ 
+ 
+
+00:26:23.090 --> 00:26:24.680 align:start position:0%
+ 
+ 
+
+00:26:24.680 --> 00:26:25.880 align:start position:0%
+ 
+ 
+
+00:26:25.880 --> 00:26:28.280 align:start position:0%
+ 
+ 
+
+00:26:28.280 --> 00:26:29.840 align:start position:0%
+ 
+ 
+
+00:26:29.840 --> 00:26:32.240 align:start position:0%
+ 
+ 
+
+00:26:32.240 --> 00:26:36.530 align:start position:0%
+ 
+ 
+
+00:26:36.530 --> 00:26:36.540 align:start position:0%
+ 
+ 
+
+00:26:36.540 --> 00:26:37.200 align:start position:0%
+ 
+
+
+00:26:37.200 --> 00:26:38.730 align:start position:0%
+ 
+ 
+
+00:26:38.730 --> 00:26:41.790 align:start position:0%
+ 
+ 
+
+00:26:41.790 --> 00:26:43.020 align:start position:0%
+ 
+ 
+
+00:26:43.020 --> 00:26:51.330 align:start position:0%
+ 
+ 
+
+00:26:51.330 --> 00:26:53.100 align:start position:0%
+ 
+ 
+
+00:26:53.100 --> 00:26:54.410 align:start position:0%
+ 
+ 
+
+00:26:54.410 --> 00:26:57.540 align:start position:0%
+ 
+ 
+
+00:26:57.540 --> 00:27:00.090 align:start position:0%
+ 
+ 
+
+00:27:00.090 --> 00:27:04.050 align:start position:0%
+ 
+ 
+
+00:27:04.050 --> 00:27:07.140 align:start position:0%
+ 
+ 
+
+00:27:07.140 --> 00:27:09.840 align:start position:0%
+ 
+ 
+
+00:27:09.840 --> 00:27:13.020 align:start position:0%
+ 
+ 
+
+00:27:13.020 --> 00:27:18.660 align:start position:0%
+ 
+ 
+
+00:27:18.660 --> 00:27:22.410 align:start position:0%
+ 
+ 
+
+00:27:22.410 --> 00:27:24.240 align:start position:0%
+ 
+ 
+
+00:27:24.240 --> 00:27:25.890 align:start position:0%
+ 
+ 
+
+00:27:25.890 --> 00:27:27.600 align:start position:0%
+ 
+ 
+
+00:27:27.600 --> 00:27:31.950 align:start position:0%
+ 
+ 
+
+00:27:31.950 --> 00:27:34.080 align:start position:0%
+ 
+ 
+
+00:27:34.080 --> 00:27:36.270 align:start position:0%
+ 
+ 
+
+00:27:36.270 --> 00:27:39.440 align:start position:0%
+ 
+ 
+
+00:27:39.440 --> 00:27:42.780 align:start position:0%
+ 
+ 
+
+00:27:42.780 --> 00:27:44.520 align:start position:0%
+ 
+ 
+
+00:27:44.520 --> 00:27:46.560 align:start position:0%
+ 
+ 
+
+00:27:46.560 --> 00:27:47.850 align:start position:0%
+ 
+ 
+
+00:27:47.850 --> 00:27:50.300 align:start position:0%
+ 
+ 
+
+00:27:50.300 --> 00:27:54.840 align:start position:0%
+ 
+ 
+
+00:27:54.840 --> 00:27:56.550 align:start position:0%
+ 
+ 
+
+00:27:56.550 --> 00:27:59.910 align:start position:0%
+ 
+ 
+
+00:27:59.910 --> 00:28:01.890 align:start position:0%
+ 
+ 
+
+00:28:01.890 --> 00:28:05.610 align:start position:0%
+ 
+ 
+
+00:28:05.610 --> 00:28:06.900 align:start position:0%
+ 
+ 
+
+00:28:06.900 --> 00:28:08.670 align:start position:0%
+ 
+ 
+
+00:28:08.670 --> 00:28:10.290 align:start position:0%
+ 
+ 
+
+00:28:10.290 --> 00:28:12.930 align:start position:0%
+ 
+ 
+
+00:28:12.930 --> 00:28:17.390 align:start position:0%
+ 
+ 
+
+00:28:17.390 --> 00:28:21.120 align:start position:0%
+ 
+ 
+
+00:28:21.120 --> 00:28:22.980 align:start position:0%
+ 
+ 
+
+00:28:22.980 --> 00:28:26.610 align:start position:0%
+ 
+ 
+
+00:28:26.610 --> 00:28:28.980 align:start position:0%
+ 
+ 
+
+00:28:28.980 --> 00:28:31.080 align:start position:0%
+ 
+ 
+
+00:28:31.080 --> 00:28:34.350 align:start position:0%
+ 
+ 
+
+00:28:34.350 --> 00:28:35.910 align:start position:0%
+ 
+ 
+
+00:28:35.910 --> 00:28:37.680 align:start position:0%
+ 
+ 
+
+00:28:37.680 --> 00:28:40.830 align:start position:0%
+ 
+ 
+
+00:28:40.830 --> 00:28:43.080 align:start position:0%
+ 
+ 
+
+00:28:43.080 --> 00:28:44.790 align:start position:0%
+ 
+ 
+
+00:28:44.790 --> 00:28:47.160 align:start position:0%
+ 
+ 
+
+00:28:47.160 --> 00:28:48.930 align:start position:0%
+ 
+ 
+
+00:28:48.930 --> 00:28:50.530 align:start position:0%
+ 
+ 
+
+00:28:50.530 --> 00:28:51.580 align:start position:0%
+ 
+ 
+
+00:28:51.580 --> 00:28:54.850 align:start position:0%
+ 
+ 
+
+00:28:54.850 --> 00:28:58.750 align:start position:0%
+ 
+ 
+
+00:28:58.750 --> 00:29:00.100 align:start position:0%
+ 
+ 
+
+00:29:00.100 --> 00:29:03.810 align:start position:0%
+ 
+ 
+
+00:29:03.810 --> 00:29:06.909 align:start position:0%
+ 
+ 
+
+00:29:06.909 --> 00:29:09.970 align:start position:0%
+ 
+ 
+
+00:29:09.970 --> 00:29:13.659 align:start position:0%
+ 
+ 
+
+00:29:13.659 --> 00:29:15.820 align:start position:0%
+ 
+ 
+
+00:29:15.820 --> 00:29:18.130 align:start position:0%
+ 
+ 
+
+00:29:18.130 --> 00:29:21.159 align:start position:0%
+ 
+ 
+
+00:29:21.159 --> 00:29:24.570 align:start position:0%
+ 
+ 
+
+00:29:24.570 --> 00:29:27.460 align:start position:0%
+ 
+ 
+
+00:29:27.460 --> 00:29:29.980 align:start position:0%
+ 
+ 
+
+00:29:29.980 --> 00:29:31.930 align:start position:0%
+ 
+ 
+
+00:29:31.930 --> 00:29:34.330 align:start position:0%
+ 
+ 
+
+00:29:34.330 --> 00:29:36.039 align:start position:0%
+ 
+ 
+
+00:29:36.039 --> 00:29:39.190 align:start position:0%
+ 
+ 
+
+00:29:39.190 --> 00:29:42.070 align:start position:0%
+ 
+ 
+
+00:29:42.070 --> 00:29:45.460 align:start position:0%
+ 
+ 
+
+00:29:45.460 --> 00:29:49.810 align:start position:0%
+ 
+ 
+
+00:29:49.810 --> 00:29:52.000 align:start position:0%
+ 
+ 
+
+00:29:52.000 --> 00:29:57.010 align:start position:0%
+ 
+ 
+
+00:29:57.010 --> 00:29:58.659 align:start position:0%
+ 
+ 
+
+00:29:58.659 --> 00:30:01.570 align:start position:0%
+ 
+ 
+
+00:30:01.570 --> 00:30:04.630 align:start position:0%
+ 
+ 
+
+00:30:04.630 --> 00:30:08.140 align:start position:0%
+ 
+ 
+
+00:30:08.140 --> 00:30:10.480 align:start position:0%
+ 
+ 
+
+00:30:10.480 --> 00:30:12.280 align:start position:0%
+ 
+ 
+
+00:30:12.280 --> 00:30:13.930 align:start position:0%
+ 
+ 
+
+00:30:13.930 --> 00:30:16.270 align:start position:0%
+ 
+ 
+
+00:30:16.270 --> 00:30:17.830 align:start position:0%
+ 
+ 
+
+00:30:17.830 --> 00:30:20.530 align:start position:0%
+ 
+ 
+
+00:30:20.530 --> 00:30:22.060 align:start position:0%
+ 
+ 
+
+00:30:22.060 --> 00:30:24.850 align:start position:0%
+ 
+ 
+
+00:30:24.850 --> 00:30:28.600 align:start position:0%
+ 
+ 
+
+00:30:28.600 --> 00:30:31.270 align:start position:0%
+ 
+ 
+
+00:30:31.270 --> 00:30:33.100 align:start position:0%
+ 
+ 
+
+00:30:33.100 --> 00:30:36.370 align:start position:0%
+ 
+ 
+
+00:30:36.370 --> 00:30:39.100 align:start position:0%
+ 
+ 
+
+00:30:39.100 --> 00:30:41.470 align:start position:0%
+ 
+ 
+
+00:30:41.470 --> 00:30:44.890 align:start position:0%
+ 
+ 
+
+00:30:44.890 --> 00:30:49.000 align:start position:0%
+ 
+ 
+
+00:30:49.000 --> 00:30:50.860 align:start position:0%
+ 
+ 
+
+00:30:50.860 --> 00:30:53.740 align:start position:0%
+ 
+ 
+
+00:30:53.740 --> 00:30:55.299 align:start position:0%
+ 
+ 
+
+00:30:55.299 --> 00:30:57.640 align:start position:0%
+ 
+ 
+
+00:30:57.640 --> 00:31:00.130 align:start position:0%
+ 
+ 
+
+00:31:00.130 --> 00:31:04.620 align:start position:0%
+ 
+ 
+
+00:31:04.620 --> 00:31:06.540 align:start position:0%
+ 
+ 
+
+00:31:06.540 --> 00:31:08.790 align:start position:0%
+ 
+ 
+
+00:31:08.790 --> 00:31:10.880 align:start position:0%
+ 
+ 
+
+00:31:10.880 --> 00:31:13.140 align:start position:0%
+ 
+ 
+
+00:31:13.140 --> 00:31:15.270 align:start position:0%
+ 
+ 
+
+00:31:15.270 --> 00:31:17.910 align:start position:0%
+ 
+ 
+
+00:31:17.910 --> 00:31:21.150 align:start position:0%
+ 
+ 
+
+00:31:21.150 --> 00:31:24.600 align:start position:0%
+ 
+ 
+
+00:31:24.600 --> 00:31:26.730 align:start position:0%
+ 
+ 
+
+00:31:26.730 --> 00:31:30.630 align:start position:0%
+ 
+ 
+
+00:31:30.630 --> 00:31:33.330 align:start position:0%
+ 
+ 
+
+00:31:33.330 --> 00:31:35.220 align:start position:0%
+ 
+ 
+
+00:31:35.220 --> 00:31:36.870 align:start position:0%
+ 
+ 
+
+00:31:36.870 --> 00:31:40.380 align:start position:0%
+ 
+ 
+
+00:31:40.380 --> 00:31:43.140 align:start position:0%
+ 
+ 
+
+00:31:43.140 --> 00:31:47.400 align:start position:0%
+ 
+ 
+
+00:31:47.400 --> 00:31:50.400 align:start position:0%
+ 
+ 
+
+00:31:50.400 --> 00:31:56.090 align:start position:0%
+ 
+ 
+
+00:31:56.090 --> 00:31:59.490 align:start position:0%
+ 
+ 
+
+00:31:59.490 --> 00:32:05.430 align:start position:0%
+ 
+ 
+
+00:32:05.430 --> 00:32:06.750 align:start position:0%
+ 
+ 
+
+00:32:06.750 --> 00:32:10.290 align:start position:0%
+ 
+ 
+
+00:32:10.290 --> 00:32:12.480 align:start position:0%
+ 
+ 
+
+00:32:12.480 --> 00:32:15.270 align:start position:0%
+ 
+ 
+
+00:32:15.270 --> 00:32:17.310 align:start position:0%
+ 
+ 
+
+00:32:17.310 --> 00:32:18.960 align:start position:0%
+ 
+ 
+
+00:32:18.960 --> 00:32:21.360 align:start position:0%
+ 
+ 
+
+00:32:21.360 --> 00:32:24.600 align:start position:0%
+ 
+ 
+
+00:32:24.600 --> 00:32:27.450 align:start position:0%
+ 
+ 
+
+00:32:27.450 --> 00:32:30.750 align:start position:0%
+ 
+ 
+
+00:32:30.750 --> 00:32:32.700 align:start position:0%
+ 
+ 
+
+00:32:32.700 --> 00:32:34.620 align:start position:0%
+ 
+ 
+
+00:32:34.620 --> 00:32:37.230 align:start position:0%
+ 
+ 
+
+00:32:37.230 --> 00:32:40.320 align:start position:0%
+ 
+ 
+
+00:32:40.320 --> 00:32:42.540 align:start position:0%
+ 
+ 
+
+00:32:42.540 --> 00:32:44.310 align:start position:0%
+ 
+ 
+
+00:32:44.310 --> 00:32:46.710 align:start position:0%
+ 
+ 
+
+00:32:46.710 --> 00:32:48.690 align:start position:0%
+ 
+ 
+
+00:32:48.690 --> 00:32:51.390 align:start position:0%
+ 
+ 
+
+00:32:51.390 --> 00:32:53.550 align:start position:0%
+ 
+ 
+
+00:32:53.550 --> 00:32:57.330 align:start position:0%
+ 
+ 
+
+00:32:57.330 --> 00:32:59.640 align:start position:0%
+ 
+ 
+
+00:32:59.640 --> 00:33:01.410 align:start position:0%
+ 
+ 
+
+00:33:01.410 --> 00:33:06.510 align:start position:0%
+ 
+ 
+
+00:33:06.510 --> 00:33:09.510 align:start position:0%
+ 
+ 
+
+00:33:09.510 --> 00:33:13.350 align:start position:0%
+ 
+ 
+
+00:33:13.350 --> 00:33:17.550 align:start position:0%
+ 
+ 
+
+00:33:17.550 --> 00:33:18.930 align:start position:0%
+ 
+ 
+
+00:33:18.930 --> 00:33:21.210 align:start position:0%
+ 
+ 
+
+00:33:21.210 --> 00:33:23.790 align:start position:0%
+ 
+ 
+
+00:33:23.790 --> 00:33:24.840 align:start position:0%
+ 
+ 
+
+00:33:24.840 --> 00:33:28.260 align:start position:0%
+ 
+ 
+
+00:33:28.260 --> 00:33:30.660 align:start position:0%
+ 
+ 
+
+00:33:30.660 --> 00:33:34.320 align:start position:0%
+ 
+ 
+
+00:33:34.320 --> 00:33:35.520 align:start position:0%
+ 
+ 
+
+00:33:35.520 --> 00:33:37.350 align:start position:0%
+ 
+ 
+
+00:33:37.350 --> 00:33:40.140 align:start position:0%
+ 
+ 
+
+00:33:40.140 --> 00:33:43.260 align:start position:0%
+ 
+ 
+
+00:33:43.260 --> 00:33:45.150 align:start position:0%
+ 
+ 
+
+00:33:45.150 --> 00:33:48.480 align:start position:0%
+ 
+ 
+
+00:33:48.480 --> 00:33:50.160 align:start position:0%
+ 
+ 
+
+00:33:50.160 --> 00:33:52.680 align:start position:0%
+ 
+ 
+
+00:33:52.680 --> 00:33:54.030 align:start position:0%
+ 
+ 
+
+00:33:54.030 --> 00:33:55.920 align:start position:0%
+ 
+ 
+
+00:33:55.920 --> 00:33:58.440 align:start position:0%
+ 
+ 
+
+00:33:58.440 --> 00:34:01.530 align:start position:0%
+ 
+ 
+
+00:34:01.530 --> 00:34:03.360 align:start position:0%
+ 
+ 
+
+00:34:03.360 --> 00:34:05.760 align:start position:0%
+ 
+ 
+
+00:34:05.760 --> 00:34:07.380 align:start position:0%
+ 
+ 
+
+00:34:07.380 --> 00:34:10.800 align:start position:0%
+ 
+ 
+
+00:34:10.800 --> 00:34:12.060 align:start position:0%
+ 
+ 
+
+00:34:12.060 --> 00:34:15.090 align:start position:0%
+ 
+ 
+
+00:34:15.090 --> 00:34:18.090 align:start position:0%
+ 
+ 
+
+00:34:18.090 --> 00:34:19.890 align:start position:0%
+ 
+ 
+
+00:34:19.890 --> 00:34:23.340 align:start position:0%
+ 
+ 
+
+00:34:23.340 --> 00:34:24.659 align:start position:0%
+ 
+ 
+
+00:34:24.659 --> 00:34:26.430 align:start position:0%
+ 
+ 
+
+00:34:26.430 --> 00:34:28.760 align:start position:0%
+ 
+ 
+
+00:34:28.760 --> 00:34:31.200 align:start position:0%
+ 
+ 
+
+00:34:31.200 --> 00:34:32.940 align:start position:0%
+ 
+ 
+
+00:34:32.940 --> 00:34:36.659 align:start position:0%
+ 
+ 
+
+00:34:36.659 --> 00:34:39.000 align:start position:0%
+ 
+ 
+
+00:34:39.000 --> 00:34:41.100 align:start position:0%
+ 
+ 
+
+00:34:41.100 --> 00:34:44.190 align:start position:0%
+ 
+ 
+
+00:34:44.190 --> 00:34:45.540 align:start position:0%
+ 
+ 
+
+00:34:45.540 --> 00:34:48.870 align:start position:0%
+ 
+ 
+
+00:34:48.870 --> 00:34:52.080 align:start position:0%
+ 
+ 
+
+00:34:52.080 --> 00:34:53.580 align:start position:0%
+ 
+ 
+
+00:34:53.580 --> 00:34:55.110 align:start position:0%
+ 
+ 
+
+00:34:55.110 --> 00:34:58.140 align:start position:0%
+ 
+ 
+
+00:34:58.140 --> 00:34:59.280 align:start position:0%
+ 
+ 
+
+00:34:59.280 --> 00:35:01.830 align:start position:0%
+ 
+ 
+
+00:35:01.830 --> 00:35:04.440 align:start position:0%
+ 
+ 
+
+00:35:04.440 --> 00:35:08.790 align:start position:0%
+ 
+ 
+
+00:35:08.790 --> 00:35:10.230 align:start position:0%
+ 
+ 
+
+00:35:10.230 --> 00:35:13.290 align:start position:0%
+ 
+ 
+
+00:35:13.290 --> 00:35:14.820 align:start position:0%
+ 
+ 
+
+00:35:14.820 --> 00:35:17.730 align:start position:0%
+ 
+ 
+
+00:35:17.730 --> 00:35:19.530 align:start position:0%
+ 
+ 
+
+00:35:19.530 --> 00:35:21.120 align:start position:0%
+ 
+ 
+
+00:35:21.120 --> 00:35:22.830 align:start position:0%
+ 
+ 
+
+00:35:22.830 --> 00:35:24.660 align:start position:0%
+ 
+ 
+
+00:35:24.660 --> 00:35:27.150 align:start position:0%
+ 
+ 
+
+00:35:27.150 --> 00:35:28.920 align:start position:0%
+ 
+ 
+
+00:35:28.920 --> 00:35:31.390 align:start position:0%
+ 
+ 
+
+00:35:31.390 --> 00:35:33.430 align:start position:0%
+ 
+ 
+
+00:35:33.430 --> 00:35:36.489 align:start position:0%
+ 
+ 
+
+00:35:36.489 --> 00:35:38.049 align:start position:0%
+ 
+ 
+
+00:35:38.049 --> 00:35:40.569 align:start position:0%
+ 
+ 
+
+00:35:40.569 --> 00:35:42.789 align:start position:0%
+ 
+ 
+
+00:35:42.789 --> 00:35:44.460 align:start position:0%
+ 
+ 
+
+00:35:44.460 --> 00:35:47.019 align:start position:0%
+ 
+ 
+
+00:35:47.019 --> 00:35:47.950 align:start position:0%
+ 
+ 
+
+00:35:47.950 --> 00:35:50.529 align:start position:0%
+ 
+ 
+
+00:35:50.529 --> 00:35:52.239 align:start position:0%
+ 
+ 
+
+00:35:52.239 --> 00:35:56.049 align:start position:0%
+ 
+ 
+
+00:35:56.049 --> 00:35:58.809 align:start position:0%
+ 
+ 
+
+00:35:58.809 --> 00:36:00.940 align:start position:0%
+ 
+ 
+
+00:36:00.940 --> 00:36:05.259 align:start position:0%
+ 
+ 
+
+00:36:05.259 --> 00:36:07.210 align:start position:0%
+ 
+ 
+
+00:36:07.210 --> 00:36:08.650 align:start position:0%
+ 
+ 
+
+00:36:08.650 --> 00:36:10.749 align:start position:0%
+ 
+ 
+
+00:36:10.749 --> 00:36:13.180 align:start position:0%
+ 
+ 
+
+00:36:13.180 --> 00:36:17.559 align:start position:0%
+ 
+ 
+
+00:36:17.559 --> 00:36:19.480 align:start position:0%
+ 
+ 
+
+00:36:19.480 --> 00:36:22.120 align:start position:0%
+ 
+ 
+
+00:36:22.120 --> 00:36:24.009 align:start position:0%
+ 
+ 
+
+00:36:24.009 --> 00:36:25.359 align:start position:0%
+ 
+ 
+
+00:36:25.359 --> 00:36:28.150 align:start position:0%
+ 
+ 
+
+00:36:28.150 --> 00:36:30.160 align:start position:0%
+ 
+ 
+
+00:36:30.160 --> 00:36:32.200 align:start position:0%
+ 
+ 
+
+00:36:32.200 --> 00:36:35.099 align:start position:0%
+ 
+ 
+
+00:36:35.099 --> 00:36:37.779 align:start position:0%
+ 
+ 
+
+00:36:37.779 --> 00:36:40.120 align:start position:0%
+ 
+ 
+
+00:36:40.120 --> 00:36:41.950 align:start position:0%
+ 
+ 
+
+00:36:41.950 --> 00:36:43.870 align:start position:0%
+ 
+ 
+
+00:36:43.870 --> 00:36:46.930 align:start position:0%
+ 
+ 
+
+00:36:46.930 --> 00:36:48.549 align:start position:0%
+ 
+ 
+
+00:36:48.549 --> 00:36:50.410 align:start position:0%
+ 
+ 
+
+00:36:50.410 --> 00:36:53.680 align:start position:0%
+ 
+ 
+
+00:36:53.680 --> 00:36:55.809 align:start position:0%
+ 
+ 
+
+00:36:55.809 --> 00:36:57.430 align:start position:0%
+ 
+ 
+
+00:36:57.430 --> 00:36:59.289 align:start position:0%
+ 
+ 
+
+00:36:59.289 --> 00:37:01.569 align:start position:0%
+ 
+ 
+
+00:37:01.569 --> 00:37:03.670 align:start position:0%
+ 
+ 
+
+00:37:03.670 --> 00:37:06.489 align:start position:0%
+ 
+ 
+
+00:37:06.489 --> 00:37:07.960 align:start position:0%
+ 
+ 
+
+00:37:07.960 --> 00:37:10.539 align:start position:0%
+ 
+ 
+
+00:37:10.539 --> 00:37:12.789 align:start position:0%
+ 
+ 
+
+00:37:12.789 --> 00:37:17.710 align:start position:0%
+ 
+ 
+
+00:37:17.710 --> 00:37:17.720 align:start position:0%
+ 
+ 
+
+00:37:17.720 --> 00:37:35.639 align:start position:0%
+ 
+
+

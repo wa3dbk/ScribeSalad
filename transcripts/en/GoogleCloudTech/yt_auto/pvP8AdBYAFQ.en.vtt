@@ -1,0 +1,3580 @@
+WEBVTT
+Kind: captions
+Language: en
+
+00:00:00.340 --> 00:00:06.340 align:start position:0%
+ 
+[Music]  lightweight fast highly available this  is how serverless is often described  insult true but making your solution  reliable and performance depends also on  you  hi I'm Slovak I work as a software  engineer in the cloud functions team at  Google and together with my colleague  Marek we'll talk about ways to build  solid production systems with cloud  functions now cloud functions is an  event-driven serverless compute platform  someone or something generates an event  and your code your function is executed  as a result of it this is pretty much  the simplest way to run your code in the  cloud there are no servers to be  provisioned managed patched or updated  you pay only Wyler code runs you can  connect and extend multiple cloud  services and finally cloud functions  automatically scale are highly available  and fault tolerant but does it mean that  all your potential problems with  availability and performance are  automatically resolved the answer is not  completely as you can still apply  multiple best practices to build a  robust system and we're going to talk  about them in this talk first we'll  cover reliability improvements then  we'll move on to performance  optimizations and additionally we will  also discuss observability which is  important when you want to know what is  going on with your system let's start  with talking over reliability  improvements through making your cloud  function retrial and idempotent we first  need to realize that in distributed  systems failures happen  in fact they are an inherent part of  such systems as it's practically  impossible to build a solid production  system or any complex system in which  errors do not occur at all the only way  we can handle them is to make sure that  we handle the errors graceful and cloud  platform actually provides significant  help in handling such errors it is  actually one of the big benefits of  using cloud and serverless solutions  however your software still needs to be  prepared for error scenarios if we think  about who ensures reliability of your  software running in the cloud we realize  that reliability must be a shared goal  across cloud platform and your solution  when you use a Google cloud service  Google takes care of its reliability for  example when you call a cloud vision API  Google makes sure that the service is  available and can handle your requests  when you upload a file to the cloud  storage Google make sure it's persisted  using replication under the hood when  you create your service in the cloud  Google still helps you build a robust  system but you are in control of its  overall reliability for example your  function may fail if it includes a bug a  call to your other service may also fail  if that service returns an error or is  flaky how to ensure reliability of your  cloud function as we already know  functions are good for processing events  in particular they're a great tool when  connecting different services for  example when processing the incoming  data and upload it uploading it to a  storage system in the success scenario  everything works the data is processed  and then persisted for example in a  database  but what if an error occurs in this  process your function may run out of  memory and network connectivity issue  may happen you may get an error response  from the service on which you depend all  these issues may potentially result in  data loss if the data doesn't make it to  its destination how to handle problems  like this retries are an important  strategy here in a distributed system it  is normal that the services on which  your function depends are not always  100% available as a result your function  may fail occasionally  the simplest way to handle failures in  serverless  is to retry function executions however  you should not force your users to retry  requests to your system but instead use  you should configure your system to  perform retrace automatically when  needed cult functions come into distinct  variants HTTP functions are invoked by  standard HTTP requests which wait for  HTTP response from the function  background functions are invoked by  events events from the clouds like  messages on a cloud pub/sub topic or  changes in a cloud storage bucket all  functions are known are normally invoked  once for an event unless an error occurs  and here is where the two variants of  cloud functions offer different  execution guarantees HTTP functions are  executed at most once due to their  synchronous nature this means that the  calls are not retried by cloud functions  and it is the caller who must handle any  errors and if you think about it the  caller should handle the errors anyway  as the request might not even reach  Google's infrastructure on the other  hand background functions are executed  at least once  as asynchronous function executions  triggered by events can be retried by  cloud functions as there is no caller  who could do it otherwise let's look at  some examples this is an HTTP function  which calls another service to upload  payload from the HTTP requests it simply  sends a post request to that service  easy right the problem is that the call  to the other service may fail for  whatever reason for example network  connectivity issue and this would result  in the function failure and if the  function isn't retried then the data may  be dropped on the floor in case of HTTP  functions the call should be reached  right by the caller so you can change  your colors code to either implement  your own retry logic or use an existing  library or a module that can perform  retries for you for example in this case  the promised retry module retries the  calls to - cloud function because we  returned the the request promise  inside inside the promised retry call  this is a simple background function it  also uploads data to another system  this time it extracts the contents from  the cloud pub/sub message payload  similar problem here if the dependent  service fails the function will fail  because we returned the promise as the  function result in case of background  functions retries should be configured  on function deployment either through  cloud SDK or cloud console by enabling  the retry on failure option  this way your function will be retried  until it succeeds the first three try  happen almost immediately after first  function execution the next three tries  follow the exponential back-off policy  kept at ten seconds and they happen for  up to seven days if your function keeps  failing however you should be careful  with using this option because it will  retry your function on any error also if  it is caused by a bug or some unexpected  input data so if you use this option you  should return errors from your function  only on transient issues and preferably  handle the permanent problems inside the  functions completely so in general there  are multiple places to apply retrace as  we saw you can retry calls to an HTTP  function you can configure it tries over  background functions you can also retry  calls to dependent systems from inside  the function for example by configuring  the client libraries that you use you  can search for what options they offer  or you can write custom code and finally  as already mentioned persistent errors  should be distinguished from transient  failures and three tried retrace should  be applied only on the latter ones let's  look at a bit more complex example now  here's a function which processes the  data and writes it to two storage  systems first to the upper one and then  to the lower one the problem is as you  might expect that any of the uploads may  fail  for example let's assume that they  upload to the second storage failed well  in this case the data would not be saved  in the storage but we know how to handle  this right apply retrace but our retrace  always save  for example here if we apply retrace the  second function execution will result in  storing the data in the second storage  assuming that the upload succeeds this  time however the first storage will  receive a duplicate because they upload  to the first storage will be retried and  duplicates introduce consistency  inconsistencies they are not good so we  don't want them can we do anything to  prepare the function for each write  executions to avoid issues like data  duplication the answer is yes and the  concept of idempotency comes in handy  here a function is considered  idempotence if an event results in the  desired outcome and side-effects even if  the function is invoked multiple times  for the same event  so making a function idempotent is  actually required to behave to make it  behave correctly on rich right execution  attempts let's look at an Oneida patan  function first this function uploads the  received contents to fire store first  and then it uploads the same contents to  another service by sending a post  request one potential problem here is  that if the upload to the fire store  succeeds and the upload to the other  service fails and the function is  retried another document with the same  contents will be added to fire store so  have a duplicate which can also be seen  in the fire store database viewer but  this may also happen if the fire store  was replaced with another system and we  as we know we don't want duplicate they  may introduce further inconsistencies  they may cause accounting problems the  users may be confused they are not good  to solve this problem we'll use event ID  this is a number which uniquely  identifies each event and what is  important here is that even if the  function execution is retried for the  same event the event ID itself remains  unchanged  how do we use it in our code we first  extract the event ID from the event  context and then we use it as a Fire's  as the firestore document ID this way if  the function is retried it will not add  a duplicate object to firestore a  duplicate document instead it will  overwrite the existing document which  exists under the same event ID with the  same contents anyway  similarly some other systems also  support so-called idempotency keys and  if the system that you use supports them  you can use event ID as the idempotency  key as a result we no longer observe  duplicates and the firestore and  similarly we wouldn't observe duplicates  in other systems to which we passed  event ID as the idempotency key but what  if the system on which we depends does  not support item fantasy here is an  example this is a function which uses  SendGrid the email delivery service to  send an email from the function the  problem is that the sent call is not  idempotent what can we do about it we  can record event IDs this is the general  approach here we use a database like  fire store in this example but other  database could work as well to store the  already handled event IDs and then when  the requests come before we enter the  non-id bottle section of the code so the  one which sends an email and if it was  retried it could result in duplicate  emails being sent in this section we  first check  by querying firestar where whether the  events was handled and if it was not we  execute the non-id button section and  then store the event ID as handled in  the firestore database this way the  chance of unwanted retried calls to the  other service of the duplicate emails  being sent are greatly reduced however  there is still small chance that if the  function attempts are executed  concurrently a duplicate emails may  still be sent to practically resolve  this issue we can use the LEAs mechanism  it allows us to get an exclusive access  to the non-id upon a section of the code  for the specific amount of time in this  example the first attempt gets the lease  before it enters the critical section  the one that sends the email the second  attempt which happens while the least  icon is actually rejected because it  cannot get the lease and finally the  third attempt which happens after the  first attempt failed takes the lease  again and eventually succeeds with  handling the event how do we apply this  approach to our code we use a fire start  transaction and this time it's not only  checks whether the given event has been  handled but it also saves the timestamp  until which the current function  execution has exclusive access to the  critical section again the one which  sends the email if another request comes  before this timestamp I mean another  retry of the same function it will be  rejected so no concurrent code execution  will happen and with this approach  applied we practically eliminated the  unwanted retries  so to summarize there are multiple ways  to make your function idempotent you can  ensure that your mutations can happen  more than once without changing the  outcome you can record which event IDs  have already been processed you can  query database state in the transaction  before mutating the state you can also  supply other policy keys when calling  API switch supported which support them  and finally you can also clean up  duplicates out-of-band through an  offline process if that approach is fine  in your world in your workflow  alright so to see retries and Ida policy  in action I will demonstrate a simple  order processing system for my fake  restaurant called kale pizza how does it  look like going from the left side of  the diagram there is a website through  which customers can create orders the  website invokes one cloud function which  publishes a message to cloud pub/sub  topic then there is another function  which is triggered on messages from this  topic and does three things first it  calls another service represented by  another function which chooses the cook  who's going to handle the given order  then it stores the order together with  the selected cook in the fire store  database and then it calls yet another  service yet another function which  triggers meal preparation and finally  the restaurant has a website which  simply syncs with the firestore database  to view the incoming orders alright so  let's see this in action  okay so I will click start right away  and here we have this two website so one  is the client side website and the other  one is the restaurant side website so  the one on the Left generates the event  I'm generating than every second here -  to see more of these events going out -  to make it more interesting and let's  see what we get here so far so good  all the retries are going through okay  let's wait a bit more all right let's  stop it so what do we see now 44 orders  went out and only 41 orders came in so  some orders got lost here and I can see  that for example the first one here  right it didn't make it to the to the  restaurant it didn't make it through the  whole pipeline so something is wrong  here and lost orders means unhappy  customers not good for your business  so let's investigate what happens so I  have the functions deployed in my  project and the main function the one  which performs those three actions is  the process order function and like I  show on the diagram it does three things  it calls the truth cook service then it  stores the order in the database and  then it calls yet another service so  probably something failed here so let's  see and here is were the observability  tools in Google cloud platforms are  invoked in Google cloud platform are  useful first I can see that on the  executions chart there are some errors  indeed right most requests were okay but  there are also some errors  and if I scroll down I can see the  errors from the last seven days and if I  click here it I go to stock driver error  reporting and which I can see the errors  chart I can see a sample stuck trace and  finally I can see some logs  okay let's let's go to this one or this  one  I can click view logs and see the logs  here alright so if I filter only by this  execution ID I can see a simple function  invocation so the function execution  started received an order but then it  got it got the transient failure from  the choose cook service and if we look  at the implementation of the choice cook  function we can see that it's  implemented in a way that only succeeds  90% of the time for the remaining 10% it  fails of course this is a synthetic  example of a failing service but as I  said you you should assume that the  function that you are calling or the  service that you are calling may may  fail for for many reasons and similar  story about the other function prepare  meal it also has the success ratio of  90% only alright so we know what  happened and we know how to handle  transient issues right we can apply  retrace so I have the second version of  this function here process or the retry  with the same source code it does the  same things but it has the retry on  failure option enabled I use this option  when deploying the function so let's see  how this one works  let's switch to the topic cloud pub/sub  topic and fire store collection which  actually are operated on by this second  version of the function  alright so I've got orders going out  orders coming in by the way the colors  are just color encoded event ID so that  we can visually compare the right and  left side  see the differences okay I can stop and  what do I see  26 orders went out and 30 orders came in  so this okay 31 31 orders came in so  definitely more than I census there must  be some duplicates and I can already see  some here which was which appears even  three times the same order the same  event IDs with three different cooks  assigned so then we start preparing the  meal right away well the customer may be  happy with the extra two meals but still  that's not good for your business so  what can we do to avoid loose duplicates  and the answer is introduced idempotency  so I have the third version of the  function here and this time I modified  the source code and the piece that I  modified is the one which runs which  stores the order in fire store so I  introduced a transaction which first  checks whether the given event ID  whether the document with the given  event ID or in this case the order ID  was already processed and only added to  the I only added to fire store if it was  not if it does not exist yet  this way I'll also prevent the issue of  overriding the same order with a  different cook assigned so let's see how  this one warps so I have the third  version here let's start generating the  events all right it takes some time to  process them we should start seeing them  here all right they're coming in let's  wait a bit more to see if we get the  desired results so far so good  order sketching up  yep okay so 29 orders generated Twain I  thought orders came in so no lost orders  and no duplicates and I'd like to  highlight that I didn't touch the  services that were flaky that failed for  10% of the time but instead i  reconfigured the other parts of the  system to handle this situation in a  good way moving on I'd like to summarize  the first part of the talk saying that  you should introduce retries and make  your function idempotence to make to  improve reliability of your functions  thank you and with this i would like to  introduce my colleague mark who is going  to cover the second part of the talk  about performance optimizations Thank  You Sadiq thank you I'm very happy to be  here with you I I wonder how many of you  actually use called functions or have  tried called functions okay so this is  gonna be a little bit it's not the basic  topic so I assume that all of you know  what the cost art is so I assume that  all of you know that the cost out is  when the infrastructures means up a new  instance that will execute the code of  your function and you probably know that  this happens if there's no instance that  is serving the traffic or maybe that  there is a southern surge in the number  of requests that your function has to  handle and then there must be many  instances executing at the same time  you've probably heard a functional  stateless and that's because there are  so many instances that came came in and  came out come out and that's true but  the fact is that they are not always  titleist which means that if there is an  instance that is serving it's probably  going to be reused for future  invocations for  subsequent calls and this lets you reuse  the state that the instance has to  improve performance and I will show you  in a little bit how you can do that so  the first example is connections let's  assume that your function has has to  connect to some external system and you  can improve performance by maintaining  persistent connections so you establish  the connection at the first function  invocation in in the instance that is  serving and then subsequent calls that  will hit the same instance are going to  to have the connection established so  this may not be so important if the  system that you connect to is in the  same data center or very close but it's  very important if the system that you  are connecting to is on the other side  of the world and then the connection  establishment actually takes time a  small caveat here is that you have to be  careful with the target system that you  you are connecting to because it may  have a limit on the number of  connections that it can handle and if  you use persistent connections any  instance of the function that is  actually out there serving will maintain  the connection so a it may exhaust the  connection pool of the target system  going farther the same principle may  apply to API objects and such API  objects very often have connections  inside somewhere so it's very useful to  declare those API objects on the global  scope in your in the code so that the  connection is not very established every  time you create the API object similarly  if there is a global variable that gets  recomputed every time your function is  called it's useful to put it into the  global scope so that it's computed once  and then reused all of subsequent  invocations but on the other hand it's  not always true that it's better to  perform those computations in in the  global scope when on the cold start  because it may happen that the the value  is not even used so if you use the value  under very rare conditions it's better  to compute it lazily and not in the  culture because the best optimization is  when you just remove the code that is  not used and this is especially  important if your function if you  declare several functions in the same  file a which you can do and actually  many people that everyone that uses  firebase probably did that because this  is the common way how firebase functions  are written and if you do that you have  to know that every function runs in a  separate set of instances so if an  instance handles the execute invocations  of the first function it will never be  called to execute the second function  because that's a separate set of  distances so if you use eval if you  initialize a very heavy variable that is  used in the second function in the  global scope it's just a waste of time  and that also applies to those require  statements nodejs where you include  libraries that you are going to use so  it's a big awkward to require libraries  inside the function but if you declare  multiple function in the same file  that's the performance optimization  when you apply this kind of  optimizations please be mindful that the  function runs only until the callback is  called  if you try to execute something after  it's called  there will be no CPU actually to do that  and the code will not progress so it may  be tempting to write the code like this  to send the result of the customer to  the user and then do some computations  to optimize for subsequent invocations  but don't do that it will not work I've  told you about cashing some computations  inside functions in the global scope  inside node.js process but you can use  also a local file system where you can  write files and those files will survive  on this particular instance as long as  as the instance is alive and disturbing  but you have to be careful here because  at the file system is in in memory so  it's it's not infinite and every file  that you write is going to consume the  memory the runtime memory of your  function so eventually if you if on  every invocation you create a new file  and you forget to delete them you will  run up to run out of memory and when you  run out of memory your instance we die  and this means that there will be a cold  start for future invocations and of  course when there is a cold start you  lose the state that you carefully  prepared inside this instance to  optimize for subsequent invocations so  it's better to avoid them and you can  avoid them by taking care of not  exceeding the allocated memory not  throwing any occult uncaught exceptions  that can catch those exceptions and  because sometimes the process that's  executed the code may actually crash  that also causes a cold start and when  your function times out also the  instance is put down and another one is  started  this always about caching computations  inside the instance that execute your  code and this cache this state is  available all only for for this  particular instance so you have to  recompute it in every other instances  it's also possible to go a little bit  further to share some state across all  the instances but for that you need to  use some database for instance a several  s database like firestorm so the summary  for for this part of the talk is that  you can leverage the state of instances  to speed up subsequent invocations and  I'm going to show you an example how I  managed to optimize a little bit of my  application to just serve faster and the  application that I prepared is a  converting text or images so it's  applying caption on on a picture and the  parameters of the functions are just to  that caption to be written and whether  we want some background or not and we  have very awkward users that's most  often they don't want any background  users prefer white picture and we are  going to optimize for this for this use  case so the function does is first it  fetches the background fork from cloud  storage then it applies the caption  using imagemagick and finally it uploads  the result also to cloud storage the  code is simple exactly as you'd probably  imagined so create a temporary directory  download the background file load the  file into memory draw the caption write  the file to disk and upload it to cloud  storage very simple right  and when we debug our distributed  application where we analyze what  happens in such an application it's very  we just have to use the platform tools  to observe what's going on so we are  going to use cloud login and monitoring  to see either logs from individual  unifications or plots of some patterns  that are in our system it's father calls  other dimensions error reporting when  you can see errors grouped by error  types and you can directly go to logs  and in the context of monitoring you can  also set up others on certain thresholds  of metrics and other conditions and so  the first thing that we do is we deploy  our function and test it at scale in our  case the scale will be just 5 QPS for 5  minutes but yeah I think that's enough  for testing at when we start that we  soon realize that we have quite a lot of  errors it's about 5% and when we look at  the plot of memory usage we see that the  memory actually goes quite high it  reaches the limit of 500 if of 256  megabytes that we allocated to the  function so probably we miss configured  our instances we just gave them too  little memory and image processing  requires the memory to load the image so  proudly we just need to improve on that  but let's first check whether this is  indeed the case that the errors were  because of memory ran out so let's go to  the function page and let's view logs  when if we filter the logs by error type  we immediately see that those errors  were memory exceeded errors so of course  we add more memory we reckon redeploy  the instance with a larger amount of  memory and we test it again and what  happens  luckily the errors went down to 2% but  they are not completely gone it's still  something still wrong and we see that  the memory usage actually went up in the  second test it went up even up to 500  mega  which is allocated so it looks like we  have a memory leak and I would let you  look at the code and maybe somebody can  find what the memory what the memory is  does anybody see the error here okay one  person sees an error let's see if others  see it second one okay very good okay  okay so some of you already know that  the problem is that we create a  temporary file and we don't delete it at  the end so the temporary file is created  here there is we just generate a random  string for the file that we are going to  generate and it has generated we write  it to disk and we never delete it so  this is the this is this works as I  described it the first part that  whenever you write something to your  local storage it's consuming your memory  so it's very easy to fix we actually  just need to delete the file because we  before we finish the function and that's  the fix that we applied and with this  memory leak fixed we admittedly see that  firstly we don't have any five hundreds  no errors and also the memory usage went  down even below this 256 limit that we  applied before so the question is shall  we now reduce the amount of memory for  the function or not but let's take a  look at the performance we see that with  more memory our function actually runs  faster and that's because this is how we  allocate CPU to functions the more  memory the function has the most CPU it  also gets and giving twice more memory  gives also twice more CPU so your  function runs faster and in our case we  would like to have the system quite  performance so two seconds of latency is  probably quite good but for seconds it's  a lot too much so let's let's stick to  this instant size and this amount of CPU  in further work so now let's take a  closer look where the function actually  spends time on what's the most costly  part so we go to cloud logging we select  an individual ego invocation we click on  it and then we can filter logs from just  one invocation and you can see that the  majority of time is spent on uploading  the file to cloud storage that's quite  surprising Google has good Network why  would that beat so slow and the fact is  that we actually used very bad  compression type and by the way this is  a not a very good idea to look at one  individual invocation to analyze what's  going on in a distributed application  because this may be just some random  problems here and maybe in other cases  everything will work fine so it's much  better to report custom metrics to stock  driver for instance and look at the  behavior at scale but in our case locks  it gave us this information so the  problem with uploading cloud to cloud  storage was that the files were big we  use BMP file images which were about  seven megabytes while PNG took only 10  kilobytes so the first optimization that  we can apply is to switch the  compression from BMP to PNG very simple  and by the way also this uploading speed  depends on the instance size because  uploading data requires a little bit of  the CPU so you can also improve on that  by giving the instance more memory and  more CPU so we when we change the  compression time type a our function is  faster almost twice much better can we  do better of course I mentioned that our  users are a bit weird that they don't  like backgrounds they like black and  white so we don't really have to  download the background image on every  invocation let's just not do that and  this actually detect the case that I  tested without any background just like  and white  so we can now download the background  only when it's needed and we can  download it only once and with this  optimization we safe at another 50  milliseconds and some of you may have  noticed that on some previous slides it  was 90 milliseconds or 84 for this face  for downloading the the background and  this is what I mentioned that one  individual invocation will not give you  a precise data we need to have multiple  invocations of that's why metrics are  always better than individual logs from  one invocation so now we can also  imagine that it's useful to move  computations that are that can be done  just once to global scope so in the next  step I'll I moved creating of the  temporary directory into the global  scope and creating the Jesus bucket  object which is this we always use the  same bucket for uploading the image and  also for double on the background so we  can you just move those two lines into  the global scope and that will sell you  another 25 milliseconds not so much but  still significant maybe more happy users  so to summarize what we did here we  fixed firstly we fixed the memory leak  in our application we increase the  instance size to give it more CPU we use  better compression so that we don't  spend so much CPU time on uploading  images to cloud storage will a easy  download the background image because it  wasn't used in only vocations and  finally we moved some computations to  the global scope so that is performed  only once and while doing that we use  the platform tools to observe our  systems we use a logging used monitoring  maybe we didn't use logging in the best  way we could have used more monitoring  and and that's about that but we still  have time to answer your questions  [Music]
+
+00:00:06.340 --> 00:00:12.530 align:start position:0%
+[Music]  lightweight fast highly available this  is how serverless is often described  insult true but making your solution  reliable and performance depends also on  you  hi I'm Slovak I work as a software  engineer in the cloud functions team at  Google and together with my colleague  Marek we'll talk about ways to build  solid production systems with cloud  functions now cloud functions is an  event-driven serverless compute platform  someone or something generates an event  and your code your function is executed  as a result of it this is pretty much  the simplest way to run your code in the  cloud there are no servers to be  provisioned managed patched or updated  you pay only Wyler code runs you can  connect and extend multiple cloud  services and finally cloud functions  automatically scale are highly available  and fault tolerant but does it mean that  all your potential problems with  availability and performance are  automatically resolved the answer is not  completely as you can still apply  multiple best practices to build a  robust system and we're going to talk  about them in this talk first we'll  cover reliability improvements then  we'll move on to performance  optimizations and additionally we will  also discuss observability which is  important when you want to know what is  going on with your system let's start  with talking over reliability  improvements through making your cloud  function retrial and idempotent we first  need to realize that in distributed  systems failures happen  in fact they are an inherent part of  such systems as it's practically  impossible to build a solid production  system or any complex system in which  errors do not occur at all the only way  we can handle them is to make sure that  we handle the errors graceful and cloud  platform actually provides significant  help in handling such errors it is  actually one of the big benefits of  using cloud and serverless solutions  however your software still needs to be  prepared for error scenarios if we think  about who ensures reliability of your  software running in the cloud we realize  that reliability must be a shared goal  across cloud platform and your solution  when you use a Google cloud service  Google takes care of its reliability for  example when you call a cloud vision API  Google makes sure that the service is  available and can handle your requests  when you upload a file to the cloud  storage Google make sure it's persisted  using replication under the hood when  you create your service in the cloud  Google still helps you build a robust  system but you are in control of its  overall reliability for example your  function may fail if it includes a bug a  call to your other service may also fail  if that service returns an error or is  flaky how to ensure reliability of your  cloud function as we already know  functions are good for processing events  in particular they're a great tool when  connecting different services for  example when processing the incoming  data and upload it uploading it to a  storage system in the success scenario  everything works the data is processed  and then persisted for example in a  database  but what if an error occurs in this  process your function may run out of  memory and network connectivity issue  may happen you may get an error response  from the service on which you depend all  these issues may potentially result in  data loss if the data doesn't make it to  its destination how to handle problems  like this retries are an important  strategy here in a distributed system it  is normal that the services on which  your function depends are not always  100% available as a result your function  may fail occasionally  the simplest way to handle failures in  serverless  is to retry function executions however  you should not force your users to retry  requests to your system but instead use  you should configure your system to  perform retrace automatically when  needed cult functions come into distinct  variants HTTP functions are invoked by  standard HTTP requests which wait for  HTTP response from the function  background functions are invoked by  events events from the clouds like  messages on a cloud pub/sub topic or  changes in a cloud storage bucket all  functions are known are normally invoked  once for an event unless an error occurs  and here is where the two variants of  cloud functions offer different  execution guarantees HTTP functions are  executed at most once due to their  synchronous nature this means that the  calls are not retried by cloud functions  and it is the caller who must handle any  errors and if you think about it the  caller should handle the errors anyway  as the request might not even reach  Google's infrastructure on the other  hand background functions are executed  at least once  as asynchronous function executions  triggered by events can be retried by  cloud functions as there is no caller  who could do it otherwise let's look at  some examples this is an HTTP function  which calls another service to upload  payload from the HTTP requests it simply  sends a post request to that service  easy right the problem is that the call  to the other service may fail for  whatever reason for example network  connectivity issue and this would result  in the function failure and if the  function isn't retried then the data may  be dropped on the floor in case of HTTP  functions the call should be reached  right by the caller so you can change  your colors code to either implement  your own retry logic or use an existing  library or a module that can perform  retries for you for example in this case  the promised retry module retries the  calls to - cloud function because we  returned the the request promise  inside inside the promised retry call  this is a simple background function it  also uploads data to another system  this time it extracts the contents from  the cloud pub/sub message payload  similar problem here if the dependent  service fails the function will fail  because we returned the promise as the  function result in case of background  functions retries should be configured  on function deployment either through  cloud SDK or cloud console by enabling  the retry on failure option  this way your function will be retried  until it succeeds the first three try  happen almost immediately after first  function execution the next three tries  follow the exponential back-off policy  kept at ten seconds and they happen for  up to seven days if your function keeps  failing however you should be careful  with using this option because it will  retry your function on any error also if  it is caused by a bug or some unexpected  input data so if you use this option you  should return errors from your function  only on transient issues and preferably  handle the permanent problems inside the  functions completely so in general there  are multiple places to apply retrace as  we saw you can retry calls to an HTTP  function you can configure it tries over  background functions you can also retry  calls to dependent systems from inside  the function for example by configuring  the client libraries that you use you  can search for what options they offer  or you can write custom code and finally  as already mentioned persistent errors  should be distinguished from transient  failures and three tried retrace should  be applied only on the latter ones let's  look at a bit more complex example now  here's a function which processes the  data and writes it to two storage  systems first to the upper one and then  to the lower one the problem is as you  might expect that any of the uploads may  fail  for example let's assume that they  upload to the second storage failed well  in this case the data would not be saved  in the storage but we know how to handle  this right apply retrace but our retrace  always save  for example here if we apply retrace the  second function execution will result in  storing the data in the second storage  assuming that the upload succeeds this  time however the first storage will  receive a duplicate because they upload  to the first storage will be retried and  duplicates introduce consistency  inconsistencies they are not good so we  don't want them can we do anything to  prepare the function for each write  executions to avoid issues like data  duplication the answer is yes and the  concept of idempotency comes in handy  here a function is considered  idempotence if an event results in the  desired outcome and side-effects even if  the function is invoked multiple times  for the same event  so making a function idempotent is  actually required to behave to make it  behave correctly on rich right execution  attempts let's look at an Oneida patan  function first this function uploads the  received contents to fire store first  and then it uploads the same contents to  another service by sending a post  request one potential problem here is  that if the upload to the fire store  succeeds and the upload to the other  service fails and the function is  retried another document with the same  contents will be added to fire store so  have a duplicate which can also be seen  in the fire store database viewer but  this may also happen if the fire store  was replaced with another system and we  as we know we don't want duplicate they  may introduce further inconsistencies  they may cause accounting problems the  users may be confused they are not good  to solve this problem we'll use event ID  this is a number which uniquely  identifies each event and what is  important here is that even if the  function execution is retried for the  same event the event ID itself remains  unchanged  how do we use it in our code we first  extract the event ID from the event  context and then we use it as a Fire's  as the firestore document ID this way if  the function is retried it will not add  a duplicate object to firestore a  duplicate document instead it will  overwrite the existing document which  exists under the same event ID with the  same contents anyway  similarly some other systems also  support so-called idempotency keys and  if the system that you use supports them  you can use event ID as the idempotency  key as a result we no longer observe  duplicates and the firestore and  similarly we wouldn't observe duplicates  in other systems to which we passed  event ID as the idempotency key but what  if the system on which we depends does  not support item fantasy here is an  example this is a function which uses  SendGrid the email delivery service to  send an email from the function the  problem is that the sent call is not  idempotent what can we do about it we  can record event IDs this is the general  approach here we use a database like  fire store in this example but other  database could work as well to store the  already handled event IDs and then when  the requests come before we enter the  non-id bottle section of the code so the  one which sends an email and if it was  retried it could result in duplicate  emails being sent in this section we  first check  by querying firestar where whether the  events was handled and if it was not we  execute the non-id button section and  then store the event ID as handled in  the firestore database this way the  chance of unwanted retried calls to the  other service of the duplicate emails  being sent are greatly reduced however  there is still small chance that if the  function attempts are executed  concurrently a duplicate emails may  still be sent to practically resolve  this issue we can use the LEAs mechanism  it allows us to get an exclusive access  to the non-id upon a section of the code  for the specific amount of time in this  example the first attempt gets the lease  before it enters the critical section  the one that sends the email the second  attempt which happens while the least  icon is actually rejected because it  cannot get the lease and finally the  third attempt which happens after the  first attempt failed takes the lease  again and eventually succeeds with  handling the event how do we apply this  approach to our code we use a fire start  transaction and this time it's not only  checks whether the given event has been  handled but it also saves the timestamp  until which the current function  execution has exclusive access to the  critical section again the one which  sends the email if another request comes  before this timestamp I mean another  retry of the same function it will be  rejected so no concurrent code execution  will happen and with this approach  applied we practically eliminated the  unwanted retries  so to summarize there are multiple ways  to make your function idempotent you can  ensure that your mutations can happen  more than once without changing the  outcome you can record which event IDs  have already been processed you can  query database state in the transaction  before mutating the state you can also  supply other policy keys when calling  API switch supported which support them  and finally you can also clean up  duplicates out-of-band through an  offline process if that approach is fine  in your world in your workflow  alright so to see retries and Ida policy  in action I will demonstrate a simple  order processing system for my fake  restaurant called kale pizza how does it  look like going from the left side of  the diagram there is a website through  which customers can create orders the  website invokes one cloud function which  publishes a message to cloud pub/sub  topic then there is another function  which is triggered on messages from this  topic and does three things first it  calls another service represented by  another function which chooses the cook  who's going to handle the given order  then it stores the order together with  the selected cook in the fire store  database and then it calls yet another  service yet another function which  triggers meal preparation and finally  the restaurant has a website which  simply syncs with the firestore database  to view the incoming orders alright so  let's see this in action  okay so I will click start right away  and here we have this two website so one  is the client side website and the other  one is the restaurant side website so  the one on the Left generates the event  I'm generating than every second here -  to see more of these events going out -  to make it more interesting and let's  see what we get here so far so good  all the retries are going through okay  let's wait a bit more all right let's  stop it so what do we see now 44 orders  went out and only 41 orders came in so  some orders got lost here and I can see  that for example the first one here  right it didn't make it to the to the  restaurant it didn't make it through the  whole pipeline so something is wrong  here and lost orders means unhappy  customers not good for your business  so let's investigate what happens so I  have the functions deployed in my  project and the main function the one  which performs those three actions is  the process order function and like I  show on the diagram it does three things  it calls the truth cook service then it  stores the order in the database and  then it calls yet another service so  probably something failed here so let's  see and here is were the observability  tools in Google cloud platforms are  invoked in Google cloud platform are  useful first I can see that on the  executions chart there are some errors  indeed right most requests were okay but  there are also some errors  and if I scroll down I can see the  errors from the last seven days and if I  click here it I go to stock driver error  reporting and which I can see the errors  chart I can see a sample stuck trace and  finally I can see some logs  okay let's let's go to this one or this  one  I can click view logs and see the logs  here alright so if I filter only by this  execution ID I can see a simple function  invocation so the function execution  started received an order but then it  got it got the transient failure from  the choose cook service and if we look  at the implementation of the choice cook  function we can see that it's  implemented in a way that only succeeds  90% of the time for the remaining 10% it  fails of course this is a synthetic  example of a failing service but as I  said you you should assume that the  function that you are calling or the  service that you are calling may may  fail for for many reasons and similar  story about the other function prepare  meal it also has the success ratio of  90% only alright so we know what  happened and we know how to handle  transient issues right we can apply  retrace so I have the second version of  this function here process or the retry  with the same source code it does the  same things but it has the retry on  failure option enabled I use this option  when deploying the function so let's see  how this one works  let's switch to the topic cloud pub/sub  topic and fire store collection which  actually are operated on by this second  version of the function  alright so I've got orders going out  orders coming in by the way the colors  are just color encoded event ID so that  we can visually compare the right and  left side  see the differences okay I can stop and  what do I see  26 orders went out and 30 orders came in  so this okay 31 31 orders came in so  definitely more than I census there must  be some duplicates and I can already see  some here which was which appears even  three times the same order the same  event IDs with three different cooks  assigned so then we start preparing the  meal right away well the customer may be  happy with the extra two meals but still  that's not good for your business so  what can we do to avoid loose duplicates  and the answer is introduced idempotency  so I have the third version of the  function here and this time I modified  the source code and the piece that I  modified is the one which runs which  stores the order in fire store so I  introduced a transaction which first  checks whether the given event ID  whether the document with the given  event ID or in this case the order ID  was already processed and only added to  the I only added to fire store if it was  not if it does not exist yet  this way I'll also prevent the issue of  overriding the same order with a  different cook assigned so let's see how  this one warps so I have the third  version here let's start generating the  events all right it takes some time to  process them we should start seeing them  here all right they're coming in let's  wait a bit more to see if we get the  desired results so far so good  order sketching up  yep okay so 29 orders generated Twain I  thought orders came in so no lost orders  and no duplicates and I'd like to  highlight that I didn't touch the  services that were flaky that failed for  10% of the time but instead i  reconfigured the other parts of the  system to handle this situation in a  good way moving on I'd like to summarize  the first part of the talk saying that  you should introduce retries and make  your function idempotence to make to  improve reliability of your functions  thank you and with this i would like to  introduce my colleague mark who is going  to cover the second part of the talk  about performance optimizations Thank  You Sadiq thank you I'm very happy to be  here with you I I wonder how many of you  actually use called functions or have  tried called functions okay so this is  gonna be a little bit it's not the basic  topic so I assume that all of you know  what the cost art is so I assume that  all of you know that the cost out is  when the infrastructures means up a new  instance that will execute the code of  your function and you probably know that  this happens if there's no instance that  is serving the traffic or maybe that  there is a southern surge in the number  of requests that your function has to  handle and then there must be many  instances executing at the same time  you've probably heard a functional  stateless and that's because there are  so many instances that came came in and  came out come out and that's true but  the fact is that they are not always  titleist which means that if there is an  instance that is serving it's probably  going to be reused for future  invocations for  subsequent calls and this lets you reuse  the state that the instance has to  improve performance and I will show you  in a little bit how you can do that so  the first example is connections let's  assume that your function has has to  connect to some external system and you  can improve performance by maintaining  persistent connections so you establish  the connection at the first function  invocation in in the instance that is  serving and then subsequent calls that  will hit the same instance are going to  to have the connection established so  this may not be so important if the  system that you connect to is in the  same data center or very close but it's  very important if the system that you  are connecting to is on the other side  of the world and then the connection  establishment actually takes time a  small caveat here is that you have to be  careful with the target system that you  you are connecting to because it may  have a limit on the number of  connections that it can handle and if  you use persistent connections any  instance of the function that is  actually out there serving will maintain  the connection so a it may exhaust the  connection pool of the target system  going farther the same principle may  apply to API objects and such API  objects very often have connections  inside somewhere so it's very useful to  declare those API objects on the global  scope in your in the code so that the  connection is not very established every  time you create the API object similarly  if there is a global variable that gets  recomputed every time your function is  called it's useful to put it into the  global scope so that it's computed once  and then reused all of subsequent  invocations but on the other hand it's  not always true that it's better to  perform those computations in in the  global scope when on the cold start  because it may happen that the the value  is not even used so if you use the value  under very rare conditions it's better  to compute it lazily and not in the  culture because the best optimization is  when you just remove the code that is  not used and this is especially  important if your function if you  declare several functions in the same  file a which you can do and actually  many people that everyone that uses  firebase probably did that because this  is the common way how firebase functions  are written and if you do that you have  to know that every function runs in a  separate set of instances so if an  instance handles the execute invocations  of the first function it will never be  called to execute the second function  because that's a separate set of  distances so if you use eval if you  initialize a very heavy variable that is  used in the second function in the  global scope it's just a waste of time  and that also applies to those require  statements nodejs where you include  libraries that you are going to use so  it's a big awkward to require libraries  inside the function but if you declare  multiple function in the same file  that's the performance optimization  when you apply this kind of  optimizations please be mindful that the  function runs only until the callback is  called  if you try to execute something after  it's called  there will be no CPU actually to do that  and the code will not progress so it may  be tempting to write the code like this  to send the result of the customer to  the user and then do some computations  to optimize for subsequent invocations  but don't do that it will not work I've  told you about cashing some computations  inside functions in the global scope  inside node.js process but you can use  also a local file system where you can  write files and those files will survive  on this particular instance as long as  as the instance is alive and disturbing  but you have to be careful here because  at the file system is in in memory so  it's it's not infinite and every file  that you write is going to consume the  memory the runtime memory of your  function so eventually if you if on  every invocation you create a new file  and you forget to delete them you will  run up to run out of memory and when you  run out of memory your instance we die  and this means that there will be a cold  start for future invocations and of  course when there is a cold start you  lose the state that you carefully  prepared inside this instance to  optimize for subsequent invocations so  it's better to avoid them and you can  avoid them by taking care of not  exceeding the allocated memory not  throwing any occult uncaught exceptions  that can catch those exceptions and  because sometimes the process that's  executed the code may actually crash  that also causes a cold start and when  your function times out also the  instance is put down and another one is  started  this always about caching computations  inside the instance that execute your  code and this cache this state is  available all only for for this  particular instance so you have to  recompute it in every other instances  it's also possible to go a little bit  further to share some state across all  the instances but for that you need to  use some database for instance a several  s database like firestorm so the summary  for for this part of the talk is that  you can leverage the state of instances  to speed up subsequent invocations and  I'm going to show you an example how I  managed to optimize a little bit of my  application to just serve faster and the  application that I prepared is a  converting text or images so it's  applying caption on on a picture and the  parameters of the functions are just to  that caption to be written and whether  we want some background or not and we  have very awkward users that's most  often they don't want any background  users prefer white picture and we are  going to optimize for this for this use  case so the function does is first it  fetches the background fork from cloud  storage then it applies the caption  using imagemagick and finally it uploads  the result also to cloud storage the  code is simple exactly as you'd probably  imagined so create a temporary directory  download the background file load the  file into memory draw the caption write  the file to disk and upload it to cloud  storage very simple right  and when we debug our distributed  application where we analyze what  happens in such an application it's very  we just have to use the platform tools  to observe what's going on so we are  going to use cloud login and monitoring  to see either logs from individual  unifications or plots of some patterns  that are in our system it's father calls  other dimensions error reporting when  you can see errors grouped by error  types and you can directly go to logs  and in the context of monitoring you can  also set up others on certain thresholds  of metrics and other conditions and so  the first thing that we do is we deploy  our function and test it at scale in our  case the scale will be just 5 QPS for 5  minutes but yeah I think that's enough  for testing at when we start that we  soon realize that we have quite a lot of  errors it's about 5% and when we look at  the plot of memory usage we see that the  memory actually goes quite high it  reaches the limit of 500 if of 256  megabytes that we allocated to the  function so probably we miss configured  our instances we just gave them too  little memory and image processing  requires the memory to load the image so  proudly we just need to improve on that  but let's first check whether this is  indeed the case that the errors were  because of memory ran out so let's go to  the function page and let's view logs  when if we filter the logs by error type  we immediately see that those errors  were memory exceeded errors so of course  we add more memory we reckon redeploy  the instance with a larger amount of  memory and we test it again and what  happens  luckily the errors went down to 2% but  they are not completely gone it's still  something still wrong and we see that  the memory usage actually went up in the  second test it went up even up to 500  mega  which is allocated so it looks like we  have a memory leak and I would let you  look at the code and maybe somebody can  find what the memory what the memory is  does anybody see the error here okay one  person sees an error let's see if others  see it second one okay very good okay  okay so some of you already know that  the problem is that we create a  temporary file and we don't delete it at  the end so the temporary file is created  here there is we just generate a random  string for the file that we are going to  generate and it has generated we write  it to disk and we never delete it so  this is the this is this works as I  described it the first part that  whenever you write something to your  local storage it's consuming your memory  so it's very easy to fix we actually  just need to delete the file because we  before we finish the function and that's  the fix that we applied and with this  memory leak fixed we admittedly see that  firstly we don't have any five hundreds  no errors and also the memory usage went  down even below this 256 limit that we  applied before so the question is shall  we now reduce the amount of memory for  the function or not but let's take a  look at the performance we see that with  more memory our function actually runs  faster and that's because this is how we  allocate CPU to functions the more  memory the function has the most CPU it  also gets and giving twice more memory  gives also twice more CPU so your  function runs faster and in our case we  would like to have the system quite  performance so two seconds of latency is  probably quite good but for seconds it's  a lot too much so let's let's stick to  this instant size and this amount of CPU  in further work so now let's take a  closer look where the function actually  spends time on what's the most costly  part so we go to cloud logging we select  an individual ego invocation we click on  it and then we can filter logs from just  one invocation and you can see that the  majority of time is spent on uploading  the file to cloud storage that's quite  surprising Google has good Network why  would that beat so slow and the fact is  that we actually used very bad  compression type and by the way this is  a not a very good idea to look at one  individual invocation to analyze what's  going on in a distributed application  because this may be just some random  problems here and maybe in other cases  everything will work fine so it's much  better to report custom metrics to stock  driver for instance and look at the  behavior at scale but in our case locks  it gave us this information so the  problem with uploading cloud to cloud  storage was that the files were big we  use BMP file images which were about  seven megabytes while PNG took only 10  kilobytes so the first optimization that  we can apply is to switch the  compression from BMP to PNG very simple  and by the way also this uploading speed  depends on the instance size because  uploading data requires a little bit of  the CPU so you can also improve on that  by giving the instance more memory and  more CPU so we when we change the  compression time type a our function is  faster almost twice much better can we  do better of course I mentioned that our  users are a bit weird that they don't  like backgrounds they like black and  white so we don't really have to  download the background image on every  invocation let's just not do that and  this actually detect the case that I  tested without any background just like  and white  so we can now download the background  only when it's needed and we can  download it only once and with this  optimization we safe at another 50  milliseconds and some of you may have  noticed that on some previous slides it  was 90 milliseconds or 84 for this face  for downloading the the background and  this is what I mentioned that one  individual invocation will not give you  a precise data we need to have multiple  invocations of that's why metrics are  always better than individual logs from  one invocation so now we can also  imagine that it's useful to move  computations that are that can be done  just once to global scope so in the next  step I'll I moved creating of the  temporary directory into the global  scope and creating the Jesus bucket  object which is this we always use the  same bucket for uploading the image and  also for double on the background so we  can you just move those two lines into  the global scope and that will sell you  another 25 milliseconds not so much but  still significant maybe more happy users  so to summarize what we did here we  fixed firstly we fixed the memory leak  in our application we increase the  instance size to give it more CPU we use  better compression so that we don't  spend so much CPU time on uploading  images to cloud storage will a easy  download the background image because it  wasn't used in only vocations and  finally we moved some computations to  the global scope so that is performed  only once and while doing that we use  the platform tools to observe our  systems we use a logging used monitoring  maybe we didn't use logging in the best  way we could have used more monitoring  and and that's about that but we still  have time to answer your questions  [Music]
+ 
+
+00:00:12.530 --> 00:00:15.790 align:start position:0%
+ 
+ 
+
+00:00:15.790 --> 00:00:20.260 align:start position:0%
+ 
+ 
+
+00:00:20.260 --> 00:00:23.689 align:start position:0%
+ 
+ 
+
+00:00:23.689 --> 00:00:23.699 align:start position:0%
+ 
+ 
+
+00:00:23.699 --> 00:00:24.490 align:start position:0%
+ 
+
+
+00:00:24.490 --> 00:00:28.279 align:start position:0%
+ 
+ 
+
+00:00:28.279 --> 00:00:30.919 align:start position:0%
+ 
+ 
+
+00:00:30.919 --> 00:00:34.069 align:start position:0%
+ 
+ 
+
+00:00:34.069 --> 00:00:38.810 align:start position:0%
+ 
+ 
+
+00:00:38.810 --> 00:00:41.330 align:start position:0%
+ 
+ 
+
+00:00:41.330 --> 00:00:46.490 align:start position:0%
+ 
+ 
+
+00:00:46.490 --> 00:00:49.299 align:start position:0%
+ 
+ 
+
+00:00:49.299 --> 00:00:52.100 align:start position:0%
+ 
+ 
+
+00:00:52.100 --> 00:00:56.479 align:start position:0%
+ 
+ 
+
+00:00:56.479 --> 00:00:59.930 align:start position:0%
+ 
+ 
+
+00:00:59.930 --> 00:01:02.270 align:start position:0%
+ 
+ 
+
+00:01:02.270 --> 00:01:04.850 align:start position:0%
+ 
+ 
+
+00:01:04.850 --> 00:01:07.510 align:start position:0%
+ 
+ 
+
+00:01:07.510 --> 00:01:11.600 align:start position:0%
+ 
+ 
+
+00:01:11.600 --> 00:01:13.609 align:start position:0%
+ 
+ 
+
+00:01:13.609 --> 00:01:17.270 align:start position:0%
+ 
+ 
+
+00:01:17.270 --> 00:01:19.399 align:start position:0%
+ 
+ 
+
+00:01:19.399 --> 00:01:23.210 align:start position:0%
+ 
+ 
+
+00:01:23.210 --> 00:01:25.640 align:start position:0%
+ 
+ 
+
+00:01:25.640 --> 00:01:28.190 align:start position:0%
+ 
+ 
+
+00:01:28.190 --> 00:01:31.819 align:start position:0%
+ 
+ 
+
+00:01:31.819 --> 00:01:33.740 align:start position:0%
+ 
+ 
+
+00:01:33.740 --> 00:01:36.499 align:start position:0%
+ 
+ 
+
+00:01:36.499 --> 00:01:39.260 align:start position:0%
+ 
+ 
+
+00:01:39.260 --> 00:01:42.679 align:start position:0%
+ 
+ 
+
+00:01:42.679 --> 00:01:46.130 align:start position:0%
+ 
+ 
+
+00:01:46.130 --> 00:01:47.510 align:start position:0%
+ 
+ 
+
+00:01:47.510 --> 00:01:50.719 align:start position:0%
+ 
+ 
+
+00:01:50.719 --> 00:01:53.330 align:start position:0%
+ 
+ 
+
+00:01:53.330 --> 00:01:54.889 align:start position:0%
+ 
+ 
+
+00:01:54.889 --> 00:01:58.730 align:start position:0%
+ 
+ 
+
+00:01:58.730 --> 00:02:00.440 align:start position:0%
+ 
+ 
+
+00:02:00.440 --> 00:02:02.810 align:start position:0%
+ 
+ 
+
+00:02:02.810 --> 00:02:08.150 align:start position:0%
+ 
+ 
+
+00:02:08.150 --> 00:02:10.850 align:start position:0%
+ 
+ 
+
+00:02:10.850 --> 00:02:13.309 align:start position:0%
+ 
+ 
+
+00:02:13.309 --> 00:02:15.709 align:start position:0%
+ 
+ 
+
+00:02:15.709 --> 00:02:17.839 align:start position:0%
+ 
+ 
+
+00:02:17.839 --> 00:02:21.830 align:start position:0%
+ 
+ 
+
+00:02:21.830 --> 00:02:25.640 align:start position:0%
+ 
+ 
+
+00:02:25.640 --> 00:02:29.830 align:start position:0%
+ 
+ 
+
+00:02:29.830 --> 00:02:34.819 align:start position:0%
+ 
+ 
+
+00:02:34.819 --> 00:02:36.740 align:start position:0%
+ 
+ 
+
+00:02:36.740 --> 00:02:38.569 align:start position:0%
+ 
+ 
+
+00:02:38.569 --> 00:02:41.809 align:start position:0%
+ 
+ 
+
+00:02:41.809 --> 00:02:44.599 align:start position:0%
+ 
+ 
+
+00:02:44.599 --> 00:02:46.550 align:start position:0%
+ 
+ 
+
+00:02:46.550 --> 00:02:49.580 align:start position:0%
+ 
+ 
+
+00:02:49.580 --> 00:02:53.780 align:start position:0%
+ 
+ 
+
+00:02:53.780 --> 00:02:57.140 align:start position:0%
+ 
+ 
+
+00:02:57.140 --> 00:03:00.890 align:start position:0%
+ 
+ 
+
+00:03:00.890 --> 00:03:03.110 align:start position:0%
+ 
+ 
+
+00:03:03.110 --> 00:03:06.339 align:start position:0%
+ 
+ 
+
+00:03:06.339 --> 00:03:09.580 align:start position:0%
+ 
+ 
+
+00:03:09.580 --> 00:03:13.399 align:start position:0%
+ 
+ 
+
+00:03:13.399 --> 00:03:16.149 align:start position:0%
+ 
+ 
+
+00:03:16.149 --> 00:03:18.619 align:start position:0%
+ 
+ 
+
+00:03:18.619 --> 00:03:21.099 align:start position:0%
+ 
+ 
+
+00:03:21.099 --> 00:03:23.809 align:start position:0%
+ 
+ 
+
+00:03:23.809 --> 00:03:27.170 align:start position:0%
+ 
+ 
+
+00:03:27.170 --> 00:03:32.149 align:start position:0%
+ 
+ 
+
+00:03:32.149 --> 00:03:34.420 align:start position:0%
+ 
+ 
+
+00:03:34.420 --> 00:03:36.949 align:start position:0%
+ 
+ 
+
+00:03:36.949 --> 00:03:39.649 align:start position:0%
+ 
+ 
+
+00:03:39.649 --> 00:03:43.430 align:start position:0%
+ 
+ 
+
+00:03:43.430 --> 00:03:46.149 align:start position:0%
+ 
+ 
+
+00:03:46.149 --> 00:03:50.689 align:start position:0%
+ 
+ 
+
+00:03:50.689 --> 00:03:54.589 align:start position:0%
+ 
+ 
+
+00:03:54.589 --> 00:03:59.809 align:start position:0%
+ 
+ 
+
+00:03:59.809 --> 00:04:02.869 align:start position:0%
+ 
+ 
+
+00:04:02.869 --> 00:04:05.089 align:start position:0%
+ 
+ 
+
+00:04:05.089 --> 00:04:09.319 align:start position:0%
+ 
+ 
+
+00:04:09.319 --> 00:04:11.719 align:start position:0%
+ 
+ 
+
+00:04:11.719 --> 00:04:13.339 align:start position:0%
+ 
+ 
+
+00:04:13.339 --> 00:04:15.499 align:start position:0%
+ 
+ 
+
+00:04:15.499 --> 00:04:18.879 align:start position:0%
+ 
+ 
+
+00:04:18.879 --> 00:04:21.830 align:start position:0%
+ 
+ 
+
+00:04:21.830 --> 00:04:23.899 align:start position:0%
+ 
+ 
+
+00:04:23.899 --> 00:04:23.909 align:start position:0%
+ 
+ 
+
+00:04:23.909 --> 00:04:25.260 align:start position:0%
+ 
+
+
+00:04:25.260 --> 00:04:27.990 align:start position:0%
+ 
+ 
+
+00:04:27.990 --> 00:04:31.350 align:start position:0%
+ 
+ 
+
+00:04:31.350 --> 00:04:34.559 align:start position:0%
+ 
+ 
+
+00:04:34.559 --> 00:04:37.980 align:start position:0%
+ 
+ 
+
+00:04:37.980 --> 00:04:41.219 align:start position:0%
+ 
+ 
+
+00:04:41.219 --> 00:04:44.520 align:start position:0%
+ 
+ 
+
+00:04:44.520 --> 00:04:47.790 align:start position:0%
+ 
+ 
+
+00:04:47.790 --> 00:04:51.629 align:start position:0%
+ 
+ 
+
+00:04:51.629 --> 00:04:55.320 align:start position:0%
+ 
+ 
+
+00:04:55.320 --> 00:04:58.890 align:start position:0%
+ 
+ 
+
+00:04:58.890 --> 00:05:01.350 align:start position:0%
+ 
+ 
+
+00:05:01.350 --> 00:05:03.659 align:start position:0%
+ 
+ 
+
+00:05:03.659 --> 00:05:07.620 align:start position:0%
+ 
+ 
+
+00:05:07.620 --> 00:05:10.399 align:start position:0%
+ 
+ 
+
+00:05:10.399 --> 00:05:13.620 align:start position:0%
+ 
+ 
+
+00:05:13.620 --> 00:05:13.630 align:start position:0%
+ 
+ 
+
+00:05:13.630 --> 00:05:14.219 align:start position:0%
+ 
+
+
+00:05:14.219 --> 00:05:17.999 align:start position:0%
+ 
+ 
+
+00:05:17.999 --> 00:05:21.749 align:start position:0%
+ 
+ 
+
+00:05:21.749 --> 00:05:24.959 align:start position:0%
+ 
+ 
+
+00:05:24.959 --> 00:05:28.080 align:start position:0%
+ 
+ 
+
+00:05:28.080 --> 00:05:30.420 align:start position:0%
+ 
+ 
+
+00:05:30.420 --> 00:05:34.950 align:start position:0%
+ 
+ 
+
+00:05:34.950 --> 00:05:38.999 align:start position:0%
+ 
+ 
+
+00:05:38.999 --> 00:05:42.240 align:start position:0%
+ 
+ 
+
+00:05:42.240 --> 00:05:45.920 align:start position:0%
+ 
+ 
+
+00:05:45.920 --> 00:05:48.930 align:start position:0%
+ 
+ 
+
+00:05:48.930 --> 00:05:52.110 align:start position:0%
+ 
+ 
+
+00:05:52.110 --> 00:05:54.240 align:start position:0%
+ 
+ 
+
+00:05:54.240 --> 00:05:58.709 align:start position:0%
+ 
+ 
+
+00:05:58.709 --> 00:06:02.010 align:start position:0%
+ 
+ 
+
+00:06:02.010 --> 00:06:05.339 align:start position:0%
+ 
+ 
+
+00:06:05.339 --> 00:06:08.219 align:start position:0%
+ 
+ 
+
+00:06:08.219 --> 00:06:10.170 align:start position:0%
+ 
+ 
+
+00:06:10.170 --> 00:06:14.730 align:start position:0%
+ 
+ 
+
+00:06:14.730 --> 00:06:17.159 align:start position:0%
+ 
+ 
+
+00:06:17.159 --> 00:06:19.980 align:start position:0%
+ 
+ 
+
+00:06:19.980 --> 00:06:22.379 align:start position:0%
+ 
+ 
+
+00:06:22.379 --> 00:06:25.080 align:start position:0%
+ 
+ 
+
+00:06:25.080 --> 00:06:27.420 align:start position:0%
+ 
+ 
+
+00:06:27.420 --> 00:06:29.159 align:start position:0%
+ 
+ 
+
+00:06:29.159 --> 00:06:31.050 align:start position:0%
+ 
+ 
+
+00:06:31.050 --> 00:06:34.800 align:start position:0%
+ 
+ 
+
+00:06:34.800 --> 00:06:37.200 align:start position:0%
+ 
+ 
+
+00:06:37.200 --> 00:06:38.670 align:start position:0%
+ 
+ 
+
+00:06:38.670 --> 00:06:41.270 align:start position:0%
+ 
+ 
+
+00:06:41.270 --> 00:06:44.129 align:start position:0%
+ 
+ 
+
+00:06:44.129 --> 00:06:45.870 align:start position:0%
+ 
+ 
+
+00:06:45.870 --> 00:06:50.430 align:start position:0%
+ 
+ 
+
+00:06:50.430 --> 00:06:54.570 align:start position:0%
+ 
+ 
+
+00:06:54.570 --> 00:06:58.260 align:start position:0%
+ 
+ 
+
+00:06:58.260 --> 00:07:01.159 align:start position:0%
+ 
+ 
+
+00:07:01.159 --> 00:07:06.439 align:start position:0%
+ 
+ 
+
+00:07:06.439 --> 00:07:12.450 align:start position:0%
+ 
+ 
+
+00:07:12.450 --> 00:07:14.370 align:start position:0%
+ 
+ 
+
+00:07:14.370 --> 00:07:16.260 align:start position:0%
+ 
+ 
+
+00:07:16.260 --> 00:07:18.900 align:start position:0%
+ 
+ 
+
+00:07:18.900 --> 00:07:21.749 align:start position:0%
+ 
+ 
+
+00:07:21.749 --> 00:07:24.029 align:start position:0%
+ 
+ 
+
+00:07:24.029 --> 00:07:29.820 align:start position:0%
+ 
+ 
+
+00:07:29.820 --> 00:07:32.820 align:start position:0%
+ 
+ 
+
+00:07:32.820 --> 00:07:37.439 align:start position:0%
+ 
+ 
+
+00:07:37.439 --> 00:07:40.920 align:start position:0%
+ 
+ 
+
+00:07:40.920 --> 00:07:44.310 align:start position:0%
+ 
+ 
+
+00:07:44.310 --> 00:07:47.460 align:start position:0%
+ 
+ 
+
+00:07:47.460 --> 00:07:51.200 align:start position:0%
+ 
+ 
+
+00:07:51.200 --> 00:07:56.250 align:start position:0%
+ 
+ 
+
+00:07:56.250 --> 00:08:00.540 align:start position:0%
+ 
+ 
+
+00:08:00.540 --> 00:08:03.719 align:start position:0%
+ 
+ 
+
+00:08:03.719 --> 00:08:10.760 align:start position:0%
+ 
+ 
+
+00:08:10.760 --> 00:08:13.649 align:start position:0%
+ 
+ 
+
+00:08:13.649 --> 00:08:16.499 align:start position:0%
+ 
+ 
+
+00:08:16.499 --> 00:08:19.920 align:start position:0%
+ 
+ 
+
+00:08:19.920 --> 00:08:24.620 align:start position:0%
+ 
+ 
+
+00:08:24.620 --> 00:08:28.290 align:start position:0%
+ 
+ 
+
+00:08:28.290 --> 00:08:30.600 align:start position:0%
+ 
+ 
+
+00:08:30.600 --> 00:08:32.880 align:start position:0%
+ 
+ 
+
+00:08:32.880 --> 00:08:38.370 align:start position:0%
+ 
+ 
+
+00:08:38.370 --> 00:08:40.920 align:start position:0%
+ 
+ 
+
+00:08:40.920 --> 00:08:43.199 align:start position:0%
+ 
+ 
+
+00:08:43.199 --> 00:08:46.380 align:start position:0%
+ 
+ 
+
+00:08:46.380 --> 00:08:49.450 align:start position:0%
+ 
+ 
+
+00:08:49.450 --> 00:08:51.360 align:start position:0%
+ 
+ 
+
+00:08:51.360 --> 00:08:55.690 align:start position:0%
+ 
+ 
+
+00:08:55.690 --> 00:08:58.120 align:start position:0%
+ 
+ 
+
+00:08:58.120 --> 00:09:00.730 align:start position:0%
+ 
+ 
+
+00:09:00.730 --> 00:09:03.100 align:start position:0%
+ 
+ 
+
+00:09:03.100 --> 00:09:06.760 align:start position:0%
+ 
+ 
+
+00:09:06.760 --> 00:09:09.430 align:start position:0%
+ 
+ 
+
+00:09:09.430 --> 00:09:13.600 align:start position:0%
+ 
+ 
+
+00:09:13.600 --> 00:09:16.000 align:start position:0%
+ 
+ 
+
+00:09:16.000 --> 00:09:20.440 align:start position:0%
+ 
+ 
+
+00:09:20.440 --> 00:09:23.260 align:start position:0%
+ 
+ 
+
+00:09:23.260 --> 00:09:27.190 align:start position:0%
+ 
+ 
+
+00:09:27.190 --> 00:09:29.650 align:start position:0%
+ 
+ 
+
+00:09:29.650 --> 00:09:32.860 align:start position:0%
+ 
+ 
+
+00:09:32.860 --> 00:09:35.889 align:start position:0%
+ 
+ 
+
+00:09:35.889 --> 00:09:41.740 align:start position:0%
+ 
+ 
+
+00:09:41.740 --> 00:09:44.310 align:start position:0%
+ 
+ 
+
+00:09:44.310 --> 00:09:47.949 align:start position:0%
+ 
+ 
+
+00:09:47.949 --> 00:09:49.960 align:start position:0%
+ 
+ 
+
+00:09:49.960 --> 00:09:53.829 align:start position:0%
+ 
+ 
+
+00:09:53.829 --> 00:09:55.810 align:start position:0%
+ 
+ 
+
+00:09:55.810 --> 00:09:58.300 align:start position:0%
+ 
+ 
+
+00:09:58.300 --> 00:10:00.880 align:start position:0%
+ 
+ 
+
+00:10:00.880 --> 00:10:04.000 align:start position:0%
+ 
+ 
+
+00:10:04.000 --> 00:10:07.570 align:start position:0%
+ 
+ 
+
+00:10:07.570 --> 00:10:10.570 align:start position:0%
+ 
+ 
+
+00:10:10.570 --> 00:10:12.130 align:start position:0%
+ 
+ 
+
+00:10:12.130 --> 00:10:14.829 align:start position:0%
+ 
+ 
+
+00:10:14.829 --> 00:10:19.840 align:start position:0%
+ 
+ 
+
+00:10:19.840 --> 00:10:23.160 align:start position:0%
+ 
+ 
+
+00:10:23.160 --> 00:10:26.410 align:start position:0%
+ 
+ 
+
+00:10:26.410 --> 00:10:28.810 align:start position:0%
+ 
+ 
+
+00:10:28.810 --> 00:10:32.680 align:start position:0%
+ 
+ 
+
+00:10:32.680 --> 00:10:37.720 align:start position:0%
+ 
+ 
+
+00:10:37.720 --> 00:10:40.300 align:start position:0%
+ 
+ 
+
+00:10:40.300 --> 00:10:40.310 align:start position:0%
+ 
+ 
+
+00:10:40.310 --> 00:10:40.960 align:start position:0%
+ 
+
+
+00:10:40.960 --> 00:10:43.000 align:start position:0%
+ 
+ 
+
+00:10:43.000 --> 00:10:49.600 align:start position:0%
+ 
+ 
+
+00:10:49.600 --> 00:10:53.620 align:start position:0%
+ 
+ 
+
+00:10:53.620 --> 00:10:56.139 align:start position:0%
+ 
+ 
+
+00:10:56.139 --> 00:10:59.890 align:start position:0%
+ 
+ 
+
+00:10:59.890 --> 00:11:02.450 align:start position:0%
+ 
+ 
+
+00:11:02.450 --> 00:11:07.470 align:start position:0%
+ 
+ 
+
+00:11:07.470 --> 00:11:09.600 align:start position:0%
+ 
+ 
+
+00:11:09.600 --> 00:11:12.329 align:start position:0%
+ 
+ 
+
+00:11:12.329 --> 00:11:14.430 align:start position:0%
+ 
+ 
+
+00:11:14.430 --> 00:11:19.079 align:start position:0%
+ 
+ 
+
+00:11:19.079 --> 00:11:20.850 align:start position:0%
+ 
+ 
+
+00:11:20.850 --> 00:11:23.420 align:start position:0%
+ 
+ 
+
+00:11:23.420 --> 00:11:26.210 align:start position:0%
+ 
+ 
+
+00:11:26.210 --> 00:11:29.100 align:start position:0%
+ 
+ 
+
+00:11:29.100 --> 00:11:31.470 align:start position:0%
+ 
+ 
+
+00:11:31.470 --> 00:11:33.210 align:start position:0%
+ 
+ 
+
+00:11:33.210 --> 00:11:36.150 align:start position:0%
+ 
+ 
+
+00:11:36.150 --> 00:11:40.110 align:start position:0%
+ 
+ 
+
+00:11:40.110 --> 00:11:42.269 align:start position:0%
+ 
+ 
+
+00:11:42.269 --> 00:11:44.760 align:start position:0%
+ 
+ 
+
+00:11:44.760 --> 00:11:47.790 align:start position:0%
+ 
+ 
+
+00:11:47.790 --> 00:11:50.579 align:start position:0%
+ 
+ 
+
+00:11:50.579 --> 00:11:52.320 align:start position:0%
+ 
+ 
+
+00:11:52.320 --> 00:11:53.400 align:start position:0%
+ 
+ 
+
+00:11:53.400 --> 00:11:56.280 align:start position:0%
+ 
+ 
+
+00:11:56.280 --> 00:11:59.910 align:start position:0%
+ 
+ 
+
+00:11:59.910 --> 00:12:02.010 align:start position:0%
+ 
+ 
+
+00:12:02.010 --> 00:12:06.420 align:start position:0%
+ 
+ 
+
+00:12:06.420 --> 00:12:11.220 align:start position:0%
+ 
+ 
+
+00:12:11.220 --> 00:12:13.980 align:start position:0%
+ 
+ 
+
+00:12:13.980 --> 00:12:17.730 align:start position:0%
+ 
+ 
+
+00:12:17.730 --> 00:12:21.480 align:start position:0%
+ 
+ 
+
+00:12:21.480 --> 00:12:25.440 align:start position:0%
+ 
+ 
+
+00:12:25.440 --> 00:12:29.640 align:start position:0%
+ 
+ 
+
+00:12:29.640 --> 00:12:33.930 align:start position:0%
+ 
+ 
+
+00:12:33.930 --> 00:12:35.970 align:start position:0%
+ 
+ 
+
+00:12:35.970 --> 00:12:39.269 align:start position:0%
+ 
+ 
+
+00:12:39.269 --> 00:12:42.000 align:start position:0%
+ 
+ 
+
+00:12:42.000 --> 00:12:45.360 align:start position:0%
+ 
+ 
+
+00:12:45.360 --> 00:12:50.730 align:start position:0%
+ 
+ 
+
+00:12:50.730 --> 00:12:53.010 align:start position:0%
+ 
+ 
+
+00:12:53.010 --> 00:12:57.480 align:start position:0%
+ 
+ 
+
+00:12:57.480 --> 00:13:01.590 align:start position:0%
+ 
+ 
+
+00:13:01.590 --> 00:13:03.360 align:start position:0%
+ 
+ 
+
+00:13:03.360 --> 00:13:06.750 align:start position:0%
+ 
+ 
+
+00:13:06.750 --> 00:13:10.040 align:start position:0%
+ 
+ 
+
+00:13:10.040 --> 00:13:15.390 align:start position:0%
+ 
+ 
+
+00:13:15.390 --> 00:13:18.030 align:start position:0%
+ 
+ 
+
+00:13:18.030 --> 00:13:21.660 align:start position:0%
+ 
+ 
+
+00:13:21.660 --> 00:13:24.480 align:start position:0%
+ 
+ 
+
+00:13:24.480 --> 00:13:26.340 align:start position:0%
+ 
+ 
+
+00:13:26.340 --> 00:13:29.760 align:start position:0%
+ 
+ 
+
+00:13:29.760 --> 00:13:29.770 align:start position:0%
+ 
+ 
+
+00:13:29.770 --> 00:13:32.270 align:start position:0%
+ 
+
+
+00:13:32.270 --> 00:13:35.760 align:start position:0%
+ 
+ 
+
+00:13:35.760 --> 00:13:40.260 align:start position:0%
+ 
+ 
+
+00:13:40.260 --> 00:13:43.140 align:start position:0%
+ 
+ 
+
+00:13:43.140 --> 00:13:47.670 align:start position:0%
+ 
+ 
+
+00:13:47.670 --> 00:13:51.750 align:start position:0%
+ 
+ 
+
+00:13:51.750 --> 00:13:54.900 align:start position:0%
+ 
+ 
+
+00:13:54.900 --> 00:13:57.150 align:start position:0%
+ 
+ 
+
+00:13:57.150 --> 00:13:59.520 align:start position:0%
+ 
+ 
+
+00:13:59.520 --> 00:14:02.010 align:start position:0%
+ 
+ 
+
+00:14:02.010 --> 00:14:04.760 align:start position:0%
+ 
+ 
+
+00:14:04.760 --> 00:14:07.680 align:start position:0%
+ 
+ 
+
+00:14:07.680 --> 00:14:11.180 align:start position:0%
+ 
+ 
+
+00:14:11.180 --> 00:14:15.240 align:start position:0%
+ 
+ 
+
+00:14:15.240 --> 00:14:18.120 align:start position:0%
+ 
+ 
+
+00:14:18.120 --> 00:14:22.550 align:start position:0%
+ 
+ 
+
+00:14:22.550 --> 00:14:25.350 align:start position:0%
+ 
+ 
+
+00:14:25.350 --> 00:14:27.780 align:start position:0%
+ 
+ 
+
+00:14:27.780 --> 00:14:29.910 align:start position:0%
+ 
+ 
+
+00:14:29.910 --> 00:14:36.750 align:start position:0%
+ 
+ 
+
+00:14:36.750 --> 00:14:39.300 align:start position:0%
+ 
+ 
+
+00:14:39.300 --> 00:14:42.720 align:start position:0%
+ 
+ 
+
+00:14:42.720 --> 00:14:45.300 align:start position:0%
+ 
+ 
+
+00:14:45.300 --> 00:14:49.080 align:start position:0%
+ 
+ 
+
+00:14:49.080 --> 00:14:51.360 align:start position:0%
+ 
+ 
+
+00:14:51.360 --> 00:14:53.010 align:start position:0%
+ 
+ 
+
+00:14:53.010 --> 00:14:59.970 align:start position:0%
+ 
+ 
+
+00:14:59.970 --> 00:15:02.520 align:start position:0%
+ 
+ 
+
+00:15:02.520 --> 00:15:06.360 align:start position:0%
+ 
+ 
+
+00:15:06.360 --> 00:15:09.150 align:start position:0%
+ 
+ 
+
+00:15:09.150 --> 00:15:12.150 align:start position:0%
+ 
+ 
+
+00:15:12.150 --> 00:15:14.970 align:start position:0%
+ 
+ 
+
+00:15:14.970 --> 00:15:17.280 align:start position:0%
+ 
+ 
+
+00:15:17.280 --> 00:15:19.590 align:start position:0%
+ 
+ 
+
+00:15:19.590 --> 00:15:21.990 align:start position:0%
+ 
+ 
+
+00:15:21.990 --> 00:15:24.360 align:start position:0%
+ 
+ 
+
+00:15:24.360 --> 00:15:27.270 align:start position:0%
+ 
+ 
+
+00:15:27.270 --> 00:15:29.070 align:start position:0%
+ 
+ 
+
+00:15:29.070 --> 00:15:31.470 align:start position:0%
+ 
+ 
+
+00:15:31.470 --> 00:15:34.440 align:start position:0%
+ 
+ 
+
+00:15:34.440 --> 00:15:37.740 align:start position:0%
+ 
+ 
+
+00:15:37.740 --> 00:15:41.070 align:start position:0%
+ 
+ 
+
+00:15:41.070 --> 00:15:45.240 align:start position:0%
+ 
+ 
+
+00:15:45.240 --> 00:15:48.329 align:start position:0%
+ 
+ 
+
+00:15:48.329 --> 00:15:50.190 align:start position:0%
+ 
+ 
+
+00:15:50.190 --> 00:15:52.920 align:start position:0%
+ 
+ 
+
+00:15:52.920 --> 00:15:55.620 align:start position:0%
+ 
+ 
+
+00:15:55.620 --> 00:15:58.680 align:start position:0%
+ 
+ 
+
+00:15:58.680 --> 00:16:01.950 align:start position:0%
+ 
+ 
+
+00:16:01.950 --> 00:16:09.210 align:start position:0%
+ 
+ 
+
+00:16:09.210 --> 00:16:13.610 align:start position:0%
+ 
+ 
+
+00:16:13.610 --> 00:16:16.950 align:start position:0%
+ 
+ 
+
+00:16:16.950 --> 00:16:19.200 align:start position:0%
+ 
+ 
+
+00:16:19.200 --> 00:16:23.579 align:start position:0%
+ 
+ 
+
+00:16:23.579 --> 00:16:26.370 align:start position:0%
+ 
+ 
+
+00:16:26.370 --> 00:16:28.950 align:start position:0%
+ 
+ 
+
+00:16:28.950 --> 00:16:33.090 align:start position:0%
+ 
+ 
+
+00:16:33.090 --> 00:16:35.820 align:start position:0%
+ 
+ 
+
+00:16:35.820 --> 00:16:37.950 align:start position:0%
+ 
+ 
+
+00:16:37.950 --> 00:16:41.579 align:start position:0%
+ 
+ 
+
+00:16:41.579 --> 00:16:44.970 align:start position:0%
+ 
+ 
+
+00:16:44.970 --> 00:16:48.480 align:start position:0%
+ 
+ 
+
+00:16:48.480 --> 00:16:52.610 align:start position:0%
+ 
+ 
+
+00:16:52.610 --> 00:16:57.390 align:start position:0%
+ 
+ 
+
+00:16:57.390 --> 00:17:02.640 align:start position:0%
+ 
+ 
+
+00:17:02.640 --> 00:17:06.179 align:start position:0%
+ 
+ 
+
+00:17:06.179 --> 00:17:08.640 align:start position:0%
+ 
+ 
+
+00:17:08.640 --> 00:17:13.189 align:start position:0%
+ 
+ 
+
+00:17:13.189 --> 00:17:15.900 align:start position:0%
+ 
+ 
+
+00:17:15.900 --> 00:17:17.970 align:start position:0%
+ 
+ 
+
+00:17:17.970 --> 00:17:19.650 align:start position:0%
+ 
+ 
+
+00:17:19.650 --> 00:17:23.250 align:start position:0%
+ 
+ 
+
+00:17:23.250 --> 00:17:26.189 align:start position:0%
+ 
+ 
+
+00:17:26.189 --> 00:17:29.550 align:start position:0%
+ 
+ 
+
+00:17:29.550 --> 00:17:32.750 align:start position:0%
+ 
+ 
+
+00:17:32.750 --> 00:17:35.520 align:start position:0%
+ 
+ 
+
+00:17:35.520 --> 00:17:38.220 align:start position:0%
+ 
+ 
+
+00:17:38.220 --> 00:17:41.890 align:start position:0%
+ 
+ 
+
+00:17:41.890 --> 00:17:44.570 align:start position:0%
+ 
+ 
+
+00:17:44.570 --> 00:17:47.419 align:start position:0%
+ 
+ 
+
+00:17:47.419 --> 00:17:51.080 align:start position:0%
+ 
+ 
+
+00:17:51.080 --> 00:17:52.700 align:start position:0%
+ 
+ 
+
+00:17:52.700 --> 00:17:55.940 align:start position:0%
+ 
+ 
+
+00:17:55.940 --> 00:17:58.730 align:start position:0%
+ 
+ 
+
+00:17:58.730 --> 00:18:01.580 align:start position:0%
+ 
+ 
+
+00:18:01.580 --> 00:18:04.970 align:start position:0%
+ 
+ 
+
+00:18:04.970 --> 00:18:07.370 align:start position:0%
+ 
+ 
+
+00:18:07.370 --> 00:18:10.190 align:start position:0%
+ 
+ 
+
+00:18:10.190 --> 00:18:12.770 align:start position:0%
+ 
+ 
+
+00:18:12.770 --> 00:18:14.240 align:start position:0%
+ 
+ 
+
+00:18:14.240 --> 00:18:18.230 align:start position:0%
+ 
+ 
+
+00:18:18.230 --> 00:18:22.360 align:start position:0%
+ 
+ 
+
+00:18:22.360 --> 00:18:25.460 align:start position:0%
+ 
+ 
+
+00:18:25.460 --> 00:18:28.270 align:start position:0%
+ 
+ 
+
+00:18:28.270 --> 00:18:31.370 align:start position:0%
+ 
+ 
+
+00:18:31.370 --> 00:18:35.360 align:start position:0%
+ 
+ 
+
+00:18:35.360 --> 00:18:39.260 align:start position:0%
+ 
+ 
+
+00:18:39.260 --> 00:18:41.900 align:start position:0%
+ 
+ 
+
+00:18:41.900 --> 00:18:44.900 align:start position:0%
+ 
+ 
+
+00:18:44.900 --> 00:18:47.419 align:start position:0%
+ 
+ 
+
+00:18:47.419 --> 00:18:50.720 align:start position:0%
+ 
+ 
+
+00:18:50.720 --> 00:18:53.840 align:start position:0%
+ 
+ 
+
+00:18:53.840 --> 00:18:57.110 align:start position:0%
+ 
+ 
+
+00:18:57.110 --> 00:19:00.380 align:start position:0%
+ 
+ 
+
+00:19:00.380 --> 00:19:02.960 align:start position:0%
+ 
+ 
+
+00:19:02.960 --> 00:19:05.780 align:start position:0%
+ 
+ 
+
+00:19:05.780 --> 00:19:09.250 align:start position:0%
+ 
+ 
+
+00:19:09.250 --> 00:19:12.680 align:start position:0%
+ 
+ 
+
+00:19:12.680 --> 00:19:15.080 align:start position:0%
+ 
+ 
+
+00:19:15.080 --> 00:19:18.470 align:start position:0%
+ 
+ 
+
+00:19:18.470 --> 00:19:21.049 align:start position:0%
+ 
+ 
+
+00:19:21.049 --> 00:19:24.080 align:start position:0%
+ 
+ 
+
+00:19:24.080 --> 00:19:26.390 align:start position:0%
+ 
+ 
+
+00:19:26.390 --> 00:19:30.260 align:start position:0%
+ 
+ 
+
+00:19:30.260 --> 00:19:35.000 align:start position:0%
+ 
+ 
+
+00:19:35.000 --> 00:19:43.400 align:start position:0%
+ 
+ 
+
+00:19:43.400 --> 00:19:46.280 align:start position:0%
+ 
+ 
+
+00:19:46.280 --> 00:19:50.120 align:start position:0%
+ 
+ 
+
+00:19:50.120 --> 00:19:53.390 align:start position:0%
+ 
+ 
+
+00:19:53.390 --> 00:19:56.810 align:start position:0%
+ 
+ 
+
+00:19:56.810 --> 00:19:58.760 align:start position:0%
+ 
+ 
+
+00:19:58.760 --> 00:20:01.040 align:start position:0%
+ 
+ 
+
+00:20:01.040 --> 00:20:05.570 align:start position:0%
+ 
+ 
+
+00:20:05.570 --> 00:20:10.730 align:start position:0%
+ 
+ 
+
+00:20:10.730 --> 00:20:16.510 align:start position:0%
+ 
+ 
+
+00:20:16.510 --> 00:20:27.160 align:start position:0%
+ 
+ 
+
+00:20:27.160 --> 00:20:29.930 align:start position:0%
+ 
+ 
+
+00:20:29.930 --> 00:20:34.520 align:start position:0%
+ 
+ 
+
+00:20:34.520 --> 00:20:38.630 align:start position:0%
+ 
+ 
+
+00:20:38.630 --> 00:20:42.800 align:start position:0%
+ 
+ 
+
+00:20:42.800 --> 00:20:47.720 align:start position:0%
+ 
+ 
+
+00:20:47.720 --> 00:20:51.410 align:start position:0%
+ 
+ 
+
+00:20:51.410 --> 00:20:53.030 align:start position:0%
+ 
+ 
+
+00:20:53.030 --> 00:20:55.490 align:start position:0%
+ 
+ 
+
+00:20:55.490 --> 00:20:58.100 align:start position:0%
+ 
+ 
+
+00:20:58.100 --> 00:21:00.290 align:start position:0%
+ 
+ 
+
+00:21:00.290 --> 00:21:03.590 align:start position:0%
+ 
+ 
+
+00:21:03.590 --> 00:21:06.500 align:start position:0%
+ 
+ 
+
+00:21:06.500 --> 00:21:11.020 align:start position:0%
+ 
+ 
+
+00:21:11.020 --> 00:21:15.260 align:start position:0%
+ 
+ 
+
+00:21:15.260 --> 00:21:18.470 align:start position:0%
+ 
+ 
+
+00:21:18.470 --> 00:21:21.140 align:start position:0%
+ 
+ 
+
+00:21:21.140 --> 00:21:24.170 align:start position:0%
+ 
+ 
+
+00:21:24.170 --> 00:21:27.860 align:start position:0%
+ 
+ 
+
+00:21:27.860 --> 00:21:30.350 align:start position:0%
+ 
+ 
+
+00:21:30.350 --> 00:21:34.880 align:start position:0%
+ 
+ 
+
+00:21:34.880 --> 00:21:37.580 align:start position:0%
+ 
+ 
+
+00:21:37.580 --> 00:21:40.600 align:start position:0%
+ 
+ 
+
+00:21:40.600 --> 00:21:42.980 align:start position:0%
+ 
+ 
+
+00:21:42.980 --> 00:21:47.420 align:start position:0%
+ 
+ 
+
+00:21:47.420 --> 00:21:50.690 align:start position:0%
+ 
+ 
+
+00:21:50.690 --> 00:21:54.050 align:start position:0%
+ 
+ 
+
+00:21:54.050 --> 00:21:55.940 align:start position:0%
+ 
+ 
+
+00:21:55.940 --> 00:21:59.299 align:start position:0%
+ 
+ 
+
+00:21:59.299 --> 00:22:02.000 align:start position:0%
+ 
+ 
+
+00:22:02.000 --> 00:22:04.700 align:start position:0%
+ 
+ 
+
+00:22:04.700 --> 00:22:08.090 align:start position:0%
+ 
+ 
+
+00:22:08.090 --> 00:22:12.490 align:start position:0%
+ 
+ 
+
+00:22:12.490 --> 00:22:17.480 align:start position:0%
+ 
+ 
+
+00:22:17.480 --> 00:22:22.400 align:start position:0%
+ 
+ 
+
+00:22:22.400 --> 00:22:22.410 align:start position:0%
+ 
+ 
+
+00:22:22.410 --> 00:22:23.000 align:start position:0%
+ 
+
+
+00:22:23.000 --> 00:22:29.030 align:start position:0%
+ 
+ 
+
+00:22:29.030 --> 00:22:33.770 align:start position:0%
+ 
+ 
+
+00:22:33.770 --> 00:22:37.909 align:start position:0%
+ 
+ 
+
+00:22:37.909 --> 00:22:39.950 align:start position:0%
+ 
+ 
+
+00:22:39.950 --> 00:22:41.750 align:start position:0%
+ 
+ 
+
+00:22:41.750 --> 00:22:43.789 align:start position:0%
+ 
+ 
+
+00:22:43.789 --> 00:22:46.340 align:start position:0%
+ 
+ 
+
+00:22:46.340 --> 00:22:48.500 align:start position:0%
+ 
+ 
+
+00:22:48.500 --> 00:22:50.360 align:start position:0%
+ 
+ 
+
+00:22:50.360 --> 00:22:52.789 align:start position:0%
+ 
+ 
+
+00:22:52.789 --> 00:22:56.630 align:start position:0%
+ 
+ 
+
+00:22:56.630 --> 00:22:58.220 align:start position:0%
+ 
+ 
+
+00:22:58.220 --> 00:23:00.590 align:start position:0%
+ 
+ 
+
+00:23:00.590 --> 00:23:03.320 align:start position:0%
+ 
+ 
+
+00:23:03.320 --> 00:23:04.789 align:start position:0%
+ 
+ 
+
+00:23:04.789 --> 00:23:07.909 align:start position:0%
+ 
+ 
+
+00:23:07.909 --> 00:23:10.250 align:start position:0%
+ 
+ 
+
+00:23:10.250 --> 00:23:12.200 align:start position:0%
+ 
+ 
+
+00:23:12.200 --> 00:23:14.890 align:start position:0%
+ 
+ 
+
+00:23:14.890 --> 00:23:18.950 align:start position:0%
+ 
+ 
+
+00:23:18.950 --> 00:23:20.840 align:start position:0%
+ 
+ 
+
+00:23:20.840 --> 00:23:22.850 align:start position:0%
+ 
+ 
+
+00:23:22.850 --> 00:23:25.700 align:start position:0%
+ 
+ 
+
+00:23:25.700 --> 00:23:28.340 align:start position:0%
+ 
+ 
+
+00:23:28.340 --> 00:23:31.190 align:start position:0%
+ 
+ 
+
+00:23:31.190 --> 00:23:35.180 align:start position:0%
+ 
+ 
+
+00:23:35.180 --> 00:23:39.980 align:start position:0%
+ 
+ 
+
+00:23:39.980 --> 00:23:42.350 align:start position:0%
+ 
+ 
+
+00:23:42.350 --> 00:23:44.710 align:start position:0%
+ 
+ 
+
+00:23:44.710 --> 00:23:48.230 align:start position:0%
+ 
+ 
+
+00:23:48.230 --> 00:23:50.659 align:start position:0%
+ 
+ 
+
+00:23:50.659 --> 00:23:56.750 align:start position:0%
+ 
+ 
+
+00:23:56.750 --> 00:23:57.799 align:start position:0%
+ 
+ 
+
+00:23:57.799 --> 00:24:00.440 align:start position:0%
+ 
+ 
+
+00:24:00.440 --> 00:24:02.570 align:start position:0%
+ 
+ 
+
+00:24:02.570 --> 00:24:06.260 align:start position:0%
+ 
+ 
+
+00:24:06.260 --> 00:24:08.690 align:start position:0%
+ 
+ 
+
+00:24:08.690 --> 00:24:09.410 align:start position:0%
+ 
+ 
+
+00:24:09.410 --> 00:24:14.860 align:start position:0%
+ 
+ 
+
+00:24:14.860 --> 00:24:16.820 align:start position:0%
+ 
+ 
+
+00:24:16.820 --> 00:24:19.250 align:start position:0%
+ 
+ 
+
+00:24:19.250 --> 00:24:23.690 align:start position:0%
+ 
+ 
+
+00:24:23.690 --> 00:24:27.110 align:start position:0%
+ 
+ 
+
+00:24:27.110 --> 00:24:29.060 align:start position:0%
+ 
+ 
+
+00:24:29.060 --> 00:24:33.170 align:start position:0%
+ 
+ 
+
+00:24:33.170 --> 00:24:35.780 align:start position:0%
+ 
+ 
+
+00:24:35.780 --> 00:24:37.880 align:start position:0%
+ 
+ 
+
+00:24:37.880 --> 00:24:39.620 align:start position:0%
+ 
+ 
+
+00:24:39.620 --> 00:24:42.110 align:start position:0%
+ 
+ 
+
+00:24:42.110 --> 00:24:44.570 align:start position:0%
+ 
+ 
+
+00:24:44.570 --> 00:24:47.540 align:start position:0%
+ 
+ 
+
+00:24:47.540 --> 00:24:49.760 align:start position:0%
+ 
+ 
+
+00:24:49.760 --> 00:24:53.840 align:start position:0%
+ 
+ 
+
+00:24:53.840 --> 00:24:55.820 align:start position:0%
+ 
+ 
+
+00:24:55.820 --> 00:24:59.720 align:start position:0%
+ 
+ 
+
+00:24:59.720 --> 00:25:02.690 align:start position:0%
+ 
+ 
+
+00:25:02.690 --> 00:25:07.340 align:start position:0%
+ 
+ 
+
+00:25:07.340 --> 00:25:10.490 align:start position:0%
+ 
+ 
+
+00:25:10.490 --> 00:25:14.180 align:start position:0%
+ 
+ 
+
+00:25:14.180 --> 00:25:17.620 align:start position:0%
+ 
+ 
+
+00:25:17.620 --> 00:25:22.790 align:start position:0%
+ 
+ 
+
+00:25:22.790 --> 00:25:25.670 align:start position:0%
+ 
+ 
+
+00:25:25.670 --> 00:25:29.960 align:start position:0%
+ 
+ 
+
+00:25:29.960 --> 00:25:33.260 align:start position:0%
+ 
+ 
+
+00:25:33.260 --> 00:25:37.040 align:start position:0%
+ 
+ 
+
+00:25:37.040 --> 00:25:39.310 align:start position:0%
+ 
+ 
+
+00:25:39.310 --> 00:25:41.990 align:start position:0%
+ 
+ 
+
+00:25:41.990 --> 00:25:45.590 align:start position:0%
+ 
+ 
+
+00:25:45.590 --> 00:25:48.620 align:start position:0%
+ 
+ 
+
+00:25:48.620 --> 00:25:52.040 align:start position:0%
+ 
+ 
+
+00:25:52.040 --> 00:25:57.200 align:start position:0%
+ 
+ 
+
+00:25:57.200 --> 00:26:01.040 align:start position:0%
+ 
+ 
+
+00:26:01.040 --> 00:26:04.670 align:start position:0%
+ 
+ 
+
+00:26:04.670 --> 00:26:10.850 align:start position:0%
+ 
+ 
+
+00:26:10.850 --> 00:26:15.010 align:start position:0%
+ 
+ 
+
+00:26:15.010 --> 00:26:17.790 align:start position:0%
+ 
+ 
+
+00:26:17.790 --> 00:26:22.830 align:start position:0%
+ 
+ 
+
+00:26:22.830 --> 00:26:26.130 align:start position:0%
+ 
+ 
+
+00:26:26.130 --> 00:26:28.950 align:start position:0%
+ 
+ 
+
+00:26:28.950 --> 00:26:30.690 align:start position:0%
+ 
+ 
+
+00:26:30.690 --> 00:26:32.910 align:start position:0%
+ 
+ 
+
+00:26:32.910 --> 00:26:35.220 align:start position:0%
+ 
+ 
+
+00:26:35.220 --> 00:26:39.030 align:start position:0%
+ 
+ 
+
+00:26:39.030 --> 00:26:41.670 align:start position:0%
+ 
+ 
+
+00:26:41.670 --> 00:26:49.350 align:start position:0%
+ 
+ 
+
+00:26:49.350 --> 00:26:53.960 align:start position:0%
+ 
+ 
+
+00:26:53.960 --> 00:26:56.700 align:start position:0%
+ 
+ 
+
+00:26:56.700 --> 00:27:01.890 align:start position:0%
+ 
+ 
+
+00:27:01.890 --> 00:27:07.880 align:start position:0%
+ 
+ 
+
+00:27:07.880 --> 00:27:11.580 align:start position:0%
+ 
+ 
+
+00:27:11.580 --> 00:27:14.100 align:start position:0%
+ 
+ 
+
+00:27:14.100 --> 00:27:16.500 align:start position:0%
+ 
+ 
+
+00:27:16.500 --> 00:27:19.470 align:start position:0%
+ 
+ 
+
+00:27:19.470 --> 00:27:26.310 align:start position:0%
+ 
+ 
+
+00:27:26.310 --> 00:27:30.090 align:start position:0%
+ 
+ 
+
+00:27:30.090 --> 00:27:32.040 align:start position:0%
+ 
+ 
+
+00:27:32.040 --> 00:27:35.550 align:start position:0%
+ 
+ 
+
+00:27:35.550 --> 00:27:38.280 align:start position:0%
+ 
+ 
+
+00:27:38.280 --> 00:27:40.380 align:start position:0%
+ 
+ 
+
+00:27:40.380 --> 00:27:42.990 align:start position:0%
+ 
+ 
+
+00:27:42.990 --> 00:27:44.580 align:start position:0%
+ 
+ 
+
+00:27:44.580 --> 00:27:47.400 align:start position:0%
+ 
+ 
+
+00:27:47.400 --> 00:27:50.370 align:start position:0%
+ 
+ 
+
+00:27:50.370 --> 00:27:52.860 align:start position:0%
+ 
+ 
+
+00:27:52.860 --> 00:27:55.260 align:start position:0%
+ 
+ 
+
+00:27:55.260 --> 00:27:57.900 align:start position:0%
+ 
+ 
+
+00:27:57.900 --> 00:28:01.050 align:start position:0%
+ 
+ 
+
+00:28:01.050 --> 00:28:02.790 align:start position:0%
+ 
+ 
+
+00:28:02.790 --> 00:28:05.430 align:start position:0%
+ 
+ 
+
+00:28:05.430 --> 00:28:08.660 align:start position:0%
+ 
+ 
+
+00:28:08.660 --> 00:28:10.710 align:start position:0%
+ 
+ 
+
+00:28:10.710 --> 00:28:13.170 align:start position:0%
+ 
+ 
+
+00:28:13.170 --> 00:28:16.260 align:start position:0%
+ 
+ 
+
+00:28:16.260 --> 00:28:21.720 align:start position:0%
+ 
+ 
+
+00:28:21.720 --> 00:28:23.220 align:start position:0%
+ 
+ 
+
+00:28:23.220 --> 00:28:26.400 align:start position:0%
+ 
+ 
+
+00:28:26.400 --> 00:28:28.050 align:start position:0%
+ 
+ 
+
+00:28:28.050 --> 00:28:30.300 align:start position:0%
+ 
+ 
+
+00:28:30.300 --> 00:28:31.470 align:start position:0%
+ 
+ 
+
+00:28:31.470 --> 00:28:35.940 align:start position:0%
+ 
+ 
+
+00:28:35.940 --> 00:28:39.389 align:start position:0%
+ 
+ 
+
+00:28:39.389 --> 00:28:41.970 align:start position:0%
+ 
+ 
+
+00:28:41.970 --> 00:28:45.870 align:start position:0%
+ 
+ 
+
+00:28:45.870 --> 00:28:49.200 align:start position:0%
+ 
+ 
+
+00:28:49.200 --> 00:28:51.299 align:start position:0%
+ 
+ 
+
+00:28:51.299 --> 00:28:54.960 align:start position:0%
+ 
+ 
+
+00:28:54.960 --> 00:28:57.029 align:start position:0%
+ 
+ 
+
+00:28:57.029 --> 00:28:59.009 align:start position:0%
+ 
+ 
+
+00:28:59.009 --> 00:29:01.139 align:start position:0%
+ 
+ 
+
+00:29:01.139 --> 00:29:03.090 align:start position:0%
+ 
+ 
+
+00:29:03.090 --> 00:29:05.490 align:start position:0%
+ 
+ 
+
+00:29:05.490 --> 00:29:08.490 align:start position:0%
+ 
+ 
+
+00:29:08.490 --> 00:29:11.669 align:start position:0%
+ 
+ 
+
+00:29:11.669 --> 00:29:13.440 align:start position:0%
+ 
+ 
+
+00:29:13.440 --> 00:29:16.139 align:start position:0%
+ 
+ 
+
+00:29:16.139 --> 00:29:18.659 align:start position:0%
+ 
+ 
+
+00:29:18.659 --> 00:29:20.310 align:start position:0%
+ 
+ 
+
+00:29:20.310 --> 00:29:21.840 align:start position:0%
+ 
+ 
+
+00:29:21.840 --> 00:29:23.820 align:start position:0%
+ 
+ 
+
+00:29:23.820 --> 00:29:26.789 align:start position:0%
+ 
+ 
+
+00:29:26.789 --> 00:29:28.919 align:start position:0%
+ 
+ 
+
+00:29:28.919 --> 00:29:31.740 align:start position:0%
+ 
+ 
+
+00:29:31.740 --> 00:29:33.810 align:start position:0%
+ 
+ 
+
+00:29:33.810 --> 00:29:35.159 align:start position:0%
+ 
+ 
+
+00:29:35.159 --> 00:29:38.009 align:start position:0%
+ 
+ 
+
+00:29:38.009 --> 00:29:39.509 align:start position:0%
+ 
+ 
+
+00:29:39.509 --> 00:29:41.580 align:start position:0%
+ 
+ 
+
+00:29:41.580 --> 00:29:45.149 align:start position:0%
+ 
+ 
+
+00:29:45.149 --> 00:29:49.620 align:start position:0%
+ 
+ 
+
+00:29:49.620 --> 00:29:54.270 align:start position:0%
+ 
+ 
+
+00:29:54.270 --> 00:29:57.430 align:start position:0%
+ 
+ 
+
+00:29:57.430 --> 00:30:01.870 align:start position:0%
+ 
+ 
+
+00:30:01.870 --> 00:30:04.440 align:start position:0%
+ 
+ 
+
+00:30:04.440 --> 00:30:07.660 align:start position:0%
+ 
+ 
+
+00:30:07.660 --> 00:30:09.580 align:start position:0%
+ 
+ 
+
+00:30:09.580 --> 00:30:12.220 align:start position:0%
+ 
+ 
+
+00:30:12.220 --> 00:30:13.780 align:start position:0%
+ 
+ 
+
+00:30:13.780 --> 00:30:19.390 align:start position:0%
+ 
+ 
+
+00:30:19.390 --> 00:30:23.460 align:start position:0%
+ 
+ 
+
+00:30:23.460 --> 00:30:25.540 align:start position:0%
+ 
+ 
+
+00:30:25.540 --> 00:30:27.370 align:start position:0%
+ 
+ 
+
+00:30:27.370 --> 00:30:29.350 align:start position:0%
+ 
+ 
+
+00:30:29.350 --> 00:30:31.780 align:start position:0%
+ 
+ 
+
+00:30:31.780 --> 00:30:36.820 align:start position:0%
+ 
+ 
+
+00:30:36.820 --> 00:30:38.470 align:start position:0%
+ 
+ 
+
+00:30:38.470 --> 00:30:41.320 align:start position:0%
+ 
+ 
+
+00:30:41.320 --> 00:30:43.540 align:start position:0%
+ 
+ 
+
+00:30:43.540 --> 00:30:45.790 align:start position:0%
+ 
+ 
+
+00:30:45.790 --> 00:30:49.780 align:start position:0%
+ 
+ 
+
+00:30:49.780 --> 00:30:51.730 align:start position:0%
+ 
+ 
+
+00:30:51.730 --> 00:30:54.760 align:start position:0%
+ 
+ 
+
+00:30:54.760 --> 00:30:57.370 align:start position:0%
+ 
+ 
+
+00:30:57.370 --> 00:30:59.320 align:start position:0%
+ 
+ 
+
+00:30:59.320 --> 00:31:02.410 align:start position:0%
+ 
+ 
+
+00:31:02.410 --> 00:31:05.110 align:start position:0%
+ 
+ 
+
+00:31:05.110 --> 00:31:06.700 align:start position:0%
+ 
+ 
+
+00:31:06.700 --> 00:31:11.140 align:start position:0%
+ 
+ 
+
+00:31:11.140 --> 00:31:13.660 align:start position:0%
+ 
+ 
+
+00:31:13.660 --> 00:31:15.400 align:start position:0%
+ 
+ 
+
+00:31:15.400 --> 00:31:17.320 align:start position:0%
+ 
+ 
+
+00:31:17.320 --> 00:31:20.140 align:start position:0%
+ 
+ 
+
+00:31:20.140 --> 00:31:23.350 align:start position:0%
+ 
+ 
+
+00:31:23.350 --> 00:31:27.280 align:start position:0%
+ 
+ 
+
+00:31:27.280 --> 00:31:29.980 align:start position:0%
+ 
+ 
+
+00:31:29.980 --> 00:31:32.830 align:start position:0%
+ 
+ 
+
+00:31:32.830 --> 00:31:34.300 align:start position:0%
+ 
+ 
+
+00:31:34.300 --> 00:31:35.770 align:start position:0%
+ 
+ 
+
+00:31:35.770 --> 00:31:38.380 align:start position:0%
+ 
+ 
+
+00:31:38.380 --> 00:31:40.390 align:start position:0%
+ 
+ 
+
+00:31:40.390 --> 00:31:43.510 align:start position:0%
+ 
+ 
+
+00:31:43.510 --> 00:31:46.170 align:start position:0%
+ 
+ 
+
+00:31:46.170 --> 00:31:51.460 align:start position:0%
+ 
+ 
+
+00:31:51.460 --> 00:31:53.680 align:start position:0%
+ 
+ 
+
+00:31:53.680 --> 00:31:56.440 align:start position:0%
+ 
+ 
+
+00:31:56.440 --> 00:31:59.050 align:start position:0%
+ 
+ 
+
+00:31:59.050 --> 00:32:00.670 align:start position:0%
+ 
+ 
+
+00:32:00.670 --> 00:32:01.990 align:start position:0%
+ 
+ 
+
+00:32:01.990 --> 00:32:05.909 align:start position:0%
+ 
+ 
+
+00:32:05.909 --> 00:32:07.750 align:start position:0%
+ 
+ 
+
+00:32:07.750 --> 00:32:10.690 align:start position:0%
+ 
+ 
+
+00:32:10.690 --> 00:32:13.000 align:start position:0%
+ 
+ 
+
+00:32:13.000 --> 00:32:13.010 align:start position:0%
+ 
+ 
+
+00:32:13.010 --> 00:32:13.390 align:start position:0%
+ 
+
+
+00:32:13.390 --> 00:32:15.789 align:start position:0%
+ 
+ 
+
+00:32:15.789 --> 00:32:17.580 align:start position:0%
+ 
+ 
+
+00:32:17.580 --> 00:32:20.680 align:start position:0%
+ 
+ 
+
+00:32:20.680 --> 00:32:22.840 align:start position:0%
+ 
+ 
+
+00:32:22.840 --> 00:32:26.320 align:start position:0%
+ 
+ 
+
+00:32:26.320 --> 00:32:28.840 align:start position:0%
+ 
+ 
+
+00:32:28.840 --> 00:32:31.120 align:start position:0%
+ 
+ 
+
+00:32:31.120 --> 00:32:33.310 align:start position:0%
+ 
+ 
+
+00:32:33.310 --> 00:32:40.299 align:start position:0%
+ 
+ 
+
+00:32:40.299 --> 00:32:43.720 align:start position:0%
+ 
+ 
+
+00:32:43.720 --> 00:32:47.500 align:start position:0%
+ 
+ 
+
+00:32:47.500 --> 00:32:50.140 align:start position:0%
+ 
+ 
+
+00:32:50.140 --> 00:32:52.090 align:start position:0%
+ 
+ 
+
+00:32:52.090 --> 00:32:54.400 align:start position:0%
+ 
+ 
+
+00:32:54.400 --> 00:32:57.720 align:start position:0%
+ 
+ 
+
+00:32:57.720 --> 00:33:03.450 align:start position:0%
+ 
+ 
+
+00:33:03.450 --> 00:33:05.950 align:start position:0%
+ 
+ 
+
+00:33:05.950 --> 00:33:09.190 align:start position:0%
+ 
+ 
+
+00:33:09.190 --> 00:33:11.740 align:start position:0%
+ 
+ 
+
+00:33:11.740 --> 00:33:14.770 align:start position:0%
+ 
+ 
+
+00:33:14.770 --> 00:33:16.780 align:start position:0%
+ 
+ 
+
+00:33:16.780 --> 00:33:19.120 align:start position:0%
+ 
+ 
+
+00:33:19.120 --> 00:33:21.039 align:start position:0%
+ 
+ 
+
+00:33:21.039 --> 00:33:23.890 align:start position:0%
+ 
+ 
+
+00:33:23.890 --> 00:33:26.950 align:start position:0%
+ 
+ 
+
+00:33:26.950 --> 00:33:29.020 align:start position:0%
+ 
+ 
+
+00:33:29.020 --> 00:33:32.620 align:start position:0%
+ 
+ 
+
+00:33:32.620 --> 00:33:37.720 align:start position:0%
+ 
+ 
+
+00:33:37.720 --> 00:33:39.880 align:start position:0%
+ 
+ 
+
+00:33:39.880 --> 00:33:41.230 align:start position:0%
+ 
+ 
+
+00:33:41.230 --> 00:33:43.270 align:start position:0%
+ 
+ 
+
+00:33:43.270 --> 00:33:46.870 align:start position:0%
+ 
+ 
+
+00:33:46.870 --> 00:33:48.430 align:start position:0%
+ 
+ 
+
+00:33:48.430 --> 00:33:51.610 align:start position:0%
+ 
+ 
+
+00:33:51.610 --> 00:33:54.460 align:start position:0%
+ 
+ 
+
+00:33:54.460 --> 00:33:56.650 align:start position:0%
+ 
+ 
+
+00:33:56.650 --> 00:33:59.970 align:start position:0%
+ 
+ 
+
+00:33:59.970 --> 00:34:02.020 align:start position:0%
+ 
+ 
+
+00:34:02.020 --> 00:34:03.610 align:start position:0%
+ 
+ 
+
+00:34:03.610 --> 00:34:06.010 align:start position:0%
+ 
+ 
+
+00:34:06.010 --> 00:34:07.690 align:start position:0%
+ 
+ 
+
+00:34:07.690 --> 00:34:10.800 align:start position:0%
+ 
+ 
+
+00:34:10.800 --> 00:34:10.810 align:start position:0%
+ 
+ 
+
+00:34:10.810 --> 00:34:13.149 align:start position:0%
+ 
+
+
+00:34:13.149 --> 00:34:17.029 align:start position:0%
+ 
+ 
+
+00:34:17.029 --> 00:34:19.760 align:start position:0%
+ 
+ 
+
+00:34:19.760 --> 00:34:21.950 align:start position:0%
+ 
+ 
+
+00:34:21.950 --> 00:34:24.829 align:start position:0%
+ 
+ 
+
+00:34:24.829 --> 00:34:26.510 align:start position:0%
+ 
+ 
+
+00:34:26.510 --> 00:34:28.720 align:start position:0%
+ 
+ 
+
+00:34:28.720 --> 00:34:32.029 align:start position:0%
+ 
+ 
+
+00:34:32.029 --> 00:34:34.909 align:start position:0%
+ 
+ 
+
+00:34:34.909 --> 00:34:36.619 align:start position:0%
+ 
+ 
+
+00:34:36.619 --> 00:34:40.430 align:start position:0%
+ 
+ 
+
+00:34:40.430 --> 00:34:45.649 align:start position:0%
+ 
+ 
+
+00:34:45.649 --> 00:34:47.720 align:start position:0%
+ 
+ 
+
+00:34:47.720 --> 00:34:49.940 align:start position:0%
+ 
+ 
+
+00:34:49.940 --> 00:34:52.490 align:start position:0%
+ 
+ 
+
+00:34:52.490 --> 00:34:55.970 align:start position:0%
+ 
+ 
+
+00:34:55.970 --> 00:34:59.299 align:start position:0%
+ 
+ 
+
+00:34:59.299 --> 00:35:03.529 align:start position:0%
+ 
+ 
+
+00:35:03.529 --> 00:35:06.069 align:start position:0%
+ 
+ 
+
+00:35:06.069 --> 00:35:09.529 align:start position:0%
+ 
+ 
+
+00:35:09.529 --> 00:35:14.569 align:start position:0%
+ 
+ 
+
+00:35:14.569 --> 00:35:16.549 align:start position:0%
+ 
+ 
+
+00:35:16.549 --> 00:35:18.289 align:start position:0%
+ 
+ 
+
+00:35:18.289 --> 00:35:20.539 align:start position:0%
+ 
+ 
+
+00:35:20.539 --> 00:35:22.849 align:start position:0%
+ 
+ 
+
+00:35:22.849 --> 00:35:24.380 align:start position:0%
+ 
+ 
+
+00:35:24.380 --> 00:35:27.529 align:start position:0%
+ 
+ 
+
+00:35:27.529 --> 00:35:29.480 align:start position:0%
+ 
+ 
+
+00:35:29.480 --> 00:35:32.660 align:start position:0%
+ 
+ 
+
+00:35:32.660 --> 00:35:34.430 align:start position:0%
+ 
+ 
+
+00:35:34.430 --> 00:35:37.010 align:start position:0%
+ 
+ 
+
+00:35:37.010 --> 00:35:39.829 align:start position:0%
+ 
+ 
+
+00:35:39.829 --> 00:35:44.329 align:start position:0%
+ 
+ 
+
+00:35:44.329 --> 00:35:46.849 align:start position:0%
+ 
+ 
+
+00:35:46.849 --> 00:35:49.269 align:start position:0%
+ 
+ 
+
+00:35:49.269 --> 00:35:52.430 align:start position:0%
+ 
+ 
+
+00:35:52.430 --> 00:35:55.940 align:start position:0%
+ 
+ 
+
+00:35:55.940 --> 00:35:58.519 align:start position:0%
+ 
+ 
+
+00:35:58.519 --> 00:36:01.620 align:start position:0%
+ 
+ 
+
+00:36:01.620 --> 00:36:05.400 align:start position:0%
+ 
+ 
+
+00:36:05.400 --> 00:36:06.870 align:start position:0%
+ 
+ 
+
+00:36:06.870 --> 00:36:10.220 align:start position:0%
+ 
+ 
+
+00:36:10.220 --> 00:36:12.620 align:start position:0%
+ 
+ 
+
+00:36:12.620 --> 00:36:16.770 align:start position:0%
+ 
+ 
+
+00:36:16.770 --> 00:36:19.290 align:start position:0%
+ 
+ 
+
+00:36:19.290 --> 00:36:22.500 align:start position:0%
+ 
+ 
+
+00:36:22.500 --> 00:36:27.450 align:start position:0%
+ 
+ 
+
+00:36:27.450 --> 00:36:31.440 align:start position:0%
+ 
+ 
+
+00:36:31.440 --> 00:36:33.480 align:start position:0%
+ 
+ 
+
+00:36:33.480 --> 00:36:35.460 align:start position:0%
+ 
+ 
+
+00:36:35.460 --> 00:36:37.440 align:start position:0%
+ 
+ 
+
+00:36:37.440 --> 00:36:40.050 align:start position:0%
+ 
+ 
+
+00:36:40.050 --> 00:36:42.270 align:start position:0%
+ 
+ 
+
+00:36:42.270 --> 00:36:48.330 align:start position:0%
+ 
+ 
+
+00:36:48.330 --> 00:36:50.640 align:start position:0%
+ 
+ 
+
+00:36:50.640 --> 00:36:52.590 align:start position:0%
+ 
+ 
+
+00:36:52.590 --> 00:36:55.350 align:start position:0%
+ 
+ 
+
+00:36:55.350 --> 00:36:57.780 align:start position:0%
+ 
+ 
+
+00:36:57.780 --> 00:37:01.200 align:start position:0%
+ 
+ 
+
+00:37:01.200 --> 00:37:02.910 align:start position:0%
+ 
+ 
+
+00:37:02.910 --> 00:37:08.160 align:start position:0%
+ 
+ 
+
+00:37:08.160 --> 00:37:10.710 align:start position:0%
+ 
+ 
+
+00:37:10.710 --> 00:37:12.990 align:start position:0%
+ 
+ 
+
+00:37:12.990 --> 00:37:17.370 align:start position:0%
+ 
+ 
+
+00:37:17.370 --> 00:37:18.930 align:start position:0%
+ 
+ 
+
+00:37:18.930 --> 00:37:23.040 align:start position:0%
+ 
+ 
+
+00:37:23.040 --> 00:37:24.840 align:start position:0%
+ 
+ 
+
+00:37:24.840 --> 00:37:27.030 align:start position:0%
+ 
+ 
+
+00:37:27.030 --> 00:37:29.850 align:start position:0%
+ 
+ 
+
+00:37:29.850 --> 00:37:31.830 align:start position:0%
+ 
+ 
+
+00:37:31.830 --> 00:37:34.380 align:start position:0%
+ 
+ 
+
+00:37:34.380 --> 00:37:36.150 align:start position:0%
+ 
+ 
+
+00:37:36.150 --> 00:37:38.790 align:start position:0%
+ 
+ 
+
+00:37:38.790 --> 00:37:41.600 align:start position:0%
+ 
+ 
+
+00:37:41.600 --> 00:37:44.820 align:start position:0%
+ 
+ 
+
+00:37:44.820 --> 00:37:47.700 align:start position:0%
+ 
+ 
+
+00:37:47.700 --> 00:37:51.840 align:start position:0%
+ 
+ 
+
+00:37:51.840 --> 00:37:54.150 align:start position:0%
+ 
+ 
+
+00:37:54.150 --> 00:37:56.580 align:start position:0%
+ 
+ 
+
+00:37:56.580 --> 00:37:59.970 align:start position:0%
+ 
+ 
+
+00:37:59.970 --> 00:37:59.980 align:start position:0%
+ 
+ 
+
+00:37:59.980 --> 00:38:01.020 align:start position:0%
+ 
+
+
+00:38:01.020 --> 00:38:05.010 align:start position:0%
+ 
+ 
+
+00:38:05.010 --> 00:38:06.570 align:start position:0%
+ 
+ 
+
+00:38:06.570 --> 00:38:09.600 align:start position:0%
+ 
+ 
+
+00:38:09.600 --> 00:38:12.240 align:start position:0%
+ 
+ 
+
+00:38:12.240 --> 00:38:15.060 align:start position:0%
+ 
+ 
+
+00:38:15.060 --> 00:38:15.070 align:start position:0%
+ 
+ 
+
+00:38:15.070 --> 00:38:15.359 align:start position:0%
+ 
+
+
+00:38:15.359 --> 00:38:17.400 align:start position:0%
+ 
+ 
+
+00:38:17.400 --> 00:38:23.099 align:start position:0%
+ 
+ 
+
+00:38:23.099 --> 00:38:25.680 align:start position:0%
+ 
+ 
+
+00:38:25.680 --> 00:38:29.900 align:start position:0%
+ 
+ 
+
+00:38:29.900 --> 00:38:34.200 align:start position:0%
+ 
+ 
+
+00:38:34.200 --> 00:38:36.660 align:start position:0%
+ 
+ 
+
+00:38:36.660 --> 00:38:45.960 align:start position:0%
+ 
+ 
+
+00:38:45.960 --> 00:38:48.269 align:start position:0%
+ 
+ 
+
+00:38:48.269 --> 00:38:51.839 align:start position:0%
+ 
+ 
+
+00:38:51.839 --> 00:38:54.539 align:start position:0%
+ 
+ 
+
+00:38:54.539 --> 00:39:00.660 align:start position:0%
+ 
+ 
+
+00:39:00.660 --> 00:39:02.970 align:start position:0%
+ 
+ 
+
+00:39:02.970 --> 00:39:05.099 align:start position:0%
+ 
+ 
+
+00:39:05.099 --> 00:39:07.319 align:start position:0%
+ 
+ 
+
+00:39:07.319 --> 00:39:09.390 align:start position:0%
+ 
+ 
+
+00:39:09.390 --> 00:39:12.180 align:start position:0%
+ 
+ 
+
+00:39:12.180 --> 00:39:13.410 align:start position:0%
+ 
+ 
+
+00:39:13.410 --> 00:39:15.029 align:start position:0%
+ 
+ 
+
+00:39:15.029 --> 00:39:18.440 align:start position:0%
+ 
+ 
+
+00:39:18.440 --> 00:39:21.059 align:start position:0%
+ 
+ 
+
+00:39:21.059 --> 00:39:22.769 align:start position:0%
+ 
+ 
+
+00:39:22.769 --> 00:39:25.019 align:start position:0%
+ 
+ 
+
+00:39:25.019 --> 00:39:28.140 align:start position:0%
+ 
+ 
+
+00:39:28.140 --> 00:39:32.720 align:start position:0%
+ 
+ 
+
+00:39:32.720 --> 00:39:36.140 align:start position:0%
+ 
+ 
+
+00:39:36.140 --> 00:39:39.329 align:start position:0%
+ 
+ 
+
+00:39:39.329 --> 00:39:44.609 align:start position:0%
+ 
+ 
+
+00:39:44.609 --> 00:39:47.220 align:start position:0%
+ 
+ 
+
+00:39:47.220 --> 00:39:49.710 align:start position:0%
+ 
+ 
+
+00:39:49.710 --> 00:39:52.859 align:start position:0%
+ 
+ 
+
+00:39:52.859 --> 00:39:55.739 align:start position:0%
+ 
+ 
+
+00:39:55.739 --> 00:39:57.479 align:start position:0%
+ 
+ 
+
+00:39:57.479 --> 00:39:59.970 align:start position:0%
+ 
+ 
+
+00:39:59.970 --> 00:40:03.960 align:start position:0%
+ 
+ 
+
+00:40:03.960 --> 00:40:06.390 align:start position:0%
+ 
+ 
+
+00:40:06.390 --> 00:40:12.120 align:start position:0%
+ 
+ 
+
+00:40:12.120 --> 00:40:14.160 align:start position:0%
+ 
+ 
+
+00:40:14.160 --> 00:40:16.229 align:start position:0%
+ 
+ 
+
+00:40:16.229 --> 00:40:17.880 align:start position:0%
+ 
+ 
+
+00:40:17.880 --> 00:40:20.779 align:start position:0%
+ 
+ 
+
+00:40:20.779 --> 00:40:23.190 align:start position:0%
+ 
+ 
+
+00:40:23.190 --> 00:40:25.890 align:start position:0%
+ 
+ 
+
+00:40:25.890 --> 00:40:29.380 align:start position:0%
+ 
+ 
+
+00:40:29.380 --> 00:40:34.480 align:start position:0%
+ 
+ 
+
+00:40:34.480 --> 00:40:36.250 align:start position:0%
+ 
+ 
+
+00:40:36.250 --> 00:40:39.160 align:start position:0%
+ 
+ 
+
+00:40:39.160 --> 00:40:42.730 align:start position:0%
+ 
+ 
+
+00:40:42.730 --> 00:40:44.800 align:start position:0%
+ 
+ 
+
+00:40:44.800 --> 00:40:47.860 align:start position:0%
+ 
+ 
+
+00:40:47.860 --> 00:40:50.590 align:start position:0%
+ 
+ 
+
+00:40:50.590 --> 00:40:53.590 align:start position:0%
+ 
+ 
+
+00:40:53.590 --> 00:40:55.810 align:start position:0%
+ 
+ 
+
+00:40:55.810 --> 00:40:58.450 align:start position:0%
+ 
+ 
+
+00:40:58.450 --> 00:41:02.290 align:start position:0%
+ 
+ 
+
+00:41:02.290 --> 00:41:06.750 align:start position:0%
+ 
+ 
+
+00:41:06.750 --> 00:41:09.340 align:start position:0%
+ 
+ 
+
+00:41:09.340 --> 00:41:11.770 align:start position:0%
+ 
+ 
+
+00:41:11.770 --> 00:41:14.890 align:start position:0%
+ 
+ 
+
+00:41:14.890 --> 00:41:17.200 align:start position:0%
+ 
+ 
+
+00:41:17.200 --> 00:41:21.720 align:start position:0%
+ 
+ 
+
+00:41:21.720 --> 00:41:24.130 align:start position:0%
+ 
+ 
+
+00:41:24.130 --> 00:41:26.530 align:start position:0%
+ 
+ 
+
+00:41:26.530 --> 00:41:28.330 align:start position:0%
+ 
+ 
+
+00:41:28.330 --> 00:41:30.370 align:start position:0%
+ 
+ 
+
+00:41:30.370 --> 00:41:33.130 align:start position:0%
+ 
+ 
+
+00:41:33.130 --> 00:41:35.290 align:start position:0%
+ 
+ 
+
+00:41:35.290 --> 00:41:36.790 align:start position:0%
+ 
+ 
+
+00:41:36.790 --> 00:41:39.280 align:start position:0%
+ 
+ 
+
+00:41:39.280 --> 00:41:42.490 align:start position:0%
+ 
+ 
+
+00:41:42.490 --> 00:41:45.010 align:start position:0%
+ 
+ 
+
+00:41:45.010 --> 00:41:46.750 align:start position:0%
+ 
+ 
+
+00:41:46.750 --> 00:41:48.490 align:start position:0%
+ 
+ 
+
+00:41:48.490 --> 00:41:51.760 align:start position:0%
+ 
+ 
+
+00:41:51.760 --> 00:41:56.580 align:start position:0%
+ 
+ 
+
+00:41:56.580 --> 00:41:58.600 align:start position:0%
+ 
+ 
+
+00:41:58.600 --> 00:42:01.570 align:start position:0%
+ 
+ 
+
+00:42:01.570 --> 00:42:03.490 align:start position:0%
+ 
+ 
+
+00:42:03.490 --> 00:42:06.670 align:start position:0%
+ 
+ 
+
+00:42:06.670 --> 00:42:09.700 align:start position:0%
+ 
+ 
+
+00:42:09.700 --> 00:42:14.170 align:start position:0%
+ 
+ 
+
+00:42:14.170 --> 00:42:18.220 align:start position:0%
+ 
+ 
+
+00:42:18.220 --> 00:42:21.850 align:start position:0%
+ 
+ 
+
+00:42:21.850 --> 00:42:24.040 align:start position:0%
+ 
+ 
+
+00:42:24.040 --> 00:42:25.750 align:start position:0%
+ 
+ 
+
+00:42:25.750 --> 00:42:27.940 align:start position:0%
+ 
+ 
+
+00:42:27.940 --> 00:42:29.800 align:start position:0%
+ 
+ 
+
+00:42:29.800 --> 00:42:31.930 align:start position:0%
+ 
+ 
+
+00:42:31.930 --> 00:42:33.190 align:start position:0%
+ 
+ 
+
+00:42:33.190 --> 00:42:36.010 align:start position:0%
+ 
+ 
+
+00:42:36.010 --> 00:42:37.330 align:start position:0%
+ 
+ 
+
+00:42:37.330 --> 00:42:39.670 align:start position:0%
+ 
+ 
+
+00:42:39.670 --> 00:42:42.280 align:start position:0%
+ 
+ 
+
+00:42:42.280 --> 00:42:44.740 align:start position:0%
+ 
+ 
+
+00:42:44.740 --> 00:42:47.260 align:start position:0%
+ 
+ 
+
+00:42:47.260 --> 00:42:50.710 align:start position:0%
+ 
+ 
+
+00:42:50.710 --> 00:42:53.410 align:start position:0%
+ 
+ 
+
+00:42:53.410 --> 00:42:56.290 align:start position:0%
+ 
+ 
+
+00:42:56.290 --> 00:42:58.710 align:start position:0%
+ 
+ 
+
+00:42:58.710 --> 00:43:01.000 align:start position:0%
+ 
+ 
+
+00:43:01.000 --> 00:43:03.070 align:start position:0%
+ 
+ 
+
+00:43:03.070 --> 00:43:07.060 align:start position:0%
+ 
+ 
+
+00:43:07.060 --> 00:43:09.100 align:start position:0%
+ 
+ 
+
+00:43:09.100 --> 00:43:12.640 align:start position:0%
+ 
+ 
+
+00:43:12.640 --> 00:43:17.470 align:start position:0%
+ 
+ 
+
+00:43:17.470 --> 00:43:19.150 align:start position:0%
+ 
+ 
+
+00:43:19.150 --> 00:43:22.720 align:start position:0%
+ 
+ 
+
+00:43:22.720 --> 00:43:25.360 align:start position:0%
+ 
+ 
+
+00:43:25.360 --> 00:43:29.230 align:start position:0%
+ 
+ 
+
+00:43:29.230 --> 00:43:30.790 align:start position:0%
+ 
+ 
+
+00:43:30.790 --> 00:43:33.280 align:start position:0%
+ 
+ 
+
+00:43:33.280 --> 00:43:35.230 align:start position:0%
+ 
+ 
+
+00:43:35.230 --> 00:43:38.020 align:start position:0%
+ 
+ 
+
+00:43:38.020 --> 00:43:39.970 align:start position:0%
+ 
+ 
+
+00:43:39.970 --> 00:43:41.920 align:start position:0%
+ 
+ 
+
+00:43:41.920 --> 00:43:44.170 align:start position:0%
+ 
+ 
+
+00:43:44.170 --> 00:43:46.720 align:start position:0%
+ 
+ 
+
+00:43:46.720 --> 00:43:50.740 align:start position:0%
+ 
+ 
+
+00:43:50.740 --> 00:43:53.890 align:start position:0%
+ 
+ 
+
+00:43:53.890 --> 00:43:55.960 align:start position:0%
+ 
+ 
+
+00:43:55.960 --> 00:43:57.880 align:start position:0%
+ 
+ 
+
+00:43:57.880 --> 00:44:00.490 align:start position:0%
+ 
+ 
+
+00:44:00.490 --> 00:44:02.310 align:start position:0%
+ 
+ 
+
+00:44:02.310 --> 00:44:05.410 align:start position:0%
+ 
+ 
+
+00:44:05.410 --> 00:44:08.080 align:start position:0%
+ 
+ 
+
+00:44:08.080 --> 00:44:10.240 align:start position:0%
+ 
+ 
+
+00:44:10.240 --> 00:44:11.830 align:start position:0%
+ 
+ 
+
+00:44:11.830 --> 00:44:14.080 align:start position:0%
+ 
+ 
+
+00:44:14.080 --> 00:44:16.150 align:start position:0%
+ 
+ 
+
+00:44:16.150 --> 00:44:19.150 align:start position:0%
+ 
+ 
+
+00:44:19.150 --> 00:44:21.220 align:start position:0%
+ 
+ 
+
+00:44:21.220 --> 00:44:25.360 align:start position:0%
+ 
+ 
+
+00:44:25.360 --> 00:44:27.100 align:start position:0%
+ 
+ 
+
+00:44:27.100 --> 00:44:28.600 align:start position:0%
+ 
+ 
+
+00:44:28.600 --> 00:44:34.360 align:start position:0%
+ 
+ 
+
+00:44:34.360 --> 00:44:36.750 align:start position:0%
+ 
+ 
+
+00:44:36.750 --> 00:44:36.760 align:start position:0%
+ 
+ 
+
+00:44:36.760 --> 00:45:01.309 align:start position:0%
+ 
+
+

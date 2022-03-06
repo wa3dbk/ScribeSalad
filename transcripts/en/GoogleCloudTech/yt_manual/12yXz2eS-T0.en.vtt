@@ -1,0 +1,459 @@
+WEBVTT
+Kind: captions
+Language: en
+
+00:00:00.037 --> 00:00:02.620
+ROBERT KUBIS: In this episode
+of "Things-I-Learned About Cloud
+
+00:00:02.620 --> 00:00:04.411
+Spanner," we look at
+write-batching to help
+
+00:00:04.411 --> 00:00:07.380
+a database specialist
+accelerate their data load.
+
+00:00:07.380 --> 00:00:08.850
+Will we find the
+right strategies
+
+00:00:08.850 --> 00:00:10.230
+for higher throughputs?
+
+00:00:10.230 --> 00:00:11.651
+Stay tuned to find out.
+
+00:00:11.651 --> 00:00:14.880
+[MUSIC PLAYING]
+
+00:00:14.880 --> 00:00:17.460
+In the previous episode,
+I helped my friend Anna,
+
+00:00:17.460 --> 00:00:19.290
+and her company,
+Pile Of Gadgets,
+
+00:00:19.290 --> 00:00:21.430
+an online shop for gadget fans.
+
+00:00:21.430 --> 00:00:23.310
+We were able to solve
+a hotspotting issue
+
+00:00:23.310 --> 00:00:25.740
+during the data load that
+kept the throughput low
+
+00:00:25.740 --> 00:00:28.680
+and the Cloud Spanner
+instance under-utilized.
+
+00:00:28.680 --> 00:00:31.260
+By choosing new,
+well-distributed primary keys
+
+00:00:31.260 --> 00:00:33.360
+for the tables,
+we saw an increase
+
+00:00:33.360 --> 00:00:35.770
+in throughput and utilization.
+
+00:00:35.770 --> 00:00:38.430
+Now we are going to see if
+we can improve the data load
+
+00:00:38.430 --> 00:00:40.920
+performance even further.
+
+00:00:40.920 --> 00:00:44.076
+The data load app, which reads
+the records from csv files
+
+00:00:44.076 --> 00:00:45.450
+and writes them
+to Cloud Spanner,
+
+00:00:45.450 --> 00:00:48.270
+was writing only one
+row per transaction.
+
+00:00:48.270 --> 00:00:51.270
+Since our goal is to load
+data as fast as possible,
+
+00:00:51.270 --> 00:00:53.010
+loading with a single
+row per transaction
+
+00:00:53.010 --> 00:00:55.690
+doesn't sound like
+the optimal solution.
+
+00:00:55.690 --> 00:00:57.480
+It seemed obvious
+to batch as many
+
+00:00:57.480 --> 00:01:00.420
+writes as possible together to
+see a considerable throughput
+
+00:01:00.420 --> 00:01:03.990
+boost, while staying below
+transaction limits, of course.
+
+00:01:03.990 --> 00:01:06.720
+The records we were
+loading are fairly small,
+
+00:01:06.720 --> 00:01:10.050
+so we increased the batch size
+to 1,000 rows per transaction,
+
+00:01:10.050 --> 00:01:12.150
+and expected much
+higher throughputs
+
+00:01:12.150 --> 00:01:15.070
+due to the reduced client-server
+communications and transaction
+
+00:01:15.070 --> 00:01:16.110
+overhead.
+
+00:01:16.110 --> 00:01:18.390
+Surprisingly, we
+only saw a bit more
+
+00:01:18.390 --> 00:01:20.160
+than doubling of our
+write throughput--
+
+00:01:20.160 --> 00:01:23.370
+50,000 rows instead of
+the previous 20,000 rows
+
+00:01:23.370 --> 00:01:24.090
+per second.
+
+00:01:24.090 --> 00:01:25.470
+Don't get me wrong--
+
+00:01:25.470 --> 00:01:27.570
+more than doubling the
+throughput is great.
+
+00:01:27.570 --> 00:01:31.530
+But we wanted to see if we
+can improve this even further.
+
+00:01:31.530 --> 00:01:33.990
+As it turns out, we were
+still missing a step
+
+00:01:33.990 --> 00:01:36.420
+to get the real
+benefits of batching.
+
+00:01:36.420 --> 00:01:38.220
+The rows that were
+batched together
+
+00:01:38.220 --> 00:01:40.200
+have well-distributed
+primary keys,
+
+00:01:40.200 --> 00:01:42.390
+the ones we introduced
+in the previous episode
+
+00:01:42.390 --> 00:01:45.090
+to fix the hotspotting
+issue during data load.
+
+00:01:45.090 --> 00:01:47.915
+That means writing
+1,000 of those rows
+
+00:01:47.915 --> 00:01:51.240
+with well-distributed primary
+keys in a single transaction
+
+00:01:51.240 --> 00:01:54.250
+ends up involving many,
+many table splits.
+
+00:01:54.250 --> 00:01:57.570
+As you know, a table is
+split based on size and load
+
+00:01:57.570 --> 00:02:00.570
+patterns in ranges of rows
+ordered alphabetically
+
+00:02:00.570 --> 00:02:02.130
+by primary key.
+
+00:02:02.130 --> 00:02:04.350
+The responsibility
+for the split is then
+
+00:02:04.350 --> 00:02:06.270
+distributed among the
+available compute nodes,
+
+00:02:06.270 --> 00:02:09.960
+where each split is controlled
+by exactly one node.
+
+00:02:09.960 --> 00:02:13.120
+Now, when we write to multiple
+splits in a single transaction,
+
+00:02:13.120 --> 00:02:15.000
+Cloud Spanner
+needs to coordinate
+
+00:02:15.000 --> 00:02:18.450
+between all the nodes that are
+responsible for these splits.
+
+00:02:18.450 --> 00:02:21.690
+For that, it needs to obtain
+locks and serialize the access
+
+00:02:21.690 --> 00:02:25.470
+for all outstanding transactions
+writing to any of these splits,
+
+00:02:25.470 --> 00:02:28.240
+using the two-phase
+commit protocol.
+
+00:02:28.240 --> 00:02:30.000
+This means the
+benefits of having
+
+00:02:30.000 --> 00:02:32.430
+multiple rows in one
+transaction are reduced
+
+00:02:32.430 --> 00:02:34.140
+by coordination
+overhead incurred
+
+00:02:34.140 --> 00:02:36.390
+by spanning multiple splits.
+
+00:02:36.390 --> 00:02:38.850
+Armed with this knowledge of
+the inner workings of Cloud
+
+00:02:38.850 --> 00:02:41.880
+Spanner, we needed a way to
+reduce the number of splits
+
+00:02:41.880 --> 00:02:45.180
+accessed by each transaction
+to gain the maximum benefit
+
+00:02:45.180 --> 00:02:46.650
+of batching.
+
+00:02:46.650 --> 00:02:48.630
+We went back to
+our loader program
+
+00:02:48.630 --> 00:02:52.020
+and modified it to load a large
+number of rows into cache.
+
+00:02:52.020 --> 00:02:55.230
+We then sorted these rows
+alphabetically by primary key--
+
+00:02:55.230 --> 00:02:57.330
+the same way the table
+splits are ordered--
+
+00:02:57.330 --> 00:03:00.060
+and partitioned them by
+our chosen batch size.
+
+00:03:00.060 --> 00:03:01.950
+From there, we created
+one transaction
+
+00:03:01.950 --> 00:03:04.230
+for each of the partitions.
+
+00:03:04.230 --> 00:03:06.590
+Some might ask here,
+didn't we just introduce
+
+00:03:06.590 --> 00:03:08.670
+well-distributed
+primary keys to avoid
+
+00:03:08.670 --> 00:03:10.750
+hotspotting in the
+previous episode,
+
+00:03:10.750 --> 00:03:12.420
+and now we are sorting?
+
+00:03:12.420 --> 00:03:13.200
+Right.
+
+00:03:13.200 --> 00:03:15.570
+The trick here is that
+the ordered partitions
+
+00:03:15.570 --> 00:03:18.780
+are distinct in the primary
+key ranges they write to.
+
+00:03:18.780 --> 00:03:22.230
+Spanning fewer table splits
+ensues, causing less contention
+
+00:03:22.230 --> 00:03:23.610
+during writes.
+
+00:03:23.610 --> 00:03:25.710
+As you can see in
+the graph, this
+
+00:03:25.710 --> 00:03:27.960
+improved our load
+performance significantly,
+
+00:03:27.960 --> 00:03:32.230
+to about 120,000 rows per
+second, a six-fold increase
+
+00:03:32.230 --> 00:03:34.320
+to where we started from.
+
+00:03:34.320 --> 00:03:36.420
+Now, to find the optimal
+load performance,
+
+00:03:36.420 --> 00:03:39.240
+we have to keep a couple
+of limitations in mind.
+
+00:03:39.240 --> 00:03:41.910
+Besides optimal size
+ranges for transactions,
+
+00:03:41.910 --> 00:03:45.330
+between 1 to 10 megabytes,
+there is a strict limitation
+
+00:03:45.330 --> 00:03:48.210
+of 20,000 mutation
+per transaction.
+
+00:03:48.210 --> 00:03:49.410
+Mutation?
+
+00:03:49.410 --> 00:03:50.370
+What is that?
+
+00:03:50.370 --> 00:03:53.020
+A mutation has a
+special meaning here,
+
+00:03:53.020 --> 00:03:56.810
+where any modification of a
+single cell in a table or index
+
+00:03:56.810 --> 00:04:00.090
+accounts for one
+mutation, except if you
+
+00:04:00.090 --> 00:04:02.010
+delete a range of rows.
+
+00:04:02.010 --> 00:04:05.250
+So for example, if you have
+a table with five columns,
+
+00:04:05.250 --> 00:04:08.110
+and an index defined on
+three of those columns,
+
+00:04:08.110 --> 00:04:11.490
+including the primary key
+columns, each instance of a row
+
+00:04:11.490 --> 00:04:14.440
+accounts for eight mutations.
+
+00:04:14.440 --> 00:04:16.529
+Now, if you don't want
+to write all this logic
+
+00:04:16.529 --> 00:04:19.380
+into your own data loader,
+you can use the Cloud Dataflow
+
+00:04:19.380 --> 00:04:21.209
+connector for Cloud Spanner.
+
+00:04:21.209 --> 00:04:24.330
+The connector does the
+sorting, partitioning,
+
+00:04:24.330 --> 00:04:27.540
+and scaling out writes
+automatically for you.
+
+00:04:27.540 --> 00:04:30.210
+Check out the sample source code
+we linked in the description
+
+00:04:30.210 --> 00:04:32.460
+to learn more about it.
+
+00:04:32.460 --> 00:04:35.010
+After all these data
+load optimizations,
+
+00:04:35.010 --> 00:04:36.580
+my friend's company,
+Pile of Gadgets,
+
+00:04:36.580 --> 00:04:38.430
+was now happy with
+the load performance,
+
+00:04:38.430 --> 00:04:40.680
+and started to look
+into how to optimize
+
+00:04:40.680 --> 00:04:43.440
+the apps for scalability
+and performance.
+
+00:04:43.440 --> 00:04:46.840
+Unfortunately, we are out
+of time in this episode.
+
+00:04:46.840 --> 00:04:48.835
+So stay tuned for
+our next one, where
+
+00:04:48.835 --> 00:04:52.530
+we show how to design our
+transactions for scalability
+
+00:04:52.530 --> 00:04:53.840
+and performance.
+
+00:04:53.840 --> 00:04:57.190
+[MUSIC PLAYING]
+
