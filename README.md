@@ -1,6 +1,6 @@
 # ScribeSalad 
 
-In absence of searchable transcripts, many interesting YouTube videos, podcasts, lectures and talks are hard to explore, quote and summarize. **ScribeSalad** is a multi-lingual open data project regrouping over 190k YouTube video transcripts discussing social and political issues, psychology, history and scientific topics ranging from biology, mathematics to artificial intelligence : TedX, Yale courses, MIT lectures, National Geographic, The Joe Rogan Experience, Big Think, IQ squared, Jordan B. Peterson talks, Tim Ferris, Jocko Podcast and more. This project is a first step towards making great content more available and inspiring speakers, storytellers, interviewers and scientists better heard.
+In absence of searchable transcripts, many interesting YouTube videos, podcasts, lectures and talks are hard to explore, quote and summarize. **ScribeSalad** is a multi-lingual open data project regrouping over 220k YouTube video transcripts discussing social and political issues, psychology, history and scientific topics ranging from biology, mathematics to artificial intelligence : TedX, Yale courses, MIT lectures, National Geographic, The Joe Rogan Experience, Big Think, IQ squared, Jordan B. Peterson talks, Tim Ferris, Jocko Podcast and more. This project is a first step towards making great content more available and inspiring speakers, storytellers, interviewers and scientists better heard.
          
 
 ## Available transcripts (in english)
@@ -17,10 +17,12 @@ In absence of searchable transcripts, many interesting YouTube videos, podcasts,
 
 * **S-V :** [Skavlan](transcripts/en/Skavlan), [Siraj Raval](transcripts/en/Siraj_Raval), [Storytellers](transcripts/en/Storytellers), [TED](transcripts/en/TED), [The Linguistics Channel](transcripts/en/The_Linguistics_Channel), [The Monday Morning Podcast](transcripts/en/TAMMP), [Theo Von](transcripts/en/TheoVon), [Theo Von Clips](transcripts/en/TheoVonClips), [TheSchoolOfLife](transcripts/en/TheSchoolOfLife), [ThinkBigAnimation](transcripts/en/ThinkBigAnimation), [TigerBellyClips](transcripts/en/TigerBellyClips), [Tim Ferris](transcripts/en/Tim_Ferris), [TFATK](transcripts/en/TFATK), [TwoCents](transcripts/en/TwoCents), [Visual politik](transcripts/en/Visual_politik)
 
-* **W-Y :** [WhatIf](transcripts/en/WhatIf), [Wired](transcripts/en/Wired), [Wisecrack](transcripts/en/Wisecrack), [Wordporn](transcripts/en/Wordporn), [Yale Courses](transcripts/en/YaleCourses), [Your Mom's House Podcast](transcripts/en/YourMomsHousePodcast)
+* **W-Y :** [WendoverProductions](transcripts/en/), [WhatIf](transcripts/en/WhatIf), [WhitneyCummings](transcripts/en/WhitneyCummings), [Wired](transcripts/en/Wired), [Wisecrack](transcripts/en/Wisecrack), [Wolfram](transcripts/en/Wolfram), [YCombinator](transcripts/en/YCombinator), [Yale Courses](transcripts/en/YaleCourses), [YangSpeaks](transcripts/en/YangSpeaks), [YannLeCun](transcripts/en/YannLeCun), [YannicKilcher](transcripts/en/YannicKilcher), [Yeagerists](transcripts/en/Yeagerists), [Your Mom's House Podcast](transcripts/en/YourMomsHousePodcast)
+ 
 
 ## Other languages 
-[Arabic (ar)](transcripts/ar/), [French (fr)](transcripts/fr/), [German (de)](transcripts/de/), [Spanish (sp)](transcripts/sp/), [Turkish (tr)](transcripts/tr/), [Portuguese (pt)](transcripts/pt/), [Italian (it)](transcripts/it/)
+[Arabic (ar)](transcripts/ar/), [French (fr)](transcripts/fr/), [German (de)](transcripts/de/), [Spanish (es)](transcripts/es/), [Russian (ru)](transcripts/ru/), [Turkish (tr)](transcripts/tr/), [Portuguese (pt)](transcripts/pt/), [Italian (it)](transcripts/it/), [Japanese (ja)](transcripts/ja/), [Korean (ko)](transcripts/ko/)
+
 
 ## Transcription quality 
 Some of the transcriptions originate from YouTube (subtitles uploaded by the video's owner) while the rest are generated automatically using a high-accuracy large-vocabulary continuous speech recognition system (~90% of accuracy in clean conditions : no background noise, no heavy accents and good quality audio). 
