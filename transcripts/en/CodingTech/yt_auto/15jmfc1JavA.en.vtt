@@ -1,0 +1,1264 @@
+WEBVTT
+Kind: captions
+Language: en
+
+00:00:00.399 --> 00:00:02.149 align:start position:0%
+ 
+yeah so i'm just gonna share a little  debugging story with you and um  i just it's it's not really um  maybe in the end the bug is is not  terribly complex but i still feel it  uh contains all of the essence of what i  find exciting about  programming you know and that is the  unexpected uh  so one day a bunch of my co-workers came  back from lunch  and they discovered that everyone's copy  of chrome had crashed  and it would just keep crashing it was  like no you could not open crash  so obviously productivity plummeted to  zero uh  and and i thought this was wonderful  already but uh  um but you know um first principle of  debugging you isolate what  changed and you know so the question was  um well was there just like a chrome  update and that killed everything but  there was nothing online  um no evidence this was anywhere else  but here so you're like well what else  um you know what else happened uh you  know in our environment and  the only other thing is we had bought  this printer  and then we got suspicious because we  had named the printer  uh an emoji we had named it printer  emoji  so we unplugged the printer right and  chrome stopped crashing  and then uh we plugged it in again and  boom  all everybody's copy of chrome on the  entire network  crashed and so okay  you know obviously we start debugging  this but i have to say i said this is  this is the greatest day of my life  that's how excited that's how excited i  got i get about  issues like this um so what was the  first thing  first approach for this uh so the first  thing that i did is i dove  into gdb on um on the system  now this is actually only mac os chromes  this was a  company with a lot of almost everyone  was running macs so  pretty pretty dominant um on mac os  you'd usually use lldb but uh  old dogs new tricks i'm sort of more  comfortable with gdb  so anyway we see here that like um  chrome is crashing in  strln which is the c standard library  function get the length of a string  um and uh so that initially is really  exciting because  uh something terrible is probably  happening right  and uh um but we we go into  of course chrome is an open source  although we'll get to  more of that later um but um  at the very least we can always we can  always disassemble uh  we can always look at the registers  that's one of my favorite things to do  the  the registers after a program has  crashed often tells such a fascinating  story  they tell us all sorts of places it's  been but in this case uh  i actually it's a pretty boring  registered dunk we can see that  in particular like the stack is is fine  all these things are fine  and rdi which is the first argument to  strlen  is zero so we just have a null pointer  dereference  it's still exciting because we can  reduce productivity in the office to  zero anytime we want but  you know we can't we can't necessarily  make chrome dance for us  so the next step is well what's  happening what is the printer  doing uh and so we turned to  an excellent tool um called tcp dump and  there actually is a  an amazing zine that just came out uh  that's that should be available here i  think maybe uh that will talk that will  tell you all about tcp dump and how  wonderful it is and  and and how to use it so i won't say too  much about that  but i do want to mention um paired with  that is another tool that  uh i really love which is called tcp  replay  which allows you to replay packet dumps  so you  tcp dump spies on your network shows you  what packets are going by your network  interface  a tcp replay lets you replay those  packets right  so this was a way for us to figure out  um  what what traffic is actually causing  this problem and so we apply an idea  from  property testing and if you don't  already know what property testing is  and you don't already do it you should  come up to me afterwards and talk to me  about it because  i think it's a really important idea and  actually we have the author of  an excellent c property testing library  called theft here with us it's wonderful  library you should check it out  but a really interesting idea from quick  check and all these things  is the shrinking of inputs so uh  you have some we captured a bunch of  traffic where the printer was spewing  out its weaponized emoji  and you know and then we we bisect it  and we  we chop it down until tcp replay is just  playing back  um you know just the packets that are  causing this problem  it turns out it's these two packets and  then nicely we can package into a script  you know  starbucks.sh that  that triggers the problem wherever we  like um  you know it's very very convenient  uh but so uh what are these packets  um so these are these are mdns packets  uh which is the  multicast dns uh and of course it's like  notable  or i immediately looked at the rfc um  oh actually i'll get back to that i  looked at the rfc and there's this sort  of quote  that i enjoyed uh that you know the the  obvious elegant solution is that  everything should be encoded as utfh um  and of course so we look at these  packets this is what the the packs look  so  mdns is um the  you know basically so dns is this glue  that that uh  sort of essentially keeps the internet  together mdns is this  is this is a very similar protocol but  just for local service discovery  but something that's interesting about  it is it sort of changes the  um kind of the inverts the relationship  uh between servers and clients because  basically unlike dns where you're asking  a server for something  in mdns you're just constantly being  bombarded by packets from  every device on your network like this  printer right  but anyways this printer is advertising  itself we can see that the service name  is a8 downstairs printer downstairs  that actually worked right but this uh  txt ty register so this is some kind of  google google clown print thing that i  don't understand  uh that's some new feature but the the  type  um record here is obviously not uh  encoded correctly and um so we look at  this  so something that i mean i noticed  emojis have been a part of every  successful talk here  right so we can't deny their vast  importance  um but you know so one of the ways that  emojis are represented is  unicode which has this large space and  then you have um  different ways of how do you actually  represent unicode on the wire  so the most common way and what mdns is  supposed to use is utf-8 which is  actually this really elegant encoding  except for the fact that  there's lots of um there's lots of  sequences of bytes you can generate that  aren't valid utf-8  right and in this case the printers is  spewing out um  like f08da0bd f08d  b6 a8 so this sequence that's twice as  long as what we would expect  and it turns out that this is like a  utf-8 encoding of  a utf-16 encoding of the printer emoji  right so some classic uh classic kind of  problem but  um wasn't wasn't caught in time anyway  why does this cause chrome to crash  so luckily of course there's a sort of  an open source version of chrome called  chromium  and we're able to reproduce the problem  there uh you know and it turns out that  it's like  it's very simple problem um so we can  see here that  we're uh creating this this uh string  and initializing it with  these bytes that we received off the  wire which is always  always a tenuous thing i think you  always want to be very careful when  doing that  although in this case it's not nearly as  much fun as we had hoped  the key thing here is we're asking for  this nsutf8 string encoding  and if we actually look at the core  foundation documentation  this says well this returns nil if uh  record bytes isn't uh valid utf-8 and so  it isn't so that's where our null  pointer dereference comes from so it  turns out the the fix  that um you know restores productivity  in the office is just this  like almost a one-liner uh kind of thing  and so  um yeah i said you know submitted that  and unfortunately  the the because it was technically a  security issue  uh the the bug was sealed for a long  time and it took some poking in patches  before  it finally got uh fixed but um  you know and so all's well it ends well  except that  actually you know this printer is still  lurking right it's still sending out its  weaponized packets and uh  i tried to contact hp um to  report this there was just no way to get  in contact with anyone responsible  and probably it's hard to fix anyway  it's probably you know  that upgrading that firmware is  difficult but consider this their their  public shaming  um in any case you know it was uh  a really simple uh thing in the end but  it just was lovely going through all  these systems and having this such an  unexpected  huge uh result from such a tiny thing  uh i think is is really the the essence  of  uh you know of the the unexpected which  is is what's so exciting about uh  programming  um so anyway i think if there's a moral  to that story uh  it's uh that everyone should go out and  stuff every input field with emoji uh  thank you  [Applause]
+
+00:00:02.149 --> 00:00:04.870 align:start position:0%
+yeah so i'm just gonna share a little  debugging story with you and um  i just it's it's not really um  maybe in the end the bug is is not  terribly complex but i still feel it  uh contains all of the essence of what i  find exciting about  programming you know and that is the  unexpected uh  so one day a bunch of my co-workers came  back from lunch  and they discovered that everyone's copy  of chrome had crashed  and it would just keep crashing it was  like no you could not open crash  so obviously productivity plummeted to  zero uh  and and i thought this was wonderful  already but uh  um but you know um first principle of  debugging you isolate what  changed and you know so the question was  um well was there just like a chrome  update and that killed everything but  there was nothing online  um no evidence this was anywhere else  but here so you're like well what else  um you know what else happened uh you  know in our environment and  the only other thing is we had bought  this printer  and then we got suspicious because we  had named the printer  uh an emoji we had named it printer  emoji  so we unplugged the printer right and  chrome stopped crashing  and then uh we plugged it in again and  boom  all everybody's copy of chrome on the  entire network  crashed and so okay  you know obviously we start debugging  this but i have to say i said this is  this is the greatest day of my life  that's how excited that's how excited i  got i get about  issues like this um so what was the  first thing  first approach for this uh so the first  thing that i did is i dove  into gdb on um on the system  now this is actually only mac os chromes  this was a  company with a lot of almost everyone  was running macs so  pretty pretty dominant um on mac os  you'd usually use lldb but uh  old dogs new tricks i'm sort of more  comfortable with gdb  so anyway we see here that like um  chrome is crashing in  strln which is the c standard library  function get the length of a string  um and uh so that initially is really  exciting because  uh something terrible is probably  happening right  and uh um but we we go into  of course chrome is an open source  although we'll get to  more of that later um but um  at the very least we can always we can  always disassemble uh  we can always look at the registers  that's one of my favorite things to do  the  the registers after a program has  crashed often tells such a fascinating  story  they tell us all sorts of places it's  been but in this case uh  i actually it's a pretty boring  registered dunk we can see that  in particular like the stack is is fine  all these things are fine  and rdi which is the first argument to  strlen  is zero so we just have a null pointer  dereference  it's still exciting because we can  reduce productivity in the office to  zero anytime we want but  you know we can't we can't necessarily  make chrome dance for us  so the next step is well what's  happening what is the printer  doing uh and so we turned to  an excellent tool um called tcp dump and  there actually is a  an amazing zine that just came out uh  that's that should be available here i  think maybe uh that will talk that will  tell you all about tcp dump and how  wonderful it is and  and and how to use it so i won't say too  much about that  but i do want to mention um paired with  that is another tool that  uh i really love which is called tcp  replay  which allows you to replay packet dumps  so you  tcp dump spies on your network shows you  what packets are going by your network  interface  a tcp replay lets you replay those  packets right  so this was a way for us to figure out  um  what what traffic is actually causing  this problem and so we apply an idea  from  property testing and if you don't  already know what property testing is  and you don't already do it you should  come up to me afterwards and talk to me  about it because  i think it's a really important idea and  actually we have the author of  an excellent c property testing library  called theft here with us it's wonderful  library you should check it out  but a really interesting idea from quick  check and all these things  is the shrinking of inputs so uh  you have some we captured a bunch of  traffic where the printer was spewing  out its weaponized emoji  and you know and then we we bisect it  and we  we chop it down until tcp replay is just  playing back  um you know just the packets that are  causing this problem  it turns out it's these two packets and  then nicely we can package into a script  you know  starbucks.sh that  that triggers the problem wherever we  like um  you know it's very very convenient  uh but so uh what are these packets  um so these are these are mdns packets  uh which is the  multicast dns uh and of course it's like  notable  or i immediately looked at the rfc um  oh actually i'll get back to that i  looked at the rfc and there's this sort  of quote  that i enjoyed uh that you know the the  obvious elegant solution is that  everything should be encoded as utfh um  and of course so we look at these  packets this is what the the packs look  so  mdns is um the  you know basically so dns is this glue  that that uh  sort of essentially keeps the internet  together mdns is this  is this is a very similar protocol but  just for local service discovery  but something that's interesting about  it is it sort of changes the  um kind of the inverts the relationship  uh between servers and clients because  basically unlike dns where you're asking  a server for something  in mdns you're just constantly being  bombarded by packets from  every device on your network like this  printer right  but anyways this printer is advertising  itself we can see that the service name  is a8 downstairs printer downstairs  that actually worked right but this uh  txt ty register so this is some kind of  google google clown print thing that i  don't understand  uh that's some new feature but the the  type  um record here is obviously not uh  encoded correctly and um so we look at  this  so something that i mean i noticed  emojis have been a part of every  successful talk here  right so we can't deny their vast  importance  um but you know so one of the ways that  emojis are represented is  unicode which has this large space and  then you have um  different ways of how do you actually  represent unicode on the wire  so the most common way and what mdns is  supposed to use is utf-8 which is  actually this really elegant encoding  except for the fact that  there's lots of um there's lots of  sequences of bytes you can generate that  aren't valid utf-8  right and in this case the printers is  spewing out um  like f08da0bd f08d  b6 a8 so this sequence that's twice as  long as what we would expect  and it turns out that this is like a  utf-8 encoding of  a utf-16 encoding of the printer emoji  right so some classic uh classic kind of  problem but  um wasn't wasn't caught in time anyway  why does this cause chrome to crash  so luckily of course there's a sort of  an open source version of chrome called  chromium  and we're able to reproduce the problem  there uh you know and it turns out that  it's like  it's very simple problem um so we can  see here that  we're uh creating this this uh string  and initializing it with  these bytes that we received off the  wire which is always  always a tenuous thing i think you  always want to be very careful when  doing that  although in this case it's not nearly as  much fun as we had hoped  the key thing here is we're asking for  this nsutf8 string encoding  and if we actually look at the core  foundation documentation  this says well this returns nil if uh  record bytes isn't uh valid utf-8 and so  it isn't so that's where our null  pointer dereference comes from so it  turns out the the fix  that um you know restores productivity  in the office is just this  like almost a one-liner uh kind of thing  and so  um yeah i said you know submitted that  and unfortunately  the the because it was technically a  security issue  uh the the bug was sealed for a long  time and it took some poking in patches  before  it finally got uh fixed but um  you know and so all's well it ends well  except that  actually you know this printer is still  lurking right it's still sending out its  weaponized packets and uh  i tried to contact hp um to  report this there was just no way to get  in contact with anyone responsible  and probably it's hard to fix anyway  it's probably you know  that upgrading that firmware is  difficult but consider this their their  public shaming  um in any case you know it was uh  a really simple uh thing in the end but  it just was lovely going through all  these systems and having this such an  unexpected  huge uh result from such a tiny thing  uh i think is is really the the essence  of  uh you know of the the unexpected which  is is what's so exciting about uh  programming  um so anyway i think if there's a moral  to that story uh  it's uh that everyone should go out and  stuff every input field with emoji uh  thank you  [Applause]
+ 
+
+00:00:04.870 --> 00:00:08.310 align:start position:0%
+ 
+ 
+
+00:00:08.310 --> 00:00:09.990 align:start position:0%
+ 
+ 
+
+00:00:09.990 --> 00:00:11.990 align:start position:0%
+ 
+ 
+
+00:00:11.990 --> 00:00:15.110 align:start position:0%
+ 
+ 
+
+00:00:15.110 --> 00:00:16.070 align:start position:0%
+ 
+ 
+
+00:00:16.070 --> 00:00:17.750 align:start position:0%
+ 
+ 
+
+00:00:17.750 --> 00:00:19.269 align:start position:0%
+ 
+ 
+
+00:00:19.269 --> 00:00:22.550 align:start position:0%
+ 
+ 
+
+00:00:22.550 --> 00:00:23.509 align:start position:0%
+ 
+ 
+
+00:00:23.509 --> 00:00:26.070 align:start position:0%
+ 
+ 
+
+00:00:26.070 --> 00:00:28.070 align:start position:0%
+ 
+ 
+
+00:00:28.070 --> 00:00:29.509 align:start position:0%
+ 
+ 
+
+00:00:29.509 --> 00:00:31.189 align:start position:0%
+ 
+ 
+
+00:00:31.189 --> 00:00:33.350 align:start position:0%
+ 
+ 
+
+00:00:33.350 --> 00:00:34.790 align:start position:0%
+ 
+ 
+
+00:00:34.790 --> 00:00:36.150 align:start position:0%
+ 
+ 
+
+00:00:36.150 --> 00:00:39.190 align:start position:0%
+ 
+ 
+
+00:00:39.190 --> 00:00:41.910 align:start position:0%
+ 
+ 
+
+00:00:41.910 --> 00:00:43.350 align:start position:0%
+ 
+ 
+
+00:00:43.350 --> 00:00:45.590 align:start position:0%
+ 
+ 
+
+00:00:45.590 --> 00:00:47.830 align:start position:0%
+ 
+ 
+
+00:00:47.830 --> 00:00:49.830 align:start position:0%
+ 
+ 
+
+00:00:49.830 --> 00:00:51.110 align:start position:0%
+ 
+ 
+
+00:00:51.110 --> 00:00:54.069 align:start position:0%
+ 
+ 
+
+00:00:54.069 --> 00:00:56.069 align:start position:0%
+ 
+ 
+
+00:00:56.069 --> 00:00:58.790 align:start position:0%
+ 
+ 
+
+00:00:58.790 --> 00:01:00.069 align:start position:0%
+ 
+ 
+
+00:01:00.069 --> 00:01:01.430 align:start position:0%
+ 
+ 
+
+00:01:01.430 --> 00:01:04.630 align:start position:0%
+ 
+ 
+
+00:01:04.630 --> 00:01:06.550 align:start position:0%
+ 
+ 
+
+00:01:06.550 --> 00:01:07.910 align:start position:0%
+ 
+ 
+
+00:01:07.910 --> 00:01:09.990 align:start position:0%
+ 
+ 
+
+00:01:09.990 --> 00:01:10.000 align:start position:0%
+ 
+ 
+
+00:01:10.000 --> 00:01:11.190 align:start position:0%
+ 
+
+
+00:01:11.190 --> 00:01:13.510 align:start position:0%
+ 
+ 
+
+00:01:13.510 --> 00:01:15.109 align:start position:0%
+ 
+ 
+
+00:01:15.109 --> 00:01:17.830 align:start position:0%
+ 
+ 
+
+00:01:17.830 --> 00:01:17.840 align:start position:0%
+ 
+ 
+
+00:01:17.840 --> 00:01:18.550 align:start position:0%
+ 
+
+
+00:01:18.550 --> 00:01:21.109 align:start position:0%
+ 
+ 
+
+00:01:21.109 --> 00:01:21.990 align:start position:0%
+ 
+ 
+
+00:01:21.990 --> 00:01:25.270 align:start position:0%
+ 
+ 
+
+00:01:25.270 --> 00:01:26.789 align:start position:0%
+ 
+ 
+
+00:01:26.789 --> 00:01:28.710 align:start position:0%
+ 
+ 
+
+00:01:28.710 --> 00:01:30.069 align:start position:0%
+ 
+ 
+
+00:01:30.069 --> 00:01:32.310 align:start position:0%
+ 
+ 
+
+00:01:32.310 --> 00:01:33.350 align:start position:0%
+ 
+ 
+
+00:01:33.350 --> 00:01:36.230 align:start position:0%
+ 
+ 
+
+00:01:36.230 --> 00:01:36.950 align:start position:0%
+ 
+ 
+
+00:01:36.950 --> 00:01:40.149 align:start position:0%
+ 
+ 
+
+00:01:40.149 --> 00:01:41.350 align:start position:0%
+ 
+ 
+
+00:01:41.350 --> 00:01:44.469 align:start position:0%
+ 
+ 
+
+00:01:44.469 --> 00:01:47.270 align:start position:0%
+ 
+ 
+
+00:01:47.270 --> 00:01:48.149 align:start position:0%
+ 
+ 
+
+00:01:48.149 --> 00:01:49.830 align:start position:0%
+ 
+ 
+
+00:01:49.830 --> 00:01:51.270 align:start position:0%
+ 
+ 
+
+00:01:51.270 --> 00:01:54.389 align:start position:0%
+ 
+ 
+
+00:01:54.389 --> 00:01:56.709 align:start position:0%
+ 
+ 
+
+00:01:56.709 --> 00:01:59.030 align:start position:0%
+ 
+ 
+
+00:01:59.030 --> 00:02:00.310 align:start position:0%
+ 
+ 
+
+00:02:00.310 --> 00:02:02.630 align:start position:0%
+ 
+ 
+
+00:02:02.630 --> 00:02:03.990 align:start position:0%
+ 
+ 
+
+00:02:03.990 --> 00:02:07.109 align:start position:0%
+ 
+ 
+
+00:02:07.109 --> 00:02:08.949 align:start position:0%
+ 
+ 
+
+00:02:08.949 --> 00:02:11.589 align:start position:0%
+ 
+ 
+
+00:02:11.589 --> 00:02:12.550 align:start position:0%
+ 
+ 
+
+00:02:12.550 --> 00:02:13.990 align:start position:0%
+ 
+ 
+
+00:02:13.990 --> 00:02:15.910 align:start position:0%
+ 
+ 
+
+00:02:15.910 --> 00:02:19.510 align:start position:0%
+ 
+ 
+
+00:02:19.510 --> 00:02:21.350 align:start position:0%
+ 
+ 
+
+00:02:21.350 --> 00:02:22.550 align:start position:0%
+ 
+ 
+
+00:02:22.550 --> 00:02:26.309 align:start position:0%
+ 
+ 
+
+00:02:26.309 --> 00:02:28.150 align:start position:0%
+ 
+ 
+
+00:02:28.150 --> 00:02:29.830 align:start position:0%
+ 
+ 
+
+00:02:29.830 --> 00:02:31.750 align:start position:0%
+ 
+ 
+
+00:02:31.750 --> 00:02:33.350 align:start position:0%
+ 
+ 
+
+00:02:33.350 --> 00:02:33.360 align:start position:0%
+ 
+ 
+
+00:02:33.360 --> 00:02:33.670 align:start position:0%
+ 
+
+
+00:02:33.670 --> 00:02:35.670 align:start position:0%
+ 
+ 
+
+00:02:35.670 --> 00:02:37.670 align:start position:0%
+ 
+ 
+
+00:02:37.670 --> 00:02:37.680 align:start position:0%
+ 
+ 
+
+00:02:37.680 --> 00:02:38.309 align:start position:0%
+ 
+
+
+00:02:38.309 --> 00:02:39.830 align:start position:0%
+ 
+ 
+
+00:02:39.830 --> 00:02:41.830 align:start position:0%
+ 
+ 
+
+00:02:41.830 --> 00:02:43.509 align:start position:0%
+ 
+ 
+
+00:02:43.509 --> 00:02:45.990 align:start position:0%
+ 
+ 
+
+00:02:45.990 --> 00:02:47.910 align:start position:0%
+ 
+ 
+
+00:02:47.910 --> 00:02:49.110 align:start position:0%
+ 
+ 
+
+00:02:49.110 --> 00:02:51.830 align:start position:0%
+ 
+ 
+
+00:02:51.830 --> 00:02:51.840 align:start position:0%
+ 
+ 
+
+00:02:51.840 --> 00:02:52.710 align:start position:0%
+ 
+
+
+00:02:52.710 --> 00:02:54.790 align:start position:0%
+ 
+ 
+
+00:02:54.790 --> 00:02:54.800 align:start position:0%
+ 
+ 
+
+00:02:54.800 --> 00:02:55.750 align:start position:0%
+ 
+
+
+00:02:55.750 --> 00:02:57.589 align:start position:0%
+ 
+ 
+
+00:02:57.589 --> 00:02:59.190 align:start position:0%
+ 
+ 
+
+00:02:59.190 --> 00:03:01.990 align:start position:0%
+ 
+ 
+
+00:03:01.990 --> 00:03:03.830 align:start position:0%
+ 
+ 
+
+00:03:03.830 --> 00:03:05.830 align:start position:0%
+ 
+ 
+
+00:03:05.830 --> 00:03:07.830 align:start position:0%
+ 
+ 
+
+00:03:07.830 --> 00:03:09.350 align:start position:0%
+ 
+ 
+
+00:03:09.350 --> 00:03:12.869 align:start position:0%
+ 
+ 
+
+00:03:12.869 --> 00:03:16.070 align:start position:0%
+ 
+ 
+
+00:03:16.070 --> 00:03:17.670 align:start position:0%
+ 
+ 
+
+00:03:17.670 --> 00:03:20.790 align:start position:0%
+ 
+ 
+
+00:03:20.790 --> 00:03:22.309 align:start position:0%
+ 
+ 
+
+00:03:22.309 --> 00:03:24.710 align:start position:0%
+ 
+ 
+
+00:03:24.710 --> 00:03:26.309 align:start position:0%
+ 
+ 
+
+00:03:26.309 --> 00:03:27.350 align:start position:0%
+ 
+ 
+
+00:03:27.350 --> 00:03:29.430 align:start position:0%
+ 
+ 
+
+00:03:29.430 --> 00:03:30.550 align:start position:0%
+ 
+ 
+
+00:03:30.550 --> 00:03:33.589 align:start position:0%
+ 
+ 
+
+00:03:33.589 --> 00:03:35.110 align:start position:0%
+ 
+ 
+
+00:03:35.110 --> 00:03:37.030 align:start position:0%
+ 
+ 
+
+00:03:37.030 --> 00:03:37.040 align:start position:0%
+ 
+ 
+
+00:03:37.040 --> 00:03:38.229 align:start position:0%
+ 
+
+
+00:03:38.229 --> 00:03:40.949 align:start position:0%
+ 
+ 
+
+00:03:40.949 --> 00:03:41.509 align:start position:0%
+ 
+ 
+
+00:03:41.509 --> 00:03:43.830 align:start position:0%
+ 
+ 
+
+00:03:43.830 --> 00:03:45.509 align:start position:0%
+ 
+ 
+
+00:03:45.509 --> 00:03:45.519 align:start position:0%
+ 
+ 
+
+00:03:45.519 --> 00:03:46.229 align:start position:0%
+ 
+
+
+00:03:46.229 --> 00:03:48.630 align:start position:0%
+ 
+ 
+
+00:03:48.630 --> 00:03:49.509 align:start position:0%
+ 
+ 
+
+00:03:49.509 --> 00:03:51.509 align:start position:0%
+ 
+ 
+
+00:03:51.509 --> 00:03:51.519 align:start position:0%
+ 
+ 
+
+00:03:51.519 --> 00:03:53.110 align:start position:0%
+ 
+
+
+00:03:53.110 --> 00:03:55.110 align:start position:0%
+ 
+ 
+
+00:03:55.110 --> 00:03:57.110 align:start position:0%
+ 
+ 
+
+00:03:57.110 --> 00:03:57.120 align:start position:0%
+ 
+ 
+
+00:03:57.120 --> 00:03:57.910 align:start position:0%
+ 
+
+
+00:03:57.910 --> 00:04:00.470 align:start position:0%
+ 
+ 
+
+00:04:00.470 --> 00:04:01.910 align:start position:0%
+ 
+ 
+
+00:04:01.910 --> 00:04:02.869 align:start position:0%
+ 
+ 
+
+00:04:02.869 --> 00:04:04.470 align:start position:0%
+ 
+ 
+
+00:04:04.470 --> 00:04:05.270 align:start position:0%
+ 
+ 
+
+00:04:05.270 --> 00:04:08.309 align:start position:0%
+ 
+ 
+
+00:04:08.309 --> 00:04:10.309 align:start position:0%
+ 
+ 
+
+00:04:10.309 --> 00:04:12.630 align:start position:0%
+ 
+ 
+
+00:04:12.630 --> 00:04:14.710 align:start position:0%
+ 
+ 
+
+00:04:14.710 --> 00:04:15.990 align:start position:0%
+ 
+ 
+
+00:04:15.990 --> 00:04:17.909 align:start position:0%
+ 
+ 
+
+00:04:17.909 --> 00:04:19.030 align:start position:0%
+ 
+ 
+
+00:04:19.030 --> 00:04:22.310 align:start position:0%
+ 
+ 
+
+00:04:22.310 --> 00:04:23.830 align:start position:0%
+ 
+ 
+
+00:04:23.830 --> 00:04:25.670 align:start position:0%
+ 
+ 
+
+00:04:25.670 --> 00:04:27.350 align:start position:0%
+ 
+ 
+
+00:04:27.350 --> 00:04:30.710 align:start position:0%
+ 
+ 
+
+00:04:30.710 --> 00:04:31.430 align:start position:0%
+ 
+ 
+
+00:04:31.430 --> 00:04:34.230 align:start position:0%
+ 
+ 
+
+00:04:34.230 --> 00:04:35.270 align:start position:0%
+ 
+ 
+
+00:04:35.270 --> 00:04:38.150 align:start position:0%
+ 
+ 
+
+00:04:38.150 --> 00:04:39.270 align:start position:0%
+ 
+ 
+
+00:04:39.270 --> 00:04:41.110 align:start position:0%
+ 
+ 
+
+00:04:41.110 --> 00:04:43.030 align:start position:0%
+ 
+ 
+
+00:04:43.030 --> 00:04:43.629 align:start position:0%
+ 
+ 
+
+00:04:43.629 --> 00:04:46.710 align:start position:0%
+ 
+ 
+
+00:04:46.710 --> 00:04:48.870 align:start position:0%
+ 
+ 
+
+00:04:48.870 --> 00:04:49.990 align:start position:0%
+ 
+ 
+
+00:04:49.990 --> 00:04:55.189 align:start position:0%
+ 
+ 
+
+00:04:55.189 --> 00:04:58.310 align:start position:0%
+ 
+ 
+
+00:04:58.310 --> 00:05:01.029 align:start position:0%
+ 
+ 
+
+00:05:01.029 --> 00:05:02.070 align:start position:0%
+ 
+ 
+
+00:05:02.070 --> 00:05:05.670 align:start position:0%
+ 
+ 
+
+00:05:05.670 --> 00:05:05.680 align:start position:0%
+ 
+ 
+
+00:05:05.680 --> 00:05:06.310 align:start position:0%
+ 
+
+
+00:05:06.310 --> 00:05:09.350 align:start position:0%
+ 
+ 
+
+00:05:09.350 --> 00:05:11.510 align:start position:0%
+ 
+ 
+
+00:05:11.510 --> 00:05:12.950 align:start position:0%
+ 
+ 
+
+00:05:12.950 --> 00:05:13.590 align:start position:0%
+ 
+ 
+
+00:05:13.590 --> 00:05:16.469 align:start position:0%
+ 
+ 
+
+00:05:16.469 --> 00:05:18.390 align:start position:0%
+ 
+ 
+
+00:05:18.390 --> 00:05:21.510 align:start position:0%
+ 
+ 
+
+00:05:21.510 --> 00:05:22.550 align:start position:0%
+ 
+ 
+
+00:05:22.550 --> 00:05:25.029 align:start position:0%
+ 
+ 
+
+00:05:25.029 --> 00:05:25.039 align:start position:0%
+ 
+ 
+
+00:05:25.039 --> 00:05:25.430 align:start position:0%
+ 
+
+
+00:05:25.430 --> 00:05:28.469 align:start position:0%
+ 
+ 
+
+00:05:28.469 --> 00:05:30.230 align:start position:0%
+ 
+ 
+
+00:05:30.230 --> 00:05:31.510 align:start position:0%
+ 
+ 
+
+00:05:31.510 --> 00:05:33.270 align:start position:0%
+ 
+ 
+
+00:05:33.270 --> 00:05:35.029 align:start position:0%
+ 
+ 
+
+00:05:35.029 --> 00:05:37.110 align:start position:0%
+ 
+ 
+
+00:05:37.110 --> 00:05:39.189 align:start position:0%
+ 
+ 
+
+00:05:39.189 --> 00:05:40.310 align:start position:0%
+ 
+ 
+
+00:05:40.310 --> 00:05:42.870 align:start position:0%
+ 
+ 
+
+00:05:42.870 --> 00:05:47.189 align:start position:0%
+ 
+ 
+
+00:05:47.189 --> 00:05:49.590 align:start position:0%
+ 
+ 
+
+00:05:49.590 --> 00:05:51.430 align:start position:0%
+ 
+ 
+
+00:05:51.430 --> 00:05:52.629 align:start position:0%
+ 
+ 
+
+00:05:52.629 --> 00:05:54.710 align:start position:0%
+ 
+ 
+
+00:05:54.710 --> 00:05:56.790 align:start position:0%
+ 
+ 
+
+00:05:56.790 --> 00:05:58.870 align:start position:0%
+ 
+ 
+
+00:05:58.870 --> 00:06:00.469 align:start position:0%
+ 
+ 
+
+00:06:00.469 --> 00:06:02.070 align:start position:0%
+ 
+ 
+
+00:06:02.070 --> 00:06:04.230 align:start position:0%
+ 
+ 
+
+00:06:04.230 --> 00:06:07.749 align:start position:0%
+ 
+ 
+
+00:06:07.749 --> 00:06:10.870 align:start position:0%
+ 
+ 
+
+00:06:10.870 --> 00:06:13.990 align:start position:0%
+ 
+ 
+
+00:06:13.990 --> 00:06:16.150 align:start position:0%
+ 
+ 
+
+00:06:16.150 --> 00:06:17.270 align:start position:0%
+ 
+ 
+
+00:06:17.270 --> 00:06:20.390 align:start position:0%
+ 
+ 
+
+00:06:20.390 --> 00:06:20.400 align:start position:0%
+ 
+ 
+
+00:06:20.400 --> 00:06:20.950 align:start position:0%
+ 
+
+
+00:06:20.950 --> 00:06:24.309 align:start position:0%
+ 
+ 
+
+00:06:24.309 --> 00:06:27.830 align:start position:0%
+ 
+ 
+
+00:06:27.830 --> 00:06:27.840 align:start position:0%
+ 
+ 
+
+00:06:27.840 --> 00:06:28.390 align:start position:0%
+ 
+
+
+00:06:28.390 --> 00:06:30.230 align:start position:0%
+ 
+ 
+
+00:06:30.230 --> 00:06:31.830 align:start position:0%
+ 
+ 
+
+00:06:31.830 --> 00:06:34.150 align:start position:0%
+ 
+ 
+
+00:06:34.150 --> 00:06:36.790 align:start position:0%
+ 
+ 
+
+00:06:36.790 --> 00:06:36.800 align:start position:0%
+ 
+ 
+
+00:06:36.800 --> 00:06:37.510 align:start position:0%
+ 
+
+
+00:06:37.510 --> 00:06:39.990 align:start position:0%
+ 
+ 
+
+00:06:39.990 --> 00:06:41.510 align:start position:0%
+ 
+ 
+
+00:06:41.510 --> 00:06:43.749 align:start position:0%
+ 
+ 
+
+00:06:43.749 --> 00:06:45.110 align:start position:0%
+ 
+ 
+
+00:06:45.110 --> 00:06:46.390 align:start position:0%
+ 
+ 
+
+00:06:46.390 --> 00:06:48.309 align:start position:0%
+ 
+ 
+
+00:06:48.309 --> 00:06:50.230 align:start position:0%
+ 
+ 
+
+00:06:50.230 --> 00:06:52.070 align:start position:0%
+ 
+ 
+
+00:06:52.070 --> 00:06:53.670 align:start position:0%
+ 
+ 
+
+00:06:53.670 --> 00:06:54.790 align:start position:0%
+ 
+ 
+
+00:06:54.790 --> 00:06:57.189 align:start position:0%
+ 
+ 
+
+00:06:57.189 --> 00:06:58.710 align:start position:0%
+ 
+ 
+
+00:06:58.710 --> 00:07:00.150 align:start position:0%
+ 
+ 
+
+00:07:00.150 --> 00:07:01.909 align:start position:0%
+ 
+ 
+
+00:07:01.909 --> 00:07:03.589 align:start position:0%
+ 
+ 
+
+00:07:03.589 --> 00:07:06.870 align:start position:0%
+ 
+ 
+
+00:07:06.870 --> 00:07:09.029 align:start position:0%
+ 
+ 
+
+00:07:09.029 --> 00:07:10.790 align:start position:0%
+ 
+ 
+
+00:07:10.790 --> 00:07:12.870 align:start position:0%
+ 
+ 
+
+00:07:12.870 --> 00:07:14.550 align:start position:0%
+ 
+ 
+
+00:07:14.550 --> 00:07:18.150 align:start position:0%
+ 
+ 
+
+00:07:18.150 --> 00:07:21.830 align:start position:0%
+ 
+ 
+
+00:07:21.830 --> 00:07:23.110 align:start position:0%
+ 
+ 
+
+00:07:23.110 --> 00:07:25.589 align:start position:0%
+ 
+ 
+
+00:07:25.589 --> 00:07:27.350 align:start position:0%
+ 
+ 
+
+00:07:27.350 --> 00:07:29.270 align:start position:0%
+ 
+ 
+
+00:07:29.270 --> 00:07:31.110 align:start position:0%
+ 
+ 
+
+00:07:31.110 --> 00:07:31.120 align:start position:0%
+ 
+ 
+
+00:07:31.120 --> 00:07:31.830 align:start position:0%
+ 
+
+
+00:07:31.830 --> 00:07:33.350 align:start position:0%
+ 
+ 
+
+00:07:33.350 --> 00:07:35.270 align:start position:0%
+ 
+ 
+
+00:07:35.270 --> 00:07:35.749 align:start position:0%
+ 
+ 
+
+00:07:35.749 --> 00:07:38.629 align:start position:0%
+ 
+ 
+
+00:07:38.629 --> 00:07:39.670 align:start position:0%
+ 
+ 
+
+00:07:39.670 --> 00:07:42.710 align:start position:0%
+ 
+ 
+
+00:07:42.710 --> 00:07:44.150 align:start position:0%
+ 
+ 
+
+00:07:44.150 --> 00:07:45.670 align:start position:0%
+ 
+ 
+
+00:07:45.670 --> 00:07:47.350 align:start position:0%
+ 
+ 
+
+00:07:47.350 --> 00:07:48.629 align:start position:0%
+ 
+ 
+
+00:07:48.629 --> 00:07:49.990 align:start position:0%
+ 
+ 
+
+00:07:49.990 --> 00:07:51.029 align:start position:0%
+ 
+ 
+
+00:07:51.029 --> 00:07:52.550 align:start position:0%
+ 
+ 
+
+00:07:52.550 --> 00:07:54.070 align:start position:0%
+ 
+ 
+
+00:07:54.070 --> 00:07:55.909 align:start position:0%
+ 
+ 
+
+00:07:55.909 --> 00:07:58.790 align:start position:0%
+ 
+ 
+
+00:07:58.790 --> 00:08:00.550 align:start position:0%
+ 
+ 
+
+00:08:00.550 --> 00:08:01.990 align:start position:0%
+ 
+ 
+
+00:08:01.990 --> 00:08:05.270 align:start position:0%
+ 
+ 
+
+00:08:05.270 --> 00:08:08.710 align:start position:0%
+ 
+ 
+
+00:08:08.710 --> 00:08:10.070 align:start position:0%
+ 
+ 
+
+00:08:10.070 --> 00:08:11.749 align:start position:0%
+ 
+ 
+
+00:08:11.749 --> 00:08:13.110 align:start position:0%
+ 
+ 
+
+00:08:13.110 --> 00:08:15.909 align:start position:0%
+ 
+ 
+
+00:08:15.909 --> 00:08:17.510 align:start position:0%
+ 
+ 
+
+00:08:17.510 --> 00:08:20.390 align:start position:0%
+ 
+ 
+
+00:08:20.390 --> 00:08:21.670 align:start position:0%
+ 
+ 
+
+00:08:21.670 --> 00:08:24.150 align:start position:0%
+ 
+ 
+
+00:08:24.150 --> 00:08:25.029 align:start position:0%
+ 
+ 
+
+00:08:25.029 --> 00:08:26.950 align:start position:0%
+ 
+ 
+
+00:08:26.950 --> 00:08:28.070 align:start position:0%
+ 
+ 
+
+00:08:28.070 --> 00:08:31.110 align:start position:0%
+ 
+ 
+
+00:08:31.110 --> 00:08:33.110 align:start position:0%
+ 
+ 
+
+00:08:33.110 --> 00:08:33.120 align:start position:0%
+ 
+ 
+
+00:08:33.120 --> 00:08:33.750 align:start position:0%
+ 
+
+
+00:08:33.750 --> 00:08:36.949 align:start position:0%
+ 
+ 
+
+00:08:36.949 --> 00:08:39.509 align:start position:0%
+ 
+ 
+
+00:08:39.509 --> 00:08:40.310 align:start position:0%
+ 
+ 
+
+00:08:40.310 --> 00:08:42.230 align:start position:0%
+ 
+ 
+
+00:08:42.230 --> 00:08:44.149 align:start position:0%
+ 
+ 
+
+00:08:44.149 --> 00:08:45.750 align:start position:0%
+ 
+ 
+
+00:08:45.750 --> 00:08:48.949 align:start position:0%
+ 
+ 
+
+00:08:48.949 --> 00:08:50.949 align:start position:0%
+ 
+ 
+
+00:08:50.949 --> 00:08:53.350 align:start position:0%
+ 
+ 
+
+00:08:53.350 --> 00:08:54.949 align:start position:0%
+ 
+ 
+
+00:08:54.949 --> 00:08:56.389 align:start position:0%
+ 
+ 
+
+00:08:56.389 --> 00:08:57.910 align:start position:0%
+ 
+ 
+
+00:08:57.910 --> 00:08:59.430 align:start position:0%
+ 
+ 
+
+00:08:59.430 --> 00:09:02.310 align:start position:0%
+ 
+ 
+
+00:09:02.310 --> 00:09:05.990 align:start position:0%
+ 
+ 
+
+00:09:05.990 --> 00:09:09.030 align:start position:0%
+ 
+ 
+
+00:09:09.030 --> 00:09:10.470 align:start position:0%
+ 
+ 
+
+00:09:10.470 --> 00:09:12.070 align:start position:0%
+ 
+ 
+
+00:09:12.070 --> 00:09:12.080 align:start position:0%
+ 
+ 
+
+00:09:12.080 --> 00:09:12.949 align:start position:0%
+ 
+
+
+00:09:12.949 --> 00:09:16.310 align:start position:0%
+ 
+ 
+
+00:09:16.310 --> 00:09:19.110 align:start position:0%
+ 
+ 
+
+00:09:19.110 --> 00:09:19.120 align:start position:0%
+ 
+ 
+
+00:09:19.120 --> 00:09:19.670 align:start position:0%
+ 
+
+
+00:09:19.670 --> 00:09:22.230 align:start position:0%
+ 
+ 
+
+00:09:22.230 --> 00:09:24.070 align:start position:0%
+ 
+ 
+
+00:09:24.070 --> 00:09:24.080 align:start position:0%
+ 
+ 
+
+00:09:24.080 --> 00:09:25.030 align:start position:0%
+ 
+
+
+00:09:25.030 --> 00:09:26.949 align:start position:0%
+ 
+ 
+
+00:09:26.949 --> 00:09:28.310 align:start position:0%
+ 
+ 
+
+00:09:28.310 --> 00:09:31.350 align:start position:0%
+ 
+ 
+
+00:09:31.350 --> 00:09:35.509 align:start position:0%
+ 
+ 
+
+00:09:35.509 --> 00:09:36.370 align:start position:0%
+ 
+ 
+
+00:09:36.370 --> 00:09:36.380 align:start position:0%
+ 
+ 
+
+00:09:36.380 --> 00:09:40.169 align:start position:0%
+ 
+
+

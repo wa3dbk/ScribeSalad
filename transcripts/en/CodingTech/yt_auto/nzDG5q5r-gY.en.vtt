@@ -1,0 +1,3216 @@
+WEBVTT
+Kind: captions
+Language: en
+
+00:00:00.060 --> 00:00:02.659 align:start position:0%
+ 
+who here uses Postgres kind of show  hands a whole lot of folks okay I wasn't  sure if we had any mice equal users or  anyone anything else so so we're here  for a lot of the same reasons we  recognize that Postgres has a lot of  really great things that are going on  for it in the community native JSON  support native hash support there's a  lot of great community standards for  data integrity and insurance continued  excellence and a lot of really large and  really expensive sub queries and a lot  of numerous native extensions and  extensions supported by the community  with standards built in natively so  we're all here for the same reasons but  post Creston got even better as a  performant database so some of the  things I'm going to talk about today are  native table partitioning hash index  resiliency a big one for a lot of folks  which is full text index searching on  JSON and JSON blobs that is native now  and a big one that I'll probably talk  about which will be a little more in  depth parallel queries and how they  affect large joins indexes and other  portions of the code base and query  analyzer accuracy and changes to how the  query planner does efficient work as  well so you'll hear me talk about some  phrases that you'll probably sound  familiar if you're avid user of Postgres  but I'm not going to jump into in depth  how much they work so I'm not going to  go into how much bloat or vacuum  sequential scans or replications are  working as well as pruning and  statistics these are also changes that  happened in Postgres 10 but I'm not  going to cover them in this talk but a  little bit about me first  I joined Heroku a little over a year and  a half ago  I've been primarily working on Sinatra  and Ruby on Rails applications for the  better part of the last four years  primarily right now in my role I'm  focused on Postgres and high  availability modes and large data growth  so growth in the terabytes of data I've  worked on a lot of different data  service engines more than I can list I'm  not going to go through all them all  there that's  much time but on the side I'm trying to  be a lot more positive so I'm trying to  do a lot of self-help and life coaching  things so I'm trying to focus on a lot  of inspirational things so on the side I  do some super-secret project work on  this social interest platform because I  like Facebook but there's a lot of  negativity on there so some of the  things that I I'm looking for some basic  things that any social interest platform  would provide which is profiles but I'm  also looking for curated content so  inspirational quotes TV characters  movies TV shows foods the list goes on  and I'm imagining a lot of usage so  we're gonna just jump right into it and  the first thing that I'm going to talk  about is inspirational quotes and this  is one that I actually saw when I was  traveling to New Zealand which I thought  was fantastic which is happiness is not  a destination it's a way of life and I'm  hoping to see millions of these populate  throughout the the codebase and through  the platform but wow that that grew fast  so even though quotes aren't very big  they're just you know small string text  most databases even at large scale have  significant amount of RAM tons of disk  space but some usage scenarios that most  quotes are never updated or revisited  after a week and most people only want  the most recent and up-to-date quotes  they don't want to see stale stuff so  that's kind of tough that one table grew  really quickly some quick math there and  that's way more memory than I have so a  little bit about how Postgres and some  of its caching system are gonna work  here it's gonna attempt to load as much  stuff in memory as possible and then  it's going to try to use what it has in  memory and if there's overflow it'll  start doing disk writing with pointers  to the files and it'll open them up at  one at a time as it does file writing so  it actually will manipulate the disks a  lot more so caching is done this way  because if you access the data obviously  you're probably going to need it sooner  than later so it's going to try to do  that in a couple different ways but the  other problem with this is that temp  disk space is not free I I know we'd all  like to  it is but it's actually not there are a  lot of other overhead costs because  usually temp this space also happens  with where the data is stored on the  database on disk and caching records in  large quantities can have some  significant impacts especially as you're  trying to concurrently access the same  table multiple times with large data  sets so one of the real issues and this  is something that some people might have  seen in the past is that we can easily  stop connecting to the database entirely  if we run too many of these simultaneous  really heavy bloating or locking queries  so who likes fast queries everyone I'm  hoping everyone likes fast queries and  database is staying up and continuing to  connect yes yes big big thumbs up in the  front row thank you so a great thing  that they actually added as Postgres 10  is native table partitioning there's  been extensions in the community for a  while that do this but let's go into  some of the big wins on native  partitioning so native partitioning  actually can entirely avoid the back  vacuum and bloating process so bulk  loads and deletes and offloads can  happen without causing overhead to your  Postgres internals so slow accesses to  your database connections things like  that they're gonna be a lot less costly  because you're not stressing that one  giant table as much our most common used  rows are only going to be the sections  of the partitions we care about and a  lot of the seldom used data can stay  where it needs to on slow disk storage  or even off on like you know cold  storage we can move it off entirely and  one of the great things about this is  that query performance improve  dramatically we we got a lot more bang  for our buck when we actually do the  lookups previously we'd have to do best  effort random index scans and then  random access reads to the disks with  large data like this disk data storage  is kind of fragmented in some scenarios  and so in average of worst case  scenarios if you actually do  complexity some of these cases actually  end up being worse than sequential scans  so native partitioning is a great way to  optimize for this another key note to  have here is PG part man is still in ten  it's still supported but it doesn't have  some of the parallel support that we're  going to talk about a little later in  this talk some other small noteworthy  items for native partitioning it's not  natively supported in boram's  obviously you saw me writing raw sequel  in the migration script there are have  been gems to try to make this more  consistent in things like active record  but none of them are really well  supported right now a lot of another  great thing about this though is tables  can be created from your partitions so  if you need to do what I'd like to call  yomo tables your your month tables this  is or even week tables this is something  that you could absolutely do and this is  a great way to even segment even data  even further as it migrates through and  it's an easy way to understand your data  over long periods of time and you can  even create partitions from your  partitions I would add a partition mean  but I feel like they're overkill but so  now we want to do a pivot so we've had a  lot of use of the platform and people  are starting to create products and now  we want to do home delivery so how do we  get that done well we obviously need  customer addresses so this seems pretty  simple and we want you know a mobile app  to be able to access lots of different  customer addresses when they're you know  going making deliveries right we want to  take customer service seriously but we  do have a lot of customers and we have a  lot of addresses so addresses aren't  uniform across North America actually  they're very different even between the  US and Canada and even between different  states different states have different  rules and regulations about where  delivery drivers can stop and and other  really important features and gotchas  like that so nobody gets ticketed on the  street so there might be some important  instructions we also need for not just  customer satisfaction but for driver  notices as well so we can kind of store  this unstructured data already in  Postgres right each store already exists  today a lot of people I'm sure use it  it's not new it's a key-value store but  you know implementing it seems  straightforward enough let's just add  the hash right yeah man those interests  address lookups are real slow real slow  the other problem here is that when  somebody is trying to make an update to  this our drivers aren't going to get it  in real time it's not gonna happen  we could add an index to improve lookups  though so let's let's try that and let's  see what happens so let's let's add a  hash index on usage and hope for the  best right it seems like it should work  maybe maybe things improved but ooh show  hands anyone seen this error message  before show hands who uses hash indexes  in here not many people ok well that's  that's good to know  um so probably a lot of people know for  good reason that hash indexes aren't  really well supported in Postgres 9x for  a lot of different reasons but the key  one being replication is is not  supported so it's not treated as a  first-class citizen the the other one is  you get a lot of misleading failures  like that that kind of looked like a  data corruption issue but actually  that's an index corruption and that's  because the hash index can't keep up so  there other things about this is that if  we have extremely large datasets to pull  from sometimes you have to completely  ask that the hash index and rebuild it  from scratch which is not a great  experience what's the solution if we  can't rely on this hashing mechanism if  we really want to use H store since it's  mostly supported well Postgres 10  actually finally brought it into the  light and made it a first-class citizen  so it added first-class citizen support  such as replication it made it crash  safe through shutdowns and fail overs  replication is done faster lookup so the  growth of each page for that index are  actually consistent with regular  indexing  this is and the pruning happens much  more consistently as well so indexes  don't go as stale as often so going back  to this we can rely on this much more  consistently and and have better peace  of mind and we do see actual improvement  now checking through and updating the  hash itself the the biggest thing that  I'd like to point out here is the  locking concurrency issue was a huge  problem and we use H store at Heroku for  a lot of different use cases the the  reduced locking for concurrent access  for records is a big win for us even  though we don't use a lot of hash index  as H store in general for the few places  that we do that this is a really big  important thing for us so going  backwards we're talking about more  curated content on on my social media  platform and I want to talk about you  know movies and TV shows and characters  that we love that we can't get enough of  for any big nerds out there I'm a huge  flash fan I met John Wesley Shipp for  the first time earlier this year which  was fantastic so I want to list all  these movies and TV shows and I want to  get the characters for all of them so  each show can have potentially fifty  hundreds maybe even thousands of  characters if anyone watches Game of  Thrones I'm sure everyone's excited  so each record can have a lot of varying  data over time right and some things  we'll want to try to you know watch is  genres catchphrases you know famous  accessories and items or even just you  know certain ways that they dress or  look or interact with other characters  I'm sure some people are gonna get a  little schwifty after all of rails cough  so we need some way to keep that data  unstructured but co-located with the  general structure of how we want to  address media and characters in general  so let's let's use a JSON blob because  this seems to make sense for this  scenario we can query third-party data  sources and we can get them in  consistent JSON format so we can reparse  them over and over again and we can get  update  the great thing about this is that we do  have this flexibility but it opens as us  opens us up to a lot of other gotchas  one of which is each row is dynamically  sized because of this so it's not  consistent what size each record is and  because we can have so many different  data sources analyzing each character  each record this could potentially get a  little hairy in tracking how this  information changes over time so how can  we keep this unstructured and not have  to parse it all or create constant  relationships through this so we could  create multiple tables we we could add a  lot of one-to-many relationships we  could modify our rails app entirely to  manage this information we could even do  partitioning based on some subset of  where the data is colligative per show  but as much as we could do all those  things there is some other easier item  to do and that is using the full text  index searching that's been added in  Postgres 10 so because we can store  whole request bodies we can store  custom-made JSON blobs this allows us  for a lot of more no sequel dynamic  schema operations and this is what we're  really caring about especially when  we're trying to get this off the ground  in initial stages this adds a lot of  flexibility so one of the great things  here is that there's a lot of examples  of how to do this online now on the pus  crocin materials but this keeps our data  structure on unstructured and flexible  so the big thing about this is indexes  can actually filter on a lot of  different views and kind of perspectives  that you want to do for the type of  index searches you want to do on your  JSON since they are treated as  first-class citizens as well and the  other great thing about this is this  gives us ways to you know target folks  on the platform that we're looking at if  we want to target them for you know  being big Marvel fans or you know maybe  somebody can't get enough of you know  Joey from France  maybe he just wants to say how you doing  all the time  but I'm a big fan of Thor so a lot of  hammers for me but let's let's jump back  for a sec quotes was our big takeoff  item that was the big one that got the  platform recognized and people love  throwback Thursday so let's let's create  a throwback stream of quotes for for  folks who want to know on this day my  favorite posters posted these quotes so  we want to be able to replay a stream of  old quotes right well streams should  include all of the posters that I liked  and followed not just my own posts so  that's a lot more quotes than you would  normally see and even getting one month  of posts and that's a lot of queries  especially if you're following a few  hundred other people that's a lot of a  lot of quotes especially for power  posters who post multiple times a day so  yeah here we go so Postgres 10 did a lot  of things to optimize how we do these  types of queries and how fast they come  back so we're gonna I'm gonna touch on  three there are more optimizations in  the parallel areas on how to return  queries that Postgres 10 did I'm only  gonna touch on these three because these  three are usually the big ones that  people talk about so we're gonna talk  about parallel bitmap heat scans gather  merges and merge joints so let's jump  into it so in 96 parallel searching and  scanning was was introduced it was a  little limited though so it used to only  do sequential scans and sequential scans  were only done the primary tables so  this kind of created the problem where  you couldn't rely on indexes you we had  a little bit of a trade-off here where  you either had to rely on your table  caching to be really effective or your  indexes to be really good but you  couldn't get an overlap here which was  kind of painful the big thing about  Postgres 10 is that changed when they  added way more parallelization to every  level of your  table schemes including indexes so you  can it do parallel searching through  your indexes first you actually go  through and construct the only the index  files first so that you are much more  methodical and strategic on how you do  your queries and how the results are  loaded and so this requires a lot less  data loaded upfront a lot less caching  and way less results that student to  parse through and a whole lot less disk  reads so the next one we're going to  talk about is gather and gather is  actually the mechanism in which Postgres  introduced how to do parallel query  construction and and result retrieval so  it was introduced with the idea of  workers obviously to do asynchronous  processing and the big thing here was  that there were multiple layers on how  results were returned a lot of the time  they were returned in arbitrary fashions  mostly in the order to have how fast  they returned from each worker so  unfortunately if you're adding searches  or sorts to this portion of the  mechanism this is going to add a  significant amount of overhead because  you're requiring not just the search of  the b-tree but you're also requiring an  extra order layer to happen after the  initial result sets are retrieved so a  small example here is you know I have a  bunch of IDs in my be tree and I just  want to retrieve the primes right so  here's a small example of a be tree the  the issue here is that when when we're  going through and checking through  Prime's the leaf nodes in some scenarios  have more content than either the roots  or some other leaf nodes so certainly if  nodes a will turn faster than others the  root node is our first return response  so 17 was actually the first node I'll  go back here so 17 was the the first one  we actually saw on the left side if  you'll actually look on the three leaf  nodes to the left of 17 Elevens only got  one so our first records are going to be  17 19 and 11 depending  on how fast they return then to so we  actually get stuff out of order so  another pass is going to be required to  sort through the somewhat strange return  results of the workers themselves and so  they were only trained to be returned as  fast as possible with no context  well this changed in Postgres 10 so  Postgres 10 changed this by optimizing  the worker collection results so gather  merges actually sped up the parallel  worker result retrieval because they  also kept context of where they  encountered the data that they actually  cared about and they kept them into  account as the result sets were returned  so it removed a lot of overhead for  sorting after the fact because at the  end it ended up being mostly just a flat  line so this was really beneficial  especially for really large datasets  traversing huge tables so kind of  revisiting this we can see that we have  a whole nother side of the beach way we  didn't touched right I I kind of glossed  over it but for good reason because  really when we parsed it down we  actually held context it did actually  move through the B tree and and  construct how we thought we were going  to see everything the reason we kept  context here is because we kept context  of the locations that we visited each  node at and so this is much more natural  ordering of operations from an intuitive  mental standpoint so it's easier to  mental map how our data is retrieved as  well too so the great thing is is  because as we merge the leaves and the  roots we basically can turn this into a  linked list and it becomes a simplified  array that's mostly natively ordered  even before we add other order clauses  if you add the order clauses they're  kept in context along with the parallel  workers so they know what to do when  they're ordering as they return results  and then the last one we're gonna cover  here is merge joints and this one while  maybe performance wise doesn't always  pack the most wallet is the most one of  the  one's for me as well so kind of applying  this to checking all the other posters I  care about for throwback Thursday I need  to join on the other customers quotes  right so previously nine six only  allowed this on nested and sub-query  loops or or hash joins the this didn't  always happen on on the primary query of  the table so a lot of our sub queries  were optimized for this but not  necessarily the originating one that we  cared about so this adds a lot of  overhead and even though indexing and  ordering is great it could actually make  things worse and not better especially  the indexing portion which is surprising  sometimes but it can be a gotcha so  parallel merge join was added to  consistently parallel do parallel  operations for all the merges at all  levels so all the sub queries all the  way up the stack from from each sub  table or even tables you've had to  rejoin to get different data sets for  temporary tables for example are now  going to be done in parallel as well so  this is gonna make things much more  efficient outer sides of the joins  especially when we do no comparisons or  checks like that are gonna be the most  effective because we're not going to be  as restrictive here and it's going to be  much quicker to run through certain  sections of that with less data and  combined with a lot of the parallel  changes to the indexes gonna be way  faster and getting all of the data that  you care about again the parallel  changes that also happen to gather merge  will give you some natural ordering by  default even before you specify order  but will still maintain context for  adding order as well so the last thing  I'm gonna touch on which I did mention  this is a real-world example actually  from something that we track at Heroku  which is part of tracking our issues on  our internal repos and external repos as  well so that we have a good list of  items for when we get future requests  issues bugs things like that and that is  actually even though this table is  pruned pretty consistently for the  issues  mapping the github issue to a repo ID  it's not huge but it's not tiny either  here is the query an analyzer for for  the table for a given repo ID execution  times not great this index is basically  not being used even though we expect it  to be used in 96 it definitely didn't  get used at all and so we end up doing  sequential scanning through it and it  gives us some pretty crappy runtimes  here's the great thing with all the  changes we post grows 10 the parallel  index got figured out by the query  analyzer and it's neat being used now  even on a tiny table  that's ridiculous just gonna let that  sink in for a sec that that's a half a  gig table that's not even a big table  that's a tiny one the changes that have  occurred in the performance games are  huge I'm not going to go through query  analytics that's another talk in and of  its own that is way too much time for  what we have to get through today so  unfortunately that's if you want to hear  me talk more about it or explain  anything more that I've seen in my last  year and a half two years come talk to  me after but there are a few last-minute  gotchas with Postgres 10 with rails that  i want to go through when i touched on  some of them but maybe someone you might  not know rails 4 doesn't support  Postgres 10  unfortunately they can the connection  protocols changed and how Postgres 10  works and so unfortunately post rails 4  only supports up to Postgres 9 6 if you  want to make the move to 10 you will  have to be on rails 5 again as I've  stated before partitioning is not native  to the Ruby and Ruby on Rails ORM  so our specific index types like hash  indexes and JSON indexes for the full  text query index searching we went over  today and the analytics queries are all  not available  except for in Ross sequel as well so  some things to know but that's one of  the reasons I love working at Heroku is  because we try to offer a lot of tools  for stuff like this so with the release  of Postgres 10 and the support for that  we've added a lot of extra support and  numerous extensions to support posters  10 as well we've added managed Postgres  credentials because the permission  schemes are very confusing as we've  found over the years new updated  hardware plans at the same price points  improved CLI analytics because our  analytics Eli's use the same query  analyzer that they do there and the same  PG internals that have had the  optimizations done as well and we are  beta beta a new feature right now for  those to test out called Postgres  connection pooling so the posters  Postgres extensions that we offer are  you know numerous and most of them are  natively offered we offer a few external  ones like post chips and things like  that if you want the complete list go go  check them out but the big one that I  love here is the is the time travel one  that's that's a big favorite especially  with the new changes to partition  Postgres manage credentials was  something we actually released late last  year but we did this for a lot of  different reasons we had a lot of  customer asks for this so Postgres  permissions are really difficult to  reason about their add a lot of  different layers and they have a lot of  nuance into creating granularity  understanding revoking permissions  things like that we still allow  customization when we issue manage  credentials but we've tried to take a  lot of the guesswork out of initially  creating a lot of these credentials and  roles for tables so we try to consider  things like special tables or special  characters that no one likes sequel  objection Bobbi tables can can stay at  home with his mom name lengths are  another big gotcha there's actually  certain character limits that if you  blow them  Postgres silently doesn't tell you so  that's that's another strange one and  we've also published some of the best  practices as well so if you want to see  some of the other things you can check  them out  the Postgres credentials deaf center but  I encourage everyone to even if you're  not using managed credentials consider  things like separations of concern  principle of least privilege and even  better external control access if you're  using a third party vendor that needs  data access you you want to give them  very restricted things you don't want to  give them access to PII data for example  to some of the things you insure for  your customers so the other big one that  we did earlier this year was broken PGX  plans I was directly actually part of  this project which was fantastic I was  very happy and excited about this which  was we were able to utilize the the  latest hardware virtualization for  better i/o better CPU and query  optimization and also we've added all  these plans under dedicated hardware so  that you get consistent and stable  performance we've documented about it in  the blog post but the big wins here are  that we've doubled CPU cores at tiers  four and up we're exposing some of the  dedicated provision iOS for plans and  we're increasing data disk size at every  tier and prices either stayed the same  or lowered so please go check that out  if you're interested in checking out  some performance on the hardware side  the one that I we do for a long time is  one that I use on a daily basis  especially when people file support  tickets for us is the Heroku CLI  especially for Postgres we've used PG  diagnose and this is something that has  been out there for a while but I want to  reiterate because Postgres database  tuning has been a big deal and other  people have talked about it at the  conference we've we've had a deaf Center  out there for a long time and we have  the extension CLI to add on to the  native Heroku PG CLI commands so the big  one is PG diagnose but if you're looking  at sequential scans or caching and hit  rates some of the things that I might  have talked about today we actually  offer pre predefined ways of querying  that information through all your tables  and schemas so please go check that out  as well  now the one that I I know a lot of  people have heard about a lot of  companies have started using  bouncer so PG bouncer for those who are  familiar or not have added management  for post crest connection pooling this  is basically because there's not really  this idea built into Postgres so  connection pooling is done outside of  Postgres and this kind of adds  insurances to making sure connections  don't stay open longer than they're  supposed to be queries don't kill your  database and we've added this as part of  the connection pooling that's how this  is done  PG bouncer is is in beta as Roku PG  connection pooling so why use it well  one thing Roku in general loves to see  is stats we love our stats this is  better visibility into seeing how our  connections behave this also gives a lot  of guardrails to protect your database  and keep it up especially if you have  multiple applications connecting to a  single database and this is really great  for asynchronous workloads for anyone  using lots of active job or anything  like that this is fantastic we've  offered it as a beta we're still working  out making the best practices out there  we're still trying to get some some  feedback from folks who you know ask for  more customers ability or better use  case scenarios so we're still doing some  some public beta work on it right now  it is supported out there and it is well  document it so though if you're  interested in using what's on server  right there for pg connection pooling  please go check it out we still offer a  client-side build pack that can run on a  dyno it doesn't have as many of the  built-in features that we'll be adding  to Postgres connection pooling but if  you are interested in using it separate  from the database itself on your  application layers or something like  that it's still available out there whoo  and that is it what a marathon thank you  so much please come check out the booth  I'm the last presenter for Heroku today  and as always thank you again so much  for letting me come and talk to you at  railsconf  [Applause]
+
+00:00:02.659 --> 00:00:06.440 align:start position:0%
+who here uses Postgres kind of show  hands a whole lot of folks okay I wasn't  sure if we had any mice equal users or  anyone anything else so so we're here  for a lot of the same reasons we  recognize that Postgres has a lot of  really great things that are going on  for it in the community native JSON  support native hash support there's a  lot of great community standards for  data integrity and insurance continued  excellence and a lot of really large and  really expensive sub queries and a lot  of numerous native extensions and  extensions supported by the community  with standards built in natively so  we're all here for the same reasons but  post Creston got even better as a  performant database so some of the  things I'm going to talk about today are  native table partitioning hash index  resiliency a big one for a lot of folks  which is full text index searching on  JSON and JSON blobs that is native now  and a big one that I'll probably talk  about which will be a little more in  depth parallel queries and how they  affect large joins indexes and other  portions of the code base and query  analyzer accuracy and changes to how the  query planner does efficient work as  well so you'll hear me talk about some  phrases that you'll probably sound  familiar if you're avid user of Postgres  but I'm not going to jump into in depth  how much they work so I'm not going to  go into how much bloat or vacuum  sequential scans or replications are  working as well as pruning and  statistics these are also changes that  happened in Postgres 10 but I'm not  going to cover them in this talk but a  little bit about me first  I joined Heroku a little over a year and  a half ago  I've been primarily working on Sinatra  and Ruby on Rails applications for the  better part of the last four years  primarily right now in my role I'm  focused on Postgres and high  availability modes and large data growth  so growth in the terabytes of data I've  worked on a lot of different data  service engines more than I can list I'm  not going to go through all them all  there that's  much time but on the side I'm trying to  be a lot more positive so I'm trying to  do a lot of self-help and life coaching  things so I'm trying to focus on a lot  of inspirational things so on the side I  do some super-secret project work on  this social interest platform because I  like Facebook but there's a lot of  negativity on there so some of the  things that I I'm looking for some basic  things that any social interest platform  would provide which is profiles but I'm  also looking for curated content so  inspirational quotes TV characters  movies TV shows foods the list goes on  and I'm imagining a lot of usage so  we're gonna just jump right into it and  the first thing that I'm going to talk  about is inspirational quotes and this  is one that I actually saw when I was  traveling to New Zealand which I thought  was fantastic which is happiness is not  a destination it's a way of life and I'm  hoping to see millions of these populate  throughout the the codebase and through  the platform but wow that that grew fast  so even though quotes aren't very big  they're just you know small string text  most databases even at large scale have  significant amount of RAM tons of disk  space but some usage scenarios that most  quotes are never updated or revisited  after a week and most people only want  the most recent and up-to-date quotes  they don't want to see stale stuff so  that's kind of tough that one table grew  really quickly some quick math there and  that's way more memory than I have so a  little bit about how Postgres and some  of its caching system are gonna work  here it's gonna attempt to load as much  stuff in memory as possible and then  it's going to try to use what it has in  memory and if there's overflow it'll  start doing disk writing with pointers  to the files and it'll open them up at  one at a time as it does file writing so  it actually will manipulate the disks a  lot more so caching is done this way  because if you access the data obviously  you're probably going to need it sooner  than later so it's going to try to do  that in a couple different ways but the  other problem with this is that temp  disk space is not free I I know we'd all  like to  it is but it's actually not there are a  lot of other overhead costs because  usually temp this space also happens  with where the data is stored on the  database on disk and caching records in  large quantities can have some  significant impacts especially as you're  trying to concurrently access the same  table multiple times with large data  sets so one of the real issues and this  is something that some people might have  seen in the past is that we can easily  stop connecting to the database entirely  if we run too many of these simultaneous  really heavy bloating or locking queries  so who likes fast queries everyone I'm  hoping everyone likes fast queries and  database is staying up and continuing to  connect yes yes big big thumbs up in the  front row thank you so a great thing  that they actually added as Postgres 10  is native table partitioning there's  been extensions in the community for a  while that do this but let's go into  some of the big wins on native  partitioning so native partitioning  actually can entirely avoid the back  vacuum and bloating process so bulk  loads and deletes and offloads can  happen without causing overhead to your  Postgres internals so slow accesses to  your database connections things like  that they're gonna be a lot less costly  because you're not stressing that one  giant table as much our most common used  rows are only going to be the sections  of the partitions we care about and a  lot of the seldom used data can stay  where it needs to on slow disk storage  or even off on like you know cold  storage we can move it off entirely and  one of the great things about this is  that query performance improve  dramatically we we got a lot more bang  for our buck when we actually do the  lookups previously we'd have to do best  effort random index scans and then  random access reads to the disks with  large data like this disk data storage  is kind of fragmented in some scenarios  and so in average of worst case  scenarios if you actually do  complexity some of these cases actually  end up being worse than sequential scans  so native partitioning is a great way to  optimize for this another key note to  have here is PG part man is still in ten  it's still supported but it doesn't have  some of the parallel support that we're  going to talk about a little later in  this talk some other small noteworthy  items for native partitioning it's not  natively supported in boram's  obviously you saw me writing raw sequel  in the migration script there are have  been gems to try to make this more  consistent in things like active record  but none of them are really well  supported right now a lot of another  great thing about this though is tables  can be created from your partitions so  if you need to do what I'd like to call  yomo tables your your month tables this  is or even week tables this is something  that you could absolutely do and this is  a great way to even segment even data  even further as it migrates through and  it's an easy way to understand your data  over long periods of time and you can  even create partitions from your  partitions I would add a partition mean  but I feel like they're overkill but so  now we want to do a pivot so we've had a  lot of use of the platform and people  are starting to create products and now  we want to do home delivery so how do we  get that done well we obviously need  customer addresses so this seems pretty  simple and we want you know a mobile app  to be able to access lots of different  customer addresses when they're you know  going making deliveries right we want to  take customer service seriously but we  do have a lot of customers and we have a  lot of addresses so addresses aren't  uniform across North America actually  they're very different even between the  US and Canada and even between different  states different states have different  rules and regulations about where  delivery drivers can stop and and other  really important features and gotchas  like that so nobody gets ticketed on the  street so there might be some important  instructions we also need for not just  customer satisfaction but for driver  notices as well so we can kind of store  this unstructured data already in  Postgres right each store already exists  today a lot of people I'm sure use it  it's not new it's a key-value store but  you know implementing it seems  straightforward enough let's just add  the hash right yeah man those interests  address lookups are real slow real slow  the other problem here is that when  somebody is trying to make an update to  this our drivers aren't going to get it  in real time it's not gonna happen  we could add an index to improve lookups  though so let's let's try that and let's  see what happens so let's let's add a  hash index on usage and hope for the  best right it seems like it should work  maybe maybe things improved but ooh show  hands anyone seen this error message  before show hands who uses hash indexes  in here not many people ok well that's  that's good to know  um so probably a lot of people know for  good reason that hash indexes aren't  really well supported in Postgres 9x for  a lot of different reasons but the key  one being replication is is not  supported so it's not treated as a  first-class citizen the the other one is  you get a lot of misleading failures  like that that kind of looked like a  data corruption issue but actually  that's an index corruption and that's  because the hash index can't keep up so  there other things about this is that if  we have extremely large datasets to pull  from sometimes you have to completely  ask that the hash index and rebuild it  from scratch which is not a great  experience what's the solution if we  can't rely on this hashing mechanism if  we really want to use H store since it's  mostly supported well Postgres 10  actually finally brought it into the  light and made it a first-class citizen  so it added first-class citizen support  such as replication it made it crash  safe through shutdowns and fail overs  replication is done faster lookup so the  growth of each page for that index are  actually consistent with regular  indexing  this is and the pruning happens much  more consistently as well so indexes  don't go as stale as often so going back  to this we can rely on this much more  consistently and and have better peace  of mind and we do see actual improvement  now checking through and updating the  hash itself the the biggest thing that  I'd like to point out here is the  locking concurrency issue was a huge  problem and we use H store at Heroku for  a lot of different use cases the the  reduced locking for concurrent access  for records is a big win for us even  though we don't use a lot of hash index  as H store in general for the few places  that we do that this is a really big  important thing for us so going  backwards we're talking about more  curated content on on my social media  platform and I want to talk about you  know movies and TV shows and characters  that we love that we can't get enough of  for any big nerds out there I'm a huge  flash fan I met John Wesley Shipp for  the first time earlier this year which  was fantastic so I want to list all  these movies and TV shows and I want to  get the characters for all of them so  each show can have potentially fifty  hundreds maybe even thousands of  characters if anyone watches Game of  Thrones I'm sure everyone's excited  so each record can have a lot of varying  data over time right and some things  we'll want to try to you know watch is  genres catchphrases you know famous  accessories and items or even just you  know certain ways that they dress or  look or interact with other characters  I'm sure some people are gonna get a  little schwifty after all of rails cough  so we need some way to keep that data  unstructured but co-located with the  general structure of how we want to  address media and characters in general  so let's let's use a JSON blob because  this seems to make sense for this  scenario we can query third-party data  sources and we can get them in  consistent JSON format so we can reparse  them over and over again and we can get  update  the great thing about this is that we do  have this flexibility but it opens as us  opens us up to a lot of other gotchas  one of which is each row is dynamically  sized because of this so it's not  consistent what size each record is and  because we can have so many different  data sources analyzing each character  each record this could potentially get a  little hairy in tracking how this  information changes over time so how can  we keep this unstructured and not have  to parse it all or create constant  relationships through this so we could  create multiple tables we we could add a  lot of one-to-many relationships we  could modify our rails app entirely to  manage this information we could even do  partitioning based on some subset of  where the data is colligative per show  but as much as we could do all those  things there is some other easier item  to do and that is using the full text  index searching that's been added in  Postgres 10 so because we can store  whole request bodies we can store  custom-made JSON blobs this allows us  for a lot of more no sequel dynamic  schema operations and this is what we're  really caring about especially when  we're trying to get this off the ground  in initial stages this adds a lot of  flexibility so one of the great things  here is that there's a lot of examples  of how to do this online now on the pus  crocin materials but this keeps our data  structure on unstructured and flexible  so the big thing about this is indexes  can actually filter on a lot of  different views and kind of perspectives  that you want to do for the type of  index searches you want to do on your  JSON since they are treated as  first-class citizens as well and the  other great thing about this is this  gives us ways to you know target folks  on the platform that we're looking at if  we want to target them for you know  being big Marvel fans or you know maybe  somebody can't get enough of you know  Joey from France  maybe he just wants to say how you doing  all the time  but I'm a big fan of Thor so a lot of  hammers for me but let's let's jump back  for a sec quotes was our big takeoff  item that was the big one that got the  platform recognized and people love  throwback Thursday so let's let's create  a throwback stream of quotes for for  folks who want to know on this day my  favorite posters posted these quotes so  we want to be able to replay a stream of  old quotes right well streams should  include all of the posters that I liked  and followed not just my own posts so  that's a lot more quotes than you would  normally see and even getting one month  of posts and that's a lot of queries  especially if you're following a few  hundred other people that's a lot of a  lot of quotes especially for power  posters who post multiple times a day so  yeah here we go so Postgres 10 did a lot  of things to optimize how we do these  types of queries and how fast they come  back so we're gonna I'm gonna touch on  three there are more optimizations in  the parallel areas on how to return  queries that Postgres 10 did I'm only  gonna touch on these three because these  three are usually the big ones that  people talk about so we're gonna talk  about parallel bitmap heat scans gather  merges and merge joints so let's jump  into it so in 96 parallel searching and  scanning was was introduced it was a  little limited though so it used to only  do sequential scans and sequential scans  were only done the primary tables so  this kind of created the problem where  you couldn't rely on indexes you we had  a little bit of a trade-off here where  you either had to rely on your table  caching to be really effective or your  indexes to be really good but you  couldn't get an overlap here which was  kind of painful the big thing about  Postgres 10 is that changed when they  added way more parallelization to every  level of your  table schemes including indexes so you  can it do parallel searching through  your indexes first you actually go  through and construct the only the index  files first so that you are much more  methodical and strategic on how you do  your queries and how the results are  loaded and so this requires a lot less  data loaded upfront a lot less caching  and way less results that student to  parse through and a whole lot less disk  reads so the next one we're going to  talk about is gather and gather is  actually the mechanism in which Postgres  introduced how to do parallel query  construction and and result retrieval so  it was introduced with the idea of  workers obviously to do asynchronous  processing and the big thing here was  that there were multiple layers on how  results were returned a lot of the time  they were returned in arbitrary fashions  mostly in the order to have how fast  they returned from each worker so  unfortunately if you're adding searches  or sorts to this portion of the  mechanism this is going to add a  significant amount of overhead because  you're requiring not just the search of  the b-tree but you're also requiring an  extra order layer to happen after the  initial result sets are retrieved so a  small example here is you know I have a  bunch of IDs in my be tree and I just  want to retrieve the primes right so  here's a small example of a be tree the  the issue here is that when when we're  going through and checking through  Prime's the leaf nodes in some scenarios  have more content than either the roots  or some other leaf nodes so certainly if  nodes a will turn faster than others the  root node is our first return response  so 17 was actually the first node I'll  go back here so 17 was the the first one  we actually saw on the left side if  you'll actually look on the three leaf  nodes to the left of 17 Elevens only got  one so our first records are going to be  17 19 and 11 depending  on how fast they return then to so we  actually get stuff out of order so  another pass is going to be required to  sort through the somewhat strange return  results of the workers themselves and so  they were only trained to be returned as  fast as possible with no context  well this changed in Postgres 10 so  Postgres 10 changed this by optimizing  the worker collection results so gather  merges actually sped up the parallel  worker result retrieval because they  also kept context of where they  encountered the data that they actually  cared about and they kept them into  account as the result sets were returned  so it removed a lot of overhead for  sorting after the fact because at the  end it ended up being mostly just a flat  line so this was really beneficial  especially for really large datasets  traversing huge tables so kind of  revisiting this we can see that we have  a whole nother side of the beach way we  didn't touched right I I kind of glossed  over it but for good reason because  really when we parsed it down we  actually held context it did actually  move through the B tree and and  construct how we thought we were going  to see everything the reason we kept  context here is because we kept context  of the locations that we visited each  node at and so this is much more natural  ordering of operations from an intuitive  mental standpoint so it's easier to  mental map how our data is retrieved as  well too so the great thing is is  because as we merge the leaves and the  roots we basically can turn this into a  linked list and it becomes a simplified  array that's mostly natively ordered  even before we add other order clauses  if you add the order clauses they're  kept in context along with the parallel  workers so they know what to do when  they're ordering as they return results  and then the last one we're gonna cover  here is merge joints and this one while  maybe performance wise doesn't always  pack the most wallet is the most one of  the  one's for me as well so kind of applying  this to checking all the other posters I  care about for throwback Thursday I need  to join on the other customers quotes  right so previously nine six only  allowed this on nested and sub-query  loops or or hash joins the this didn't  always happen on on the primary query of  the table so a lot of our sub queries  were optimized for this but not  necessarily the originating one that we  cared about so this adds a lot of  overhead and even though indexing and  ordering is great it could actually make  things worse and not better especially  the indexing portion which is surprising  sometimes but it can be a gotcha so  parallel merge join was added to  consistently parallel do parallel  operations for all the merges at all  levels so all the sub queries all the  way up the stack from from each sub  table or even tables you've had to  rejoin to get different data sets for  temporary tables for example are now  going to be done in parallel as well so  this is gonna make things much more  efficient outer sides of the joins  especially when we do no comparisons or  checks like that are gonna be the most  effective because we're not going to be  as restrictive here and it's going to be  much quicker to run through certain  sections of that with less data and  combined with a lot of the parallel  changes to the indexes gonna be way  faster and getting all of the data that  you care about again the parallel  changes that also happen to gather merge  will give you some natural ordering by  default even before you specify order  but will still maintain context for  adding order as well so the last thing  I'm gonna touch on which I did mention  this is a real-world example actually  from something that we track at Heroku  which is part of tracking our issues on  our internal repos and external repos as  well so that we have a good list of  items for when we get future requests  issues bugs things like that and that is  actually even though this table is  pruned pretty consistently for the  issues  mapping the github issue to a repo ID  it's not huge but it's not tiny either  here is the query an analyzer for for  the table for a given repo ID execution  times not great this index is basically  not being used even though we expect it  to be used in 96 it definitely didn't  get used at all and so we end up doing  sequential scanning through it and it  gives us some pretty crappy runtimes  here's the great thing with all the  changes we post grows 10 the parallel  index got figured out by the query  analyzer and it's neat being used now  even on a tiny table  that's ridiculous just gonna let that  sink in for a sec that that's a half a  gig table that's not even a big table  that's a tiny one the changes that have  occurred in the performance games are  huge I'm not going to go through query  analytics that's another talk in and of  its own that is way too much time for  what we have to get through today so  unfortunately that's if you want to hear  me talk more about it or explain  anything more that I've seen in my last  year and a half two years come talk to  me after but there are a few last-minute  gotchas with Postgres 10 with rails that  i want to go through when i touched on  some of them but maybe someone you might  not know rails 4 doesn't support  Postgres 10  unfortunately they can the connection  protocols changed and how Postgres 10  works and so unfortunately post rails 4  only supports up to Postgres 9 6 if you  want to make the move to 10 you will  have to be on rails 5 again as I've  stated before partitioning is not native  to the Ruby and Ruby on Rails ORM  so our specific index types like hash  indexes and JSON indexes for the full  text query index searching we went over  today and the analytics queries are all  not available  except for in Ross sequel as well so  some things to know but that's one of  the reasons I love working at Heroku is  because we try to offer a lot of tools  for stuff like this so with the release  of Postgres 10 and the support for that  we've added a lot of extra support and  numerous extensions to support posters  10 as well we've added managed Postgres  credentials because the permission  schemes are very confusing as we've  found over the years new updated  hardware plans at the same price points  improved CLI analytics because our  analytics Eli's use the same query  analyzer that they do there and the same  PG internals that have had the  optimizations done as well and we are  beta beta a new feature right now for  those to test out called Postgres  connection pooling so the posters  Postgres extensions that we offer are  you know numerous and most of them are  natively offered we offer a few external  ones like post chips and things like  that if you want the complete list go go  check them out but the big one that I  love here is the is the time travel one  that's that's a big favorite especially  with the new changes to partition  Postgres manage credentials was  something we actually released late last  year but we did this for a lot of  different reasons we had a lot of  customer asks for this so Postgres  permissions are really difficult to  reason about their add a lot of  different layers and they have a lot of  nuance into creating granularity  understanding revoking permissions  things like that we still allow  customization when we issue manage  credentials but we've tried to take a  lot of the guesswork out of initially  creating a lot of these credentials and  roles for tables so we try to consider  things like special tables or special  characters that no one likes sequel  objection Bobbi tables can can stay at  home with his mom name lengths are  another big gotcha there's actually  certain character limits that if you  blow them  Postgres silently doesn't tell you so  that's that's another strange one and  we've also published some of the best  practices as well so if you want to see  some of the other things you can check  them out  the Postgres credentials deaf center but  I encourage everyone to even if you're  not using managed credentials consider  things like separations of concern  principle of least privilege and even  better external control access if you're  using a third party vendor that needs  data access you you want to give them  very restricted things you don't want to  give them access to PII data for example  to some of the things you insure for  your customers so the other big one that  we did earlier this year was broken PGX  plans I was directly actually part of  this project which was fantastic I was  very happy and excited about this which  was we were able to utilize the the  latest hardware virtualization for  better i/o better CPU and query  optimization and also we've added all  these plans under dedicated hardware so  that you get consistent and stable  performance we've documented about it in  the blog post but the big wins here are  that we've doubled CPU cores at tiers  four and up we're exposing some of the  dedicated provision iOS for plans and  we're increasing data disk size at every  tier and prices either stayed the same  or lowered so please go check that out  if you're interested in checking out  some performance on the hardware side  the one that I we do for a long time is  one that I use on a daily basis  especially when people file support  tickets for us is the Heroku CLI  especially for Postgres we've used PG  diagnose and this is something that has  been out there for a while but I want to  reiterate because Postgres database  tuning has been a big deal and other  people have talked about it at the  conference we've we've had a deaf Center  out there for a long time and we have  the extension CLI to add on to the  native Heroku PG CLI commands so the big  one is PG diagnose but if you're looking  at sequential scans or caching and hit  rates some of the things that I might  have talked about today we actually  offer pre predefined ways of querying  that information through all your tables  and schemas so please go check that out  as well  now the one that I I know a lot of  people have heard about a lot of  companies have started using  bouncer so PG bouncer for those who are  familiar or not have added management  for post crest connection pooling this  is basically because there's not really  this idea built into Postgres so  connection pooling is done outside of  Postgres and this kind of adds  insurances to making sure connections  don't stay open longer than they're  supposed to be queries don't kill your  database and we've added this as part of  the connection pooling that's how this  is done  PG bouncer is is in beta as Roku PG  connection pooling so why use it well  one thing Roku in general loves to see  is stats we love our stats this is  better visibility into seeing how our  connections behave this also gives a lot  of guardrails to protect your database  and keep it up especially if you have  multiple applications connecting to a  single database and this is really great  for asynchronous workloads for anyone  using lots of active job or anything  like that this is fantastic we've  offered it as a beta we're still working  out making the best practices out there  we're still trying to get some some  feedback from folks who you know ask for  more customers ability or better use  case scenarios so we're still doing some  some public beta work on it right now  it is supported out there and it is well  document it so though if you're  interested in using what's on server  right there for pg connection pooling  please go check it out we still offer a  client-side build pack that can run on a  dyno it doesn't have as many of the  built-in features that we'll be adding  to Postgres connection pooling but if  you are interested in using it separate  from the database itself on your  application layers or something like  that it's still available out there whoo  and that is it what a marathon thank you  so much please come check out the booth  I'm the last presenter for Heroku today  and as always thank you again so much  for letting me come and talk to you at  railsconf  [Applause]
+ 
+
+00:00:06.440 --> 00:00:08.059 align:start position:0%
+ 
+ 
+
+00:00:08.059 --> 00:00:11.780 align:start position:0%
+ 
+ 
+
+00:00:11.780 --> 00:00:12.770 align:start position:0%
+ 
+ 
+
+00:00:12.770 --> 00:00:14.240 align:start position:0%
+ 
+ 
+
+00:00:14.240 --> 00:00:15.980 align:start position:0%
+ 
+ 
+
+00:00:15.980 --> 00:00:18.590 align:start position:0%
+ 
+ 
+
+00:00:18.590 --> 00:00:21.590 align:start position:0%
+ 
+ 
+
+00:00:21.590 --> 00:00:23.990 align:start position:0%
+ 
+ 
+
+00:00:23.990 --> 00:00:28.220 align:start position:0%
+ 
+ 
+
+00:00:28.220 --> 00:00:30.290 align:start position:0%
+ 
+ 
+
+00:00:30.290 --> 00:00:33.470 align:start position:0%
+ 
+ 
+
+00:00:33.470 --> 00:00:35.720 align:start position:0%
+ 
+ 
+
+00:00:35.720 --> 00:00:37.580 align:start position:0%
+ 
+ 
+
+00:00:37.580 --> 00:00:39.380 align:start position:0%
+ 
+ 
+
+00:00:39.380 --> 00:00:41.720 align:start position:0%
+ 
+ 
+
+00:00:41.720 --> 00:00:44.869 align:start position:0%
+ 
+ 
+
+00:00:44.869 --> 00:00:46.970 align:start position:0%
+ 
+ 
+
+00:00:46.970 --> 00:00:48.880 align:start position:0%
+ 
+ 
+
+00:00:48.880 --> 00:00:51.560 align:start position:0%
+ 
+ 
+
+00:00:51.560 --> 00:00:54.290 align:start position:0%
+ 
+ 
+
+00:00:54.290 --> 00:00:56.330 align:start position:0%
+ 
+ 
+
+00:00:56.330 --> 00:00:59.150 align:start position:0%
+ 
+ 
+
+00:00:59.150 --> 00:01:01.849 align:start position:0%
+ 
+ 
+
+00:01:01.849 --> 00:01:03.200 align:start position:0%
+ 
+ 
+
+00:01:03.200 --> 00:01:05.899 align:start position:0%
+ 
+ 
+
+00:01:05.899 --> 00:01:09.380 align:start position:0%
+ 
+ 
+
+00:01:09.380 --> 00:01:12.020 align:start position:0%
+ 
+ 
+
+00:01:12.020 --> 00:01:14.630 align:start position:0%
+ 
+ 
+
+00:01:14.630 --> 00:01:17.210 align:start position:0%
+ 
+ 
+
+00:01:17.210 --> 00:01:21.920 align:start position:0%
+ 
+ 
+
+00:01:21.920 --> 00:01:24.170 align:start position:0%
+ 
+ 
+
+00:01:24.170 --> 00:01:27.020 align:start position:0%
+ 
+ 
+
+00:01:27.020 --> 00:01:29.060 align:start position:0%
+ 
+ 
+
+00:01:29.060 --> 00:01:31.310 align:start position:0%
+ 
+ 
+
+00:01:31.310 --> 00:01:33.560 align:start position:0%
+ 
+ 
+
+00:01:33.560 --> 00:01:35.660 align:start position:0%
+ 
+ 
+
+00:01:35.660 --> 00:01:37.399 align:start position:0%
+ 
+ 
+
+00:01:37.399 --> 00:01:39.499 align:start position:0%
+ 
+ 
+
+00:01:39.499 --> 00:01:41.270 align:start position:0%
+ 
+ 
+
+00:01:41.270 --> 00:01:45.020 align:start position:0%
+ 
+ 
+
+00:01:45.020 --> 00:01:46.249 align:start position:0%
+ 
+ 
+
+00:01:46.249 --> 00:01:48.530 align:start position:0%
+ 
+ 
+
+00:01:48.530 --> 00:01:49.190 align:start position:0%
+ 
+ 
+
+00:01:49.190 --> 00:01:51.139 align:start position:0%
+ 
+ 
+
+00:01:51.139 --> 00:01:52.880 align:start position:0%
+ 
+ 
+
+00:01:52.880 --> 00:01:54.880 align:start position:0%
+ 
+ 
+
+00:01:54.880 --> 00:01:57.020 align:start position:0%
+ 
+ 
+
+00:01:57.020 --> 00:01:59.149 align:start position:0%
+ 
+ 
+
+00:01:59.149 --> 00:02:01.700 align:start position:0%
+ 
+ 
+
+00:02:01.700 --> 00:02:05.600 align:start position:0%
+ 
+ 
+
+00:02:05.600 --> 00:02:07.370 align:start position:0%
+ 
+ 
+
+00:02:07.370 --> 00:02:09.440 align:start position:0%
+ 
+ 
+
+00:02:09.440 --> 00:02:11.089 align:start position:0%
+ 
+ 
+
+00:02:11.089 --> 00:02:12.500 align:start position:0%
+ 
+ 
+
+00:02:12.500 --> 00:02:16.280 align:start position:0%
+ 
+ 
+
+00:02:16.280 --> 00:02:18.530 align:start position:0%
+ 
+ 
+
+00:02:18.530 --> 00:02:20.750 align:start position:0%
+ 
+ 
+
+00:02:20.750 --> 00:02:22.309 align:start position:0%
+ 
+ 
+
+00:02:22.309 --> 00:02:24.830 align:start position:0%
+ 
+ 
+
+00:02:24.830 --> 00:02:26.869 align:start position:0%
+ 
+ 
+
+00:02:26.869 --> 00:02:29.300 align:start position:0%
+ 
+ 
+
+00:02:29.300 --> 00:02:30.830 align:start position:0%
+ 
+ 
+
+00:02:30.830 --> 00:02:34.250 align:start position:0%
+ 
+ 
+
+00:02:34.250 --> 00:02:36.589 align:start position:0%
+ 
+ 
+
+00:02:36.589 --> 00:02:38.449 align:start position:0%
+ 
+ 
+
+00:02:38.449 --> 00:02:41.089 align:start position:0%
+ 
+ 
+
+00:02:41.089 --> 00:02:42.979 align:start position:0%
+ 
+ 
+
+00:02:42.979 --> 00:02:46.039 align:start position:0%
+ 
+ 
+
+00:02:46.039 --> 00:02:49.699 align:start position:0%
+ 
+ 
+
+00:02:49.699 --> 00:02:52.990 align:start position:0%
+ 
+ 
+
+00:02:52.990 --> 00:02:55.099 align:start position:0%
+ 
+ 
+
+00:02:55.099 --> 00:02:56.000 align:start position:0%
+ 
+ 
+
+00:02:56.000 --> 00:02:57.860 align:start position:0%
+ 
+ 
+
+00:02:57.860 --> 00:02:59.449 align:start position:0%
+ 
+ 
+
+00:02:59.449 --> 00:03:02.210 align:start position:0%
+ 
+ 
+
+00:03:02.210 --> 00:03:04.129 align:start position:0%
+ 
+ 
+
+00:03:04.129 --> 00:03:06.199 align:start position:0%
+ 
+ 
+
+00:03:06.199 --> 00:03:09.229 align:start position:0%
+ 
+ 
+
+00:03:09.229 --> 00:03:12.229 align:start position:0%
+ 
+ 
+
+00:03:12.229 --> 00:03:16.270 align:start position:0%
+ 
+ 
+
+00:03:16.270 --> 00:03:19.099 align:start position:0%
+ 
+ 
+
+00:03:19.099 --> 00:03:21.369 align:start position:0%
+ 
+ 
+
+00:03:21.369 --> 00:03:24.379 align:start position:0%
+ 
+ 
+
+00:03:24.379 --> 00:03:26.449 align:start position:0%
+ 
+ 
+
+00:03:26.449 --> 00:03:30.259 align:start position:0%
+ 
+ 
+
+00:03:30.259 --> 00:03:32.449 align:start position:0%
+ 
+ 
+
+00:03:32.449 --> 00:03:34.789 align:start position:0%
+ 
+ 
+
+00:03:34.789 --> 00:03:36.259 align:start position:0%
+ 
+ 
+
+00:03:36.259 --> 00:03:39.069 align:start position:0%
+ 
+ 
+
+00:03:39.069 --> 00:03:41.869 align:start position:0%
+ 
+ 
+
+00:03:41.869 --> 00:03:44.689 align:start position:0%
+ 
+ 
+
+00:03:44.689 --> 00:03:47.839 align:start position:0%
+ 
+ 
+
+00:03:47.839 --> 00:03:50.119 align:start position:0%
+ 
+ 
+
+00:03:50.119 --> 00:03:51.800 align:start position:0%
+ 
+ 
+
+00:03:51.800 --> 00:03:53.150 align:start position:0%
+ 
+ 
+
+00:03:53.150 --> 00:03:55.430 align:start position:0%
+ 
+ 
+
+00:03:55.430 --> 00:03:57.860 align:start position:0%
+ 
+ 
+
+00:03:57.860 --> 00:04:00.289 align:start position:0%
+ 
+ 
+
+00:04:00.289 --> 00:04:02.149 align:start position:0%
+ 
+ 
+
+00:04:02.149 --> 00:04:04.460 align:start position:0%
+ 
+ 
+
+00:04:04.460 --> 00:04:07.069 align:start position:0%
+ 
+ 
+
+00:04:07.069 --> 00:04:08.780 align:start position:0%
+ 
+ 
+
+00:04:08.780 --> 00:04:11.809 align:start position:0%
+ 
+ 
+
+00:04:11.809 --> 00:04:13.909 align:start position:0%
+ 
+ 
+
+00:04:13.909 --> 00:04:15.289 align:start position:0%
+ 
+ 
+
+00:04:15.289 --> 00:04:16.640 align:start position:0%
+ 
+ 
+
+00:04:16.640 --> 00:04:20.420 align:start position:0%
+ 
+ 
+
+00:04:20.420 --> 00:04:23.300 align:start position:0%
+ 
+ 
+
+00:04:23.300 --> 00:04:26.149 align:start position:0%
+ 
+ 
+
+00:04:26.149 --> 00:04:26.700 align:start position:0%
+ 
+ 
+
+00:04:26.700 --> 00:04:29.100 align:start position:0%
+ 
+ 
+
+00:04:29.100 --> 00:04:30.779 align:start position:0%
+ 
+ 
+
+00:04:30.779 --> 00:04:32.760 align:start position:0%
+ 
+ 
+
+00:04:32.760 --> 00:04:35.040 align:start position:0%
+ 
+ 
+
+00:04:35.040 --> 00:04:38.520 align:start position:0%
+ 
+ 
+
+00:04:38.520 --> 00:04:41.070 align:start position:0%
+ 
+ 
+
+00:04:41.070 --> 00:04:42.749 align:start position:0%
+ 
+ 
+
+00:04:42.749 --> 00:04:45.330 align:start position:0%
+ 
+ 
+
+00:04:45.330 --> 00:04:47.219 align:start position:0%
+ 
+ 
+
+00:04:47.219 --> 00:04:50.850 align:start position:0%
+ 
+ 
+
+00:04:50.850 --> 00:04:52.200 align:start position:0%
+ 
+ 
+
+00:04:52.200 --> 00:04:54.059 align:start position:0%
+ 
+ 
+
+00:04:54.059 --> 00:04:56.520 align:start position:0%
+ 
+ 
+
+00:04:56.520 --> 00:04:58.920 align:start position:0%
+ 
+ 
+
+00:04:58.920 --> 00:05:01.580 align:start position:0%
+ 
+ 
+
+00:05:01.580 --> 00:05:06.480 align:start position:0%
+ 
+ 
+
+00:05:06.480 --> 00:05:08.629 align:start position:0%
+ 
+ 
+
+00:05:08.629 --> 00:05:11.580 align:start position:0%
+ 
+ 
+
+00:05:11.580 --> 00:05:13.890 align:start position:0%
+ 
+ 
+
+00:05:13.890 --> 00:05:17.249 align:start position:0%
+ 
+ 
+
+00:05:17.249 --> 00:05:20.339 align:start position:0%
+ 
+ 
+
+00:05:20.339 --> 00:05:23.820 align:start position:0%
+ 
+ 
+
+00:05:23.820 --> 00:05:25.680 align:start position:0%
+ 
+ 
+
+00:05:25.680 --> 00:05:28.320 align:start position:0%
+ 
+ 
+
+00:05:28.320 --> 00:05:30.390 align:start position:0%
+ 
+ 
+
+00:05:30.390 --> 00:05:32.790 align:start position:0%
+ 
+ 
+
+00:05:32.790 --> 00:05:34.980 align:start position:0%
+ 
+ 
+
+00:05:34.980 --> 00:05:37.379 align:start position:0%
+ 
+ 
+
+00:05:37.379 --> 00:05:39.899 align:start position:0%
+ 
+ 
+
+00:05:39.899 --> 00:05:42.149 align:start position:0%
+ 
+ 
+
+00:05:42.149 --> 00:05:44.790 align:start position:0%
+ 
+ 
+
+00:05:44.790 --> 00:05:47.279 align:start position:0%
+ 
+ 
+
+00:05:47.279 --> 00:05:49.830 align:start position:0%
+ 
+ 
+
+00:05:49.830 --> 00:05:52.649 align:start position:0%
+ 
+ 
+
+00:05:52.649 --> 00:05:55.920 align:start position:0%
+ 
+ 
+
+00:05:55.920 --> 00:05:58.709 align:start position:0%
+ 
+ 
+
+00:05:58.709 --> 00:06:01.140 align:start position:0%
+ 
+ 
+
+00:06:01.140 --> 00:06:02.850 align:start position:0%
+ 
+ 
+
+00:06:02.850 --> 00:06:05.100 align:start position:0%
+ 
+ 
+
+00:06:05.100 --> 00:06:07.860 align:start position:0%
+ 
+ 
+
+00:06:07.860 --> 00:06:10.459 align:start position:0%
+ 
+ 
+
+00:06:10.459 --> 00:06:12.480 align:start position:0%
+ 
+ 
+
+00:06:12.480 --> 00:06:14.969 align:start position:0%
+ 
+ 
+
+00:06:14.969 --> 00:06:18.060 align:start position:0%
+ 
+ 
+
+00:06:18.060 --> 00:06:19.770 align:start position:0%
+ 
+ 
+
+00:06:19.770 --> 00:06:23.189 align:start position:0%
+ 
+ 
+
+00:06:23.189 --> 00:06:26.070 align:start position:0%
+ 
+ 
+
+00:06:26.070 --> 00:06:28.860 align:start position:0%
+ 
+ 
+
+00:06:28.860 --> 00:06:32.610 align:start position:0%
+ 
+ 
+
+00:06:32.610 --> 00:06:34.649 align:start position:0%
+ 
+ 
+
+00:06:34.649 --> 00:06:36.480 align:start position:0%
+ 
+ 
+
+00:06:36.480 --> 00:06:38.170 align:start position:0%
+ 
+ 
+
+00:06:38.170 --> 00:06:40.360 align:start position:0%
+ 
+ 
+
+00:06:40.360 --> 00:06:42.280 align:start position:0%
+ 
+ 
+
+00:06:42.280 --> 00:06:45.130 align:start position:0%
+ 
+ 
+
+00:06:45.130 --> 00:06:49.420 align:start position:0%
+ 
+ 
+
+00:06:49.420 --> 00:06:52.870 align:start position:0%
+ 
+ 
+
+00:06:52.870 --> 00:06:54.910 align:start position:0%
+ 
+ 
+
+00:06:54.910 --> 00:06:57.550 align:start position:0%
+ 
+ 
+
+00:06:57.550 --> 00:06:59.170 align:start position:0%
+ 
+ 
+
+00:06:59.170 --> 00:07:04.150 align:start position:0%
+ 
+ 
+
+00:07:04.150 --> 00:07:08.050 align:start position:0%
+ 
+ 
+
+00:07:08.050 --> 00:07:10.150 align:start position:0%
+ 
+ 
+
+00:07:10.150 --> 00:07:12.070 align:start position:0%
+ 
+ 
+
+00:07:12.070 --> 00:07:14.680 align:start position:0%
+ 
+ 
+
+00:07:14.680 --> 00:07:16.900 align:start position:0%
+ 
+ 
+
+00:07:16.900 --> 00:07:19.390 align:start position:0%
+ 
+ 
+
+00:07:19.390 --> 00:07:20.710 align:start position:0%
+ 
+ 
+
+00:07:20.710 --> 00:07:24.280 align:start position:0%
+ 
+ 
+
+00:07:24.280 --> 00:07:26.470 align:start position:0%
+ 
+ 
+
+00:07:26.470 --> 00:07:28.750 align:start position:0%
+ 
+ 
+
+00:07:28.750 --> 00:07:31.960 align:start position:0%
+ 
+ 
+
+00:07:31.960 --> 00:07:35.290 align:start position:0%
+ 
+ 
+
+00:07:35.290 --> 00:07:37.480 align:start position:0%
+ 
+ 
+
+00:07:37.480 --> 00:07:40.330 align:start position:0%
+ 
+ 
+
+00:07:40.330 --> 00:07:42.520 align:start position:0%
+ 
+ 
+
+00:07:42.520 --> 00:07:44.710 align:start position:0%
+ 
+ 
+
+00:07:44.710 --> 00:07:46.570 align:start position:0%
+ 
+ 
+
+00:07:46.570 --> 00:07:48.670 align:start position:0%
+ 
+ 
+
+00:07:48.670 --> 00:07:50.470 align:start position:0%
+ 
+ 
+
+00:07:50.470 --> 00:07:54.280 align:start position:0%
+ 
+ 
+
+00:07:54.280 --> 00:07:57.910 align:start position:0%
+ 
+ 
+
+00:07:57.910 --> 00:07:59.950 align:start position:0%
+ 
+ 
+
+00:07:59.950 --> 00:08:01.960 align:start position:0%
+ 
+ 
+
+00:08:01.960 --> 00:08:03.670 align:start position:0%
+ 
+ 
+
+00:08:03.670 --> 00:08:06.250 align:start position:0%
+ 
+ 
+
+00:08:06.250 --> 00:08:07.960 align:start position:0%
+ 
+ 
+
+00:08:07.960 --> 00:08:10.510 align:start position:0%
+ 
+ 
+
+00:08:10.510 --> 00:08:13.330 align:start position:0%
+ 
+ 
+
+00:08:13.330 --> 00:08:15.010 align:start position:0%
+ 
+ 
+
+00:08:15.010 --> 00:08:17.050 align:start position:0%
+ 
+ 
+
+00:08:17.050 --> 00:08:19.330 align:start position:0%
+ 
+ 
+
+00:08:19.330 --> 00:08:22.810 align:start position:0%
+ 
+ 
+
+00:08:22.810 --> 00:08:25.630 align:start position:0%
+ 
+ 
+
+00:08:25.630 --> 00:08:28.270 align:start position:0%
+ 
+ 
+
+00:08:28.270 --> 00:08:30.190 align:start position:0%
+ 
+ 
+
+00:08:30.190 --> 00:08:31.930 align:start position:0%
+ 
+ 
+
+00:08:31.930 --> 00:08:33.670 align:start position:0%
+ 
+ 
+
+00:08:33.670 --> 00:08:35.020 align:start position:0%
+ 
+ 
+
+00:08:35.020 --> 00:08:37.300 align:start position:0%
+ 
+ 
+
+00:08:37.300 --> 00:08:39.640 align:start position:0%
+ 
+ 
+
+00:08:39.640 --> 00:08:41.950 align:start position:0%
+ 
+ 
+
+00:08:41.950 --> 00:08:43.720 align:start position:0%
+ 
+ 
+
+00:08:43.720 --> 00:08:46.750 align:start position:0%
+ 
+ 
+
+00:08:46.750 --> 00:08:48.790 align:start position:0%
+ 
+ 
+
+00:08:48.790 --> 00:08:50.930 align:start position:0%
+ 
+ 
+
+00:08:50.930 --> 00:08:54.530 align:start position:0%
+ 
+ 
+
+00:08:54.530 --> 00:08:56.000 align:start position:0%
+ 
+ 
+
+00:08:56.000 --> 00:08:58.460 align:start position:0%
+ 
+ 
+
+00:08:58.460 --> 00:09:00.020 align:start position:0%
+ 
+ 
+
+00:09:00.020 --> 00:09:02.540 align:start position:0%
+ 
+ 
+
+00:09:02.540 --> 00:09:04.880 align:start position:0%
+ 
+ 
+
+00:09:04.880 --> 00:09:06.170 align:start position:0%
+ 
+ 
+
+00:09:06.170 --> 00:09:10.940 align:start position:0%
+ 
+ 
+
+00:09:10.940 --> 00:09:14.440 align:start position:0%
+ 
+ 
+
+00:09:14.440 --> 00:09:16.790 align:start position:0%
+ 
+ 
+
+00:09:16.790 --> 00:09:18.470 align:start position:0%
+ 
+ 
+
+00:09:18.470 --> 00:09:20.870 align:start position:0%
+ 
+ 
+
+00:09:20.870 --> 00:09:24.050 align:start position:0%
+ 
+ 
+
+00:09:24.050 --> 00:09:26.780 align:start position:0%
+ 
+ 
+
+00:09:26.780 --> 00:09:28.310 align:start position:0%
+ 
+ 
+
+00:09:28.310 --> 00:09:30.350 align:start position:0%
+ 
+ 
+
+00:09:30.350 --> 00:09:32.510 align:start position:0%
+ 
+ 
+
+00:09:32.510 --> 00:09:34.610 align:start position:0%
+ 
+ 
+
+00:09:34.610 --> 00:09:40.340 align:start position:0%
+ 
+ 
+
+00:09:40.340 --> 00:09:41.810 align:start position:0%
+ 
+ 
+
+00:09:41.810 --> 00:09:47.210 align:start position:0%
+ 
+ 
+
+00:09:47.210 --> 00:09:51.140 align:start position:0%
+ 
+ 
+
+00:09:51.140 --> 00:09:51.950 align:start position:0%
+ 
+ 
+
+00:09:51.950 --> 00:09:56.510 align:start position:0%
+ 
+ 
+
+00:09:56.510 --> 00:09:58.400 align:start position:0%
+ 
+ 
+
+00:09:58.400 --> 00:10:01.940 align:start position:0%
+ 
+ 
+
+00:10:01.940 --> 00:10:03.230 align:start position:0%
+ 
+ 
+
+00:10:03.230 --> 00:10:05.450 align:start position:0%
+ 
+ 
+
+00:10:05.450 --> 00:10:06.860 align:start position:0%
+ 
+ 
+
+00:10:06.860 --> 00:10:10.280 align:start position:0%
+ 
+ 
+
+00:10:10.280 --> 00:10:11.810 align:start position:0%
+ 
+ 
+
+00:10:11.810 --> 00:10:14.000 align:start position:0%
+ 
+ 
+
+00:10:14.000 --> 00:10:16.460 align:start position:0%
+ 
+ 
+
+00:10:16.460 --> 00:10:18.530 align:start position:0%
+ 
+ 
+
+00:10:18.530 --> 00:10:21.430 align:start position:0%
+ 
+ 
+
+00:10:21.430 --> 00:10:24.350 align:start position:0%
+ 
+ 
+
+00:10:24.350 --> 00:10:27.770 align:start position:0%
+ 
+ 
+
+00:10:27.770 --> 00:10:29.960 align:start position:0%
+ 
+ 
+
+00:10:29.960 --> 00:10:32.150 align:start position:0%
+ 
+ 
+
+00:10:32.150 --> 00:10:33.530 align:start position:0%
+ 
+ 
+
+00:10:33.530 --> 00:10:37.910 align:start position:0%
+ 
+ 
+
+00:10:37.910 --> 00:10:40.460 align:start position:0%
+ 
+ 
+
+00:10:40.460 --> 00:10:42.050 align:start position:0%
+ 
+ 
+
+00:10:42.050 --> 00:10:46.190 align:start position:0%
+ 
+ 
+
+00:10:46.190 --> 00:10:47.750 align:start position:0%
+ 
+ 
+
+00:10:47.750 --> 00:10:49.400 align:start position:0%
+ 
+ 
+
+00:10:49.400 --> 00:10:51.800 align:start position:0%
+ 
+ 
+
+00:10:51.800 --> 00:10:53.660 align:start position:0%
+ 
+ 
+
+00:10:53.660 --> 00:10:56.380 align:start position:0%
+ 
+ 
+
+00:10:56.380 --> 00:10:59.240 align:start position:0%
+ 
+ 
+
+00:10:59.240 --> 00:11:01.370 align:start position:0%
+ 
+ 
+
+00:11:01.370 --> 00:11:02.720 align:start position:0%
+ 
+ 
+
+00:11:02.720 --> 00:11:02.730 align:start position:0%
+ 
+ 
+
+00:11:02.730 --> 00:11:03.420 align:start position:0%
+ 
+
+
+00:11:03.420 --> 00:11:05.430 align:start position:0%
+ 
+ 
+
+00:11:05.430 --> 00:11:07.139 align:start position:0%
+ 
+ 
+
+00:11:07.139 --> 00:11:11.010 align:start position:0%
+ 
+ 
+
+00:11:11.010 --> 00:11:13.320 align:start position:0%
+ 
+ 
+
+00:11:13.320 --> 00:11:16.200 align:start position:0%
+ 
+ 
+
+00:11:16.200 --> 00:11:19.019 align:start position:0%
+ 
+ 
+
+00:11:19.019 --> 00:11:21.510 align:start position:0%
+ 
+ 
+
+00:11:21.510 --> 00:11:25.110 align:start position:0%
+ 
+ 
+
+00:11:25.110 --> 00:11:27.210 align:start position:0%
+ 
+ 
+
+00:11:27.210 --> 00:11:29.490 align:start position:0%
+ 
+ 
+
+00:11:29.490 --> 00:11:32.340 align:start position:0%
+ 
+ 
+
+00:11:32.340 --> 00:11:35.730 align:start position:0%
+ 
+ 
+
+00:11:35.730 --> 00:11:38.160 align:start position:0%
+ 
+ 
+
+00:11:38.160 --> 00:11:40.949 align:start position:0%
+ 
+ 
+
+00:11:40.949 --> 00:11:42.570 align:start position:0%
+ 
+ 
+
+00:11:42.570 --> 00:11:45.000 align:start position:0%
+ 
+ 
+
+00:11:45.000 --> 00:11:46.920 align:start position:0%
+ 
+ 
+
+00:11:46.920 --> 00:11:50.790 align:start position:0%
+ 
+ 
+
+00:11:50.790 --> 00:11:52.410 align:start position:0%
+ 
+ 
+
+00:11:52.410 --> 00:11:55.380 align:start position:0%
+ 
+ 
+
+00:11:55.380 --> 00:11:58.050 align:start position:0%
+ 
+ 
+
+00:11:58.050 --> 00:11:59.699 align:start position:0%
+ 
+ 
+
+00:11:59.699 --> 00:12:01.970 align:start position:0%
+ 
+ 
+
+00:12:01.970 --> 00:12:05.040 align:start position:0%
+ 
+ 
+
+00:12:05.040 --> 00:12:07.199 align:start position:0%
+ 
+ 
+
+00:12:07.199 --> 00:12:09.090 align:start position:0%
+ 
+ 
+
+00:12:09.090 --> 00:12:11.970 align:start position:0%
+ 
+ 
+
+00:12:11.970 --> 00:12:13.769 align:start position:0%
+ 
+ 
+
+00:12:13.769 --> 00:12:16.130 align:start position:0%
+ 
+ 
+
+00:12:16.130 --> 00:12:19.410 align:start position:0%
+ 
+ 
+
+00:12:19.410 --> 00:12:21.690 align:start position:0%
+ 
+ 
+
+00:12:21.690 --> 00:12:23.370 align:start position:0%
+ 
+ 
+
+00:12:23.370 --> 00:12:26.090 align:start position:0%
+ 
+ 
+
+00:12:26.090 --> 00:12:29.430 align:start position:0%
+ 
+ 
+
+00:12:29.430 --> 00:12:32.160 align:start position:0%
+ 
+ 
+
+00:12:32.160 --> 00:12:34.800 align:start position:0%
+ 
+ 
+
+00:12:34.800 --> 00:12:38.460 align:start position:0%
+ 
+ 
+
+00:12:38.460 --> 00:12:41.820 align:start position:0%
+ 
+ 
+
+00:12:41.820 --> 00:12:43.860 align:start position:0%
+ 
+ 
+
+00:12:43.860 --> 00:12:46.220 align:start position:0%
+ 
+ 
+
+00:12:46.220 --> 00:12:48.329 align:start position:0%
+ 
+ 
+
+00:12:48.329 --> 00:12:51.199 align:start position:0%
+ 
+ 
+
+00:12:51.199 --> 00:12:54.870 align:start position:0%
+ 
+ 
+
+00:12:54.870 --> 00:12:57.569 align:start position:0%
+ 
+ 
+
+00:12:57.569 --> 00:12:59.730 align:start position:0%
+ 
+ 
+
+00:12:59.730 --> 00:13:02.130 align:start position:0%
+ 
+ 
+
+00:13:02.130 --> 00:13:05.280 align:start position:0%
+ 
+ 
+
+00:13:05.280 --> 00:13:07.290 align:start position:0%
+ 
+ 
+
+00:13:07.290 --> 00:13:09.630 align:start position:0%
+ 
+ 
+
+00:13:09.630 --> 00:13:11.460 align:start position:0%
+ 
+ 
+
+00:13:11.460 --> 00:13:14.130 align:start position:0%
+ 
+ 
+
+00:13:14.130 --> 00:13:15.930 align:start position:0%
+ 
+ 
+
+00:13:15.930 --> 00:13:15.940 align:start position:0%
+ 
+ 
+
+00:13:15.940 --> 00:13:17.430 align:start position:0%
+ 
+
+
+00:13:17.430 --> 00:13:20.800 align:start position:0%
+ 
+ 
+
+00:13:20.800 --> 00:13:24.160 align:start position:0%
+ 
+ 
+
+00:13:24.160 --> 00:13:27.010 align:start position:0%
+ 
+ 
+
+00:13:27.010 --> 00:13:29.530 align:start position:0%
+ 
+ 
+
+00:13:29.530 --> 00:13:31.900 align:start position:0%
+ 
+ 
+
+00:13:31.900 --> 00:13:35.310 align:start position:0%
+ 
+ 
+
+00:13:35.310 --> 00:13:37.690 align:start position:0%
+ 
+ 
+
+00:13:37.690 --> 00:13:40.360 align:start position:0%
+ 
+ 
+
+00:13:40.360 --> 00:13:43.360 align:start position:0%
+ 
+ 
+
+00:13:43.360 --> 00:13:45.340 align:start position:0%
+ 
+ 
+
+00:13:45.340 --> 00:13:48.220 align:start position:0%
+ 
+ 
+
+00:13:48.220 --> 00:13:50.230 align:start position:0%
+ 
+ 
+
+00:13:50.230 --> 00:13:52.000 align:start position:0%
+ 
+ 
+
+00:13:52.000 --> 00:13:55.090 align:start position:0%
+ 
+ 
+
+00:13:55.090 --> 00:13:57.730 align:start position:0%
+ 
+ 
+
+00:13:57.730 --> 00:13:59.889 align:start position:0%
+ 
+ 
+
+00:13:59.889 --> 00:14:03.010 align:start position:0%
+ 
+ 
+
+00:14:03.010 --> 00:14:05.470 align:start position:0%
+ 
+ 
+
+00:14:05.470 --> 00:14:08.019 align:start position:0%
+ 
+ 
+
+00:14:08.019 --> 00:14:11.190 align:start position:0%
+ 
+ 
+
+00:14:11.190 --> 00:14:14.019 align:start position:0%
+ 
+ 
+
+00:14:14.019 --> 00:14:16.510 align:start position:0%
+ 
+ 
+
+00:14:16.510 --> 00:14:19.600 align:start position:0%
+ 
+ 
+
+00:14:19.600 --> 00:14:21.579 align:start position:0%
+ 
+ 
+
+00:14:21.579 --> 00:14:24.760 align:start position:0%
+ 
+ 
+
+00:14:24.760 --> 00:14:26.730 align:start position:0%
+ 
+ 
+
+00:14:26.730 --> 00:14:30.190 align:start position:0%
+ 
+ 
+
+00:14:30.190 --> 00:14:32.170 align:start position:0%
+ 
+ 
+
+00:14:32.170 --> 00:14:35.319 align:start position:0%
+ 
+ 
+
+00:14:35.319 --> 00:14:36.610 align:start position:0%
+ 
+ 
+
+00:14:36.610 --> 00:14:37.720 align:start position:0%
+ 
+ 
+
+00:14:37.720 --> 00:14:39.760 align:start position:0%
+ 
+ 
+
+00:14:39.760 --> 00:14:43.150 align:start position:0%
+ 
+ 
+
+00:14:43.150 --> 00:14:44.650 align:start position:0%
+ 
+ 
+
+00:14:44.650 --> 00:14:47.260 align:start position:0%
+ 
+ 
+
+00:14:47.260 --> 00:14:50.440 align:start position:0%
+ 
+ 
+
+00:14:50.440 --> 00:14:53.650 align:start position:0%
+ 
+ 
+
+00:14:53.650 --> 00:14:58.510 align:start position:0%
+ 
+ 
+
+00:14:58.510 --> 00:15:01.120 align:start position:0%
+ 
+ 
+
+00:15:01.120 --> 00:15:03.790 align:start position:0%
+ 
+ 
+
+00:15:03.790 --> 00:15:05.500 align:start position:0%
+ 
+ 
+
+00:15:05.500 --> 00:15:06.970 align:start position:0%
+ 
+ 
+
+00:15:06.970 --> 00:15:08.530 align:start position:0%
+ 
+ 
+
+00:15:08.530 --> 00:15:10.660 align:start position:0%
+ 
+ 
+
+00:15:10.660 --> 00:15:11.980 align:start position:0%
+ 
+ 
+
+00:15:11.980 --> 00:15:15.310 align:start position:0%
+ 
+ 
+
+00:15:15.310 --> 00:15:17.680 align:start position:0%
+ 
+ 
+
+00:15:17.680 --> 00:15:20.170 align:start position:0%
+ 
+ 
+
+00:15:20.170 --> 00:15:22.720 align:start position:0%
+ 
+ 
+
+00:15:22.720 --> 00:15:24.880 align:start position:0%
+ 
+ 
+
+00:15:24.880 --> 00:15:25.720 align:start position:0%
+ 
+ 
+
+00:15:25.720 --> 00:15:27.790 align:start position:0%
+ 
+ 
+
+00:15:27.790 --> 00:15:28.809 align:start position:0%
+ 
+ 
+
+00:15:28.809 --> 00:15:32.619 align:start position:0%
+ 
+ 
+
+00:15:32.619 --> 00:15:37.119 align:start position:0%
+ 
+ 
+
+00:15:37.119 --> 00:15:40.689 align:start position:0%
+ 
+ 
+
+00:15:40.689 --> 00:15:42.789 align:start position:0%
+ 
+ 
+
+00:15:42.789 --> 00:15:45.609 align:start position:0%
+ 
+ 
+
+00:15:45.609 --> 00:15:48.460 align:start position:0%
+ 
+ 
+
+00:15:48.460 --> 00:15:50.710 align:start position:0%
+ 
+ 
+
+00:15:50.710 --> 00:15:52.840 align:start position:0%
+ 
+ 
+
+00:15:52.840 --> 00:15:56.049 align:start position:0%
+ 
+ 
+
+00:15:56.049 --> 00:15:57.729 align:start position:0%
+ 
+ 
+
+00:15:57.729 --> 00:16:00.340 align:start position:0%
+ 
+ 
+
+00:16:00.340 --> 00:16:02.919 align:start position:0%
+ 
+ 
+
+00:16:02.919 --> 00:16:04.929 align:start position:0%
+ 
+ 
+
+00:16:04.929 --> 00:16:06.999 align:start position:0%
+ 
+ 
+
+00:16:06.999 --> 00:16:10.840 align:start position:0%
+ 
+ 
+
+00:16:10.840 --> 00:16:13.479 align:start position:0%
+ 
+ 
+
+00:16:13.479 --> 00:16:15.099 align:start position:0%
+ 
+ 
+
+00:16:15.099 --> 00:16:17.919 align:start position:0%
+ 
+ 
+
+00:16:17.919 --> 00:16:19.749 align:start position:0%
+ 
+ 
+
+00:16:19.749 --> 00:16:26.729 align:start position:0%
+ 
+ 
+
+00:16:26.729 --> 00:16:31.509 align:start position:0%
+ 
+ 
+
+00:16:31.509 --> 00:16:33.939 align:start position:0%
+ 
+ 
+
+00:16:33.939 --> 00:16:36.369 align:start position:0%
+ 
+ 
+
+00:16:36.369 --> 00:16:38.919 align:start position:0%
+ 
+ 
+
+00:16:38.919 --> 00:16:41.889 align:start position:0%
+ 
+ 
+
+00:16:41.889 --> 00:16:43.899 align:start position:0%
+ 
+ 
+
+00:16:43.899 --> 00:16:46.419 align:start position:0%
+ 
+ 
+
+00:16:46.419 --> 00:16:47.710 align:start position:0%
+ 
+ 
+
+00:16:47.710 --> 00:16:49.419 align:start position:0%
+ 
+ 
+
+00:16:49.419 --> 00:16:51.789 align:start position:0%
+ 
+ 
+
+00:16:51.789 --> 00:16:54.579 align:start position:0%
+ 
+ 
+
+00:16:54.579 --> 00:16:56.799 align:start position:0%
+ 
+ 
+
+00:16:56.799 --> 00:17:02.049 align:start position:0%
+ 
+ 
+
+00:17:02.049 --> 00:17:05.470 align:start position:0%
+ 
+ 
+
+00:17:05.470 --> 00:17:08.649 align:start position:0%
+ 
+ 
+
+00:17:08.649 --> 00:17:10.990 align:start position:0%
+ 
+ 
+
+00:17:10.990 --> 00:17:13.889 align:start position:0%
+ 
+ 
+
+00:17:13.889 --> 00:17:16.419 align:start position:0%
+ 
+ 
+
+00:17:16.419 --> 00:17:19.389 align:start position:0%
+ 
+ 
+
+00:17:19.389 --> 00:17:22.169 align:start position:0%
+ 
+ 
+
+00:17:22.169 --> 00:17:25.329 align:start position:0%
+ 
+ 
+
+00:17:25.329 --> 00:17:27.399 align:start position:0%
+ 
+ 
+
+00:17:27.399 --> 00:17:28.960 align:start position:0%
+ 
+ 
+
+00:17:28.960 --> 00:17:31.119 align:start position:0%
+ 
+ 
+
+00:17:31.119 --> 00:17:35.169 align:start position:0%
+ 
+ 
+
+00:17:35.169 --> 00:17:37.360 align:start position:0%
+ 
+ 
+
+00:17:37.360 --> 00:17:40.629 align:start position:0%
+ 
+ 
+
+00:17:40.629 --> 00:17:41.799 align:start position:0%
+ 
+ 
+
+00:17:41.799 --> 00:17:44.200 align:start position:0%
+ 
+ 
+
+00:17:44.200 --> 00:17:46.960 align:start position:0%
+ 
+ 
+
+00:17:46.960 --> 00:17:49.570 align:start position:0%
+ 
+ 
+
+00:17:49.570 --> 00:17:52.330 align:start position:0%
+ 
+ 
+
+00:17:52.330 --> 00:17:54.580 align:start position:0%
+ 
+ 
+
+00:17:54.580 --> 00:17:57.249 align:start position:0%
+ 
+ 
+
+00:17:57.249 --> 00:17:58.749 align:start position:0%
+ 
+ 
+
+00:17:58.749 --> 00:18:01.060 align:start position:0%
+ 
+ 
+
+00:18:01.060 --> 00:18:03.190 align:start position:0%
+ 
+ 
+
+00:18:03.190 --> 00:18:05.200 align:start position:0%
+ 
+ 
+
+00:18:05.200 --> 00:18:07.090 align:start position:0%
+ 
+ 
+
+00:18:07.090 --> 00:18:11.019 align:start position:0%
+ 
+ 
+
+00:18:11.019 --> 00:18:13.509 align:start position:0%
+ 
+ 
+
+00:18:13.509 --> 00:18:16.330 align:start position:0%
+ 
+ 
+
+00:18:16.330 --> 00:18:19.529 align:start position:0%
+ 
+ 
+
+00:18:19.529 --> 00:18:22.960 align:start position:0%
+ 
+ 
+
+00:18:22.960 --> 00:18:25.659 align:start position:0%
+ 
+ 
+
+00:18:25.659 --> 00:18:27.519 align:start position:0%
+ 
+ 
+
+00:18:27.519 --> 00:18:30.220 align:start position:0%
+ 
+ 
+
+00:18:30.220 --> 00:18:32.200 align:start position:0%
+ 
+ 
+
+00:18:32.200 --> 00:18:34.960 align:start position:0%
+ 
+ 
+
+00:18:34.960 --> 00:18:36.989 align:start position:0%
+ 
+ 
+
+00:18:36.989 --> 00:18:39.669 align:start position:0%
+ 
+ 
+
+00:18:39.669 --> 00:18:43.019 align:start position:0%
+ 
+ 
+
+00:18:43.019 --> 00:18:45.609 align:start position:0%
+ 
+ 
+
+00:18:45.609 --> 00:18:47.710 align:start position:0%
+ 
+ 
+
+00:18:47.710 --> 00:18:49.210 align:start position:0%
+ 
+ 
+
+00:18:49.210 --> 00:18:50.739 align:start position:0%
+ 
+ 
+
+00:18:50.739 --> 00:18:53.049 align:start position:0%
+ 
+ 
+
+00:18:53.049 --> 00:18:55.570 align:start position:0%
+ 
+ 
+
+00:18:55.570 --> 00:18:59.169 align:start position:0%
+ 
+ 
+
+00:18:59.169 --> 00:19:03.720 align:start position:0%
+ 
+ 
+
+00:19:03.720 --> 00:19:06.789 align:start position:0%
+ 
+ 
+
+00:19:06.789 --> 00:19:09.100 align:start position:0%
+ 
+ 
+
+00:19:09.100 --> 00:19:10.570 align:start position:0%
+ 
+ 
+
+00:19:10.570 --> 00:19:15.239 align:start position:0%
+ 
+ 
+
+00:19:15.239 --> 00:19:18.430 align:start position:0%
+ 
+ 
+
+00:19:18.430 --> 00:19:20.379 align:start position:0%
+ 
+ 
+
+00:19:20.379 --> 00:19:24.460 align:start position:0%
+ 
+ 
+
+00:19:24.460 --> 00:19:26.859 align:start position:0%
+ 
+ 
+
+00:19:26.859 --> 00:19:28.659 align:start position:0%
+ 
+ 
+
+00:19:28.659 --> 00:19:30.970 align:start position:0%
+ 
+ 
+
+00:19:30.970 --> 00:19:33.070 align:start position:0%
+ 
+ 
+
+00:19:33.070 --> 00:19:35.440 align:start position:0%
+ 
+ 
+
+00:19:35.440 --> 00:19:40.389 align:start position:0%
+ 
+ 
+
+00:19:40.389 --> 00:19:42.279 align:start position:0%
+ 
+ 
+
+00:19:42.279 --> 00:19:44.919 align:start position:0%
+ 
+ 
+
+00:19:44.919 --> 00:19:48.460 align:start position:0%
+ 
+ 
+
+00:19:48.460 --> 00:19:52.810 align:start position:0%
+ 
+ 
+
+00:19:52.810 --> 00:19:55.630 align:start position:0%
+ 
+ 
+
+00:19:55.630 --> 00:20:00.160 align:start position:0%
+ 
+ 
+
+00:20:00.160 --> 00:20:02.980 align:start position:0%
+ 
+ 
+
+00:20:02.980 --> 00:20:04.539 align:start position:0%
+ 
+ 
+
+00:20:04.539 --> 00:20:07.660 align:start position:0%
+ 
+ 
+
+00:20:07.660 --> 00:20:10.480 align:start position:0%
+ 
+ 
+
+00:20:10.480 --> 00:20:12.549 align:start position:0%
+ 
+ 
+
+00:20:12.549 --> 00:20:14.380 align:start position:0%
+ 
+ 
+
+00:20:14.380 --> 00:20:17.110 align:start position:0%
+ 
+ 
+
+00:20:17.110 --> 00:20:19.450 align:start position:0%
+ 
+ 
+
+00:20:19.450 --> 00:20:22.060 align:start position:0%
+ 
+ 
+
+00:20:22.060 --> 00:20:24.430 align:start position:0%
+ 
+ 
+
+00:20:24.430 --> 00:20:26.710 align:start position:0%
+ 
+ 
+
+00:20:26.710 --> 00:20:28.630 align:start position:0%
+ 
+ 
+
+00:20:28.630 --> 00:20:31.299 align:start position:0%
+ 
+ 
+
+00:20:31.299 --> 00:20:33.580 align:start position:0%
+ 
+ 
+
+00:20:33.580 --> 00:20:36.600 align:start position:0%
+ 
+ 
+
+00:20:36.600 --> 00:20:40.000 align:start position:0%
+ 
+ 
+
+00:20:40.000 --> 00:20:43.299 align:start position:0%
+ 
+ 
+
+00:20:43.299 --> 00:20:45.940 align:start position:0%
+ 
+ 
+
+00:20:45.940 --> 00:20:48.010 align:start position:0%
+ 
+ 
+
+00:20:48.010 --> 00:20:50.320 align:start position:0%
+ 
+ 
+
+00:20:50.320 --> 00:20:54.159 align:start position:0%
+ 
+ 
+
+00:20:54.159 --> 00:20:56.950 align:start position:0%
+ 
+ 
+
+00:20:56.950 --> 00:20:58.690 align:start position:0%
+ 
+ 
+
+00:20:58.690 --> 00:21:01.419 align:start position:0%
+ 
+ 
+
+00:21:01.419 --> 00:21:04.900 align:start position:0%
+ 
+ 
+
+00:21:04.900 --> 00:21:07.450 align:start position:0%
+ 
+ 
+
+00:21:07.450 --> 00:21:10.360 align:start position:0%
+ 
+ 
+
+00:21:10.360 --> 00:21:12.310 align:start position:0%
+ 
+ 
+
+00:21:12.310 --> 00:21:14.470 align:start position:0%
+ 
+ 
+
+00:21:14.470 --> 00:21:18.039 align:start position:0%
+ 
+ 
+
+00:21:18.039 --> 00:21:20.350 align:start position:0%
+ 
+ 
+
+00:21:20.350 --> 00:21:22.000 align:start position:0%
+ 
+ 
+
+00:21:22.000 --> 00:21:25.570 align:start position:0%
+ 
+ 
+
+00:21:25.570 --> 00:21:27.850 align:start position:0%
+ 
+ 
+
+00:21:27.850 --> 00:21:29.890 align:start position:0%
+ 
+ 
+
+00:21:29.890 --> 00:21:32.200 align:start position:0%
+ 
+ 
+
+00:21:32.200 --> 00:21:34.750 align:start position:0%
+ 
+ 
+
+00:21:34.750 --> 00:21:37.030 align:start position:0%
+ 
+ 
+
+00:21:37.030 --> 00:21:39.820 align:start position:0%
+ 
+ 
+
+00:21:39.820 --> 00:21:42.190 align:start position:0%
+ 
+ 
+
+00:21:42.190 --> 00:21:45.430 align:start position:0%
+ 
+ 
+
+00:21:45.430 --> 00:21:47.830 align:start position:0%
+ 
+ 
+
+00:21:47.830 --> 00:21:49.510 align:start position:0%
+ 
+ 
+
+00:21:49.510 --> 00:21:52.510 align:start position:0%
+ 
+ 
+
+00:21:52.510 --> 00:21:55.030 align:start position:0%
+ 
+ 
+
+00:21:55.030 --> 00:21:56.799 align:start position:0%
+ 
+ 
+
+00:21:56.799 --> 00:22:00.159 align:start position:0%
+ 
+ 
+
+00:22:00.159 --> 00:22:02.980 align:start position:0%
+ 
+ 
+
+00:22:02.980 --> 00:22:05.380 align:start position:0%
+ 
+ 
+
+00:22:05.380 --> 00:22:07.990 align:start position:0%
+ 
+ 
+
+00:22:07.990 --> 00:22:08.000 align:start position:0%
+ 
+ 
+
+00:22:08.000 --> 00:22:08.680 align:start position:0%
+ 
+
+
+00:22:08.680 --> 00:22:11.650 align:start position:0%
+ 
+ 
+
+00:22:11.650 --> 00:22:14.020 align:start position:0%
+ 
+ 
+
+00:22:14.020 --> 00:22:16.930 align:start position:0%
+ 
+ 
+
+00:22:16.930 --> 00:22:18.490 align:start position:0%
+ 
+ 
+
+00:22:18.490 --> 00:22:22.450 align:start position:0%
+ 
+ 
+
+00:22:22.450 --> 00:22:25.000 align:start position:0%
+ 
+ 
+
+00:22:25.000 --> 00:22:27.790 align:start position:0%
+ 
+ 
+
+00:22:27.790 --> 00:22:31.000 align:start position:0%
+ 
+ 
+
+00:22:31.000 --> 00:22:33.280 align:start position:0%
+ 
+ 
+
+00:22:33.280 --> 00:22:34.740 align:start position:0%
+ 
+ 
+
+00:22:34.740 --> 00:22:37.210 align:start position:0%
+ 
+ 
+
+00:22:37.210 --> 00:22:40.600 align:start position:0%
+ 
+ 
+
+00:22:40.600 --> 00:22:42.730 align:start position:0%
+ 
+ 
+
+00:22:42.730 --> 00:22:45.190 align:start position:0%
+ 
+ 
+
+00:22:45.190 --> 00:22:46.840 align:start position:0%
+ 
+ 
+
+00:22:46.840 --> 00:22:48.520 align:start position:0%
+ 
+ 
+
+00:22:48.520 --> 00:22:54.840 align:start position:0%
+ 
+ 
+
+00:22:54.840 --> 00:22:58.110 align:start position:0%
+ 
+ 
+
+00:22:58.110 --> 00:23:01.270 align:start position:0%
+ 
+ 
+
+00:23:01.270 --> 00:23:03.250 align:start position:0%
+ 
+ 
+
+00:23:03.250 --> 00:23:05.560 align:start position:0%
+ 
+ 
+
+00:23:05.560 --> 00:23:07.990 align:start position:0%
+ 
+ 
+
+00:23:07.990 --> 00:23:10.360 align:start position:0%
+ 
+ 
+
+00:23:10.360 --> 00:23:12.490 align:start position:0%
+ 
+ 
+
+00:23:12.490 --> 00:23:14.800 align:start position:0%
+ 
+ 
+
+00:23:14.800 --> 00:23:17.110 align:start position:0%
+ 
+ 
+
+00:23:17.110 --> 00:23:19.090 align:start position:0%
+ 
+ 
+
+00:23:19.090 --> 00:23:22.000 align:start position:0%
+ 
+ 
+
+00:23:22.000 --> 00:23:25.330 align:start position:0%
+ 
+ 
+
+00:23:25.330 --> 00:23:26.830 align:start position:0%
+ 
+ 
+
+00:23:26.830 --> 00:23:29.140 align:start position:0%
+ 
+ 
+
+00:23:29.140 --> 00:23:30.670 align:start position:0%
+ 
+ 
+
+00:23:30.670 --> 00:23:32.650 align:start position:0%
+ 
+ 
+
+00:23:32.650 --> 00:23:35.070 align:start position:0%
+ 
+ 
+
+00:23:35.070 --> 00:23:37.120 align:start position:0%
+ 
+ 
+
+00:23:37.120 --> 00:23:40.300 align:start position:0%
+ 
+ 
+
+00:23:40.300 --> 00:23:42.580 align:start position:0%
+ 
+ 
+
+00:23:42.580 --> 00:23:46.030 align:start position:0%
+ 
+ 
+
+00:23:46.030 --> 00:23:47.560 align:start position:0%
+ 
+ 
+
+00:23:47.560 --> 00:23:49.480 align:start position:0%
+ 
+ 
+
+00:23:49.480 --> 00:23:51.850 align:start position:0%
+ 
+ 
+
+00:23:51.850 --> 00:23:53.890 align:start position:0%
+ 
+ 
+
+00:23:53.890 --> 00:23:57.760 align:start position:0%
+ 
+ 
+
+00:23:57.760 --> 00:24:00.390 align:start position:0%
+ 
+ 
+
+00:24:00.390 --> 00:24:02.620 align:start position:0%
+ 
+ 
+
+00:24:02.620 --> 00:24:05.110 align:start position:0%
+ 
+ 
+
+00:24:05.110 --> 00:24:07.810 align:start position:0%
+ 
+ 
+
+00:24:07.810 --> 00:24:10.480 align:start position:0%
+ 
+ 
+
+00:24:10.480 --> 00:24:12.160 align:start position:0%
+ 
+ 
+
+00:24:12.160 --> 00:24:14.340 align:start position:0%
+ 
+ 
+
+00:24:14.340 --> 00:24:18.130 align:start position:0%
+ 
+ 
+
+00:24:18.130 --> 00:24:19.900 align:start position:0%
+ 
+ 
+
+00:24:19.900 --> 00:24:21.460 align:start position:0%
+ 
+ 
+
+00:24:21.460 --> 00:24:21.470 align:start position:0%
+ 
+ 
+
+00:24:21.470 --> 00:24:22.080 align:start position:0%
+ 
+
+
+00:24:22.080 --> 00:24:26.900 align:start position:0%
+ 
+ 
+
+00:24:26.900 --> 00:24:31.340 align:start position:0%
+ 
+ 
+
+00:24:31.340 --> 00:24:34.980 align:start position:0%
+ 
+ 
+
+00:24:34.980 --> 00:24:39.600 align:start position:0%
+ 
+ 
+
+00:24:39.600 --> 00:24:41.820 align:start position:0%
+ 
+ 
+
+00:24:41.820 --> 00:24:44.130 align:start position:0%
+ 
+ 
+
+00:24:44.130 --> 00:24:47.820 align:start position:0%
+ 
+ 
+
+00:24:47.820 --> 00:24:50.220 align:start position:0%
+ 
+ 
+
+00:24:50.220 --> 00:24:51.900 align:start position:0%
+ 
+ 
+
+00:24:51.900 --> 00:24:54.500 align:start position:0%
+ 
+ 
+
+00:24:54.500 --> 00:24:57.300 align:start position:0%
+ 
+ 
+
+00:24:57.300 --> 00:25:01.800 align:start position:0%
+ 
+ 
+
+00:25:01.800 --> 00:25:03.690 align:start position:0%
+ 
+ 
+
+00:25:03.690 --> 00:25:06.350 align:start position:0%
+ 
+ 
+
+00:25:06.350 --> 00:25:08.250 align:start position:0%
+ 
+ 
+
+00:25:08.250 --> 00:25:13.320 align:start position:0%
+ 
+ 
+
+00:25:13.320 --> 00:25:17.760 align:start position:0%
+ 
+ 
+
+00:25:17.760 --> 00:25:19.590 align:start position:0%
+ 
+ 
+
+00:25:19.590 --> 00:25:23.250 align:start position:0%
+ 
+ 
+
+00:25:23.250 --> 00:25:25.080 align:start position:0%
+ 
+ 
+
+00:25:25.080 --> 00:25:29.220 align:start position:0%
+ 
+ 
+
+00:25:29.220 --> 00:25:31.050 align:start position:0%
+ 
+ 
+
+00:25:31.050 --> 00:25:33.720 align:start position:0%
+ 
+ 
+
+00:25:33.720 --> 00:25:35.570 align:start position:0%
+ 
+ 
+
+00:25:35.570 --> 00:25:40.290 align:start position:0%
+ 
+ 
+
+00:25:40.290 --> 00:25:41.760 align:start position:0%
+ 
+ 
+
+00:25:41.760 --> 00:25:44.430 align:start position:0%
+ 
+ 
+
+00:25:44.430 --> 00:25:46.530 align:start position:0%
+ 
+ 
+
+00:25:46.530 --> 00:25:49.890 align:start position:0%
+ 
+ 
+
+00:25:49.890 --> 00:25:52.020 align:start position:0%
+ 
+ 
+
+00:25:52.020 --> 00:25:54.030 align:start position:0%
+ 
+ 
+
+00:25:54.030 --> 00:25:55.500 align:start position:0%
+ 
+ 
+
+00:25:55.500 --> 00:25:57.630 align:start position:0%
+ 
+ 
+
+00:25:57.630 --> 00:25:58.560 align:start position:0%
+ 
+ 
+
+00:25:58.560 --> 00:26:00.960 align:start position:0%
+ 
+ 
+
+00:26:00.960 --> 00:26:03.090 align:start position:0%
+ 
+ 
+
+00:26:03.090 --> 00:26:06.450 align:start position:0%
+ 
+ 
+
+00:26:06.450 --> 00:26:09.900 align:start position:0%
+ 
+ 
+
+00:26:09.900 --> 00:26:11.520 align:start position:0%
+ 
+ 
+
+00:26:11.520 --> 00:26:15.150 align:start position:0%
+ 
+ 
+
+00:26:15.150 --> 00:26:17.520 align:start position:0%
+ 
+ 
+
+00:26:17.520 --> 00:26:21.210 align:start position:0%
+ 
+ 
+
+00:26:21.210 --> 00:26:23.820 align:start position:0%
+ 
+ 
+
+00:26:23.820 --> 00:26:26.250 align:start position:0%
+ 
+ 
+
+00:26:26.250 --> 00:26:28.320 align:start position:0%
+ 
+ 
+
+00:26:28.320 --> 00:26:30.900 align:start position:0%
+ 
+ 
+
+00:26:30.900 --> 00:26:33.280 align:start position:0%
+ 
+ 
+
+00:26:33.280 --> 00:26:35.190 align:start position:0%
+ 
+ 
+
+00:26:35.190 --> 00:26:38.200 align:start position:0%
+ 
+ 
+
+00:26:38.200 --> 00:26:40.150 align:start position:0%
+ 
+ 
+
+00:26:40.150 --> 00:26:41.680 align:start position:0%
+ 
+ 
+
+00:26:41.680 --> 00:26:43.930 align:start position:0%
+ 
+ 
+
+00:26:43.930 --> 00:26:45.700 align:start position:0%
+ 
+ 
+
+00:26:45.700 --> 00:26:48.460 align:start position:0%
+ 
+ 
+
+00:26:48.460 --> 00:26:50.110 align:start position:0%
+ 
+ 
+
+00:26:50.110 --> 00:26:53.170 align:start position:0%
+ 
+ 
+
+00:26:53.170 --> 00:26:54.670 align:start position:0%
+ 
+ 
+
+00:26:54.670 --> 00:26:56.590 align:start position:0%
+ 
+ 
+
+00:26:56.590 --> 00:26:59.980 align:start position:0%
+ 
+ 
+
+00:26:59.980 --> 00:27:01.890 align:start position:0%
+ 
+ 
+
+00:27:01.890 --> 00:27:04.450 align:start position:0%
+ 
+ 
+
+00:27:04.450 --> 00:27:06.820 align:start position:0%
+ 
+ 
+
+00:27:06.820 --> 00:27:08.890 align:start position:0%
+ 
+ 
+
+00:27:08.890 --> 00:27:10.330 align:start position:0%
+ 
+ 
+
+00:27:10.330 --> 00:27:12.460 align:start position:0%
+ 
+ 
+
+00:27:12.460 --> 00:27:16.960 align:start position:0%
+ 
+ 
+
+00:27:16.960 --> 00:27:19.270 align:start position:0%
+ 
+ 
+
+00:27:19.270 --> 00:27:22.960 align:start position:0%
+ 
+ 
+
+00:27:22.960 --> 00:27:25.950 align:start position:0%
+ 
+ 
+
+00:27:25.950 --> 00:27:29.200 align:start position:0%
+ 
+ 
+
+00:27:29.200 --> 00:27:31.750 align:start position:0%
+ 
+ 
+
+00:27:31.750 --> 00:27:33.280 align:start position:0%
+ 
+ 
+
+00:27:33.280 --> 00:27:35.770 align:start position:0%
+ 
+ 
+
+00:27:35.770 --> 00:27:37.120 align:start position:0%
+ 
+ 
+
+00:27:37.120 --> 00:27:40.480 align:start position:0%
+ 
+ 
+
+00:27:40.480 --> 00:27:42.040 align:start position:0%
+ 
+ 
+
+00:27:42.040 --> 00:27:45.300 align:start position:0%
+ 
+ 
+
+00:27:45.300 --> 00:27:47.140 align:start position:0%
+ 
+ 
+
+00:27:47.140 --> 00:27:48.730 align:start position:0%
+ 
+ 
+
+00:27:48.730 --> 00:27:51.250 align:start position:0%
+ 
+ 
+
+00:27:51.250 --> 00:27:52.420 align:start position:0%
+ 
+ 
+
+00:27:52.420 --> 00:27:54.850 align:start position:0%
+ 
+ 
+
+00:27:54.850 --> 00:27:56.590 align:start position:0%
+ 
+ 
+
+00:27:56.590 --> 00:27:57.970 align:start position:0%
+ 
+ 
+
+00:27:57.970 --> 00:27:59.590 align:start position:0%
+ 
+ 
+
+00:27:59.590 --> 00:28:02.500 align:start position:0%
+ 
+ 
+
+00:28:02.500 --> 00:28:04.420 align:start position:0%
+ 
+ 
+
+00:28:04.420 --> 00:28:06.790 align:start position:0%
+ 
+ 
+
+00:28:06.790 --> 00:28:09.130 align:start position:0%
+ 
+ 
+
+00:28:09.130 --> 00:28:10.960 align:start position:0%
+ 
+ 
+
+00:28:10.960 --> 00:28:12.850 align:start position:0%
+ 
+ 
+
+00:28:12.850 --> 00:28:15.190 align:start position:0%
+ 
+ 
+
+00:28:15.190 --> 00:28:18.130 align:start position:0%
+ 
+ 
+
+00:28:18.130 --> 00:28:20.560 align:start position:0%
+ 
+ 
+
+00:28:20.560 --> 00:28:23.860 align:start position:0%
+ 
+ 
+
+00:28:23.860 --> 00:28:26.320 align:start position:0%
+ 
+ 
+
+00:28:26.320 --> 00:28:29.530 align:start position:0%
+ 
+ 
+
+00:28:29.530 --> 00:28:31.300 align:start position:0%
+ 
+ 
+
+00:28:31.300 --> 00:28:32.800 align:start position:0%
+ 
+ 
+
+00:28:32.800 --> 00:28:33.670 align:start position:0%
+ 
+ 
+
+00:28:33.670 --> 00:28:35.920 align:start position:0%
+ 
+ 
+
+00:28:35.920 --> 00:28:37.600 align:start position:0%
+ 
+ 
+
+00:28:37.600 --> 00:28:39.490 align:start position:0%
+ 
+ 
+
+00:28:39.490 --> 00:28:42.070 align:start position:0%
+ 
+ 
+
+00:28:42.070 --> 00:28:43.630 align:start position:0%
+ 
+ 
+
+00:28:43.630 --> 00:28:44.430 align:start position:0%
+ 
+ 
+
+00:28:44.430 --> 00:28:46.080 align:start position:0%
+ 
+ 
+
+00:28:46.080 --> 00:28:48.900 align:start position:0%
+ 
+ 
+
+00:28:48.900 --> 00:28:51.360 align:start position:0%
+ 
+ 
+
+00:28:51.360 --> 00:28:54.140 align:start position:0%
+ 
+ 
+
+00:28:54.140 --> 00:28:56.670 align:start position:0%
+ 
+ 
+
+00:28:56.670 --> 00:28:58.590 align:start position:0%
+ 
+ 
+
+00:28:58.590 --> 00:29:00.030 align:start position:0%
+ 
+ 
+
+00:29:00.030 --> 00:29:01.950 align:start position:0%
+ 
+ 
+
+00:29:01.950 --> 00:29:03.420 align:start position:0%
+ 
+ 
+
+00:29:03.420 --> 00:29:06.150 align:start position:0%
+ 
+ 
+
+00:29:06.150 --> 00:29:08.490 align:start position:0%
+ 
+ 
+
+00:29:08.490 --> 00:29:12.060 align:start position:0%
+ 
+ 
+
+00:29:12.060 --> 00:29:15.480 align:start position:0%
+ 
+ 
+
+00:29:15.480 --> 00:29:18.150 align:start position:0%
+ 
+ 
+
+00:29:18.150 --> 00:29:19.950 align:start position:0%
+ 
+ 
+
+00:29:19.950 --> 00:29:21.450 align:start position:0%
+ 
+ 
+
+00:29:21.450 --> 00:29:23.940 align:start position:0%
+ 
+ 
+
+00:29:23.940 --> 00:29:26.400 align:start position:0%
+ 
+ 
+
+00:29:26.400 --> 00:29:28.890 align:start position:0%
+ 
+ 
+
+00:29:28.890 --> 00:29:31.710 align:start position:0%
+ 
+ 
+
+00:29:31.710 --> 00:29:34.470 align:start position:0%
+ 
+ 
+
+00:29:34.470 --> 00:29:36.930 align:start position:0%
+ 
+ 
+
+00:29:36.930 --> 00:29:40.080 align:start position:0%
+ 
+ 
+
+00:29:40.080 --> 00:29:42.120 align:start position:0%
+ 
+ 
+
+00:29:42.120 --> 00:29:45.180 align:start position:0%
+ 
+ 
+
+00:29:45.180 --> 00:29:47.400 align:start position:0%
+ 
+ 
+
+00:29:47.400 --> 00:29:49.650 align:start position:0%
+ 
+ 
+
+00:29:49.650 --> 00:29:52.560 align:start position:0%
+ 
+ 
+
+00:29:52.560 --> 00:29:54.690 align:start position:0%
+ 
+ 
+
+00:29:54.690 --> 00:29:56.880 align:start position:0%
+ 
+ 
+
+00:29:56.880 --> 00:29:58.530 align:start position:0%
+ 
+ 
+
+00:29:58.530 --> 00:30:02.360 align:start position:0%
+ 
+ 
+
+00:30:02.360 --> 00:30:05.430 align:start position:0%
+ 
+ 
+
+00:30:05.430 --> 00:30:07.200 align:start position:0%
+ 
+ 
+
+00:30:07.200 --> 00:30:08.550 align:start position:0%
+ 
+ 
+
+00:30:08.550 --> 00:30:10.920 align:start position:0%
+ 
+ 
+
+00:30:10.920 --> 00:30:13.470 align:start position:0%
+ 
+ 
+
+00:30:13.470 --> 00:30:15.450 align:start position:0%
+ 
+ 
+
+00:30:15.450 --> 00:30:17.400 align:start position:0%
+ 
+ 
+
+00:30:17.400 --> 00:30:19.050 align:start position:0%
+ 
+ 
+
+00:30:19.050 --> 00:30:21.870 align:start position:0%
+ 
+ 
+
+00:30:21.870 --> 00:30:22.920 align:start position:0%
+ 
+ 
+
+00:30:22.920 --> 00:30:25.950 align:start position:0%
+ 
+ 
+
+00:30:25.950 --> 00:30:27.720 align:start position:0%
+ 
+ 
+
+00:30:27.720 --> 00:30:30.120 align:start position:0%
+ 
+ 
+
+00:30:30.120 --> 00:30:34.500 align:start position:0%
+ 
+ 
+
+00:30:34.500 --> 00:30:36.690 align:start position:0%
+ 
+ 
+
+00:30:36.690 --> 00:30:39.360 align:start position:0%
+ 
+ 
+
+00:30:39.360 --> 00:30:40.380 align:start position:0%
+ 
+ 
+
+00:30:40.380 --> 00:30:42.060 align:start position:0%
+ 
+ 
+
+00:30:42.060 --> 00:30:45.360 align:start position:0%
+ 
+ 
+
+00:30:45.360 --> 00:30:46.920 align:start position:0%
+ 
+ 
+
+00:30:46.920 --> 00:30:48.930 align:start position:0%
+ 
+ 
+
+00:30:48.930 --> 00:30:50.810 align:start position:0%
+ 
+ 
+
+00:30:50.810 --> 00:30:54.840 align:start position:0%
+ 
+ 
+
+00:30:54.840 --> 00:30:56.090 align:start position:0%
+ 
+ 
+
+00:30:56.090 --> 00:30:57.870 align:start position:0%
+ 
+ 
+
+00:30:57.870 --> 00:31:01.440 align:start position:0%
+ 
+ 
+
+00:31:01.440 --> 00:31:04.890 align:start position:0%
+ 
+ 
+
+00:31:04.890 --> 00:31:07.980 align:start position:0%
+ 
+ 
+
+00:31:07.980 --> 00:31:10.020 align:start position:0%
+ 
+ 
+
+00:31:10.020 --> 00:31:11.850 align:start position:0%
+ 
+ 
+
+00:31:11.850 --> 00:31:13.110 align:start position:0%
+ 
+ 
+
+00:31:13.110 --> 00:31:15.410 align:start position:0%
+ 
+ 
+
+00:31:15.410 --> 00:31:19.170 align:start position:0%
+ 
+ 
+
+00:31:19.170 --> 00:31:20.790 align:start position:0%
+ 
+ 
+
+00:31:20.790 --> 00:31:23.010 align:start position:0%
+ 
+ 
+
+00:31:23.010 --> 00:31:26.340 align:start position:0%
+ 
+ 
+
+00:31:26.340 --> 00:31:28.320 align:start position:0%
+ 
+ 
+
+00:31:28.320 --> 00:31:28.890 align:start position:0%
+ 
+ 
+
+00:31:28.890 --> 00:31:32.220 align:start position:0%
+ 
+ 
+
+00:31:32.220 --> 00:31:36.690 align:start position:0%
+ 
+ 
+
+00:31:36.690 --> 00:31:40.890 align:start position:0%
+ 
+ 
+
+00:31:40.890 --> 00:31:44.850 align:start position:0%
+ 
+ 
+
+00:31:44.850 --> 00:31:46.950 align:start position:0%
+ 
+ 
+
+00:31:46.950 --> 00:31:50.580 align:start position:0%
+ 
+ 
+
+00:31:50.580 --> 00:31:52.260 align:start position:0%
+ 
+ 
+
+00:31:52.260 --> 00:31:54.240 align:start position:0%
+ 
+ 
+
+00:31:54.240 --> 00:31:55.920 align:start position:0%
+ 
+ 
+
+00:31:55.920 --> 00:31:58.140 align:start position:0%
+ 
+ 
+
+00:31:58.140 --> 00:32:00.270 align:start position:0%
+ 
+ 
+
+00:32:00.270 --> 00:32:02.880 align:start position:0%
+ 
+ 
+
+00:32:02.880 --> 00:32:07.440 align:start position:0%
+ 
+ 
+
+00:32:07.440 --> 00:32:10.080 align:start position:0%
+ 
+ 
+
+00:32:10.080 --> 00:32:13.260 align:start position:0%
+ 
+ 
+
+00:32:13.260 --> 00:32:15.390 align:start position:0%
+ 
+ 
+
+00:32:15.390 --> 00:32:18.330 align:start position:0%
+ 
+ 
+
+00:32:18.330 --> 00:32:20.790 align:start position:0%
+ 
+ 
+
+00:32:20.790 --> 00:32:23.340 align:start position:0%
+ 
+ 
+
+00:32:23.340 --> 00:32:25.380 align:start position:0%
+ 
+ 
+
+00:32:25.380 --> 00:32:27.360 align:start position:0%
+ 
+ 
+
+00:32:27.360 --> 00:32:28.560 align:start position:0%
+ 
+ 
+
+00:32:28.560 --> 00:32:30.750 align:start position:0%
+ 
+ 
+
+00:32:30.750 --> 00:32:32.420 align:start position:0%
+ 
+ 
+
+00:32:32.420 --> 00:32:35.160 align:start position:0%
+ 
+ 
+
+00:32:35.160 --> 00:32:36.900 align:start position:0%
+ 
+ 
+
+00:32:36.900 --> 00:32:40.050 align:start position:0%
+ 
+ 
+
+00:32:40.050 --> 00:32:41.820 align:start position:0%
+ 
+ 
+
+00:32:41.820 --> 00:32:43.710 align:start position:0%
+ 
+ 
+
+00:32:43.710 --> 00:32:45.840 align:start position:0%
+ 
+ 
+
+00:32:45.840 --> 00:32:47.760 align:start position:0%
+ 
+ 
+
+00:32:47.760 --> 00:32:49.140 align:start position:0%
+ 
+ 
+
+00:32:49.140 --> 00:32:54.450 align:start position:0%
+ 
+ 
+
+00:32:54.450 --> 00:32:58.890 align:start position:0%
+ 
+ 
+
+00:32:58.890 --> 00:33:00.630 align:start position:0%
+ 
+ 
+
+00:33:00.630 --> 00:33:02.670 align:start position:0%
+ 
+ 
+
+00:33:02.670 --> 00:33:04.830 align:start position:0%
+ 
+ 
+
+00:33:04.830 --> 00:33:06.060 align:start position:0%
+ 
+ 
+
+00:33:06.060 --> 00:33:06.070 align:start position:0%
+ 
+ 
+
+00:33:06.070 --> 00:33:07.100 align:start position:0%
+ 
+
+
+00:33:07.100 --> 00:33:07.110 align:start position:0%
+ 
+ 
+
+00:33:07.110 --> 00:33:11.010 align:start position:0%
+ 
+
+

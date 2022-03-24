@@ -1,0 +1,2836 @@
+WEBVTT
+Kind: captions
+Language: en
+
+00:00:10.820 --> 00:00:15.170 align:start position:0%
+ 
+hi everyone how's it going today we're  gonna take a look behind the scenes of  JavaScript engines and specifically  we're gonna take a look at what that  means for JavaScript developers like you  and I now I work on the v8 team at  Google and v8 is the JavaScript engine  that's used within Google Chrome but  also note yes and some other projects so  let's just initialize this environment  variable right there and update the  slides and there we go yeah so  disclaimer I am going to talk about some  v8 specific internals but I guarantee  that all the performance advice that  will draw from this knowledge applies  not just to v8 and Chrome but to all  browsers and all JavaScript engines  across the board and I think that's  really important so let's get right into  it javascript objects can have arbitrary  properties associated with them the  names of these properties can consist of  alphanumeric characters or even weird  Unicode characters as well but one  specific case that JavaScript engines  can choose to optimize for our  properties whose names are entirely  numeric more specifically array indexes  in v8 array indexes are stored  separately they're treated specially  although in many circumstances these  properties behave just like other  properties v8 chooses to store them  separately from non numeric properties  for optimization purposes internally via  v8 even gives these properties a name  they're called elements so think of it  this way objects have properties and  values and arrays have indexes that map  to elements it's just the names that we  use in v8 now whenever you're running  JavaScript code v8 keeps track of what  kind of elements each array contains  this information allows VA to optimize  any operations on the array specifically  for this type of elements so for example  when you call reduce or map or for each  on an array if yet can use that  information to optimize those calls  now take this array for example what  kind of elements does it contain well if  you were to ask the typeof operator in  JavaScript it will tell you that all  these three elements are numbers at the  JavaScript language  that's all you'll get JavaScript doesn't  distinguish between integers floats and  doubles but behind the scenes in the  JavaScript engine itself we can make  this more precise distinction so the  elements count for this array is packed  my elements and we'll get to the packed  part in a minute so ignore that for now  for now focus on the my part in v8 smile  is a smile refers to the particular  format that we use to store small  integers that's what it stands for small  integer later adding a floating-point  number to the same array transitions the  elements kinds to a more generic version  packed double elements now adding a  string literal to the array changes the  elements kind once again v8 assigns and  elements kind to each array and as we've  seen the elements kind of an array is  not stat in stone it can change at  runtime in this case we transitions all  the way from packets my elements to  packed elements so far we've seen three  distinct elements kinds there's one for  smize doubles and regular elements you  can think of this as a pyramid because  the set of numbers that can be  represented as a smile is a subset of  the numbers that can be represented as a  double and the same thing goes for  doubles versus regular elements but  what's important here is that these  element kind transitions can only occur  in one direction you go from a very  specific one like the ones at the top to  one that is more general like the ones  at the bottom it only goes downwards and  once we transition to packed elements  which is for regular elements we can  never transition upwards again we can  never go back up to packed double  elements for example now going back to  that array that we had before the array  contains five elements what happens if  we assign a value to do the index that  is far outside of the arrays boundaries  for example if we assign a value at  position nine in the array while doing  this creates holes in the array the  holes are at positions five until eight  the array is now sparse or holy as we  call it in v8  so creating holes in the array  downgrades the elements guides to it's a  holy variant in this case we went from  packed elements to holy elements now  there are other ways of creating holes  for example if you use the delete  operator on an indexed element that also  creates a hole or if you have an array  literal and you just forget to assign a  value like for example if you have two  commas and there is no value in between  them that would also create a hole so  why does Fiat care so much about whether  there's a hole in an array or not why  does it care so much that it has a  separate elements kind for holes let's  find out by taking a look at an example  just pretend that you're a JavaScript  engine for the next couple of minutes  okay  and you're getting the element at index  eight what's the value for the element  at index eight that's the question that  we need to answer you can't just give  the answer right away you have to do  some work you have to follow the spec to  get the answer so v8 starts off by doing  a bounced check on the array index is  this index between zero inclusive and  the length of the array exclusive and in  this case the bounds check succeeds but  we still cannot really answer the  question of what the result is more work  is needed so now we look up the property  named eight on the array itself but in  this case that property doesn't exist  because all that's there is a hole so we  still cannot answer the question we have  to take a little deeper now because the  property is not present on the array  itself we have to grow up the prototype  chain until either a value is found or  the prototype chain ends and the first  thing we check in a prototype chain is  array the prototype because that's the  prototype for any array and this does  not have a product this does not have a  property named 8 defined on it so at  this point we still do not know what the  answer is we have to continue to follow  the prototype chain now the next item in  a prototype chain is object or prototype  because that's the prototype of a radar  prototype and we check if the property  eight exists there but it doesn't and in  this case the prototype chain ends after  reaching object dot prototype  it could be even longer in case someone  extended it that is a totally valid  thing to do in JavaScript you can muck  with built-in prototypes and we'd say  it's probably a bad practice but as a  JavaScript engine you have to support  these cases because it can happen in the  real world now in this case because the  chain ends we cannot continue searching  for the property which means we can now  finally answer our question the hole at  position 8 in the array is undefined yay  finally well from a JavaScript engines  perspective that's a lot of work that we  just did just to get an undefined value  right now if you compare that to a  packed array which is an array that is  guaranteed to have no holes in it it  turns out that we don't actually have to  do up a lot of this work if the array  index is within bounds then the  JavaScript engine can already return the  value no other checks or expensive  lookups on the prototype chain are  needed at all now if we go back to a  holy array even if we get a property  that does exist within a holy array  there's still a bit more work that we  have to do we have to check if the  property exists first because we know  there are holes in this array so vhx if  the index is within the bounds of the  array and it is but it still doesn't  have enough information to return the  results so we must check if the property  actually exists in the array just in  case there is a hole at this position in  this case a property exists so we can  finally return its value now if the  property didn't exist we would be back  in the situation from before where I  would have to look up prototype chain  which is very expensive and bad for  performance now this is the very best  case scenario for a holy array and it's  still one more operation compared to a  packed array and this is why in general  packed arrays are preferred over holy  arrays operations on packed arrays can  just be optimized in a much more  aggressive way than operations on holy  arrays for optimal performance you  should try and avoid creating holes  whenever you can so we looked at this  pyramid before with this list of  elements kinds there's smize doubles and  regular elements and we knew that we can  transition  downwards throughout this pyramid but  now we learned that it turns out there's  actually two flavors for each of these  elements kinds there's the packed  version and there's a Holi version and  not only can we transition downwards we  can also transition from left to right  we can go from packed to holy so instead  of two separate pyramids it's probably a  little bit easier to think of elements  kinds as a lattice and that is in fact  how v8 implements the system around  elements kinds and the transitions  between them more concretely it looks  something like this  so we have our smile double and regular  elements and each of those comes in two  flavors  there's the pact and the holy version  now these are the most common array  elements kinds but v8 distinguishes  about twenty different elements kinds  for other things like typed arrays as  well and you can only transition  downwards throughout this lattice it's  kind of like that pokemon blue tower  puzzle where all the tiles have like an  arrow drawn on the floor and when you  step on a tile you can only move in that  direction the same goes here you can  only follow the arrows throughout the  lattice which means you can never go  back up once a single floating-point  number is added to an array it is marked  as double even if it later consists of  Smiles only and similarly once you  create a hole in an array it has marked  as holy now in general more specific  elements kinds enable more fine-grained  optimizations the further down the  elements kindness in this lattice the  slower manipulations and operations on  that object might be so for optimal  performance it makes sense to needlessly  to avoid needlessly transitioning  between these elements kinds and stick  to the most specific elements kinds that  applies to your use case let's look at  an example for that for each unique  elements kind v8 can apply specific of  image optimizations when performing  operations on the array whenever you're  using for each for example v8 can  optimize this call based on this  knowledge about the elements kind we can  have one set of for each optimizations  specifically for packets my elements  another set of optimizations for packed  double elements and so on and over time  we can add more and more of these  optimizations so if you look at chrome  59 for example this  when we just shipped a new pipeline in  v8 we had ignition our new interpreter  and turbofan our new optimizing compiler  and at the time we didn't really do  anything special with this information  for for each so while we renew the  elements kinds of these arrays we didn't  specifically optimize any of these  elements kinds but by the time chrome 61  was released we had optimized for each  in turbofan for all packed elements  kinds and more recently in chrome 64 we  added support for the holy elements  kinds as well four for each specifically  so this is a pattern that you'll see  repeated over time over time we will add  more and more fine-grain and specific  optimizations for different elements  kinds for specific array functionality  so you could say the same thing about  rate of prototype dot map for example we  support all these different elements  kinds for map in chrome 64 as well same  goes for filter some every reduce reduce  right and then there's some other array  methods like find and find index and  these two are a little bit special if  you look them up in the spec you'll find  that these Street holes in erase a  little bit differently than all of the  other array methods because they turn  holes into explicit undefined values  which makes things a little bit  complicated for us and for that reason  we haven't yet been able to optimize a  holy double elements so far but like I  said before this is something that we're  working on and over time you can expect  to see more green in these lattices for  any given array method so very soon it  will look like this now let's look at  another example this piece of code  creates an array of length 3  but what values does the array contain  it just has three holes in it so the  array is sparse at this point so it gets  the element kind holy smile  holy is my elements because that's the  most specific possibility given the  currently available information now  let's assign a value to position zero in  the array well wait a minute that's a  string instead of a small integer so in  this case the elements kinds transitions  to holy elements now we add a value  to position one in the array and the  elements kinds remains unchanged in this  case and finally we sign another value  to the last position in the array now at  this point all three positions in the  array are filled so the array is packed  and no longer sparse however we cannot  transition to a more specific kind as  packed elements as we saw after we seen  earlier so unfortunately the elements  kind remains holy elements at this point  once an array is marked as holy it is  holy forever I believe that's how  sainthood works as well now in this  scenario a better solution is of course  to use an array literal instead if you  know all the values ahead of time then  why not just add them in an array  literal but if you don't know all the  values ahead of time you can still use a  technique that is similar you can start  off with an empty array or with an array  that contains some of the values that  you already know and then you can push  more values to it as you dynamically  compute them or get them from some  external source that way you avoid  creating holes in the array at any given  time and the array will never get marked  as holy this approach ensures that v8  optimizes any future operations on the  array to the best of its abilities life  is easier without poles JavaScript  engines can deal with packed arrays much  more efficiently in general if you need  to perform lots of operations on an  array try and avoid creating holes in it  and similarly you should avoid reading  beyond the length of the array because  there's nothing there anyway so for  example don't write your loops like this  this loop reads all the elements in the  array and then one more it only stops  when it finds an undefined or null  element so this also means that it would  only work for arrays that don't contain  undefined or no now this kind of pattern  is just as bad as hitting a hole it's a  different scenario but it's very similar  because in this case the bounds check  that we did before fails the check to  see if the property is present fails and  then we need to look up the prototype  chain just like before and as we've  learned that is very expensive so don't  do this and instead keep your loop  simple if you have to write out your own  loop you can do  do it the simple way you can keep track  of the index and keep iterating until  you hit the last element when the  collection you're looping over is  iterable which is the case for arrays  and node lists for example then that's  even better you can just use for off and  this is my favorite way of looping over  any kind of collection in JavaScript  because it's so simple now for arrays  specifically of course you can also use  array dot prototype out for each that  also works and the good news today is  that whether you want to use for each or  write your own for loop or use for off  performance-wise it doesn't matter  anymore which means you can just make  that decision and pick your favorite  without performance being a factor in  that decision I think that's pretty  great now avoid creating avoid reading  beyond the end of the array in summary  so doing so is just as bad as hitting a  hole now before we move on to some more  performance advice here's a fun facts  javascript has two zeros there's the  regular zero which is positive but  there's also a negative zero and  although these values are strictly equal  to each other  because of course why wouldn't they be  it turns out that they're actually  observably different in some cases and  object op is is an example of that  because they behave differently  it means javascript engines has have to  store these values separately as well in  different ways and the reason I'm  telling you this is because this has an  impact on elements kinds I mentioned  earlier that a piece of advice when it  comes to elements kind is to avoid  transitioning to a less specific  elements kind whenever you can and this  is actually harder than it seems for  example just adding minus 0 to an array  of small integers is enough to  transition it to packed double elements  any future operations on this array will  now be optimized in a completely  different way and they would be for  smiles specifically so that's just one  more reason to avoid negative 0 in  general unless of course you need to  explicitly differentiate between  negative and positive 0 in your code but  you probably don't now the same thing  goes for nan and infinity these values  are stored as a double  which means that adding a single lamp to  an array of smile elements transitions  it to double elements so if you're  planning on performing lots of  operations on an array of integers you  should consider normalizing the values  before you're adding them to the array  so normalize minus zero to positive zero  and block-man and infinity when you're  initializing the values this way the  array sticks to the packets my elements  kind and of course there's a one time  normalization cost involved there for  all the extra text that you do when  you're initializing the array but it can  be worth the later optimizations in fact  if you're doing lots of mathematical  operations on an array of numbers should  probably look into using type arrays  because v8 has specific elements guides  for those as well and they're kind of  optimized for this kind of thing in  general if you need to perform lots of  operations on an array try sticking to  an elements kind that's as specific as  possible so that v8 can optimize it as  much as possible some objects in  JavaScript especially in the Dom look  like arrays although there aren't proper  arrays it's possible to create array  like objects yourself which is what I'm  doing here this object has a length  property and it supports indexed element  access just like a real array but it  lacks array methods like for each on its  prototype it's still possible to call  these array methods on this object  though here we're calling the array for  each built-in on the array like object  and that works as expected however this  is going to be slower than calling array  than calling for each on a proper array  which is highly optimized in v8 so if  you plan on using array built-ins on  this object more than once  consider turning it into an actual array  beforehand so that v8 can optimize these  operations to the best of its abilities  and here we're using slice to do that so  of course there is a one-time cost of  doing the actual slice call but this  cost can be worth the later  optimizations especially if you plan on  performing lots of operations on the  array and a specific example of this is  the arguments object this is an array  like object so when you call array  built-in such as for each on it it works  but it won't be fully up to  that's the way it could be for a proper  airing so nowadays I think there is a  better solution to this in the form of  es2015 rest parameters they produce  proper arrays that can be used instead  of the array like arguments objects in a  very elegant way so nowadays I think  there is no good reason to use the  arguments object anymore  use rest parameters it will make your  code more elegant and more optimizable  in various JavaScript engines as well  this is not a real crocodile and it's  not gonna have the same performance as a  real crocodile the same thing goes for  arrays in general you should avoid array  like objects whenever possible and use  real arrays instead now after all this  talk about elements kinds you may be  wondering how you can identify the  elements kinds of a given array in your  code base maybe you're debugging a  performance issue or maybe you just want  to have a deeper understanding of what  I'm talking about well you can run you  can compile v8 from source in a debug  build and run the d8 binary d8 stands  for developer shell or debug build no  one on the v8 team really knows what it  stands for actually it's a mystery D but  what I do know is that you have to pass  in the allow native syntax flag doing so  enables access to some internal v8  functionality from within JavaScript  it's very powerful especially if you  combine this with a debug build of v8 so  entering that command opens up a wrapper  which is very similar to what you get if  you just type node on your command line  except this way we can run some code  directly in v8 so now it's time to write  some code first we create the array that  we want to test and then we call one of  those special v8 internal functions on  it in this case debug print and you see  how the name there starts with a  percentage sign yeah that's not actually  valid JavaScript and the reason why we  do this is because we don't want people  to use this in production it doesn't  make sense to use it in production and  by making it invalid javascript we kind  of force it on people that they cannot  use this in production this would only  work in this particular built of v8  anyway so doesn't make sense to try to  use it elsewhere now running this code  prints a lot of output  even more than what is shown here in the  slide but in this case what we're  looking for is the elements kind of the  array which is listed on this line the  elements kind is holy smile elements cow  now that cow does not refer to the  animal it stands for copy-on-write which  is yet another internal optimization but  don't worry about that for now we can  talk about it in another presentation or  just come talk to me later  let's recap what we've seen so far we've  explored what elements kinds are and how  they work and as a result we were able  to identify some practical tips that can  help us boost performance avoid creating  holes in arrays don't access array  indexes beyond the arrays length try to  keep the elements kind of your array as  specific as possible by sticking to a  single value type for each array avoid  using array like objects and when you  have to use them consider converting  them into proper arrays before  performing any expensive operations on  them now although this presentation  covered some v8 specific internals these  tips don't just apply to v8 other  JavaScript engines can benefit from them  as well and by following this advice I  guarantee you that your code is not  going to get slower in any of the other  engines in fact it will probably get  faster across the board now there is one  more thing that I quickly wanted to  mention we went to an example like this  before where we have an array and it has  some values in it and if you know the  values beforehand it makes sense to  hard-code them into an array literal  like this but things get more  interesting for larger arrays especially  if you don't know all the values  beforehand maybe you're computing the  values dynamically or you're fetching  them from some third party source or  whatever and if you know the length of  this array ahead of time especially if  the array is very large it makes sense  to pass it through the array constructor  like this and doing so ensures that  JavaScript engines can pre allocate  space for all the 9001 elements the  array will hold the downside is as we've  seen before that the array will be  marked as holy from the moment it's  created so there's some ups and some  downs here when using the array  constructor like this  javascript engines can pre allocate the  space that they need for the correct  number of needed elements behind the  scenes especially for large arrays this  might speed up the actual creation of  the array however the array is marked as  holy from the beginning so there's  potentially slower array operations on  the array compared to packed arrays it  depends on which you know what you want  to optimize the creation or the  operations of the array to avoid going  holy we discussed this pattern where you  start with an empty array and then as  you get more values you just push them  to the array now when you create an  array the JavaScript engine creates a  buffer in the backing store to hold all  this array elements and for an empty  array that we already initialize a  buffer of 16 elements in v8 to give it  some room to grow now when a new element  is added that doesn't fit in the buffer  anymore we have to create a new buffer  in the backing store and then copy over  all the elements from the old array  behind the scenes and this is an  expensive operation and this is called  reallocation now if you start off with  an empty array for example and then you  push 9001 items to it one by one then v8  will reallocate the buffer in the  backing store for a total of 16 times  which is not too bad but this number  grows as the array gets larger so  especially for large arrays you might  want to consider this starting from an  empty array and continuously pushing to  it ensures we never create any holes  which is good the array remains packed  and any future operations on the array  can be fully optimized but the downside  of continuously pushing to an array that  is continuously pushing to an array is  that behind the scenes engines need to  reallocate the space as the array grows  all the time and for a large race maybe  not 9001 elements may be millions of  elements this might slow down the actual  creation of the array so either you  choose to optimize the array creation  itself by using new array passing in the  length if you know it so that it can be  pre-allocated behind the scenes or you  choose to optimize the later operations  on the array in this case it makes sense  to avoid holy elements kinds and it's a  trade-off for sure and which of these  two you pick depends  on the use case that you have in your  specific code finally the last piece of  advice I'd like to give is to write  modern idiomatic JavaScript without  worrying about performance too much  because that way JavaScript engines can  make it fast for you  thank you  [Applause]  you
+
+00:00:15.170 --> 00:00:16.700 align:start position:0%
+hi everyone how's it going today we're  gonna take a look behind the scenes of  JavaScript engines and specifically  we're gonna take a look at what that  means for JavaScript developers like you  and I now I work on the v8 team at  Google and v8 is the JavaScript engine  that's used within Google Chrome but  also note yes and some other projects so  let's just initialize this environment  variable right there and update the  slides and there we go yeah so  disclaimer I am going to talk about some  v8 specific internals but I guarantee  that all the performance advice that  will draw from this knowledge applies  not just to v8 and Chrome but to all  browsers and all JavaScript engines  across the board and I think that's  really important so let's get right into  it javascript objects can have arbitrary  properties associated with them the  names of these properties can consist of  alphanumeric characters or even weird  Unicode characters as well but one  specific case that JavaScript engines  can choose to optimize for our  properties whose names are entirely  numeric more specifically array indexes  in v8 array indexes are stored  separately they're treated specially  although in many circumstances these  properties behave just like other  properties v8 chooses to store them  separately from non numeric properties  for optimization purposes internally via  v8 even gives these properties a name  they're called elements so think of it  this way objects have properties and  values and arrays have indexes that map  to elements it's just the names that we  use in v8 now whenever you're running  JavaScript code v8 keeps track of what  kind of elements each array contains  this information allows VA to optimize  any operations on the array specifically  for this type of elements so for example  when you call reduce or map or for each  on an array if yet can use that  information to optimize those calls  now take this array for example what  kind of elements does it contain well if  you were to ask the typeof operator in  JavaScript it will tell you that all  these three elements are numbers at the  JavaScript language  that's all you'll get JavaScript doesn't  distinguish between integers floats and  doubles but behind the scenes in the  JavaScript engine itself we can make  this more precise distinction so the  elements count for this array is packed  my elements and we'll get to the packed  part in a minute so ignore that for now  for now focus on the my part in v8 smile  is a smile refers to the particular  format that we use to store small  integers that's what it stands for small  integer later adding a floating-point  number to the same array transitions the  elements kinds to a more generic version  packed double elements now adding a  string literal to the array changes the  elements kind once again v8 assigns and  elements kind to each array and as we've  seen the elements kind of an array is  not stat in stone it can change at  runtime in this case we transitions all  the way from packets my elements to  packed elements so far we've seen three  distinct elements kinds there's one for  smize doubles and regular elements you  can think of this as a pyramid because  the set of numbers that can be  represented as a smile is a subset of  the numbers that can be represented as a  double and the same thing goes for  doubles versus regular elements but  what's important here is that these  element kind transitions can only occur  in one direction you go from a very  specific one like the ones at the top to  one that is more general like the ones  at the bottom it only goes downwards and  once we transition to packed elements  which is for regular elements we can  never transition upwards again we can  never go back up to packed double  elements for example now going back to  that array that we had before the array  contains five elements what happens if  we assign a value to do the index that  is far outside of the arrays boundaries  for example if we assign a value at  position nine in the array while doing  this creates holes in the array the  holes are at positions five until eight  the array is now sparse or holy as we  call it in v8  so creating holes in the array  downgrades the elements guides to it's a  holy variant in this case we went from  packed elements to holy elements now  there are other ways of creating holes  for example if you use the delete  operator on an indexed element that also  creates a hole or if you have an array  literal and you just forget to assign a  value like for example if you have two  commas and there is no value in between  them that would also create a hole so  why does Fiat care so much about whether  there's a hole in an array or not why  does it care so much that it has a  separate elements kind for holes let's  find out by taking a look at an example  just pretend that you're a JavaScript  engine for the next couple of minutes  okay  and you're getting the element at index  eight what's the value for the element  at index eight that's the question that  we need to answer you can't just give  the answer right away you have to do  some work you have to follow the spec to  get the answer so v8 starts off by doing  a bounced check on the array index is  this index between zero inclusive and  the length of the array exclusive and in  this case the bounds check succeeds but  we still cannot really answer the  question of what the result is more work  is needed so now we look up the property  named eight on the array itself but in  this case that property doesn't exist  because all that's there is a hole so we  still cannot answer the question we have  to take a little deeper now because the  property is not present on the array  itself we have to grow up the prototype  chain until either a value is found or  the prototype chain ends and the first  thing we check in a prototype chain is  array the prototype because that's the  prototype for any array and this does  not have a product this does not have a  property named 8 defined on it so at  this point we still do not know what the  answer is we have to continue to follow  the prototype chain now the next item in  a prototype chain is object or prototype  because that's the prototype of a radar  prototype and we check if the property  eight exists there but it doesn't and in  this case the prototype chain ends after  reaching object dot prototype  it could be even longer in case someone  extended it that is a totally valid  thing to do in JavaScript you can muck  with built-in prototypes and we'd say  it's probably a bad practice but as a  JavaScript engine you have to support  these cases because it can happen in the  real world now in this case because the  chain ends we cannot continue searching  for the property which means we can now  finally answer our question the hole at  position 8 in the array is undefined yay  finally well from a JavaScript engines  perspective that's a lot of work that we  just did just to get an undefined value  right now if you compare that to a  packed array which is an array that is  guaranteed to have no holes in it it  turns out that we don't actually have to  do up a lot of this work if the array  index is within bounds then the  JavaScript engine can already return the  value no other checks or expensive  lookups on the prototype chain are  needed at all now if we go back to a  holy array even if we get a property  that does exist within a holy array  there's still a bit more work that we  have to do we have to check if the  property exists first because we know  there are holes in this array so vhx if  the index is within the bounds of the  array and it is but it still doesn't  have enough information to return the  results so we must check if the property  actually exists in the array just in  case there is a hole at this position in  this case a property exists so we can  finally return its value now if the  property didn't exist we would be back  in the situation from before where I  would have to look up prototype chain  which is very expensive and bad for  performance now this is the very best  case scenario for a holy array and it's  still one more operation compared to a  packed array and this is why in general  packed arrays are preferred over holy  arrays operations on packed arrays can  just be optimized in a much more  aggressive way than operations on holy  arrays for optimal performance you  should try and avoid creating holes  whenever you can so we looked at this  pyramid before with this list of  elements kinds there's smize doubles and  regular elements and we knew that we can  transition  downwards throughout this pyramid but  now we learned that it turns out there's  actually two flavors for each of these  elements kinds there's the packed  version and there's a Holi version and  not only can we transition downwards we  can also transition from left to right  we can go from packed to holy so instead  of two separate pyramids it's probably a  little bit easier to think of elements  kinds as a lattice and that is in fact  how v8 implements the system around  elements kinds and the transitions  between them more concretely it looks  something like this  so we have our smile double and regular  elements and each of those comes in two  flavors  there's the pact and the holy version  now these are the most common array  elements kinds but v8 distinguishes  about twenty different elements kinds  for other things like typed arrays as  well and you can only transition  downwards throughout this lattice it's  kind of like that pokemon blue tower  puzzle where all the tiles have like an  arrow drawn on the floor and when you  step on a tile you can only move in that  direction the same goes here you can  only follow the arrows throughout the  lattice which means you can never go  back up once a single floating-point  number is added to an array it is marked  as double even if it later consists of  Smiles only and similarly once you  create a hole in an array it has marked  as holy now in general more specific  elements kinds enable more fine-grained  optimizations the further down the  elements kindness in this lattice the  slower manipulations and operations on  that object might be so for optimal  performance it makes sense to needlessly  to avoid needlessly transitioning  between these elements kinds and stick  to the most specific elements kinds that  applies to your use case let's look at  an example for that for each unique  elements kind v8 can apply specific of  image optimizations when performing  operations on the array whenever you're  using for each for example v8 can  optimize this call based on this  knowledge about the elements kind we can  have one set of for each optimizations  specifically for packets my elements  another set of optimizations for packed  double elements and so on and over time  we can add more and more of these  optimizations so if you look at chrome  59 for example this  when we just shipped a new pipeline in  v8 we had ignition our new interpreter  and turbofan our new optimizing compiler  and at the time we didn't really do  anything special with this information  for for each so while we renew the  elements kinds of these arrays we didn't  specifically optimize any of these  elements kinds but by the time chrome 61  was released we had optimized for each  in turbofan for all packed elements  kinds and more recently in chrome 64 we  added support for the holy elements  kinds as well four for each specifically  so this is a pattern that you'll see  repeated over time over time we will add  more and more fine-grain and specific  optimizations for different elements  kinds for specific array functionality  so you could say the same thing about  rate of prototype dot map for example we  support all these different elements  kinds for map in chrome 64 as well same  goes for filter some every reduce reduce  right and then there's some other array  methods like find and find index and  these two are a little bit special if  you look them up in the spec you'll find  that these Street holes in erase a  little bit differently than all of the  other array methods because they turn  holes into explicit undefined values  which makes things a little bit  complicated for us and for that reason  we haven't yet been able to optimize a  holy double elements so far but like I  said before this is something that we're  working on and over time you can expect  to see more green in these lattices for  any given array method so very soon it  will look like this now let's look at  another example this piece of code  creates an array of length 3  but what values does the array contain  it just has three holes in it so the  array is sparse at this point so it gets  the element kind holy smile  holy is my elements because that's the  most specific possibility given the  currently available information now  let's assign a value to position zero in  the array well wait a minute that's a  string instead of a small integer so in  this case the elements kinds transitions  to holy elements now we add a value  to position one in the array and the  elements kinds remains unchanged in this  case and finally we sign another value  to the last position in the array now at  this point all three positions in the  array are filled so the array is packed  and no longer sparse however we cannot  transition to a more specific kind as  packed elements as we saw after we seen  earlier so unfortunately the elements  kind remains holy elements at this point  once an array is marked as holy it is  holy forever I believe that's how  sainthood works as well now in this  scenario a better solution is of course  to use an array literal instead if you  know all the values ahead of time then  why not just add them in an array  literal but if you don't know all the  values ahead of time you can still use a  technique that is similar you can start  off with an empty array or with an array  that contains some of the values that  you already know and then you can push  more values to it as you dynamically  compute them or get them from some  external source that way you avoid  creating holes in the array at any given  time and the array will never get marked  as holy this approach ensures that v8  optimizes any future operations on the  array to the best of its abilities life  is easier without poles JavaScript  engines can deal with packed arrays much  more efficiently in general if you need  to perform lots of operations on an  array try and avoid creating holes in it  and similarly you should avoid reading  beyond the length of the array because  there's nothing there anyway so for  example don't write your loops like this  this loop reads all the elements in the  array and then one more it only stops  when it finds an undefined or null  element so this also means that it would  only work for arrays that don't contain  undefined or no now this kind of pattern  is just as bad as hitting a hole it's a  different scenario but it's very similar  because in this case the bounds check  that we did before fails the check to  see if the property is present fails and  then we need to look up the prototype  chain just like before and as we've  learned that is very expensive so don't  do this and instead keep your loop  simple if you have to write out your own  loop you can do  do it the simple way you can keep track  of the index and keep iterating until  you hit the last element when the  collection you're looping over is  iterable which is the case for arrays  and node lists for example then that's  even better you can just use for off and  this is my favorite way of looping over  any kind of collection in JavaScript  because it's so simple now for arrays  specifically of course you can also use  array dot prototype out for each that  also works and the good news today is  that whether you want to use for each or  write your own for loop or use for off  performance-wise it doesn't matter  anymore which means you can just make  that decision and pick your favorite  without performance being a factor in  that decision I think that's pretty  great now avoid creating avoid reading  beyond the end of the array in summary  so doing so is just as bad as hitting a  hole now before we move on to some more  performance advice here's a fun facts  javascript has two zeros there's the  regular zero which is positive but  there's also a negative zero and  although these values are strictly equal  to each other  because of course why wouldn't they be  it turns out that they're actually  observably different in some cases and  object op is is an example of that  because they behave differently  it means javascript engines has have to  store these values separately as well in  different ways and the reason I'm  telling you this is because this has an  impact on elements kinds I mentioned  earlier that a piece of advice when it  comes to elements kind is to avoid  transitioning to a less specific  elements kind whenever you can and this  is actually harder than it seems for  example just adding minus 0 to an array  of small integers is enough to  transition it to packed double elements  any future operations on this array will  now be optimized in a completely  different way and they would be for  smiles specifically so that's just one  more reason to avoid negative 0 in  general unless of course you need to  explicitly differentiate between  negative and positive 0 in your code but  you probably don't now the same thing  goes for nan and infinity these values  are stored as a double  which means that adding a single lamp to  an array of smile elements transitions  it to double elements so if you're  planning on performing lots of  operations on an array of integers you  should consider normalizing the values  before you're adding them to the array  so normalize minus zero to positive zero  and block-man and infinity when you're  initializing the values this way the  array sticks to the packets my elements  kind and of course there's a one time  normalization cost involved there for  all the extra text that you do when  you're initializing the array but it can  be worth the later optimizations in fact  if you're doing lots of mathematical  operations on an array of numbers should  probably look into using type arrays  because v8 has specific elements guides  for those as well and they're kind of  optimized for this kind of thing in  general if you need to perform lots of  operations on an array try sticking to  an elements kind that's as specific as  possible so that v8 can optimize it as  much as possible some objects in  JavaScript especially in the Dom look  like arrays although there aren't proper  arrays it's possible to create array  like objects yourself which is what I'm  doing here this object has a length  property and it supports indexed element  access just like a real array but it  lacks array methods like for each on its  prototype it's still possible to call  these array methods on this object  though here we're calling the array for  each built-in on the array like object  and that works as expected however this  is going to be slower than calling array  than calling for each on a proper array  which is highly optimized in v8 so if  you plan on using array built-ins on  this object more than once  consider turning it into an actual array  beforehand so that v8 can optimize these  operations to the best of its abilities  and here we're using slice to do that so  of course there is a one-time cost of  doing the actual slice call but this  cost can be worth the later  optimizations especially if you plan on  performing lots of operations on the  array and a specific example of this is  the arguments object this is an array  like object so when you call array  built-in such as for each on it it works  but it won't be fully up to  that's the way it could be for a proper  airing so nowadays I think there is a  better solution to this in the form of  es2015 rest parameters they produce  proper arrays that can be used instead  of the array like arguments objects in a  very elegant way so nowadays I think  there is no good reason to use the  arguments object anymore  use rest parameters it will make your  code more elegant and more optimizable  in various JavaScript engines as well  this is not a real crocodile and it's  not gonna have the same performance as a  real crocodile the same thing goes for  arrays in general you should avoid array  like objects whenever possible and use  real arrays instead now after all this  talk about elements kinds you may be  wondering how you can identify the  elements kinds of a given array in your  code base maybe you're debugging a  performance issue or maybe you just want  to have a deeper understanding of what  I'm talking about well you can run you  can compile v8 from source in a debug  build and run the d8 binary d8 stands  for developer shell or debug build no  one on the v8 team really knows what it  stands for actually it's a mystery D but  what I do know is that you have to pass  in the allow native syntax flag doing so  enables access to some internal v8  functionality from within JavaScript  it's very powerful especially if you  combine this with a debug build of v8 so  entering that command opens up a wrapper  which is very similar to what you get if  you just type node on your command line  except this way we can run some code  directly in v8 so now it's time to write  some code first we create the array that  we want to test and then we call one of  those special v8 internal functions on  it in this case debug print and you see  how the name there starts with a  percentage sign yeah that's not actually  valid JavaScript and the reason why we  do this is because we don't want people  to use this in production it doesn't  make sense to use it in production and  by making it invalid javascript we kind  of force it on people that they cannot  use this in production this would only  work in this particular built of v8  anyway so doesn't make sense to try to  use it elsewhere now running this code  prints a lot of output  even more than what is shown here in the  slide but in this case what we're  looking for is the elements kind of the  array which is listed on this line the  elements kind is holy smile elements cow  now that cow does not refer to the  animal it stands for copy-on-write which  is yet another internal optimization but  don't worry about that for now we can  talk about it in another presentation or  just come talk to me later  let's recap what we've seen so far we've  explored what elements kinds are and how  they work and as a result we were able  to identify some practical tips that can  help us boost performance avoid creating  holes in arrays don't access array  indexes beyond the arrays length try to  keep the elements kind of your array as  specific as possible by sticking to a  single value type for each array avoid  using array like objects and when you  have to use them consider converting  them into proper arrays before  performing any expensive operations on  them now although this presentation  covered some v8 specific internals these  tips don't just apply to v8 other  JavaScript engines can benefit from them  as well and by following this advice I  guarantee you that your code is not  going to get slower in any of the other  engines in fact it will probably get  faster across the board now there is one  more thing that I quickly wanted to  mention we went to an example like this  before where we have an array and it has  some values in it and if you know the  values beforehand it makes sense to  hard-code them into an array literal  like this but things get more  interesting for larger arrays especially  if you don't know all the values  beforehand maybe you're computing the  values dynamically or you're fetching  them from some third party source or  whatever and if you know the length of  this array ahead of time especially if  the array is very large it makes sense  to pass it through the array constructor  like this and doing so ensures that  JavaScript engines can pre allocate  space for all the 9001 elements the  array will hold the downside is as we've  seen before that the array will be  marked as holy from the moment it's  created so there's some ups and some  downs here when using the array  constructor like this  javascript engines can pre allocate the  space that they need for the correct  number of needed elements behind the  scenes especially for large arrays this  might speed up the actual creation of  the array however the array is marked as  holy from the beginning so there's  potentially slower array operations on  the array compared to packed arrays it  depends on which you know what you want  to optimize the creation or the  operations of the array to avoid going  holy we discussed this pattern where you  start with an empty array and then as  you get more values you just push them  to the array now when you create an  array the JavaScript engine creates a  buffer in the backing store to hold all  this array elements and for an empty  array that we already initialize a  buffer of 16 elements in v8 to give it  some room to grow now when a new element  is added that doesn't fit in the buffer  anymore we have to create a new buffer  in the backing store and then copy over  all the elements from the old array  behind the scenes and this is an  expensive operation and this is called  reallocation now if you start off with  an empty array for example and then you  push 9001 items to it one by one then v8  will reallocate the buffer in the  backing store for a total of 16 times  which is not too bad but this number  grows as the array gets larger so  especially for large arrays you might  want to consider this starting from an  empty array and continuously pushing to  it ensures we never create any holes  which is good the array remains packed  and any future operations on the array  can be fully optimized but the downside  of continuously pushing to an array that  is continuously pushing to an array is  that behind the scenes engines need to  reallocate the space as the array grows  all the time and for a large race maybe  not 9001 elements may be millions of  elements this might slow down the actual  creation of the array so either you  choose to optimize the array creation  itself by using new array passing in the  length if you know it so that it can be  pre-allocated behind the scenes or you  choose to optimize the later operations  on the array in this case it makes sense  to avoid holy elements kinds and it's a  trade-off for sure and which of these  two you pick depends  on the use case that you have in your  specific code finally the last piece of  advice I'd like to give is to write  modern idiomatic JavaScript without  worrying about performance too much  because that way JavaScript engines can  make it fast for you  thank you  [Applause]  you
+ 
+
+00:00:16.700 --> 00:00:18.590 align:start position:0%
+ 
+ 
+
+00:00:18.590 --> 00:00:20.300 align:start position:0%
+ 
+ 
+
+00:00:20.300 --> 00:00:22.250 align:start position:0%
+ 
+ 
+
+00:00:22.250 --> 00:00:25.400 align:start position:0%
+ 
+ 
+
+00:00:25.400 --> 00:00:27.019 align:start position:0%
+ 
+ 
+
+00:00:27.019 --> 00:00:28.909 align:start position:0%
+ 
+ 
+
+00:00:28.909 --> 00:00:31.640 align:start position:0%
+ 
+ 
+
+00:00:31.640 --> 00:00:33.560 align:start position:0%
+ 
+ 
+
+00:00:33.560 --> 00:00:35.600 align:start position:0%
+ 
+ 
+
+00:00:35.600 --> 00:00:38.690 align:start position:0%
+ 
+ 
+
+00:00:38.690 --> 00:00:41.090 align:start position:0%
+ 
+ 
+
+00:00:41.090 --> 00:00:44.300 align:start position:0%
+ 
+ 
+
+00:00:44.300 --> 00:00:46.100 align:start position:0%
+ 
+ 
+
+00:00:46.100 --> 00:00:47.570 align:start position:0%
+ 
+ 
+
+00:00:47.570 --> 00:00:49.820 align:start position:0%
+ 
+ 
+
+00:00:49.820 --> 00:00:51.470 align:start position:0%
+ 
+ 
+
+00:00:51.470 --> 00:00:53.120 align:start position:0%
+ 
+ 
+
+00:00:53.120 --> 00:00:56.600 align:start position:0%
+ 
+ 
+
+00:00:56.600 --> 00:00:59.390 align:start position:0%
+ 
+ 
+
+00:00:59.390 --> 00:01:01.790 align:start position:0%
+ 
+ 
+
+00:01:01.790 --> 00:01:03.890 align:start position:0%
+ 
+ 
+
+00:01:03.890 --> 00:01:06.140 align:start position:0%
+ 
+ 
+
+00:01:06.140 --> 00:01:08.270 align:start position:0%
+ 
+ 
+
+00:01:08.270 --> 00:01:10.039 align:start position:0%
+ 
+ 
+
+00:01:10.039 --> 00:01:11.539 align:start position:0%
+ 
+ 
+
+00:01:11.539 --> 00:01:13.700 align:start position:0%
+ 
+ 
+
+00:01:13.700 --> 00:01:17.120 align:start position:0%
+ 
+ 
+
+00:01:17.120 --> 00:01:20.419 align:start position:0%
+ 
+ 
+
+00:01:20.419 --> 00:01:22.399 align:start position:0%
+ 
+ 
+
+00:01:22.399 --> 00:01:24.440 align:start position:0%
+ 
+ 
+
+00:01:24.440 --> 00:01:26.380 align:start position:0%
+ 
+ 
+
+00:01:26.380 --> 00:01:29.209 align:start position:0%
+ 
+ 
+
+00:01:29.209 --> 00:01:31.489 align:start position:0%
+ 
+ 
+
+00:01:31.489 --> 00:01:34.190 align:start position:0%
+ 
+ 
+
+00:01:34.190 --> 00:01:36.319 align:start position:0%
+ 
+ 
+
+00:01:36.319 --> 00:01:39.260 align:start position:0%
+ 
+ 
+
+00:01:39.260 --> 00:01:41.779 align:start position:0%
+ 
+ 
+
+00:01:41.779 --> 00:01:45.319 align:start position:0%
+ 
+ 
+
+00:01:45.319 --> 00:01:47.989 align:start position:0%
+ 
+ 
+
+00:01:47.989 --> 00:01:51.440 align:start position:0%
+ 
+ 
+
+00:01:51.440 --> 00:01:53.899 align:start position:0%
+ 
+ 
+
+00:01:53.899 --> 00:01:55.840 align:start position:0%
+ 
+ 
+
+00:01:55.840 --> 00:01:58.580 align:start position:0%
+ 
+ 
+
+00:01:58.580 --> 00:02:00.739 align:start position:0%
+ 
+ 
+
+00:02:00.739 --> 00:02:03.469 align:start position:0%
+ 
+ 
+
+00:02:03.469 --> 00:02:05.809 align:start position:0%
+ 
+ 
+
+00:02:05.809 --> 00:02:07.639 align:start position:0%
+ 
+ 
+
+00:02:07.639 --> 00:02:09.529 align:start position:0%
+ 
+ 
+
+00:02:09.529 --> 00:02:13.040 align:start position:0%
+ 
+ 
+
+00:02:13.040 --> 00:02:15.680 align:start position:0%
+ 
+ 
+
+00:02:15.680 --> 00:02:17.990 align:start position:0%
+ 
+ 
+
+00:02:17.990 --> 00:02:19.399 align:start position:0%
+ 
+ 
+
+00:02:19.399 --> 00:02:22.220 align:start position:0%
+ 
+ 
+
+00:02:22.220 --> 00:02:23.150 align:start position:0%
+ 
+ 
+
+00:02:23.150 --> 00:02:24.980 align:start position:0%
+ 
+ 
+
+00:02:24.980 --> 00:02:27.770 align:start position:0%
+ 
+ 
+
+00:02:27.770 --> 00:02:30.170 align:start position:0%
+ 
+ 
+
+00:02:30.170 --> 00:02:31.910 align:start position:0%
+ 
+ 
+
+00:02:31.910 --> 00:02:35.870 align:start position:0%
+ 
+ 
+
+00:02:35.870 --> 00:02:38.120 align:start position:0%
+ 
+ 
+
+00:02:38.120 --> 00:02:41.120 align:start position:0%
+ 
+ 
+
+00:02:41.120 --> 00:02:42.800 align:start position:0%
+ 
+ 
+
+00:02:42.800 --> 00:02:47.240 align:start position:0%
+ 
+ 
+
+00:02:47.240 --> 00:02:50.660 align:start position:0%
+ 
+ 
+
+00:02:50.660 --> 00:02:52.760 align:start position:0%
+ 
+ 
+
+00:02:52.760 --> 00:02:54.860 align:start position:0%
+ 
+ 
+
+00:02:54.860 --> 00:02:58.310 align:start position:0%
+ 
+ 
+
+00:02:58.310 --> 00:03:00.500 align:start position:0%
+ 
+ 
+
+00:03:00.500 --> 00:03:03.280 align:start position:0%
+ 
+ 
+
+00:03:03.280 --> 00:03:07.730 align:start position:0%
+ 
+ 
+
+00:03:07.730 --> 00:03:09.410 align:start position:0%
+ 
+ 
+
+00:03:09.410 --> 00:03:13.820 align:start position:0%
+ 
+ 
+
+00:03:13.820 --> 00:03:15.980 align:start position:0%
+ 
+ 
+
+00:03:15.980 --> 00:03:17.570 align:start position:0%
+ 
+ 
+
+00:03:17.570 --> 00:03:19.490 align:start position:0%
+ 
+ 
+
+00:03:19.490 --> 00:03:21.920 align:start position:0%
+ 
+ 
+
+00:03:21.920 --> 00:03:23.930 align:start position:0%
+ 
+ 
+
+00:03:23.930 --> 00:03:28.130 align:start position:0%
+ 
+ 
+
+00:03:28.130 --> 00:03:30.080 align:start position:0%
+ 
+ 
+
+00:03:30.080 --> 00:03:33.260 align:start position:0%
+ 
+ 
+
+00:03:33.260 --> 00:03:35.150 align:start position:0%
+ 
+ 
+
+00:03:35.150 --> 00:03:36.350 align:start position:0%
+ 
+ 
+
+00:03:36.350 --> 00:03:38.840 align:start position:0%
+ 
+ 
+
+00:03:38.840 --> 00:03:40.310 align:start position:0%
+ 
+ 
+
+00:03:40.310 --> 00:03:41.630 align:start position:0%
+ 
+ 
+
+00:03:41.630 --> 00:03:44.750 align:start position:0%
+ 
+ 
+
+00:03:44.750 --> 00:03:45.920 align:start position:0%
+ 
+ 
+
+00:03:45.920 --> 00:03:47.990 align:start position:0%
+ 
+ 
+
+00:03:47.990 --> 00:03:50.090 align:start position:0%
+ 
+ 
+
+00:03:50.090 --> 00:03:52.430 align:start position:0%
+ 
+ 
+
+00:03:52.430 --> 00:03:54.410 align:start position:0%
+ 
+ 
+
+00:03:54.410 --> 00:03:56.930 align:start position:0%
+ 
+ 
+
+00:03:56.930 --> 00:03:59.960 align:start position:0%
+ 
+ 
+
+00:03:59.960 --> 00:04:01.820 align:start position:0%
+ 
+ 
+
+00:04:01.820 --> 00:04:03.830 align:start position:0%
+ 
+ 
+
+00:04:03.830 --> 00:04:05.750 align:start position:0%
+ 
+ 
+
+00:04:05.750 --> 00:04:09.590 align:start position:0%
+ 
+ 
+
+00:04:09.590 --> 00:04:12.590 align:start position:0%
+ 
+ 
+
+00:04:12.590 --> 00:04:15.530 align:start position:0%
+ 
+ 
+
+00:04:15.530 --> 00:04:18.080 align:start position:0%
+ 
+ 
+
+00:04:18.080 --> 00:04:19.970 align:start position:0%
+ 
+ 
+
+00:04:19.970 --> 00:04:22.070 align:start position:0%
+ 
+ 
+
+00:04:22.070 --> 00:04:25.670 align:start position:0%
+ 
+ 
+
+00:04:25.670 --> 00:04:28.430 align:start position:0%
+ 
+ 
+
+00:04:28.430 --> 00:04:30.560 align:start position:0%
+ 
+ 
+
+00:04:30.560 --> 00:04:34.190 align:start position:0%
+ 
+ 
+
+00:04:34.190 --> 00:04:35.829 align:start position:0%
+ 
+ 
+
+00:04:35.829 --> 00:04:37.909 align:start position:0%
+ 
+ 
+
+00:04:37.909 --> 00:04:39.980 align:start position:0%
+ 
+ 
+
+00:04:39.980 --> 00:04:42.469 align:start position:0%
+ 
+ 
+
+00:04:42.469 --> 00:04:45.980 align:start position:0%
+ 
+ 
+
+00:04:45.980 --> 00:04:47.659 align:start position:0%
+ 
+ 
+
+00:04:47.659 --> 00:04:49.459 align:start position:0%
+ 
+ 
+
+00:04:49.459 --> 00:04:51.679 align:start position:0%
+ 
+ 
+
+00:04:51.679 --> 00:04:53.869 align:start position:0%
+ 
+ 
+
+00:04:53.869 --> 00:04:56.239 align:start position:0%
+ 
+ 
+
+00:04:56.239 --> 00:04:58.070 align:start position:0%
+ 
+ 
+
+00:04:58.070 --> 00:04:59.959 align:start position:0%
+ 
+ 
+
+00:04:59.959 --> 00:05:03.619 align:start position:0%
+ 
+ 
+
+00:05:03.619 --> 00:05:05.480 align:start position:0%
+ 
+ 
+
+00:05:05.480 --> 00:05:07.790 align:start position:0%
+ 
+ 
+
+00:05:07.790 --> 00:05:09.200 align:start position:0%
+ 
+ 
+
+00:05:09.200 --> 00:05:11.869 align:start position:0%
+ 
+ 
+
+00:05:11.869 --> 00:05:15.040 align:start position:0%
+ 
+ 
+
+00:05:15.040 --> 00:05:17.600 align:start position:0%
+ 
+ 
+
+00:05:17.600 --> 00:05:18.709 align:start position:0%
+ 
+ 
+
+00:05:18.709 --> 00:05:18.719 align:start position:0%
+ 
+ 
+
+00:05:18.719 --> 00:05:19.339 align:start position:0%
+ 
+
+
+00:05:19.339 --> 00:05:21.559 align:start position:0%
+ 
+ 
+
+00:05:21.559 --> 00:05:24.679 align:start position:0%
+ 
+ 
+
+00:05:24.679 --> 00:05:25.999 align:start position:0%
+ 
+ 
+
+00:05:25.999 --> 00:05:28.189 align:start position:0%
+ 
+ 
+
+00:05:28.189 --> 00:05:30.260 align:start position:0%
+ 
+ 
+
+00:05:30.260 --> 00:05:32.450 align:start position:0%
+ 
+ 
+
+00:05:32.450 --> 00:05:36.709 align:start position:0%
+ 
+ 
+
+00:05:36.709 --> 00:05:39.139 align:start position:0%
+ 
+ 
+
+00:05:39.139 --> 00:05:41.300 align:start position:0%
+ 
+ 
+
+00:05:41.300 --> 00:05:44.149 align:start position:0%
+ 
+ 
+
+00:05:44.149 --> 00:05:46.639 align:start position:0%
+ 
+ 
+
+00:05:46.639 --> 00:05:47.929 align:start position:0%
+ 
+ 
+
+00:05:47.929 --> 00:05:50.029 align:start position:0%
+ 
+ 
+
+00:05:50.029 --> 00:05:53.719 align:start position:0%
+ 
+ 
+
+00:05:53.719 --> 00:05:56.300 align:start position:0%
+ 
+ 
+
+00:05:56.300 --> 00:05:57.829 align:start position:0%
+ 
+ 
+
+00:05:57.829 --> 00:06:01.249 align:start position:0%
+ 
+ 
+
+00:06:01.249 --> 00:06:03.739 align:start position:0%
+ 
+ 
+
+00:06:03.739 --> 00:06:06.469 align:start position:0%
+ 
+ 
+
+00:06:06.469 --> 00:06:08.029 align:start position:0%
+ 
+ 
+
+00:06:08.029 --> 00:06:10.100 align:start position:0%
+ 
+ 
+
+00:06:10.100 --> 00:06:12.709 align:start position:0%
+ 
+ 
+
+00:06:12.709 --> 00:06:15.860 align:start position:0%
+ 
+ 
+
+00:06:15.860 --> 00:06:17.299 align:start position:0%
+ 
+ 
+
+00:06:17.299 --> 00:06:19.159 align:start position:0%
+ 
+ 
+
+00:06:19.159 --> 00:06:22.279 align:start position:0%
+ 
+ 
+
+00:06:22.279 --> 00:06:24.439 align:start position:0%
+ 
+ 
+
+00:06:24.439 --> 00:06:27.799 align:start position:0%
+ 
+ 
+
+00:06:27.799 --> 00:06:29.659 align:start position:0%
+ 
+ 
+
+00:06:29.659 --> 00:06:31.760 align:start position:0%
+ 
+ 
+
+00:06:31.760 --> 00:06:34.879 align:start position:0%
+ 
+ 
+
+00:06:34.879 --> 00:06:36.709 align:start position:0%
+ 
+ 
+
+00:06:36.709 --> 00:06:38.420 align:start position:0%
+ 
+ 
+
+00:06:38.420 --> 00:06:40.850 align:start position:0%
+ 
+ 
+
+00:06:40.850 --> 00:06:44.929 align:start position:0%
+ 
+ 
+
+00:06:44.929 --> 00:06:46.999 align:start position:0%
+ 
+ 
+
+00:06:46.999 --> 00:06:49.190 align:start position:0%
+ 
+ 
+
+00:06:49.190 --> 00:06:51.050 align:start position:0%
+ 
+ 
+
+00:06:51.050 --> 00:06:52.970 align:start position:0%
+ 
+ 
+
+00:06:52.970 --> 00:06:54.590 align:start position:0%
+ 
+ 
+
+00:06:54.590 --> 00:06:56.630 align:start position:0%
+ 
+ 
+
+00:06:56.630 --> 00:06:59.540 align:start position:0%
+ 
+ 
+
+00:06:59.540 --> 00:07:00.950 align:start position:0%
+ 
+ 
+
+00:07:00.950 --> 00:07:02.540 align:start position:0%
+ 
+ 
+
+00:07:02.540 --> 00:07:05.510 align:start position:0%
+ 
+ 
+
+00:07:05.510 --> 00:07:07.520 align:start position:0%
+ 
+ 
+
+00:07:07.520 --> 00:07:09.350 align:start position:0%
+ 
+ 
+
+00:07:09.350 --> 00:07:12.590 align:start position:0%
+ 
+ 
+
+00:07:12.590 --> 00:07:15.560 align:start position:0%
+ 
+ 
+
+00:07:15.560 --> 00:07:19.460 align:start position:0%
+ 
+ 
+
+00:07:19.460 --> 00:07:21.500 align:start position:0%
+ 
+ 
+
+00:07:21.500 --> 00:07:23.570 align:start position:0%
+ 
+ 
+
+00:07:23.570 --> 00:07:27.230 align:start position:0%
+ 
+ 
+
+00:07:27.230 --> 00:07:29.630 align:start position:0%
+ 
+ 
+
+00:07:29.630 --> 00:07:32.060 align:start position:0%
+ 
+ 
+
+00:07:32.060 --> 00:07:33.590 align:start position:0%
+ 
+ 
+
+00:07:33.590 --> 00:07:36.560 align:start position:0%
+ 
+ 
+
+00:07:36.560 --> 00:07:38.510 align:start position:0%
+ 
+ 
+
+00:07:38.510 --> 00:07:40.640 align:start position:0%
+ 
+ 
+
+00:07:40.640 --> 00:07:43.190 align:start position:0%
+ 
+ 
+
+00:07:43.190 --> 00:07:44.540 align:start position:0%
+ 
+ 
+
+00:07:44.540 --> 00:07:47.690 align:start position:0%
+ 
+ 
+
+00:07:47.690 --> 00:07:50.660 align:start position:0%
+ 
+ 
+
+00:07:50.660 --> 00:07:52.910 align:start position:0%
+ 
+ 
+
+00:07:52.910 --> 00:07:55.220 align:start position:0%
+ 
+ 
+
+00:07:55.220 --> 00:07:57.920 align:start position:0%
+ 
+ 
+
+00:07:57.920 --> 00:07:59.900 align:start position:0%
+ 
+ 
+
+00:07:59.900 --> 00:08:03.050 align:start position:0%
+ 
+ 
+
+00:08:03.050 --> 00:08:04.250 align:start position:0%
+ 
+ 
+
+00:08:04.250 --> 00:08:06.950 align:start position:0%
+ 
+ 
+
+00:08:06.950 --> 00:08:08.660 align:start position:0%
+ 
+ 
+
+00:08:08.660 --> 00:08:11.990 align:start position:0%
+ 
+ 
+
+00:08:11.990 --> 00:08:14.390 align:start position:0%
+ 
+ 
+
+00:08:14.390 --> 00:08:16.430 align:start position:0%
+ 
+ 
+
+00:08:16.430 --> 00:08:19.310 align:start position:0%
+ 
+ 
+
+00:08:19.310 --> 00:08:22.130 align:start position:0%
+ 
+ 
+
+00:08:22.130 --> 00:08:23.660 align:start position:0%
+ 
+ 
+
+00:08:23.660 --> 00:08:25.100 align:start position:0%
+ 
+ 
+
+00:08:25.100 --> 00:08:26.750 align:start position:0%
+ 
+ 
+
+00:08:26.750 --> 00:08:28.730 align:start position:0%
+ 
+ 
+
+00:08:28.730 --> 00:08:31.550 align:start position:0%
+ 
+ 
+
+00:08:31.550 --> 00:08:34.160 align:start position:0%
+ 
+ 
+
+00:08:34.160 --> 00:08:36.200 align:start position:0%
+ 
+ 
+
+00:08:36.200 --> 00:08:39.200 align:start position:0%
+ 
+ 
+
+00:08:39.200 --> 00:08:42.020 align:start position:0%
+ 
+ 
+
+00:08:42.020 --> 00:08:45.050 align:start position:0%
+ 
+ 
+
+00:08:45.050 --> 00:08:46.700 align:start position:0%
+ 
+ 
+
+00:08:46.700 --> 00:08:48.560 align:start position:0%
+ 
+ 
+
+00:08:48.560 --> 00:08:50.780 align:start position:0%
+ 
+ 
+
+00:08:50.780 --> 00:08:52.190 align:start position:0%
+ 
+ 
+
+00:08:52.190 --> 00:08:55.430 align:start position:0%
+ 
+ 
+
+00:08:55.430 --> 00:08:57.140 align:start position:0%
+ 
+ 
+
+00:08:57.140 --> 00:08:59.780 align:start position:0%
+ 
+ 
+
+00:08:59.780 --> 00:09:01.670 align:start position:0%
+ 
+ 
+
+00:09:01.670 --> 00:09:01.680 align:start position:0%
+ 
+ 
+
+00:09:01.680 --> 00:09:02.720 align:start position:0%
+ 
+
+
+00:09:02.720 --> 00:09:05.210 align:start position:0%
+ 
+ 
+
+00:09:05.210 --> 00:09:06.980 align:start position:0%
+ 
+ 
+
+00:09:06.980 --> 00:09:08.600 align:start position:0%
+ 
+ 
+
+00:09:08.600 --> 00:09:10.340 align:start position:0%
+ 
+ 
+
+00:09:10.340 --> 00:09:12.259 align:start position:0%
+ 
+ 
+
+00:09:12.259 --> 00:09:14.600 align:start position:0%
+ 
+ 
+
+00:09:14.600 --> 00:09:16.670 align:start position:0%
+ 
+ 
+
+00:09:16.670 --> 00:09:19.759 align:start position:0%
+ 
+ 
+
+00:09:19.759 --> 00:09:21.319 align:start position:0%
+ 
+ 
+
+00:09:21.319 --> 00:09:22.790 align:start position:0%
+ 
+ 
+
+00:09:22.790 --> 00:09:25.490 align:start position:0%
+ 
+ 
+
+00:09:25.490 --> 00:09:27.379 align:start position:0%
+ 
+ 
+
+00:09:27.379 --> 00:09:29.090 align:start position:0%
+ 
+ 
+
+00:09:29.090 --> 00:09:31.430 align:start position:0%
+ 
+ 
+
+00:09:31.430 --> 00:09:32.350 align:start position:0%
+ 
+ 
+
+00:09:32.350 --> 00:09:35.720 align:start position:0%
+ 
+ 
+
+00:09:35.720 --> 00:09:37.610 align:start position:0%
+ 
+ 
+
+00:09:37.610 --> 00:09:37.620 align:start position:0%
+ 
+ 
+
+00:09:37.620 --> 00:09:38.060 align:start position:0%
+ 
+
+
+00:09:38.060 --> 00:09:40.100 align:start position:0%
+ 
+ 
+
+00:09:40.100 --> 00:09:42.259 align:start position:0%
+ 
+ 
+
+00:09:42.259 --> 00:09:44.900 align:start position:0%
+ 
+ 
+
+00:09:44.900 --> 00:09:46.639 align:start position:0%
+ 
+ 
+
+00:09:46.639 --> 00:09:48.800 align:start position:0%
+ 
+ 
+
+00:09:48.800 --> 00:09:51.290 align:start position:0%
+ 
+ 
+
+00:09:51.290 --> 00:09:52.970 align:start position:0%
+ 
+ 
+
+00:09:52.970 --> 00:09:54.650 align:start position:0%
+ 
+ 
+
+00:09:54.650 --> 00:09:56.750 align:start position:0%
+ 
+ 
+
+00:09:56.750 --> 00:09:58.129 align:start position:0%
+ 
+ 
+
+00:09:58.129 --> 00:09:59.810 align:start position:0%
+ 
+ 
+
+00:09:59.810 --> 00:10:01.730 align:start position:0%
+ 
+ 
+
+00:10:01.730 --> 00:10:03.259 align:start position:0%
+ 
+ 
+
+00:10:03.259 --> 00:10:05.660 align:start position:0%
+ 
+ 
+
+00:10:05.660 --> 00:10:07.939 align:start position:0%
+ 
+ 
+
+00:10:07.939 --> 00:10:10.069 align:start position:0%
+ 
+ 
+
+00:10:10.069 --> 00:10:12.259 align:start position:0%
+ 
+ 
+
+00:10:12.259 --> 00:10:15.319 align:start position:0%
+ 
+ 
+
+00:10:15.319 --> 00:10:17.509 align:start position:0%
+ 
+ 
+
+00:10:17.509 --> 00:10:22.160 align:start position:0%
+ 
+ 
+
+00:10:22.160 --> 00:10:24.019 align:start position:0%
+ 
+ 
+
+00:10:24.019 --> 00:10:26.150 align:start position:0%
+ 
+ 
+
+00:10:26.150 --> 00:10:28.129 align:start position:0%
+ 
+ 
+
+00:10:28.129 --> 00:10:30.199 align:start position:0%
+ 
+ 
+
+00:10:30.199 --> 00:10:33.019 align:start position:0%
+ 
+ 
+
+00:10:33.019 --> 00:10:34.579 align:start position:0%
+ 
+ 
+
+00:10:34.579 --> 00:10:36.980 align:start position:0%
+ 
+ 
+
+00:10:36.980 --> 00:10:38.990 align:start position:0%
+ 
+ 
+
+00:10:38.990 --> 00:10:41.300 align:start position:0%
+ 
+ 
+
+00:10:41.300 --> 00:10:44.300 align:start position:0%
+ 
+ 
+
+00:10:44.300 --> 00:10:46.490 align:start position:0%
+ 
+ 
+
+00:10:46.490 --> 00:10:48.920 align:start position:0%
+ 
+ 
+
+00:10:48.920 --> 00:10:50.870 align:start position:0%
+ 
+ 
+
+00:10:50.870 --> 00:10:53.090 align:start position:0%
+ 
+ 
+
+00:10:53.090 --> 00:10:55.550 align:start position:0%
+ 
+ 
+
+00:10:55.550 --> 00:10:57.170 align:start position:0%
+ 
+ 
+
+00:10:57.170 --> 00:10:59.689 align:start position:0%
+ 
+ 
+
+00:10:59.689 --> 00:11:02.120 align:start position:0%
+ 
+ 
+
+00:11:02.120 --> 00:11:04.250 align:start position:0%
+ 
+ 
+
+00:11:04.250 --> 00:11:06.500 align:start position:0%
+ 
+ 
+
+00:11:06.500 --> 00:11:10.009 align:start position:0%
+ 
+ 
+
+00:11:10.009 --> 00:11:12.259 align:start position:0%
+ 
+ 
+
+00:11:12.259 --> 00:11:15.139 align:start position:0%
+ 
+ 
+
+00:11:15.139 --> 00:11:16.500 align:start position:0%
+ 
+ 
+
+00:11:16.500 --> 00:11:18.960 align:start position:0%
+ 
+ 
+
+00:11:18.960 --> 00:11:21.300 align:start position:0%
+ 
+ 
+
+00:11:21.300 --> 00:11:23.580 align:start position:0%
+ 
+ 
+
+00:11:23.580 --> 00:11:25.830 align:start position:0%
+ 
+ 
+
+00:11:25.830 --> 00:11:27.270 align:start position:0%
+ 
+ 
+
+00:11:27.270 --> 00:11:29.640 align:start position:0%
+ 
+ 
+
+00:11:29.640 --> 00:11:31.710 align:start position:0%
+ 
+ 
+
+00:11:31.710 --> 00:11:33.690 align:start position:0%
+ 
+ 
+
+00:11:33.690 --> 00:11:36.360 align:start position:0%
+ 
+ 
+
+00:11:36.360 --> 00:11:38.700 align:start position:0%
+ 
+ 
+
+00:11:38.700 --> 00:11:41.340 align:start position:0%
+ 
+ 
+
+00:11:41.340 --> 00:11:45.270 align:start position:0%
+ 
+ 
+
+00:11:45.270 --> 00:11:47.010 align:start position:0%
+ 
+ 
+
+00:11:47.010 --> 00:11:49.350 align:start position:0%
+ 
+ 
+
+00:11:49.350 --> 00:11:51.270 align:start position:0%
+ 
+ 
+
+00:11:51.270 --> 00:11:53.460 align:start position:0%
+ 
+ 
+
+00:11:53.460 --> 00:11:55.860 align:start position:0%
+ 
+ 
+
+00:11:55.860 --> 00:11:57.510 align:start position:0%
+ 
+ 
+
+00:11:57.510 --> 00:11:59.970 align:start position:0%
+ 
+ 
+
+00:11:59.970 --> 00:12:01.730 align:start position:0%
+ 
+ 
+
+00:12:01.730 --> 00:12:05.610 align:start position:0%
+ 
+ 
+
+00:12:05.610 --> 00:12:06.870 align:start position:0%
+ 
+ 
+
+00:12:06.870 --> 00:12:10.800 align:start position:0%
+ 
+ 
+
+00:12:10.800 --> 00:12:15.330 align:start position:0%
+ 
+ 
+
+00:12:15.330 --> 00:12:17.670 align:start position:0%
+ 
+ 
+
+00:12:17.670 --> 00:12:20.730 align:start position:0%
+ 
+ 
+
+00:12:20.730 --> 00:12:22.470 align:start position:0%
+ 
+ 
+
+00:12:22.470 --> 00:12:24.180 align:start position:0%
+ 
+ 
+
+00:12:24.180 --> 00:12:26.460 align:start position:0%
+ 
+ 
+
+00:12:26.460 --> 00:12:27.900 align:start position:0%
+ 
+ 
+
+00:12:27.900 --> 00:12:29.700 align:start position:0%
+ 
+ 
+
+00:12:29.700 --> 00:12:32.370 align:start position:0%
+ 
+ 
+
+00:12:32.370 --> 00:12:33.540 align:start position:0%
+ 
+ 
+
+00:12:33.540 --> 00:12:35.880 align:start position:0%
+ 
+ 
+
+00:12:35.880 --> 00:12:38.760 align:start position:0%
+ 
+ 
+
+00:12:38.760 --> 00:12:41.490 align:start position:0%
+ 
+ 
+
+00:12:41.490 --> 00:12:42.690 align:start position:0%
+ 
+ 
+
+00:12:42.690 --> 00:12:44.340 align:start position:0%
+ 
+ 
+
+00:12:44.340 --> 00:12:46.470 align:start position:0%
+ 
+ 
+
+00:12:46.470 --> 00:12:49.530 align:start position:0%
+ 
+ 
+
+00:12:49.530 --> 00:12:53.370 align:start position:0%
+ 
+ 
+
+00:12:53.370 --> 00:12:55.530 align:start position:0%
+ 
+ 
+
+00:12:55.530 --> 00:12:57.540 align:start position:0%
+ 
+ 
+
+00:12:57.540 --> 00:13:00.230 align:start position:0%
+ 
+ 
+
+00:13:00.230 --> 00:13:03.720 align:start position:0%
+ 
+ 
+
+00:13:03.720 --> 00:13:06.240 align:start position:0%
+ 
+ 
+
+00:13:06.240 --> 00:13:08.520 align:start position:0%
+ 
+ 
+
+00:13:08.520 --> 00:13:11.400 align:start position:0%
+ 
+ 
+
+00:13:11.400 --> 00:13:13.230 align:start position:0%
+ 
+ 
+
+00:13:13.230 --> 00:13:16.200 align:start position:0%
+ 
+ 
+
+00:13:16.200 --> 00:13:18.270 align:start position:0%
+ 
+ 
+
+00:13:18.270 --> 00:13:20.760 align:start position:0%
+ 
+ 
+
+00:13:20.760 --> 00:13:23.070 align:start position:0%
+ 
+ 
+
+00:13:23.070 --> 00:13:25.350 align:start position:0%
+ 
+ 
+
+00:13:25.350 --> 00:13:30.450 align:start position:0%
+ 
+ 
+
+00:13:30.450 --> 00:13:32.370 align:start position:0%
+ 
+ 
+
+00:13:32.370 --> 00:13:34.140 align:start position:0%
+ 
+ 
+
+00:13:34.140 --> 00:13:36.600 align:start position:0%
+ 
+ 
+
+00:13:36.600 --> 00:13:40.110 align:start position:0%
+ 
+ 
+
+00:13:40.110 --> 00:13:41.640 align:start position:0%
+ 
+ 
+
+00:13:41.640 --> 00:13:43.980 align:start position:0%
+ 
+ 
+
+00:13:43.980 --> 00:13:47.160 align:start position:0%
+ 
+ 
+
+00:13:47.160 --> 00:13:49.080 align:start position:0%
+ 
+ 
+
+00:13:49.080 --> 00:13:51.300 align:start position:0%
+ 
+ 
+
+00:13:51.300 --> 00:13:54.630 align:start position:0%
+ 
+ 
+
+00:13:54.630 --> 00:13:56.850 align:start position:0%
+ 
+ 
+
+00:13:56.850 --> 00:13:59.370 align:start position:0%
+ 
+ 
+
+00:13:59.370 --> 00:14:01.650 align:start position:0%
+ 
+ 
+
+00:14:01.650 --> 00:14:04.950 align:start position:0%
+ 
+ 
+
+00:14:04.950 --> 00:14:06.870 align:start position:0%
+ 
+ 
+
+00:14:06.870 --> 00:14:08.550 align:start position:0%
+ 
+ 
+
+00:14:08.550 --> 00:14:10.680 align:start position:0%
+ 
+ 
+
+00:14:10.680 --> 00:14:12.450 align:start position:0%
+ 
+ 
+
+00:14:12.450 --> 00:14:15.060 align:start position:0%
+ 
+ 
+
+00:14:15.060 --> 00:14:16.980 align:start position:0%
+ 
+ 
+
+00:14:16.980 --> 00:14:18.930 align:start position:0%
+ 
+ 
+
+00:14:18.930 --> 00:14:20.700 align:start position:0%
+ 
+ 
+
+00:14:20.700 --> 00:14:21.990 align:start position:0%
+ 
+ 
+
+00:14:21.990 --> 00:14:24.390 align:start position:0%
+ 
+ 
+
+00:14:24.390 --> 00:14:26.460 align:start position:0%
+ 
+ 
+
+00:14:26.460 --> 00:14:28.020 align:start position:0%
+ 
+ 
+
+00:14:28.020 --> 00:14:30.450 align:start position:0%
+ 
+ 
+
+00:14:30.450 --> 00:14:32.250 align:start position:0%
+ 
+ 
+
+00:14:32.250 --> 00:14:34.350 align:start position:0%
+ 
+ 
+
+00:14:34.350 --> 00:14:37.110 align:start position:0%
+ 
+ 
+
+00:14:37.110 --> 00:14:39.330 align:start position:0%
+ 
+ 
+
+00:14:39.330 --> 00:14:43.230 align:start position:0%
+ 
+ 
+
+00:14:43.230 --> 00:14:46.200 align:start position:0%
+ 
+ 
+
+00:14:46.200 --> 00:14:47.940 align:start position:0%
+ 
+ 
+
+00:14:47.940 --> 00:14:50.580 align:start position:0%
+ 
+ 
+
+00:14:50.580 --> 00:14:51.960 align:start position:0%
+ 
+ 
+
+00:14:51.960 --> 00:14:54.390 align:start position:0%
+ 
+ 
+
+00:14:54.390 --> 00:14:58.320 align:start position:0%
+ 
+ 
+
+00:14:58.320 --> 00:15:00.390 align:start position:0%
+ 
+ 
+
+00:15:00.390 --> 00:15:03.240 align:start position:0%
+ 
+ 
+
+00:15:03.240 --> 00:15:04.590 align:start position:0%
+ 
+ 
+
+00:15:04.590 --> 00:15:07.170 align:start position:0%
+ 
+ 
+
+00:15:07.170 --> 00:15:10.590 align:start position:0%
+ 
+ 
+
+00:15:10.590 --> 00:15:12.390 align:start position:0%
+ 
+ 
+
+00:15:12.390 --> 00:15:14.790 align:start position:0%
+ 
+ 
+
+00:15:14.790 --> 00:15:16.530 align:start position:0%
+ 
+ 
+
+00:15:16.530 --> 00:15:20.370 align:start position:0%
+ 
+ 
+
+00:15:20.370 --> 00:15:23.010 align:start position:0%
+ 
+ 
+
+00:15:23.010 --> 00:15:24.590 align:start position:0%
+ 
+ 
+
+00:15:24.590 --> 00:15:27.210 align:start position:0%
+ 
+ 
+
+00:15:27.210 --> 00:15:29.610 align:start position:0%
+ 
+ 
+
+00:15:29.610 --> 00:15:31.250 align:start position:0%
+ 
+ 
+
+00:15:31.250 --> 00:15:33.450 align:start position:0%
+ 
+ 
+
+00:15:33.450 --> 00:15:35.370 align:start position:0%
+ 
+ 
+
+00:15:35.370 --> 00:15:38.610 align:start position:0%
+ 
+ 
+
+00:15:38.610 --> 00:15:40.410 align:start position:0%
+ 
+ 
+
+00:15:40.410 --> 00:15:42.750 align:start position:0%
+ 
+ 
+
+00:15:42.750 --> 00:15:44.260 align:start position:0%
+ 
+ 
+
+00:15:44.260 --> 00:15:46.540 align:start position:0%
+ 
+ 
+
+00:15:46.540 --> 00:15:48.430 align:start position:0%
+ 
+ 
+
+00:15:48.430 --> 00:15:51.250 align:start position:0%
+ 
+ 
+
+00:15:51.250 --> 00:15:52.540 align:start position:0%
+ 
+ 
+
+00:15:52.540 --> 00:15:54.550 align:start position:0%
+ 
+ 
+
+00:15:54.550 --> 00:15:56.740 align:start position:0%
+ 
+ 
+
+00:15:56.740 --> 00:15:59.080 align:start position:0%
+ 
+ 
+
+00:15:59.080 --> 00:16:01.300 align:start position:0%
+ 
+ 
+
+00:16:01.300 --> 00:16:03.010 align:start position:0%
+ 
+ 
+
+00:16:03.010 --> 00:16:06.310 align:start position:0%
+ 
+ 
+
+00:16:06.310 --> 00:16:08.020 align:start position:0%
+ 
+ 
+
+00:16:08.020 --> 00:16:10.270 align:start position:0%
+ 
+ 
+
+00:16:10.270 --> 00:16:12.820 align:start position:0%
+ 
+ 
+
+00:16:12.820 --> 00:16:15.550 align:start position:0%
+ 
+ 
+
+00:16:15.550 --> 00:16:18.240 align:start position:0%
+ 
+ 
+
+00:16:18.240 --> 00:16:20.140 align:start position:0%
+ 
+ 
+
+00:16:20.140 --> 00:16:21.970 align:start position:0%
+ 
+ 
+
+00:16:21.970 --> 00:16:23.920 align:start position:0%
+ 
+ 
+
+00:16:23.920 --> 00:16:26.170 align:start position:0%
+ 
+ 
+
+00:16:26.170 --> 00:16:27.940 align:start position:0%
+ 
+ 
+
+00:16:27.940 --> 00:16:33.400 align:start position:0%
+ 
+ 
+
+00:16:33.400 --> 00:16:35.860 align:start position:0%
+ 
+ 
+
+00:16:35.860 --> 00:16:37.630 align:start position:0%
+ 
+ 
+
+00:16:37.630 --> 00:16:40.990 align:start position:0%
+ 
+ 
+
+00:16:40.990 --> 00:16:43.510 align:start position:0%
+ 
+ 
+
+00:16:43.510 --> 00:16:46.060 align:start position:0%
+ 
+ 
+
+00:16:46.060 --> 00:16:48.490 align:start position:0%
+ 
+ 
+
+00:16:48.490 --> 00:16:49.950 align:start position:0%
+ 
+ 
+
+00:16:49.950 --> 00:16:52.540 align:start position:0%
+ 
+ 
+
+00:16:52.540 --> 00:16:53.050 align:start position:0%
+ 
+ 
+
+00:16:53.050 --> 00:16:54.840 align:start position:0%
+ 
+ 
+
+00:16:54.840 --> 00:16:56.590 align:start position:0%
+ 
+ 
+
+00:16:56.590 --> 00:16:58.630 align:start position:0%
+ 
+ 
+
+00:16:58.630 --> 00:17:00.510 align:start position:0%
+ 
+ 
+
+00:17:00.510 --> 00:17:02.830 align:start position:0%
+ 
+ 
+
+00:17:02.830 --> 00:17:04.990 align:start position:0%
+ 
+ 
+
+00:17:04.990 --> 00:17:07.329 align:start position:0%
+ 
+ 
+
+00:17:07.329 --> 00:17:09.430 align:start position:0%
+ 
+ 
+
+00:17:09.430 --> 00:17:11.500 align:start position:0%
+ 
+ 
+
+00:17:11.500 --> 00:17:16.090 align:start position:0%
+ 
+ 
+
+00:17:16.090 --> 00:17:17.770 align:start position:0%
+ 
+ 
+
+00:17:17.770 --> 00:17:19.780 align:start position:0%
+ 
+ 
+
+00:17:19.780 --> 00:17:21.280 align:start position:0%
+ 
+ 
+
+00:17:21.280 --> 00:17:23.920 align:start position:0%
+ 
+ 
+
+00:17:23.920 --> 00:17:25.960 align:start position:0%
+ 
+ 
+
+00:17:25.960 --> 00:17:28.810 align:start position:0%
+ 
+ 
+
+00:17:28.810 --> 00:17:31.120 align:start position:0%
+ 
+ 
+
+00:17:31.120 --> 00:17:33.100 align:start position:0%
+ 
+ 
+
+00:17:33.100 --> 00:17:35.710 align:start position:0%
+ 
+ 
+
+00:17:35.710 --> 00:17:37.240 align:start position:0%
+ 
+ 
+
+00:17:37.240 --> 00:17:39.010 align:start position:0%
+ 
+ 
+
+00:17:39.010 --> 00:17:41.680 align:start position:0%
+ 
+ 
+
+00:17:41.680 --> 00:17:43.810 align:start position:0%
+ 
+ 
+
+00:17:43.810 --> 00:17:45.820 align:start position:0%
+ 
+ 
+
+00:17:45.820 --> 00:17:47.170 align:start position:0%
+ 
+ 
+
+00:17:47.170 --> 00:17:49.510 align:start position:0%
+ 
+ 
+
+00:17:49.510 --> 00:17:53.080 align:start position:0%
+ 
+ 
+
+00:17:53.080 --> 00:17:55.540 align:start position:0%
+ 
+ 
+
+00:17:55.540 --> 00:17:57.510 align:start position:0%
+ 
+ 
+
+00:17:57.510 --> 00:17:59.370 align:start position:0%
+ 
+ 
+
+00:17:59.370 --> 00:18:01.320 align:start position:0%
+ 
+ 
+
+00:18:01.320 --> 00:18:03.630 align:start position:0%
+ 
+ 
+
+00:18:03.630 --> 00:18:04.650 align:start position:0%
+ 
+ 
+
+00:18:04.650 --> 00:18:06.870 align:start position:0%
+ 
+ 
+
+00:18:06.870 --> 00:18:08.730 align:start position:0%
+ 
+ 
+
+00:18:08.730 --> 00:18:10.380 align:start position:0%
+ 
+ 
+
+00:18:10.380 --> 00:18:13.320 align:start position:0%
+ 
+ 
+
+00:18:13.320 --> 00:18:15.690 align:start position:0%
+ 
+ 
+
+00:18:15.690 --> 00:18:18.000 align:start position:0%
+ 
+ 
+
+00:18:18.000 --> 00:18:20.100 align:start position:0%
+ 
+ 
+
+00:18:20.100 --> 00:18:22.170 align:start position:0%
+ 
+ 
+
+00:18:22.170 --> 00:18:24.210 align:start position:0%
+ 
+ 
+
+00:18:24.210 --> 00:18:25.590 align:start position:0%
+ 
+ 
+
+00:18:25.590 --> 00:18:27.600 align:start position:0%
+ 
+ 
+
+00:18:27.600 --> 00:18:30.840 align:start position:0%
+ 
+ 
+
+00:18:30.840 --> 00:18:32.190 align:start position:0%
+ 
+ 
+
+00:18:32.190 --> 00:18:34.470 align:start position:0%
+ 
+ 
+
+00:18:34.470 --> 00:18:35.940 align:start position:0%
+ 
+ 
+
+00:18:35.940 --> 00:18:38.160 align:start position:0%
+ 
+ 
+
+00:18:38.160 --> 00:18:39.840 align:start position:0%
+ 
+ 
+
+00:18:39.840 --> 00:18:43.020 align:start position:0%
+ 
+ 
+
+00:18:43.020 --> 00:18:44.550 align:start position:0%
+ 
+ 
+
+00:18:44.550 --> 00:18:46.740 align:start position:0%
+ 
+ 
+
+00:18:46.740 --> 00:18:48.600 align:start position:0%
+ 
+ 
+
+00:18:48.600 --> 00:18:51.210 align:start position:0%
+ 
+ 
+
+00:18:51.210 --> 00:18:55.290 align:start position:0%
+ 
+ 
+
+00:18:55.290 --> 00:18:58.020 align:start position:0%
+ 
+ 
+
+00:18:58.020 --> 00:19:00.240 align:start position:0%
+ 
+ 
+
+00:19:00.240 --> 00:19:02.430 align:start position:0%
+ 
+ 
+
+00:19:02.430 --> 00:19:03.900 align:start position:0%
+ 
+ 
+
+00:19:03.900 --> 00:19:06.060 align:start position:0%
+ 
+ 
+
+00:19:06.060 --> 00:19:08.730 align:start position:0%
+ 
+ 
+
+00:19:08.730 --> 00:19:11.520 align:start position:0%
+ 
+ 
+
+00:19:11.520 --> 00:19:13.860 align:start position:0%
+ 
+ 
+
+00:19:13.860 --> 00:19:16.290 align:start position:0%
+ 
+ 
+
+00:19:16.290 --> 00:19:18.210 align:start position:0%
+ 
+ 
+
+00:19:18.210 --> 00:19:21.480 align:start position:0%
+ 
+ 
+
+00:19:21.480 --> 00:19:23.580 align:start position:0%
+ 
+ 
+
+00:19:23.580 --> 00:19:27.300 align:start position:0%
+ 
+ 
+
+00:19:27.300 --> 00:19:29.580 align:start position:0%
+ 
+ 
+
+00:19:29.580 --> 00:19:31.740 align:start position:0%
+ 
+ 
+
+00:19:31.740 --> 00:19:34.740 align:start position:0%
+ 
+ 
+
+00:19:34.740 --> 00:19:36.270 align:start position:0%
+ 
+ 
+
+00:19:36.270 --> 00:19:37.890 align:start position:0%
+ 
+ 
+
+00:19:37.890 --> 00:19:40.110 align:start position:0%
+ 
+ 
+
+00:19:40.110 --> 00:19:43.470 align:start position:0%
+ 
+ 
+
+00:19:43.470 --> 00:19:45.090 align:start position:0%
+ 
+ 
+
+00:19:45.090 --> 00:19:49.020 align:start position:0%
+ 
+ 
+
+00:19:49.020 --> 00:19:50.970 align:start position:0%
+ 
+ 
+
+00:19:50.970 --> 00:19:54.570 align:start position:0%
+ 
+ 
+
+00:19:54.570 --> 00:19:56.040 align:start position:0%
+ 
+ 
+
+00:19:56.040 --> 00:19:57.780 align:start position:0%
+ 
+ 
+
+00:19:57.780 --> 00:19:59.400 align:start position:0%
+ 
+ 
+
+00:19:59.400 --> 00:20:03.540 align:start position:0%
+ 
+ 
+
+00:20:03.540 --> 00:20:05.940 align:start position:0%
+ 
+ 
+
+00:20:05.940 --> 00:20:07.740 align:start position:0%
+ 
+ 
+
+00:20:07.740 --> 00:20:10.050 align:start position:0%
+ 
+ 
+
+00:20:10.050 --> 00:20:11.370 align:start position:0%
+ 
+ 
+
+00:20:11.370 --> 00:20:13.080 align:start position:0%
+ 
+ 
+
+00:20:13.080 --> 00:20:16.200 align:start position:0%
+ 
+ 
+
+00:20:16.200 --> 00:20:17.700 align:start position:0%
+ 
+ 
+
+00:20:17.700 --> 00:20:21.060 align:start position:0%
+ 
+ 
+
+00:20:21.060 --> 00:20:22.920 align:start position:0%
+ 
+ 
+
+00:20:22.920 --> 00:20:25.320 align:start position:0%
+ 
+ 
+
+00:20:25.320 --> 00:20:27.480 align:start position:0%
+ 
+ 
+
+00:20:27.480 --> 00:20:28.950 align:start position:0%
+ 
+ 
+
+00:20:28.950 --> 00:20:30.210 align:start position:0%
+ 
+ 
+
+00:20:30.210 --> 00:20:32.730 align:start position:0%
+ 
+ 
+
+00:20:32.730 --> 00:20:34.800 align:start position:0%
+ 
+ 
+
+00:20:34.800 --> 00:20:38.120 align:start position:0%
+ 
+ 
+
+00:20:38.120 --> 00:20:41.760 align:start position:0%
+ 
+ 
+
+00:20:41.760 --> 00:20:43.320 align:start position:0%
+ 
+ 
+
+00:20:43.320 --> 00:20:46.200 align:start position:0%
+ 
+ 
+
+00:20:46.200 --> 00:20:49.620 align:start position:0%
+ 
+ 
+
+00:20:49.620 --> 00:20:51.750 align:start position:0%
+ 
+ 
+
+00:20:51.750 --> 00:20:56.250 align:start position:0%
+ 
+ 
+
+00:20:56.250 --> 00:20:57.570 align:start position:0%
+ 
+ 
+
+00:20:57.570 --> 00:20:59.370 align:start position:0%
+ 
+ 
+
+00:20:59.370 --> 00:21:01.350 align:start position:0%
+ 
+ 
+
+00:21:01.350 --> 00:21:03.000 align:start position:0%
+ 
+ 
+
+00:21:03.000 --> 00:21:04.590 align:start position:0%
+ 
+ 
+
+00:21:04.590 --> 00:21:05.940 align:start position:0%
+ 
+ 
+
+00:21:05.940 --> 00:21:09.180 align:start position:0%
+ 
+ 
+
+00:21:09.180 --> 00:21:10.890 align:start position:0%
+ 
+ 
+
+00:21:10.890 --> 00:21:14.940 align:start position:0%
+ 
+ 
+
+00:21:14.940 --> 00:21:17.760 align:start position:0%
+ 
+ 
+
+00:21:17.760 --> 00:21:19.230 align:start position:0%
+ 
+ 
+
+00:21:19.230 --> 00:21:23.010 align:start position:0%
+ 
+ 
+
+00:21:23.010 --> 00:21:24.660 align:start position:0%
+ 
+ 
+
+00:21:24.660 --> 00:21:27.870 align:start position:0%
+ 
+ 
+
+00:21:27.870 --> 00:21:29.670 align:start position:0%
+ 
+ 
+
+00:21:29.670 --> 00:21:31.740 align:start position:0%
+ 
+ 
+
+00:21:31.740 --> 00:21:34.110 align:start position:0%
+ 
+ 
+
+00:21:34.110 --> 00:21:37.590 align:start position:0%
+ 
+ 
+
+00:21:37.590 --> 00:21:39.270 align:start position:0%
+ 
+ 
+
+00:21:39.270 --> 00:21:40.980 align:start position:0%
+ 
+ 
+
+00:21:40.980 --> 00:21:42.510 align:start position:0%
+ 
+ 
+
+00:21:42.510 --> 00:21:44.610 align:start position:0%
+ 
+ 
+
+00:21:44.610 --> 00:21:47.970 align:start position:0%
+ 
+ 
+
+00:21:47.970 --> 00:21:50.490 align:start position:0%
+ 
+ 
+
+00:21:50.490 --> 00:21:53.670 align:start position:0%
+ 
+ 
+
+00:21:53.670 --> 00:21:55.650 align:start position:0%
+ 
+ 
+
+00:21:55.650 --> 00:21:58.080 align:start position:0%
+ 
+ 
+
+00:21:58.080 --> 00:21:59.250 align:start position:0%
+ 
+ 
+
+00:21:59.250 --> 00:22:01.860 align:start position:0%
+ 
+ 
+
+00:22:01.860 --> 00:22:04.530 align:start position:0%
+ 
+ 
+
+00:22:04.530 --> 00:22:06.000 align:start position:0%
+ 
+ 
+
+00:22:06.000 --> 00:22:07.500 align:start position:0%
+ 
+ 
+
+00:22:07.500 --> 00:22:08.970 align:start position:0%
+ 
+ 
+
+00:22:08.970 --> 00:22:11.520 align:start position:0%
+ 
+ 
+
+00:22:11.520 --> 00:22:13.830 align:start position:0%
+ 
+ 
+
+00:22:13.830 --> 00:22:16.140 align:start position:0%
+ 
+ 
+
+00:22:16.140 --> 00:22:18.180 align:start position:0%
+ 
+ 
+
+00:22:18.180 --> 00:22:20.340 align:start position:0%
+ 
+ 
+
+00:22:20.340 --> 00:22:24.090 align:start position:0%
+ 
+ 
+
+00:22:24.090 --> 00:22:25.350 align:start position:0%
+ 
+ 
+
+00:22:25.350 --> 00:22:27.090 align:start position:0%
+ 
+ 
+
+00:22:27.090 --> 00:22:28.920 align:start position:0%
+ 
+ 
+
+00:22:28.920 --> 00:22:30.810 align:start position:0%
+ 
+ 
+
+00:22:30.810 --> 00:22:32.780 align:start position:0%
+ 
+ 
+
+00:22:32.780 --> 00:22:37.820 align:start position:0%
+ 
+ 
+
+00:22:37.820 --> 00:22:40.080 align:start position:0%
+ 
+ 
+
+00:22:40.080 --> 00:22:42.180 align:start position:0%
+ 
+ 
+
+00:22:42.180 --> 00:22:44.340 align:start position:0%
+ 
+ 
+
+00:22:44.340 --> 00:22:46.380 align:start position:0%
+ 
+ 
+
+00:22:46.380 --> 00:22:48.180 align:start position:0%
+ 
+ 
+
+00:22:48.180 --> 00:22:50.180 align:start position:0%
+ 
+ 
+
+00:22:50.180 --> 00:22:52.860 align:start position:0%
+ 
+ 
+
+00:22:52.860 --> 00:22:54.930 align:start position:0%
+ 
+ 
+
+00:22:54.930 --> 00:22:56.790 align:start position:0%
+ 
+ 
+
+00:22:56.790 --> 00:22:59.160 align:start position:0%
+ 
+ 
+
+00:22:59.160 --> 00:23:02.550 align:start position:0%
+ 
+ 
+
+00:23:02.550 --> 00:23:06.300 align:start position:0%
+ 
+ 
+
+00:23:06.300 --> 00:23:09.930 align:start position:0%
+ 
+ 
+
+00:23:09.930 --> 00:23:11.730 align:start position:0%
+ 
+ 
+
+00:23:11.730 --> 00:23:13.680 align:start position:0%
+ 
+ 
+
+00:23:13.680 --> 00:23:17.310 align:start position:0%
+ 
+ 
+
+00:23:17.310 --> 00:23:19.320 align:start position:0%
+ 
+ 
+
+00:23:19.320 --> 00:23:21.000 align:start position:0%
+ 
+ 
+
+00:23:21.000 --> 00:23:23.100 align:start position:0%
+ 
+ 
+
+00:23:23.100 --> 00:23:25.050 align:start position:0%
+ 
+ 
+
+00:23:25.050 --> 00:23:28.140 align:start position:0%
+ 
+ 
+
+00:23:28.140 --> 00:23:30.690 align:start position:0%
+ 
+ 
+
+00:23:30.690 --> 00:23:32.820 align:start position:0%
+ 
+ 
+
+00:23:32.820 --> 00:23:34.410 align:start position:0%
+ 
+ 
+
+00:23:34.410 --> 00:23:36.570 align:start position:0%
+ 
+ 
+
+00:23:36.570 --> 00:23:38.100 align:start position:0%
+ 
+ 
+
+00:23:38.100 --> 00:23:39.660 align:start position:0%
+ 
+ 
+
+00:23:39.660 --> 00:23:41.400 align:start position:0%
+ 
+ 
+
+00:23:41.400 --> 00:23:45.000 align:start position:0%
+ 
+ 
+
+00:23:45.000 --> 00:23:46.260 align:start position:0%
+ 
+ 
+
+00:23:46.260 --> 00:23:48.900 align:start position:0%
+ 
+ 
+
+00:23:48.900 --> 00:23:50.970 align:start position:0%
+ 
+ 
+
+00:23:50.970 --> 00:23:53.130 align:start position:0%
+ 
+ 
+
+00:23:53.130 --> 00:23:54.900 align:start position:0%
+ 
+ 
+
+00:23:54.900 --> 00:23:56.790 align:start position:0%
+ 
+ 
+
+00:23:56.790 --> 00:23:59.070 align:start position:0%
+ 
+ 
+
+00:23:59.070 --> 00:24:01.440 align:start position:0%
+ 
+ 
+
+00:24:01.440 --> 00:24:02.550 align:start position:0%
+ 
+ 
+
+00:24:02.550 --> 00:24:04.440 align:start position:0%
+ 
+ 
+
+00:24:04.440 --> 00:24:06.150 align:start position:0%
+ 
+ 
+
+00:24:06.150 --> 00:24:08.460 align:start position:0%
+ 
+ 
+
+00:24:08.460 --> 00:24:12.030 align:start position:0%
+ 
+ 
+
+00:24:12.030 --> 00:24:14.100 align:start position:0%
+ 
+ 
+
+00:24:14.100 --> 00:24:16.350 align:start position:0%
+ 
+ 
+
+00:24:16.350 --> 00:24:17.640 align:start position:0%
+ 
+ 
+
+00:24:17.640 --> 00:24:20.430 align:start position:0%
+ 
+ 
+
+00:24:20.430 --> 00:24:22.260 align:start position:0%
+ 
+ 
+
+00:24:22.260 --> 00:24:25.500 align:start position:0%
+ 
+ 
+
+00:24:25.500 --> 00:24:28.950 align:start position:0%
+ 
+ 
+
+00:24:28.950 --> 00:24:30.330 align:start position:0%
+ 
+ 
+
+00:24:30.330 --> 00:24:32.220 align:start position:0%
+ 
+ 
+
+00:24:32.220 --> 00:24:35.730 align:start position:0%
+ 
+ 
+
+00:24:35.730 --> 00:24:38.040 align:start position:0%
+ 
+ 
+
+00:24:38.040 --> 00:24:39.070 align:start position:0%
+ 
+ 
+
+00:24:39.070 --> 00:24:40.870 align:start position:0%
+ 
+ 
+
+00:24:40.870 --> 00:24:42.250 align:start position:0%
+ 
+ 
+
+00:24:42.250 --> 00:24:43.870 align:start position:0%
+ 
+ 
+
+00:24:43.870 --> 00:24:46.360 align:start position:0%
+ 
+ 
+
+00:24:46.360 --> 00:24:48.250 align:start position:0%
+ 
+ 
+
+00:24:48.250 --> 00:24:51.009 align:start position:0%
+ 
+ 
+
+00:24:51.009 --> 00:24:53.259 align:start position:0%
+ 
+ 
+
+00:24:53.259 --> 00:24:55.870 align:start position:0%
+ 
+ 
+
+00:24:55.870 --> 00:24:58.899 align:start position:0%
+ 
+ 
+
+00:24:58.899 --> 00:25:00.610 align:start position:0%
+ 
+ 
+
+00:25:00.610 --> 00:25:02.200 align:start position:0%
+ 
+ 
+
+00:25:02.200 --> 00:25:04.779 align:start position:0%
+ 
+ 
+
+00:25:04.779 --> 00:25:06.880 align:start position:0%
+ 
+ 
+
+00:25:06.880 --> 00:25:08.710 align:start position:0%
+ 
+ 
+
+00:25:08.710 --> 00:25:10.419 align:start position:0%
+ 
+ 
+
+00:25:10.419 --> 00:25:12.820 align:start position:0%
+ 
+ 
+
+00:25:12.820 --> 00:25:14.769 align:start position:0%
+ 
+ 
+
+00:25:14.769 --> 00:25:16.870 align:start position:0%
+ 
+ 
+
+00:25:16.870 --> 00:25:18.850 align:start position:0%
+ 
+ 
+
+00:25:18.850 --> 00:25:21.190 align:start position:0%
+ 
+ 
+
+00:25:21.190 --> 00:25:23.590 align:start position:0%
+ 
+ 
+
+00:25:23.590 --> 00:25:26.259 align:start position:0%
+ 
+ 
+
+00:25:26.259 --> 00:25:27.850 align:start position:0%
+ 
+ 
+
+00:25:27.850 --> 00:25:30.190 align:start position:0%
+ 
+ 
+
+00:25:30.190 --> 00:25:31.810 align:start position:0%
+ 
+ 
+
+00:25:31.810 --> 00:25:33.330 align:start position:0%
+ 
+ 
+
+00:25:33.330 --> 00:25:35.230 align:start position:0%
+ 
+ 
+
+00:25:35.230 --> 00:25:37.419 align:start position:0%
+ 
+ 
+
+00:25:37.419 --> 00:25:40.330 align:start position:0%
+ 
+ 
+
+00:25:40.330 --> 00:25:42.220 align:start position:0%
+ 
+ 
+
+00:25:42.220 --> 00:25:45.909 align:start position:0%
+ 
+ 
+
+00:25:45.909 --> 00:25:47.500 align:start position:0%
+ 
+ 
+
+00:25:47.500 --> 00:25:49.889 align:start position:0%
+ 
+ 
+
+00:25:49.889 --> 00:25:52.120 align:start position:0%
+ 
+ 
+
+00:25:52.120 --> 00:25:55.360 align:start position:0%
+ 
+ 
+
+00:25:55.360 --> 00:25:57.220 align:start position:0%
+ 
+ 
+
+00:25:57.220 --> 00:25:59.350 align:start position:0%
+ 
+ 
+
+00:25:59.350 --> 00:26:01.330 align:start position:0%
+ 
+ 
+
+00:26:01.330 --> 00:26:02.889 align:start position:0%
+ 
+ 
+
+00:26:02.889 --> 00:26:05.259 align:start position:0%
+ 
+ 
+
+00:26:05.259 --> 00:26:08.139 align:start position:0%
+ 
+ 
+
+00:26:08.139 --> 00:26:10.539 align:start position:0%
+ 
+ 
+
+00:26:10.539 --> 00:26:13.600 align:start position:0%
+ 
+ 
+
+00:26:13.600 --> 00:26:16.539 align:start position:0%
+ 
+ 
+
+00:26:16.539 --> 00:26:18.970 align:start position:0%
+ 
+ 
+
+00:26:18.970 --> 00:26:20.799 align:start position:0%
+ 
+ 
+
+00:26:20.799 --> 00:26:23.590 align:start position:0%
+ 
+ 
+
+00:26:23.590 --> 00:26:25.930 align:start position:0%
+ 
+ 
+
+00:26:25.930 --> 00:26:28.750 align:start position:0%
+ 
+ 
+
+00:26:28.750 --> 00:26:32.620 align:start position:0%
+ 
+ 
+
+00:26:32.620 --> 00:26:34.180 align:start position:0%
+ 
+ 
+
+00:26:34.180 --> 00:26:37.120 align:start position:0%
+ 
+ 
+
+00:26:37.120 --> 00:26:39.250 align:start position:0%
+ 
+ 
+
+00:26:39.250 --> 00:26:41.529 align:start position:0%
+ 
+ 
+
+00:26:41.529 --> 00:26:43.629 align:start position:0%
+ 
+ 
+
+00:26:43.629 --> 00:26:46.000 align:start position:0%
+ 
+ 
+
+00:26:46.000 --> 00:26:48.970 align:start position:0%
+ 
+ 
+
+00:26:48.970 --> 00:26:50.830 align:start position:0%
+ 
+ 
+
+00:26:50.830 --> 00:26:51.980 align:start position:0%
+ 
+ 
+
+00:26:51.980 --> 00:26:53.450 align:start position:0%
+ 
+ 
+
+00:26:53.450 --> 00:26:57.410 align:start position:0%
+ 
+ 
+
+00:26:57.410 --> 00:26:59.000 align:start position:0%
+ 
+ 
+
+00:26:59.000 --> 00:27:01.250 align:start position:0%
+ 
+ 
+
+00:27:01.250 --> 00:27:02.810 align:start position:0%
+ 
+ 
+
+00:27:02.810 --> 00:27:05.690 align:start position:0%
+ 
+ 
+
+00:27:05.690 --> 00:27:07.780 align:start position:0%
+ 
+ 
+
+00:27:07.780 --> 00:27:09.690 align:start position:0%
+ 
+ 
+
+00:27:09.690 --> 00:27:09.700 align:start position:0%
+ 
+ 
+
+00:27:09.700 --> 00:27:22.710 align:start position:0%
+ 
+
+
+00:27:22.710 --> 00:27:22.720 align:start position:0%
+ 
+ 
+
+00:27:22.720 --> 00:27:24.780 align:start position:0%
+ 
+
+

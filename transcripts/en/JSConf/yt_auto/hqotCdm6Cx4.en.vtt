@@ -1,0 +1,3840 @@
+WEBVTT
+Kind: captions
+Language: en
+
+00:00:29.039 --> 00:00:30.230 align:start position:0%
+ 
+primarily in um  and we're looking at performance all the  way from the client none of the server  just kind of optimizing as much of it as  we can  yeah i'm john mccutchan and i work in  the dark vmt  focusing on performance so i'm really  just here for the currywurst  all right so we're going to do a trip  down  memory lane and talk about uh managing  memory  at female scale  so you know my gmail attachment gig of  ram you've got like 24  mags on your machine actually i just got  64.  so you've got 64 gigs on your machine  what's the problem well my grandmother's  program is for  well that's a few problems she might  need a new computer  um or you know we can fix this problem  so um you know when it comes down to the  age-old performance versus memory  trade-offs  nine times out of ten developers will  achieve performance because really what  you want to do is give yourself  or your users the best experience  possible and you know having a nice fast  responsive ad is really what you're  after so you know  using a little bit of memory when we  think that we have modern machines with  lots and lots of memory  it's easy so just to be clear you're  saying that  you know the assumption is that you can  use as much memory as you want and  performance is just gonna get better  because you can cache a little bit  that's the typical thinking exactly  but um  though we didn't know you know how often  this is happening we have a lot of users  we didn't know what percentage of users  were experiencing memory problems  but we had a lot of analysis from our  friends and family  and then we kind of started explaining  around a little bit we tried to see like  if we do common actions compose  messages read messages delete stuff you  know  how common is it for memory to grow  right performance deductions and is it  doing  growing uncontrollably um so we started  to look at some tools as well we were  using the chrome dev tools but really  they didn't never  were intended to scale to applications  that were as big as gmail gmail has  become  quite large over the years and so you  know we'd start using it and  the devtools would crash so this is a  problem yeah  and you know it turns out that this is  not just gmail's problem or any other  large web apps problem because really  chrome  will put multiple tabs in the same  process so if one  tab crashes and runs out of memory then  all of the tabs that are in that process  will  will crash as well so even like smaller  web apps that you know are just static  pages of text could be sharing a render  process with chrome  with gmail and they could all crash so  this is a problem that you know we  wanted to fix  on behalf of all web apps yeah  all right but so before we can really  dig into chrome dev tools  and uh get to the bottom of this problem  let's go back to basics  and um talk about how  memory management is uh done behind the  scenes for you in javascript  so we'll talk about some core concepts  like how are values like variables  properties all the things that are like  alive that you interact with  functions everything in javascript how  are they organized in memory  try and come up with the definition of  garbage and then define what a leak is  in a javascript application  so everything in javascript uh is  organized in the value graph  and so you start the value graph at some  root node this is like you can think of  it like document or window  these are things that will never go away  while your page is loaded in the  in the browser aside from the root note  there's also object nodes and this is  just a standard javascript object  um and what makes it distinct from  scalar nodes is that it can actually  reference other values in the graph  scalar nodes are bools numbers things  like that those are always the  end of the end of the value graph  so all values have a retaining path and  this is a very fundamental concept when  it comes to managing memory effectively  in javascript so we look at the green  node here it has two retaining paths  actually  it has the retaining path that starts at  the root note and traverses along that  edge  and the second retaining path starts the  root note and traverses along those two  edges  so if you wanted to free the green node  you would have to cut  both of these retaining paths they would  have to be removed from the graph  otherwise it's going to remain  in memory so let's say we wanted to  remove the red node from the graph  we could start and cut that edge at that  point the red node along with the green  nodes  their garbage they'll be collected  return back to the system you could also  cut this edge or this edge  any of these edges are going to remove  the red node from the graph and as a  javascript application developer you  need to be aware of  you know the retaining paths to these  objects when you're trying to clean it  up  so this is what garbage is garbage is a  value that cannot be reached from the  root note  so if we look at here you can see that  there's these red and green notes here  which the red node is still referencing  the green node they're garbage there's  no way to start at the root node  and find some retaining path that gets  you to these two guys  so garbage collection is like in a very  simple way it's just  finding everything that's still alive  not you're not finding what's dead  you're finding what's still alive what's  still in the graph  and then returning the memory used by  the dead objects back to the system  so in this case these two guys are dead  and we can  you know they'll be returned back after  a garbage collection cycle  so similar to a retained retaining path  there's also retaining size and this is  how much memory you're going to give  back to the system  if you were to cut this value out of the  graph so the yellow node  the yellow node's retain size is the  size of itself plus the size of all of  its descendants that would become  garbage  if the yellow node was pulled out in  this case the l on the green  and we can pull back and we can say that  this new yellow nodes retain size is the  sum of these other  two other nodes and if you pull all the  way back to the root node which you can  never free you can never remove from the  graph  its retain size is everything in your  page  so now that we kind of understand the  very basic  operation of garbage garbage collection  let's look at leaks  so a leak in javascript is just you've  made an error and you've actually left a  retaining path  somewhere in your application maybe  through the dom or through an event  callback or something like that  where you expect some object to have no  more references and be returned to the  system  but it doesn't it's a programmer error  always  so let's look at a really simplistic  version of gmail where we have email and  we're going to make a  div element and put the message inside  the div element  and then we're going to add that div  element to a display list of things that  we're showing on the page  very simplistic but it gets the point  across  so this is a subsection of the value  graph here we have the email  object and it message it references  message and then  message has a special type of native  reference to the dom notes which are  managed independently from javascript  objects  and then we see we have our display and  it has a list of  dom nodes which are being displayed on  the page so sometime later you're done  and you want to clear the display list  and you  you know you remove all the children  from the display but  you've accidentally left that div node  referenced inside your message and the  message is going to be cached  by gmail because we want to cache all  these messages for as long as possible  so we don't have to make network  requests and this kind of behavior you  know on the scale of gmail you leave it  open for a few weeks  suddenly these tiny little leaks start  accumulating and  he's dead  so the basics of javascript memory  management is just everything's inside  of a graph  there's retaining paths and these are  the paths that are holding the values  keeping them alive without a retained  path the value becomes garbage and gets  its retained size is freed back to the  system  so with that out of the way let's talk  about how v8  actually manages your memory so let's  get a little bit more specific a little  bit more low level  and try and help you understand what's  going on when your page gets  interrupted for a garbage collection  so in understanding memory you should  understand where the cost is in  allocating memory and it's not in  actually constructing the object that's  not the expensive part  the expensive part is the collection  phase and we'll see why  momentarily so every time you call new  or do an implicit memory allocation with  like a  an array literal or an object literal  those are actually allocating memory  even though you don't see the keyword  new you're actually  reserving memory from the heap and this  is really cheap  until the memory pool that you're  allocating from is exhausted  at which point the page is paused so  that means your script is just hung  nothing is happening no rendering is  occurring and a garbage collection is  forced because we need to return some  memory back to the system so that it can  satisfy the new request  and this can take milliseconds i know  milliseconds might seem like not very  much but if you think about a frame of  your page and you want something that's  very animation heavy and smooth  you've only got 16 milliseconds if you  have five of them devoted to gc  the user is going to see like some frame  hiccup or something like that so you  have to be careful about  kind of the patterns in which you  allocate memory and  uh try and relate that back to like how  interactive and how the feel of the  application should be  and you know just intuitively every  allocation that you do  brings you closer to this pause there's  no going back every time you take a step  forward  you're getting closer and closer to that  wall where you have to just wait  and then be pulled back and you know  your application can resume  so v8 manages memory in a generational  way and this is a  common uh garbage collection technique  so values are split between young  and old and over time young values are  promoted or tenured up to old values  and so you can this is very like  intuitive like you can just understand  this  simply like young values are things that  you just allocated like a temporary  variable inside the functions is  executing that's a young value  something that you've kept around for  maybe a few minutes  that's going to get moved into the old  heap and that's managed  differently so the  characteristics of a young generation  heap is that  the allocation is really fast collection  is fast because it's small and it's kind  of kept contained  and it's frequently collected when you  use the chrome devtools timeline tool  and you see a gc event nine times out of  ten that's going to be a young space  collection  and you can see here that this  collection took a fraction of a  millisecond  and it freed up about two megs of memory  in contrast the old generation still has  pretty fast allocation  all things being relative but the  collection is much much slower  luckily the collection of old space  happens  very infrequently sometimes never on a  page i mean your page would have to be  around for a while before the whole  space is collected  and parts of the old space collection  actually run concurrently with the  mutator and the mutator is your script  that's your page  so some parts of old space collection  occur while your page is executing  whereas young space is always like an  interruption your page is stopped  frames are dropping everything is just  the user experience is terrible  so why is collecting the young  generation so much faster it really  comes down to a simple metric and that's  the  death rate young objects  are by their very nature very it's very  improbable for them to live a long time  because most of the time  you're just doing some simple  computation on a number and there's an  allocation and then you throw the  reference away and it's out of the graph  almost immediately so it's not going to  stick around and on  average the death rate is about 80  percent was in contrast  old space most things that make it to  old space  have lived for a long time and unless  your application is like completely  doing something  different chances are they're going to  survive an old space collection  so considering that what's going to  cause jank on your page is a young space  collection well let's actually walk  through what's going on when you  allocate memory and then when a  collection occurs  so you can kind of understand when  you're writing your page  how to try and avoid this so the young  generation in v8 is split into two  equally sized halves the two space and  the from space  and when you call new or do an implicit  allocation memory is being reserved from  the tooth space  later on we'll see that during gc the  front space is used and we'll see this  in a moment  assuming your two space is empty it's  all unallocated your page is coming  along and you allocate object a  and then b c and d and everything's  great it's really fast no interruption  the allocation is basically free  it's awesome and then oh you try and  allocate e  and you you don't have enough memory in  size inside the two space to satisfy  this so what happens is your pages  it's kind of backed up e never is  allocated your script is just waiting  there  ready to resume after the gc occurs  so what happens is from and two space  are just swapped  so two space is now empty again and from  space has  all of the objects which you previously  allocated  and then the live values are found again  you don't find dead values you find the  live values  and so b and d in this case are now  they're dead we can return the memory  back to the system and what happens is  basically a and c are allocated again  and they're copied  into the new to space and this copy is  actually where  almost all of the time in a gc is spent  because copying implies i o and that's  that's just expensive relative to cpu  computation these days  so what happens is a and c get copied  there and from space gets cleared  it's free you're just you know you don't  care what's inside that memory anymore  and you can just pretend that it's empty  um and then you can allocate object d  and your page is resumed  so this in a nutshell is what happens  during gc pause when you're looking at  the timeline event you see your page was  paused for two milliseconds  this just occurred and of course we're  looking at a very small scale on the  slides but in something like gmail  i mean there's maybe hundreds of  thousands of objects that have to be  walked and copied that survive  and you know and then there's also the  tenure where you get copied from young  space to old space  so intuitively you have to understand  that each allocation moves you closer  there is no going back  every time you allocate something you're  inching your page closer to that pause  um and you know collection collections  pause your application  it leads to jank users just think like  oh this page is kind of like low quality  maybe they don't want to come back so  you want to minimize this as much as  possible  all right so now we're going to talk a  little bit about tools and techniques  you've got the background down so let's  talk about  what we actually did in gmail so first i  said we were starting out from nothing  we didn't know how  common this problem was so we wanted to  collect some measurements from our users  so to do this we used the window  performance memory  api and we collected this returns three  values  returns the js heap size limit which is  the maximum amount of memory that can be  allocated  um before the he's dead gym and then the  total js heap size which is the total  amount of memory that has been allocated  so far  including the free space and then the  used js heap size which is actually the  amount of  live memory being allocated so is the  total  like that's the high water mark that's  the high water mark yeah including free  space  and then the closer the total gets to  the limit the closer you are to that  use dead gym right so um so what we did  was we collected this data every 30  minutes for gmail users  um and then we aggregated it and then we  could actually see like  how does our average user compare to  like our power users right so we could  see the difference between  you know say um people who are very  active on their email leave it open for  a very long time  get hundreds of messages a day versus  like the people who  log in every once in a while to have one  message a week and you know aren't using  it quite as much  so we could see the difference between  there  and then once we had this data we follow  we took a user  and we followed that person for three  days we kind of watched what happened to  both their memory  and their latency and we saw that over  time as that heap grew  their latencies increased as well and so  this fits with the idea that  like the heaps getting bigger there's  more gcs more things are surviving  right so like every message click to  open a message was taking longer than it  did when you had the smaller heap  so that was really interesting for us  because it turned out that more memory  doesn't always equal better performance  so now we knew that we had a problem but  we needed to figure out how to fix it so  for that we turned to the chrome dev  tools  so the first thing we like to do is to  use the the memory timeline  and using the memory timeline you can  perform a set of actions and watch in  real time  so this graph in particular shows the  number of dom nodes that are allocated  and we know that the number of dom nodes  corresponds directly to  how much memory is being used by the  page so as we performed a bunch of  actions we could see the number of  dominoes grow  growing and then we can force the  garbage collection and you expect to see  that  number drop right and if you pick an  action that you expect  not to result in that increase in memory  then you should expect to see that  the number of dom nodes drop down to  your baseline so we found that  if we do this particular action a bunch  of times and then  collect garbage and it didn't reach the  baseline turns out we have a leak  but now what so for this we turn to the  object tracker and this is live as of  chrome 29  and this will actually allow you to  perform actions in your in your app  and live see a live tracker of  allocated objects so it'll take heap  snapshots periodically as you're  performing these actions  and then you can see the deltas between  each periodic heap snapshot  and be able to figure out what new  objects are in the heap at any given  time  so up here at the top of the object  tracker there's color-coded bars  the blue will indicate live objects and  the gray will  indicate objects that were allocated and  are no longer live  and so you'll actually see over time  blue bars go gray  right right as they're collected they'll  turn gray  and then at the top you can kind of  expand or make your windows smaller to  see  exactly the difference in at a  particular period in time  and then down below is the regular heat  profile contents and  this is you know the heat profiler  that's been in devtools for quite a long  time  but here you can see exactly the  contents of whatever window you happen  to be looking at  so i think um it's probably better done  with a demo  so i we wrote you know a very simple  mail  like app um just like gmail we cache  messages for better performance so we  really want to not have that network  request right when you hit a message to  open it so we want to cache it  in the browser and make sure that when  you click on it it just has to display  it  so in this particular example we have a  cache size of five messages so this  means that we should never have more  than five messages  resident in memory at any given time so  let's check it out  all right  all right so let's bring up the dev  tools  all right so first here we'll start with  the timeline let's  get this up here a little bit so you  guys can see it and we'll make sure the  dom node count is being displayed and  we'll turn off the others so we don't  have quite as much noise so we'll start  it  let's grow through these messages  and collect some garbage  keep going  collect some more just to make sure and  then we'll go ahead and stop it  so we can widen this window  see exactly what happened did i miss the  collection  okay let's like restart this we see that  you know it's it's going up with each  time i click  the amount of number of dom nodes uh  let's go  click this guy did we get it one more  time okay  so we see at the top there's a running  timeline in the blue line and that  can show you um overall what's happening  and then we'll click this again and  let's go ahead and stop this  okay so if we widen this window we can  see the whole timeline here  we see a little drop when we collected  garbage but it didn't drop all the way  to the baseline and this is something  that we expect we expect it  once the cache is full we expect it to  drop back to the baseline with every  five messages  and it didn't look like it did that so  from now let's move over to  the object tracker profiler and we're  gonna go ahead and refresh this tab  so we'll start with a clean slate you  really want to do this in an incognito  window as well so that you don't have  any extensions that you may have  installed in your browser affecting your  performance in your memory  yeah actually so if you have an  extension loaded and we all do  that all the objects that the extension  creates will show up inside the heap  profile  right so incognito tab is always  recommended yep  keep things clean so we've refreshed  we're starting with a clean slate so  we're going to  go ahead and start recording  and let's scroll through these messages  again  and as you see i'm clicking to the next  message these messages are being loaded  and they're blue they're live and then  let's go back down  you see some of these are turning gray  they're no longer in the cache  so let's stop it and  as i told you the message cache is five  and  it looks like i have more than five blue  bars or blue bars here right so we have  more than five messages sticking around  for some reason or another  so we can go and see any particular  allocation and i expect like these ones  down here on the left  the old ones should have been flush from  the cache by now but they're not  so i can click on one of them and it'll  zoom in to just  the delta at that heap snapshot and show  me now down below  what's still live and here we can expand  it and if i click on one of these guys  down below at the bottom you can see the  retaining tree which is what john went  over in the graph  earlier so this will show you this can  help you find bugs because what  was happening here was that we were  saving a reference to every third  message in our cache  and that reference was actually never  removed and so  these messages could not be garbage  collected and so you would have seen  that from the retaining path here  so  all right so was it really worth it  i'd say so this is the stats that we  were collecting from window performance  memory api  and this is over a period of about a  year  so we started out really high the blue  bar was our 99th percentile this is  where the power users were  and um their memory footprints were huge  and the delta between like the 99th  percentile and the median  was was pretty big so over time we  started fixing  identifying these leaks using the  techniques we showed you  as well as just making sure that we were  allocating memory  in a reasonable fashion you see a couple  of  bumps in the blue line there um  they're most obvious in the blue line  but they actually showed up everywhere  and these were actually  regressions in v8 so that were bugs in  in the va garbage collection they were  actually bugs yeah so  um by collecting this data though we  could give them feedback and say you  know this doesn't look right this is  something that  gmail didn't change a whole lot in this  time frame and we're seeing these huge  problems and  um so we were able to get them to fix it  so that's pretty amazing  so really um this is a call to action so  we showed you that  the bigger the footprint the more you  see these pauses the more you'll  you'll be able to see them in your  actual application performance so these  latencies were going up  these pauses were actually affecting our  use  so the traditional memory versus  performance it's not  as traditional as one might think yep so  you should  really ask yourself these questions i  mean how much memory is your page using  do you know  i mean lorena knows exactly how much  memory gmail is using  and brought it down by a massive amount  then you should all be doing this on  your pages because it just  improves the feel of the application  pages are becoming really animation  heavy  and it's awesome but every little gc  pause that occurs during an animation  is going to make your user think uh it's  not the highest quality  so and like if you look at your browser  you know a lot of times at the top of  the bar  you'll see like 50 tabs chrome is not  going to fork you know  50 or 100 render processes so they're  going to end up in the same process  you kind of want to make sure that just  for your own sanity as well as  your users who are you know browsing to  multiple sites at the same time  they're having a good experience and you  know is your page leak free  um gmail wasn't i mean there was some  issues where  over time some common operations were  leaking probably tiny amounts of memory  but  if you want your page to be kind of an  application and your end user is  expected to spend a lot of time with it  these tiny leaks add up and they're not  just  you know chewing up memory as we've  shown it also just decreases the quality  of your site's experience  and you know users these days have very  high expectations for web apps  they've got to perform as good as native  apps  yep so making sure that you're g-seeing  as infrequently as possible like these  tiny little  even fractions of milliseconds can  really add up if you start  allocating more and more memory these  pauses are going to take even longer so  the more data that needs to be copied  from  the from the two space in the from space  like we want to kind of minimize that  and make sure that these pauses are  short  and infrequent so we showed you a bunch  of tools  the api to be able to collect data is  really key  the heat profiler and the continuous  version of the heat profile or the  object tracker  can all be used to both identify and  actually fix  these problems  thank you thanks everybody  so we'll stick around a little bit for  questions outside yeah are there any  questions  or we could do that lots of questions  yes so have you tried approaching the  um problem from another way around so  from my viewpoint it would be so nice to  be able to set  say for instance okay let's see like i  said like four megabyte  budget for my page and basically that we  would be able to like see it okay like  given this like crappy phone that i'm  like sort of trying to simulate  okay this is how often it would be run  the garbage collector would it be  possible for instance like have a  uh writable properties for this windows  performance  i i don't see why it couldn't be i mean  you're right certain devices are very  constrained by memory like a desktop  machine these days is pretty  massive but yeah i think that's a good  idea yeah  okay one more over here first of all i  want to say it was a very good  presentation  i really liked the slides on the garbage  collection um  my question is do the chrome developer  tools show external memory allocations  from things like typed arrays or buffers  and nodejs  are they counting against retained size  do you know um i believe typed array  should show up yep  um and certainly like dom nodes and  things like that which are external  allocations  are there as well yeah yeah all right  thanks  all right so i think we're going to keep  this track rolling so that we don't get  behind  you guys can catch up with these guys at  the break if you have any more questions  so stay tuned and our next speaker will  be up shortly thanks  thanks everyone  you
+
+00:00:30.230 --> 00:00:31.509 align:start position:0%
+primarily in um  and we're looking at performance all the  way from the client none of the server  just kind of optimizing as much of it as  we can  yeah i'm john mccutchan and i work in  the dark vmt  focusing on performance so i'm really  just here for the currywurst  all right so we're going to do a trip  down  memory lane and talk about uh managing  memory  at female scale  so you know my gmail attachment gig of  ram you've got like 24  mags on your machine actually i just got  64.  so you've got 64 gigs on your machine  what's the problem well my grandmother's  program is for  well that's a few problems she might  need a new computer  um or you know we can fix this problem  so um you know when it comes down to the  age-old performance versus memory  trade-offs  nine times out of ten developers will  achieve performance because really what  you want to do is give yourself  or your users the best experience  possible and you know having a nice fast  responsive ad is really what you're  after so you know  using a little bit of memory when we  think that we have modern machines with  lots and lots of memory  it's easy so just to be clear you're  saying that  you know the assumption is that you can  use as much memory as you want and  performance is just gonna get better  because you can cache a little bit  that's the typical thinking exactly  but um  though we didn't know you know how often  this is happening we have a lot of users  we didn't know what percentage of users  were experiencing memory problems  but we had a lot of analysis from our  friends and family  and then we kind of started explaining  around a little bit we tried to see like  if we do common actions compose  messages read messages delete stuff you  know  how common is it for memory to grow  right performance deductions and is it  doing  growing uncontrollably um so we started  to look at some tools as well we were  using the chrome dev tools but really  they didn't never  were intended to scale to applications  that were as big as gmail gmail has  become  quite large over the years and so you  know we'd start using it and  the devtools would crash so this is a  problem yeah  and you know it turns out that this is  not just gmail's problem or any other  large web apps problem because really  chrome  will put multiple tabs in the same  process so if one  tab crashes and runs out of memory then  all of the tabs that are in that process  will  will crash as well so even like smaller  web apps that you know are just static  pages of text could be sharing a render  process with chrome  with gmail and they could all crash so  this is a problem that you know we  wanted to fix  on behalf of all web apps yeah  all right but so before we can really  dig into chrome dev tools  and uh get to the bottom of this problem  let's go back to basics  and um talk about how  memory management is uh done behind the  scenes for you in javascript  so we'll talk about some core concepts  like how are values like variables  properties all the things that are like  alive that you interact with  functions everything in javascript how  are they organized in memory  try and come up with the definition of  garbage and then define what a leak is  in a javascript application  so everything in javascript uh is  organized in the value graph  and so you start the value graph at some  root node this is like you can think of  it like document or window  these are things that will never go away  while your page is loaded in the  in the browser aside from the root note  there's also object nodes and this is  just a standard javascript object  um and what makes it distinct from  scalar nodes is that it can actually  reference other values in the graph  scalar nodes are bools numbers things  like that those are always the  end of the end of the value graph  so all values have a retaining path and  this is a very fundamental concept when  it comes to managing memory effectively  in javascript so we look at the green  node here it has two retaining paths  actually  it has the retaining path that starts at  the root note and traverses along that  edge  and the second retaining path starts the  root note and traverses along those two  edges  so if you wanted to free the green node  you would have to cut  both of these retaining paths they would  have to be removed from the graph  otherwise it's going to remain  in memory so let's say we wanted to  remove the red node from the graph  we could start and cut that edge at that  point the red node along with the green  nodes  their garbage they'll be collected  return back to the system you could also  cut this edge or this edge  any of these edges are going to remove  the red node from the graph and as a  javascript application developer you  need to be aware of  you know the retaining paths to these  objects when you're trying to clean it  up  so this is what garbage is garbage is a  value that cannot be reached from the  root note  so if we look at here you can see that  there's these red and green notes here  which the red node is still referencing  the green node they're garbage there's  no way to start at the root node  and find some retaining path that gets  you to these two guys  so garbage collection is like in a very  simple way it's just  finding everything that's still alive  not you're not finding what's dead  you're finding what's still alive what's  still in the graph  and then returning the memory used by  the dead objects back to the system  so in this case these two guys are dead  and we can  you know they'll be returned back after  a garbage collection cycle  so similar to a retained retaining path  there's also retaining size and this is  how much memory you're going to give  back to the system  if you were to cut this value out of the  graph so the yellow node  the yellow node's retain size is the  size of itself plus the size of all of  its descendants that would become  garbage  if the yellow node was pulled out in  this case the l on the green  and we can pull back and we can say that  this new yellow nodes retain size is the  sum of these other  two other nodes and if you pull all the  way back to the root node which you can  never free you can never remove from the  graph  its retain size is everything in your  page  so now that we kind of understand the  very basic  operation of garbage garbage collection  let's look at leaks  so a leak in javascript is just you've  made an error and you've actually left a  retaining path  somewhere in your application maybe  through the dom or through an event  callback or something like that  where you expect some object to have no  more references and be returned to the  system  but it doesn't it's a programmer error  always  so let's look at a really simplistic  version of gmail where we have email and  we're going to make a  div element and put the message inside  the div element  and then we're going to add that div  element to a display list of things that  we're showing on the page  very simplistic but it gets the point  across  so this is a subsection of the value  graph here we have the email  object and it message it references  message and then  message has a special type of native  reference to the dom notes which are  managed independently from javascript  objects  and then we see we have our display and  it has a list of  dom nodes which are being displayed on  the page so sometime later you're done  and you want to clear the display list  and you  you know you remove all the children  from the display but  you've accidentally left that div node  referenced inside your message and the  message is going to be cached  by gmail because we want to cache all  these messages for as long as possible  so we don't have to make network  requests and this kind of behavior you  know on the scale of gmail you leave it  open for a few weeks  suddenly these tiny little leaks start  accumulating and  he's dead  so the basics of javascript memory  management is just everything's inside  of a graph  there's retaining paths and these are  the paths that are holding the values  keeping them alive without a retained  path the value becomes garbage and gets  its retained size is freed back to the  system  so with that out of the way let's talk  about how v8  actually manages your memory so let's  get a little bit more specific a little  bit more low level  and try and help you understand what's  going on when your page gets  interrupted for a garbage collection  so in understanding memory you should  understand where the cost is in  allocating memory and it's not in  actually constructing the object that's  not the expensive part  the expensive part is the collection  phase and we'll see why  momentarily so every time you call new  or do an implicit memory allocation with  like a  an array literal or an object literal  those are actually allocating memory  even though you don't see the keyword  new you're actually  reserving memory from the heap and this  is really cheap  until the memory pool that you're  allocating from is exhausted  at which point the page is paused so  that means your script is just hung  nothing is happening no rendering is  occurring and a garbage collection is  forced because we need to return some  memory back to the system so that it can  satisfy the new request  and this can take milliseconds i know  milliseconds might seem like not very  much but if you think about a frame of  your page and you want something that's  very animation heavy and smooth  you've only got 16 milliseconds if you  have five of them devoted to gc  the user is going to see like some frame  hiccup or something like that so you  have to be careful about  kind of the patterns in which you  allocate memory and  uh try and relate that back to like how  interactive and how the feel of the  application should be  and you know just intuitively every  allocation that you do  brings you closer to this pause there's  no going back every time you take a step  forward  you're getting closer and closer to that  wall where you have to just wait  and then be pulled back and you know  your application can resume  so v8 manages memory in a generational  way and this is a  common uh garbage collection technique  so values are split between young  and old and over time young values are  promoted or tenured up to old values  and so you can this is very like  intuitive like you can just understand  this  simply like young values are things that  you just allocated like a temporary  variable inside the functions is  executing that's a young value  something that you've kept around for  maybe a few minutes  that's going to get moved into the old  heap and that's managed  differently so the  characteristics of a young generation  heap is that  the allocation is really fast collection  is fast because it's small and it's kind  of kept contained  and it's frequently collected when you  use the chrome devtools timeline tool  and you see a gc event nine times out of  ten that's going to be a young space  collection  and you can see here that this  collection took a fraction of a  millisecond  and it freed up about two megs of memory  in contrast the old generation still has  pretty fast allocation  all things being relative but the  collection is much much slower  luckily the collection of old space  happens  very infrequently sometimes never on a  page i mean your page would have to be  around for a while before the whole  space is collected  and parts of the old space collection  actually run concurrently with the  mutator and the mutator is your script  that's your page  so some parts of old space collection  occur while your page is executing  whereas young space is always like an  interruption your page is stopped  frames are dropping everything is just  the user experience is terrible  so why is collecting the young  generation so much faster it really  comes down to a simple metric and that's  the  death rate young objects  are by their very nature very it's very  improbable for them to live a long time  because most of the time  you're just doing some simple  computation on a number and there's an  allocation and then you throw the  reference away and it's out of the graph  almost immediately so it's not going to  stick around and on  average the death rate is about 80  percent was in contrast  old space most things that make it to  old space  have lived for a long time and unless  your application is like completely  doing something  different chances are they're going to  survive an old space collection  so considering that what's going to  cause jank on your page is a young space  collection well let's actually walk  through what's going on when you  allocate memory and then when a  collection occurs  so you can kind of understand when  you're writing your page  how to try and avoid this so the young  generation in v8 is split into two  equally sized halves the two space and  the from space  and when you call new or do an implicit  allocation memory is being reserved from  the tooth space  later on we'll see that during gc the  front space is used and we'll see this  in a moment  assuming your two space is empty it's  all unallocated your page is coming  along and you allocate object a  and then b c and d and everything's  great it's really fast no interruption  the allocation is basically free  it's awesome and then oh you try and  allocate e  and you you don't have enough memory in  size inside the two space to satisfy  this so what happens is your pages  it's kind of backed up e never is  allocated your script is just waiting  there  ready to resume after the gc occurs  so what happens is from and two space  are just swapped  so two space is now empty again and from  space has  all of the objects which you previously  allocated  and then the live values are found again  you don't find dead values you find the  live values  and so b and d in this case are now  they're dead we can return the memory  back to the system and what happens is  basically a and c are allocated again  and they're copied  into the new to space and this copy is  actually where  almost all of the time in a gc is spent  because copying implies i o and that's  that's just expensive relative to cpu  computation these days  so what happens is a and c get copied  there and from space gets cleared  it's free you're just you know you don't  care what's inside that memory anymore  and you can just pretend that it's empty  um and then you can allocate object d  and your page is resumed  so this in a nutshell is what happens  during gc pause when you're looking at  the timeline event you see your page was  paused for two milliseconds  this just occurred and of course we're  looking at a very small scale on the  slides but in something like gmail  i mean there's maybe hundreds of  thousands of objects that have to be  walked and copied that survive  and you know and then there's also the  tenure where you get copied from young  space to old space  so intuitively you have to understand  that each allocation moves you closer  there is no going back  every time you allocate something you're  inching your page closer to that pause  um and you know collection collections  pause your application  it leads to jank users just think like  oh this page is kind of like low quality  maybe they don't want to come back so  you want to minimize this as much as  possible  all right so now we're going to talk a  little bit about tools and techniques  you've got the background down so let's  talk about  what we actually did in gmail so first i  said we were starting out from nothing  we didn't know how  common this problem was so we wanted to  collect some measurements from our users  so to do this we used the window  performance memory  api and we collected this returns three  values  returns the js heap size limit which is  the maximum amount of memory that can be  allocated  um before the he's dead gym and then the  total js heap size which is the total  amount of memory that has been allocated  so far  including the free space and then the  used js heap size which is actually the  amount of  live memory being allocated so is the  total  like that's the high water mark that's  the high water mark yeah including free  space  and then the closer the total gets to  the limit the closer you are to that  use dead gym right so um so what we did  was we collected this data every 30  minutes for gmail users  um and then we aggregated it and then we  could actually see like  how does our average user compare to  like our power users right so we could  see the difference between  you know say um people who are very  active on their email leave it open for  a very long time  get hundreds of messages a day versus  like the people who  log in every once in a while to have one  message a week and you know aren't using  it quite as much  so we could see the difference between  there  and then once we had this data we follow  we took a user  and we followed that person for three  days we kind of watched what happened to  both their memory  and their latency and we saw that over  time as that heap grew  their latencies increased as well and so  this fits with the idea that  like the heaps getting bigger there's  more gcs more things are surviving  right so like every message click to  open a message was taking longer than it  did when you had the smaller heap  so that was really interesting for us  because it turned out that more memory  doesn't always equal better performance  so now we knew that we had a problem but  we needed to figure out how to fix it so  for that we turned to the chrome dev  tools  so the first thing we like to do is to  use the the memory timeline  and using the memory timeline you can  perform a set of actions and watch in  real time  so this graph in particular shows the  number of dom nodes that are allocated  and we know that the number of dom nodes  corresponds directly to  how much memory is being used by the  page so as we performed a bunch of  actions we could see the number of  dominoes grow  growing and then we can force the  garbage collection and you expect to see  that  number drop right and if you pick an  action that you expect  not to result in that increase in memory  then you should expect to see that  the number of dom nodes drop down to  your baseline so we found that  if we do this particular action a bunch  of times and then  collect garbage and it didn't reach the  baseline turns out we have a leak  but now what so for this we turn to the  object tracker and this is live as of  chrome 29  and this will actually allow you to  perform actions in your in your app  and live see a live tracker of  allocated objects so it'll take heap  snapshots periodically as you're  performing these actions  and then you can see the deltas between  each periodic heap snapshot  and be able to figure out what new  objects are in the heap at any given  time  so up here at the top of the object  tracker there's color-coded bars  the blue will indicate live objects and  the gray will  indicate objects that were allocated and  are no longer live  and so you'll actually see over time  blue bars go gray  right right as they're collected they'll  turn gray  and then at the top you can kind of  expand or make your windows smaller to  see  exactly the difference in at a  particular period in time  and then down below is the regular heat  profile contents and  this is you know the heat profiler  that's been in devtools for quite a long  time  but here you can see exactly the  contents of whatever window you happen  to be looking at  so i think um it's probably better done  with a demo  so i we wrote you know a very simple  mail  like app um just like gmail we cache  messages for better performance so we  really want to not have that network  request right when you hit a message to  open it so we want to cache it  in the browser and make sure that when  you click on it it just has to display  it  so in this particular example we have a  cache size of five messages so this  means that we should never have more  than five messages  resident in memory at any given time so  let's check it out  all right  all right so let's bring up the dev  tools  all right so first here we'll start with  the timeline let's  get this up here a little bit so you  guys can see it and we'll make sure the  dom node count is being displayed and  we'll turn off the others so we don't  have quite as much noise so we'll start  it  let's grow through these messages  and collect some garbage  keep going  collect some more just to make sure and  then we'll go ahead and stop it  so we can widen this window  see exactly what happened did i miss the  collection  okay let's like restart this we see that  you know it's it's going up with each  time i click  the amount of number of dom nodes uh  let's go  click this guy did we get it one more  time okay  so we see at the top there's a running  timeline in the blue line and that  can show you um overall what's happening  and then we'll click this again and  let's go ahead and stop this  okay so if we widen this window we can  see the whole timeline here  we see a little drop when we collected  garbage but it didn't drop all the way  to the baseline and this is something  that we expect we expect it  once the cache is full we expect it to  drop back to the baseline with every  five messages  and it didn't look like it did that so  from now let's move over to  the object tracker profiler and we're  gonna go ahead and refresh this tab  so we'll start with a clean slate you  really want to do this in an incognito  window as well so that you don't have  any extensions that you may have  installed in your browser affecting your  performance in your memory  yeah actually so if you have an  extension loaded and we all do  that all the objects that the extension  creates will show up inside the heap  profile  right so incognito tab is always  recommended yep  keep things clean so we've refreshed  we're starting with a clean slate so  we're going to  go ahead and start recording  and let's scroll through these messages  again  and as you see i'm clicking to the next  message these messages are being loaded  and they're blue they're live and then  let's go back down  you see some of these are turning gray  they're no longer in the cache  so let's stop it and  as i told you the message cache is five  and  it looks like i have more than five blue  bars or blue bars here right so we have  more than five messages sticking around  for some reason or another  so we can go and see any particular  allocation and i expect like these ones  down here on the left  the old ones should have been flush from  the cache by now but they're not  so i can click on one of them and it'll  zoom in to just  the delta at that heap snapshot and show  me now down below  what's still live and here we can expand  it and if i click on one of these guys  down below at the bottom you can see the  retaining tree which is what john went  over in the graph  earlier so this will show you this can  help you find bugs because what  was happening here was that we were  saving a reference to every third  message in our cache  and that reference was actually never  removed and so  these messages could not be garbage  collected and so you would have seen  that from the retaining path here  so  all right so was it really worth it  i'd say so this is the stats that we  were collecting from window performance  memory api  and this is over a period of about a  year  so we started out really high the blue  bar was our 99th percentile this is  where the power users were  and um their memory footprints were huge  and the delta between like the 99th  percentile and the median  was was pretty big so over time we  started fixing  identifying these leaks using the  techniques we showed you  as well as just making sure that we were  allocating memory  in a reasonable fashion you see a couple  of  bumps in the blue line there um  they're most obvious in the blue line  but they actually showed up everywhere  and these were actually  regressions in v8 so that were bugs in  in the va garbage collection they were  actually bugs yeah so  um by collecting this data though we  could give them feedback and say you  know this doesn't look right this is  something that  gmail didn't change a whole lot in this  time frame and we're seeing these huge  problems and  um so we were able to get them to fix it  so that's pretty amazing  so really um this is a call to action so  we showed you that  the bigger the footprint the more you  see these pauses the more you'll  you'll be able to see them in your  actual application performance so these  latencies were going up  these pauses were actually affecting our  use  so the traditional memory versus  performance it's not  as traditional as one might think yep so  you should  really ask yourself these questions i  mean how much memory is your page using  do you know  i mean lorena knows exactly how much  memory gmail is using  and brought it down by a massive amount  then you should all be doing this on  your pages because it just  improves the feel of the application  pages are becoming really animation  heavy  and it's awesome but every little gc  pause that occurs during an animation  is going to make your user think uh it's  not the highest quality  so and like if you look at your browser  you know a lot of times at the top of  the bar  you'll see like 50 tabs chrome is not  going to fork you know  50 or 100 render processes so they're  going to end up in the same process  you kind of want to make sure that just  for your own sanity as well as  your users who are you know browsing to  multiple sites at the same time  they're having a good experience and you  know is your page leak free  um gmail wasn't i mean there was some  issues where  over time some common operations were  leaking probably tiny amounts of memory  but  if you want your page to be kind of an  application and your end user is  expected to spend a lot of time with it  these tiny leaks add up and they're not  just  you know chewing up memory as we've  shown it also just decreases the quality  of your site's experience  and you know users these days have very  high expectations for web apps  they've got to perform as good as native  apps  yep so making sure that you're g-seeing  as infrequently as possible like these  tiny little  even fractions of milliseconds can  really add up if you start  allocating more and more memory these  pauses are going to take even longer so  the more data that needs to be copied  from  the from the two space in the from space  like we want to kind of minimize that  and make sure that these pauses are  short  and infrequent so we showed you a bunch  of tools  the api to be able to collect data is  really key  the heat profiler and the continuous  version of the heat profile or the  object tracker  can all be used to both identify and  actually fix  these problems  thank you thanks everybody  so we'll stick around a little bit for  questions outside yeah are there any  questions  or we could do that lots of questions  yes so have you tried approaching the  um problem from another way around so  from my viewpoint it would be so nice to  be able to set  say for instance okay let's see like i  said like four megabyte  budget for my page and basically that we  would be able to like see it okay like  given this like crappy phone that i'm  like sort of trying to simulate  okay this is how often it would be run  the garbage collector would it be  possible for instance like have a  uh writable properties for this windows  performance  i i don't see why it couldn't be i mean  you're right certain devices are very  constrained by memory like a desktop  machine these days is pretty  massive but yeah i think that's a good  idea yeah  okay one more over here first of all i  want to say it was a very good  presentation  i really liked the slides on the garbage  collection um  my question is do the chrome developer  tools show external memory allocations  from things like typed arrays or buffers  and nodejs  are they counting against retained size  do you know um i believe typed array  should show up yep  um and certainly like dom nodes and  things like that which are external  allocations  are there as well yeah yeah all right  thanks  all right so i think we're going to keep  this track rolling so that we don't get  behind  you guys can catch up with these guys at  the break if you have any more questions  so stay tuned and our next speaker will  be up shortly thanks  thanks everyone  you
+ 
+
+00:00:31.509 --> 00:00:33.430 align:start position:0%
+ 
+ 
+
+00:00:33.430 --> 00:00:35.430 align:start position:0%
+ 
+ 
+
+00:00:35.430 --> 00:00:37.190 align:start position:0%
+ 
+ 
+
+00:00:37.190 --> 00:00:39.510 align:start position:0%
+ 
+ 
+
+00:00:39.510 --> 00:00:41.030 align:start position:0%
+ 
+ 
+
+00:00:41.030 --> 00:00:43.270 align:start position:0%
+ 
+ 
+
+00:00:43.270 --> 00:00:49.270 align:start position:0%
+ 
+ 
+
+00:00:49.270 --> 00:00:52.310 align:start position:0%
+ 
+ 
+
+00:00:52.310 --> 00:00:52.320 align:start position:0%
+ 
+ 
+
+00:00:52.320 --> 00:00:52.709 align:start position:0%
+ 
+
+
+00:00:52.709 --> 00:00:55.510 align:start position:0%
+ 
+ 
+
+00:00:55.510 --> 00:00:55.520 align:start position:0%
+ 
+ 
+
+00:00:55.520 --> 00:00:55.990 align:start position:0%
+ 
+
+
+00:00:55.990 --> 00:01:00.310 align:start position:0%
+ 
+ 
+
+00:01:00.310 --> 00:01:02.709 align:start position:0%
+ 
+ 
+
+00:01:02.709 --> 00:01:04.469 align:start position:0%
+ 
+ 
+
+00:01:04.469 --> 00:01:07.030 align:start position:0%
+ 
+ 
+
+00:01:07.030 --> 00:01:07.040 align:start position:0%
+ 
+ 
+
+00:01:07.040 --> 00:01:07.830 align:start position:0%
+ 
+
+
+00:01:07.830 --> 00:01:09.670 align:start position:0%
+ 
+ 
+
+00:01:09.670 --> 00:01:11.270 align:start position:0%
+ 
+ 
+
+00:01:11.270 --> 00:01:12.630 align:start position:0%
+ 
+ 
+
+00:01:12.630 --> 00:01:14.310 align:start position:0%
+ 
+ 
+
+00:01:14.310 --> 00:01:15.749 align:start position:0%
+ 
+ 
+
+00:01:15.749 --> 00:01:17.749 align:start position:0%
+ 
+ 
+
+00:01:17.749 --> 00:01:19.270 align:start position:0%
+ 
+ 
+
+00:01:19.270 --> 00:01:20.710 align:start position:0%
+ 
+ 
+
+00:01:20.710 --> 00:01:20.720 align:start position:0%
+ 
+ 
+
+00:01:20.720 --> 00:01:21.510 align:start position:0%
+ 
+
+
+00:01:21.510 --> 00:01:23.109 align:start position:0%
+ 
+ 
+
+00:01:23.109 --> 00:01:24.310 align:start position:0%
+ 
+ 
+
+00:01:24.310 --> 00:01:25.910 align:start position:0%
+ 
+ 
+
+00:01:25.910 --> 00:01:27.590 align:start position:0%
+ 
+ 
+
+00:01:27.590 --> 00:01:29.830 align:start position:0%
+ 
+ 
+
+00:01:29.830 --> 00:01:31.590 align:start position:0%
+ 
+ 
+
+00:01:31.590 --> 00:01:33.109 align:start position:0%
+ 
+ 
+
+00:01:33.109 --> 00:01:34.630 align:start position:0%
+ 
+ 
+
+00:01:34.630 --> 00:01:36.069 align:start position:0%
+ 
+ 
+
+00:01:36.069 --> 00:01:37.429 align:start position:0%
+ 
+ 
+
+00:01:37.429 --> 00:01:40.310 align:start position:0%
+ 
+ 
+
+00:01:40.310 --> 00:01:41.030 align:start position:0%
+ 
+ 
+
+00:01:41.030 --> 00:01:42.789 align:start position:0%
+ 
+ 
+
+00:01:42.789 --> 00:01:44.389 align:start position:0%
+ 
+ 
+
+00:01:44.389 --> 00:01:45.749 align:start position:0%
+ 
+ 
+
+00:01:45.749 --> 00:01:47.429 align:start position:0%
+ 
+ 
+
+00:01:47.429 --> 00:01:51.109 align:start position:0%
+ 
+ 
+
+00:01:51.109 --> 00:02:09.430 align:start position:0%
+ 
+ 
+
+00:02:09.430 --> 00:02:11.270 align:start position:0%
+ 
+ 
+
+00:02:11.270 --> 00:02:13.510 align:start position:0%
+ 
+ 
+
+00:02:13.510 --> 00:02:15.030 align:start position:0%
+ 
+ 
+
+00:02:15.030 --> 00:02:16.869 align:start position:0%
+ 
+ 
+
+00:02:16.869 --> 00:02:18.390 align:start position:0%
+ 
+ 
+
+00:02:18.390 --> 00:02:20.550 align:start position:0%
+ 
+ 
+
+00:02:20.550 --> 00:02:22.070 align:start position:0%
+ 
+ 
+
+00:02:22.070 --> 00:02:23.910 align:start position:0%
+ 
+ 
+
+00:02:23.910 --> 00:02:26.150 align:start position:0%
+ 
+ 
+
+00:02:26.150 --> 00:02:29.190 align:start position:0%
+ 
+ 
+
+00:02:29.190 --> 00:02:29.200 align:start position:0%
+ 
+ 
+
+00:02:29.200 --> 00:02:30.150 align:start position:0%
+ 
+
+
+00:02:30.150 --> 00:02:32.390 align:start position:0%
+ 
+ 
+
+00:02:32.390 --> 00:02:33.990 align:start position:0%
+ 
+ 
+
+00:02:33.990 --> 00:02:34.000 align:start position:0%
+ 
+ 
+
+00:02:34.000 --> 00:02:34.630 align:start position:0%
+ 
+
+
+00:02:34.630 --> 00:02:37.430 align:start position:0%
+ 
+ 
+
+00:02:37.430 --> 00:02:38.869 align:start position:0%
+ 
+ 
+
+00:02:38.869 --> 00:02:40.070 align:start position:0%
+ 
+ 
+
+00:02:40.070 --> 00:02:41.110 align:start position:0%
+ 
+ 
+
+00:02:41.110 --> 00:02:43.430 align:start position:0%
+ 
+ 
+
+00:02:43.430 --> 00:02:45.030 align:start position:0%
+ 
+ 
+
+00:02:45.030 --> 00:02:45.040 align:start position:0%
+ 
+ 
+
+00:02:45.040 --> 00:02:45.589 align:start position:0%
+ 
+
+
+00:02:45.589 --> 00:02:47.509 align:start position:0%
+ 
+ 
+
+00:02:47.509 --> 00:02:48.949 align:start position:0%
+ 
+ 
+
+00:02:48.949 --> 00:02:50.949 align:start position:0%
+ 
+ 
+
+00:02:50.949 --> 00:02:54.630 align:start position:0%
+ 
+ 
+
+00:02:54.630 --> 00:02:55.830 align:start position:0%
+ 
+ 
+
+00:02:55.830 --> 00:02:57.910 align:start position:0%
+ 
+ 
+
+00:02:57.910 --> 00:02:59.589 align:start position:0%
+ 
+ 
+
+00:02:59.589 --> 00:02:59.599 align:start position:0%
+ 
+ 
+
+00:02:59.599 --> 00:03:00.309 align:start position:0%
+ 
+
+
+00:03:00.309 --> 00:03:02.070 align:start position:0%
+ 
+ 
+
+00:03:02.070 --> 00:03:03.430 align:start position:0%
+ 
+ 
+
+00:03:03.430 --> 00:03:05.990 align:start position:0%
+ 
+ 
+
+00:03:05.990 --> 00:03:07.509 align:start position:0%
+ 
+ 
+
+00:03:07.509 --> 00:03:07.519 align:start position:0%
+ 
+ 
+
+00:03:07.519 --> 00:03:07.910 align:start position:0%
+ 
+
+
+00:03:07.910 --> 00:03:11.430 align:start position:0%
+ 
+ 
+
+00:03:11.430 --> 00:03:13.350 align:start position:0%
+ 
+ 
+
+00:03:13.350 --> 00:03:15.350 align:start position:0%
+ 
+ 
+
+00:03:15.350 --> 00:03:16.470 align:start position:0%
+ 
+ 
+
+00:03:16.470 --> 00:03:19.270 align:start position:0%
+ 
+ 
+
+00:03:19.270 --> 00:03:20.630 align:start position:0%
+ 
+ 
+
+00:03:20.630 --> 00:03:21.670 align:start position:0%
+ 
+ 
+
+00:03:21.670 --> 00:03:26.149 align:start position:0%
+ 
+ 
+
+00:03:26.149 --> 00:03:27.990 align:start position:0%
+ 
+ 
+
+00:03:27.990 --> 00:03:29.509 align:start position:0%
+ 
+ 
+
+00:03:29.509 --> 00:03:32.149 align:start position:0%
+ 
+ 
+
+00:03:32.149 --> 00:03:33.589 align:start position:0%
+ 
+ 
+
+00:03:33.589 --> 00:03:36.949 align:start position:0%
+ 
+ 
+
+00:03:36.949 --> 00:03:39.430 align:start position:0%
+ 
+ 
+
+00:03:39.430 --> 00:03:41.589 align:start position:0%
+ 
+ 
+
+00:03:41.589 --> 00:03:43.270 align:start position:0%
+ 
+ 
+
+00:03:43.270 --> 00:03:45.110 align:start position:0%
+ 
+ 
+
+00:03:45.110 --> 00:03:46.550 align:start position:0%
+ 
+ 
+
+00:03:46.550 --> 00:03:48.390 align:start position:0%
+ 
+ 
+
+00:03:48.390 --> 00:03:49.750 align:start position:0%
+ 
+ 
+
+00:03:49.750 --> 00:03:51.509 align:start position:0%
+ 
+ 
+
+00:03:51.509 --> 00:03:52.869 align:start position:0%
+ 
+ 
+
+00:03:52.869 --> 00:03:54.869 align:start position:0%
+ 
+ 
+
+00:03:54.869 --> 00:03:57.350 align:start position:0%
+ 
+ 
+
+00:03:57.350 --> 00:03:59.830 align:start position:0%
+ 
+ 
+
+00:03:59.830 --> 00:04:01.910 align:start position:0%
+ 
+ 
+
+00:04:01.910 --> 00:04:04.149 align:start position:0%
+ 
+ 
+
+00:04:04.149 --> 00:04:05.589 align:start position:0%
+ 
+ 
+
+00:04:05.589 --> 00:04:07.509 align:start position:0%
+ 
+ 
+
+00:04:07.509 --> 00:04:09.190 align:start position:0%
+ 
+ 
+
+00:04:09.190 --> 00:04:11.030 align:start position:0%
+ 
+ 
+
+00:04:11.030 --> 00:04:14.070 align:start position:0%
+ 
+ 
+
+00:04:14.070 --> 00:04:15.429 align:start position:0%
+ 
+ 
+
+00:04:15.429 --> 00:04:17.030 align:start position:0%
+ 
+ 
+
+00:04:17.030 --> 00:04:19.270 align:start position:0%
+ 
+ 
+
+00:04:19.270 --> 00:04:20.949 align:start position:0%
+ 
+ 
+
+00:04:20.949 --> 00:04:23.430 align:start position:0%
+ 
+ 
+
+00:04:23.430 --> 00:04:25.110 align:start position:0%
+ 
+ 
+
+00:04:25.110 --> 00:04:26.310 align:start position:0%
+ 
+ 
+
+00:04:26.310 --> 00:04:29.990 align:start position:0%
+ 
+ 
+
+00:04:29.990 --> 00:04:32.070 align:start position:0%
+ 
+ 
+
+00:04:32.070 --> 00:04:33.990 align:start position:0%
+ 
+ 
+
+00:04:33.990 --> 00:04:36.070 align:start position:0%
+ 
+ 
+
+00:04:36.070 --> 00:04:38.150 align:start position:0%
+ 
+ 
+
+00:04:38.150 --> 00:04:40.150 align:start position:0%
+ 
+ 
+
+00:04:40.150 --> 00:04:40.160 align:start position:0%
+ 
+ 
+
+00:04:40.160 --> 00:04:40.950 align:start position:0%
+ 
+
+
+00:04:40.950 --> 00:04:42.710 align:start position:0%
+ 
+ 
+
+00:04:42.710 --> 00:04:44.870 align:start position:0%
+ 
+ 
+
+00:04:44.870 --> 00:04:44.880 align:start position:0%
+ 
+ 
+
+00:04:44.880 --> 00:04:45.430 align:start position:0%
+ 
+
+
+00:04:45.430 --> 00:04:47.749 align:start position:0%
+ 
+ 
+
+00:04:47.749 --> 00:04:49.270 align:start position:0%
+ 
+ 
+
+00:04:49.270 --> 00:04:49.280 align:start position:0%
+ 
+ 
+
+00:04:49.280 --> 00:04:50.230 align:start position:0%
+ 
+
+
+00:04:50.230 --> 00:04:52.790 align:start position:0%
+ 
+ 
+
+00:04:52.790 --> 00:04:53.670 align:start position:0%
+ 
+ 
+
+00:04:53.670 --> 00:04:55.189 align:start position:0%
+ 
+ 
+
+00:04:55.189 --> 00:04:56.550 align:start position:0%
+ 
+ 
+
+00:04:56.550 --> 00:04:58.629 align:start position:0%
+ 
+ 
+
+00:04:58.629 --> 00:05:01.430 align:start position:0%
+ 
+ 
+
+00:05:01.430 --> 00:05:03.029 align:start position:0%
+ 
+ 
+
+00:05:03.029 --> 00:05:04.710 align:start position:0%
+ 
+ 
+
+00:05:04.710 --> 00:05:06.230 align:start position:0%
+ 
+ 
+
+00:05:06.230 --> 00:05:06.240 align:start position:0%
+ 
+ 
+
+00:05:06.240 --> 00:05:06.710 align:start position:0%
+ 
+
+
+00:05:06.710 --> 00:05:08.310 align:start position:0%
+ 
+ 
+
+00:05:08.310 --> 00:05:10.469 align:start position:0%
+ 
+ 
+
+00:05:10.469 --> 00:05:13.430 align:start position:0%
+ 
+ 
+
+00:05:13.430 --> 00:05:15.430 align:start position:0%
+ 
+ 
+
+00:05:15.430 --> 00:05:17.270 align:start position:0%
+ 
+ 
+
+00:05:17.270 --> 00:05:18.790 align:start position:0%
+ 
+ 
+
+00:05:18.790 --> 00:05:20.150 align:start position:0%
+ 
+ 
+
+00:05:20.150 --> 00:05:21.749 align:start position:0%
+ 
+ 
+
+00:05:21.749 --> 00:05:23.110 align:start position:0%
+ 
+ 
+
+00:05:23.110 --> 00:05:23.120 align:start position:0%
+ 
+ 
+
+00:05:23.120 --> 00:05:26.070 align:start position:0%
+ 
+
+
+00:05:26.070 --> 00:05:28.870 align:start position:0%
+ 
+ 
+
+00:05:28.870 --> 00:05:30.469 align:start position:0%
+ 
+ 
+
+00:05:30.469 --> 00:05:31.430 align:start position:0%
+ 
+ 
+
+00:05:31.430 --> 00:05:33.029 align:start position:0%
+ 
+ 
+
+00:05:33.029 --> 00:05:34.950 align:start position:0%
+ 
+ 
+
+00:05:34.950 --> 00:05:36.390 align:start position:0%
+ 
+ 
+
+00:05:36.390 --> 00:05:37.909 align:start position:0%
+ 
+ 
+
+00:05:37.909 --> 00:05:39.670 align:start position:0%
+ 
+ 
+
+00:05:39.670 --> 00:05:41.350 align:start position:0%
+ 
+ 
+
+00:05:41.350 --> 00:05:44.150 align:start position:0%
+ 
+ 
+
+00:05:44.150 --> 00:05:46.390 align:start position:0%
+ 
+ 
+
+00:05:46.390 --> 00:05:47.590 align:start position:0%
+ 
+ 
+
+00:05:47.590 --> 00:05:50.070 align:start position:0%
+ 
+ 
+
+00:05:50.070 --> 00:05:51.350 align:start position:0%
+ 
+ 
+
+00:05:51.350 --> 00:05:52.629 align:start position:0%
+ 
+ 
+
+00:05:52.629 --> 00:05:53.749 align:start position:0%
+ 
+ 
+
+00:05:53.749 --> 00:05:55.830 align:start position:0%
+ 
+ 
+
+00:05:55.830 --> 00:05:57.830 align:start position:0%
+ 
+ 
+
+00:05:57.830 --> 00:06:00.390 align:start position:0%
+ 
+ 
+
+00:06:00.390 --> 00:06:01.510 align:start position:0%
+ 
+ 
+
+00:06:01.510 --> 00:06:02.870 align:start position:0%
+ 
+ 
+
+00:06:02.870 --> 00:06:05.189 align:start position:0%
+ 
+ 
+
+00:06:05.189 --> 00:06:07.909 align:start position:0%
+ 
+ 
+
+00:06:07.909 --> 00:06:09.430 align:start position:0%
+ 
+ 
+
+00:06:09.430 --> 00:06:10.629 align:start position:0%
+ 
+ 
+
+00:06:10.629 --> 00:06:11.510 align:start position:0%
+ 
+ 
+
+00:06:11.510 --> 00:06:13.590 align:start position:0%
+ 
+ 
+
+00:06:13.590 --> 00:06:15.990 align:start position:0%
+ 
+ 
+
+00:06:15.990 --> 00:06:17.590 align:start position:0%
+ 
+ 
+
+00:06:17.590 --> 00:06:19.909 align:start position:0%
+ 
+ 
+
+00:06:19.909 --> 00:06:21.350 align:start position:0%
+ 
+ 
+
+00:06:21.350 --> 00:06:21.360 align:start position:0%
+ 
+ 
+
+00:06:21.360 --> 00:06:22.150 align:start position:0%
+ 
+
+
+00:06:22.150 --> 00:06:24.070 align:start position:0%
+ 
+ 
+
+00:06:24.070 --> 00:06:25.670 align:start position:0%
+ 
+ 
+
+00:06:25.670 --> 00:06:28.629 align:start position:0%
+ 
+ 
+
+00:06:28.629 --> 00:06:30.629 align:start position:0%
+ 
+ 
+
+00:06:30.629 --> 00:06:31.830 align:start position:0%
+ 
+ 
+
+00:06:31.830 --> 00:06:33.830 align:start position:0%
+ 
+ 
+
+00:06:33.830 --> 00:06:35.430 align:start position:0%
+ 
+ 
+
+00:06:35.430 --> 00:06:37.270 align:start position:0%
+ 
+ 
+
+00:06:37.270 --> 00:06:37.280 align:start position:0%
+ 
+ 
+
+00:06:37.280 --> 00:06:38.230 align:start position:0%
+ 
+
+
+00:06:38.230 --> 00:06:40.469 align:start position:0%
+ 
+ 
+
+00:06:40.469 --> 00:06:40.479 align:start position:0%
+ 
+ 
+
+00:06:40.479 --> 00:06:43.350 align:start position:0%
+ 
+
+
+00:06:43.350 --> 00:06:45.350 align:start position:0%
+ 
+ 
+
+00:06:45.350 --> 00:06:47.350 align:start position:0%
+ 
+ 
+
+00:06:47.350 --> 00:06:48.950 align:start position:0%
+ 
+ 
+
+00:06:48.950 --> 00:06:50.710 align:start position:0%
+ 
+ 
+
+00:06:50.710 --> 00:06:52.469 align:start position:0%
+ 
+ 
+
+00:06:52.469 --> 00:06:53.990 align:start position:0%
+ 
+ 
+
+00:06:53.990 --> 00:06:54.950 align:start position:0%
+ 
+ 
+
+00:06:54.950 --> 00:06:56.790 align:start position:0%
+ 
+ 
+
+00:06:56.790 --> 00:06:58.309 align:start position:0%
+ 
+ 
+
+00:06:58.309 --> 00:06:59.749 align:start position:0%
+ 
+ 
+
+00:06:59.749 --> 00:07:01.589 align:start position:0%
+ 
+ 
+
+00:07:01.589 --> 00:07:03.110 align:start position:0%
+ 
+ 
+
+00:07:03.110 --> 00:07:03.120 align:start position:0%
+ 
+ 
+
+00:07:03.120 --> 00:07:03.990 align:start position:0%
+ 
+
+
+00:07:03.990 --> 00:07:06.230 align:start position:0%
+ 
+ 
+
+00:07:06.230 --> 00:07:06.240 align:start position:0%
+ 
+ 
+
+00:07:06.240 --> 00:07:07.189 align:start position:0%
+ 
+
+
+00:07:07.189 --> 00:07:09.510 align:start position:0%
+ 
+ 
+
+00:07:09.510 --> 00:07:11.589 align:start position:0%
+ 
+ 
+
+00:07:11.589 --> 00:07:12.790 align:start position:0%
+ 
+ 
+
+00:07:12.790 --> 00:07:14.950 align:start position:0%
+ 
+ 
+
+00:07:14.950 --> 00:07:16.230 align:start position:0%
+ 
+ 
+
+00:07:16.230 --> 00:07:18.469 align:start position:0%
+ 
+ 
+
+00:07:18.469 --> 00:07:20.070 align:start position:0%
+ 
+ 
+
+00:07:20.070 --> 00:07:21.430 align:start position:0%
+ 
+ 
+
+00:07:21.430 --> 00:07:23.270 align:start position:0%
+ 
+ 
+
+00:07:23.270 --> 00:07:23.280 align:start position:0%
+ 
+ 
+
+00:07:23.280 --> 00:07:24.790 align:start position:0%
+ 
+
+
+00:07:24.790 --> 00:07:27.350 align:start position:0%
+ 
+ 
+
+00:07:27.350 --> 00:07:28.790 align:start position:0%
+ 
+ 
+
+00:07:28.790 --> 00:07:30.870 align:start position:0%
+ 
+ 
+
+00:07:30.870 --> 00:07:32.070 align:start position:0%
+ 
+ 
+
+00:07:32.070 --> 00:07:34.390 align:start position:0%
+ 
+ 
+
+00:07:34.390 --> 00:07:36.070 align:start position:0%
+ 
+ 
+
+00:07:36.070 --> 00:07:38.070 align:start position:0%
+ 
+ 
+
+00:07:38.070 --> 00:07:38.080 align:start position:0%
+ 
+ 
+
+00:07:38.080 --> 00:07:40.230 align:start position:0%
+ 
+
+
+00:07:40.230 --> 00:07:42.150 align:start position:0%
+ 
+ 
+
+00:07:42.150 --> 00:07:43.510 align:start position:0%
+ 
+ 
+
+00:07:43.510 --> 00:07:45.029 align:start position:0%
+ 
+ 
+
+00:07:45.029 --> 00:07:47.510 align:start position:0%
+ 
+ 
+
+00:07:47.510 --> 00:07:49.189 align:start position:0%
+ 
+ 
+
+00:07:49.189 --> 00:07:49.670 align:start position:0%
+ 
+ 
+
+00:07:49.670 --> 00:07:50.869 align:start position:0%
+ 
+ 
+
+00:07:50.869 --> 00:07:54.950 align:start position:0%
+ 
+ 
+
+00:07:54.950 --> 00:07:57.830 align:start position:0%
+ 
+ 
+
+00:07:57.830 --> 00:07:59.430 align:start position:0%
+ 
+ 
+
+00:07:59.430 --> 00:08:00.790 align:start position:0%
+ 
+ 
+
+00:08:00.790 --> 00:08:02.629 align:start position:0%
+ 
+ 
+
+00:08:02.629 --> 00:08:04.710 align:start position:0%
+ 
+ 
+
+00:08:04.710 --> 00:08:05.830 align:start position:0%
+ 
+ 
+
+00:08:05.830 --> 00:08:08.230 align:start position:0%
+ 
+ 
+
+00:08:08.230 --> 00:08:09.749 align:start position:0%
+ 
+ 
+
+00:08:09.749 --> 00:08:10.869 align:start position:0%
+ 
+ 
+
+00:08:10.869 --> 00:08:13.670 align:start position:0%
+ 
+ 
+
+00:08:13.670 --> 00:08:15.029 align:start position:0%
+ 
+ 
+
+00:08:15.029 --> 00:08:18.469 align:start position:0%
+ 
+ 
+
+00:08:18.469 --> 00:08:20.550 align:start position:0%
+ 
+ 
+
+00:08:20.550 --> 00:08:21.990 align:start position:0%
+ 
+ 
+
+00:08:21.990 --> 00:08:22.790 align:start position:0%
+ 
+ 
+
+00:08:22.790 --> 00:08:24.150 align:start position:0%
+ 
+ 
+
+00:08:24.150 --> 00:08:26.469 align:start position:0%
+ 
+ 
+
+00:08:26.469 --> 00:08:28.309 align:start position:0%
+ 
+ 
+
+00:08:28.309 --> 00:08:30.550 align:start position:0%
+ 
+ 
+
+00:08:30.550 --> 00:08:32.389 align:start position:0%
+ 
+ 
+
+00:08:32.389 --> 00:08:32.399 align:start position:0%
+ 
+ 
+
+00:08:32.399 --> 00:08:33.990 align:start position:0%
+ 
+
+
+00:08:33.990 --> 00:08:35.430 align:start position:0%
+ 
+ 
+
+00:08:35.430 --> 00:08:37.029 align:start position:0%
+ 
+ 
+
+00:08:37.029 --> 00:08:38.389 align:start position:0%
+ 
+ 
+
+00:08:38.389 --> 00:08:39.829 align:start position:0%
+ 
+ 
+
+00:08:39.829 --> 00:08:41.190 align:start position:0%
+ 
+ 
+
+00:08:41.190 --> 00:08:43.269 align:start position:0%
+ 
+ 
+
+00:08:43.269 --> 00:08:44.790 align:start position:0%
+ 
+ 
+
+00:08:44.790 --> 00:08:47.910 align:start position:0%
+ 
+ 
+
+00:08:47.910 --> 00:08:49.509 align:start position:0%
+ 
+ 
+
+00:08:49.509 --> 00:08:50.949 align:start position:0%
+ 
+ 
+
+00:08:50.949 --> 00:08:52.470 align:start position:0%
+ 
+ 
+
+00:08:52.470 --> 00:08:54.150 align:start position:0%
+ 
+ 
+
+00:08:54.150 --> 00:08:55.829 align:start position:0%
+ 
+ 
+
+00:08:55.829 --> 00:08:57.829 align:start position:0%
+ 
+ 
+
+00:08:57.829 --> 00:08:59.030 align:start position:0%
+ 
+ 
+
+00:08:59.030 --> 00:09:01.750 align:start position:0%
+ 
+ 
+
+00:09:01.750 --> 00:09:03.750 align:start position:0%
+ 
+ 
+
+00:09:03.750 --> 00:09:04.550 align:start position:0%
+ 
+ 
+
+00:09:04.550 --> 00:09:06.230 align:start position:0%
+ 
+ 
+
+00:09:06.230 --> 00:09:08.470 align:start position:0%
+ 
+ 
+
+00:09:08.470 --> 00:09:09.910 align:start position:0%
+ 
+ 
+
+00:09:09.910 --> 00:09:12.070 align:start position:0%
+ 
+ 
+
+00:09:12.070 --> 00:09:14.230 align:start position:0%
+ 
+ 
+
+00:09:14.230 --> 00:09:15.509 align:start position:0%
+ 
+ 
+
+00:09:15.509 --> 00:09:17.190 align:start position:0%
+ 
+ 
+
+00:09:17.190 --> 00:09:19.269 align:start position:0%
+ 
+ 
+
+00:09:19.269 --> 00:09:21.110 align:start position:0%
+ 
+ 
+
+00:09:21.110 --> 00:09:22.870 align:start position:0%
+ 
+ 
+
+00:09:22.870 --> 00:09:24.389 align:start position:0%
+ 
+ 
+
+00:09:24.389 --> 00:09:26.470 align:start position:0%
+ 
+ 
+
+00:09:26.470 --> 00:09:28.230 align:start position:0%
+ 
+ 
+
+00:09:28.230 --> 00:09:29.910 align:start position:0%
+ 
+ 
+
+00:09:29.910 --> 00:09:32.070 align:start position:0%
+ 
+ 
+
+00:09:32.070 --> 00:09:34.470 align:start position:0%
+ 
+ 
+
+00:09:34.470 --> 00:09:36.310 align:start position:0%
+ 
+ 
+
+00:09:36.310 --> 00:09:37.910 align:start position:0%
+ 
+ 
+
+00:09:37.910 --> 00:09:39.430 align:start position:0%
+ 
+ 
+
+00:09:39.430 --> 00:09:41.670 align:start position:0%
+ 
+ 
+
+00:09:41.670 --> 00:09:43.509 align:start position:0%
+ 
+ 
+
+00:09:43.509 --> 00:09:46.070 align:start position:0%
+ 
+ 
+
+00:09:46.070 --> 00:09:47.750 align:start position:0%
+ 
+ 
+
+00:09:47.750 --> 00:09:50.230 align:start position:0%
+ 
+ 
+
+00:09:50.230 --> 00:09:51.509 align:start position:0%
+ 
+ 
+
+00:09:51.509 --> 00:09:53.030 align:start position:0%
+ 
+ 
+
+00:09:53.030 --> 00:09:54.870 align:start position:0%
+ 
+ 
+
+00:09:54.870 --> 00:09:57.350 align:start position:0%
+ 
+ 
+
+00:09:57.350 --> 00:09:58.710 align:start position:0%
+ 
+ 
+
+00:09:58.710 --> 00:10:00.150 align:start position:0%
+ 
+ 
+
+00:10:00.150 --> 00:10:01.750 align:start position:0%
+ 
+ 
+
+00:10:01.750 --> 00:10:03.190 align:start position:0%
+ 
+ 
+
+00:10:03.190 --> 00:10:04.870 align:start position:0%
+ 
+ 
+
+00:10:04.870 --> 00:10:07.030 align:start position:0%
+ 
+ 
+
+00:10:07.030 --> 00:10:07.040 align:start position:0%
+ 
+ 
+
+00:10:07.040 --> 00:10:07.509 align:start position:0%
+ 
+
+
+00:10:07.509 --> 00:10:08.949 align:start position:0%
+ 
+ 
+
+00:10:08.949 --> 00:10:10.710 align:start position:0%
+ 
+ 
+
+00:10:10.710 --> 00:10:12.790 align:start position:0%
+ 
+ 
+
+00:10:12.790 --> 00:10:14.949 align:start position:0%
+ 
+ 
+
+00:10:14.949 --> 00:10:17.190 align:start position:0%
+ 
+ 
+
+00:10:17.190 --> 00:10:17.990 align:start position:0%
+ 
+ 
+
+00:10:17.990 --> 00:10:20.230 align:start position:0%
+ 
+ 
+
+00:10:20.230 --> 00:10:22.069 align:start position:0%
+ 
+ 
+
+00:10:22.069 --> 00:10:24.230 align:start position:0%
+ 
+ 
+
+00:10:24.230 --> 00:10:27.110 align:start position:0%
+ 
+ 
+
+00:10:27.110 --> 00:10:28.470 align:start position:0%
+ 
+ 
+
+00:10:28.470 --> 00:10:30.310 align:start position:0%
+ 
+ 
+
+00:10:30.310 --> 00:10:30.320 align:start position:0%
+ 
+ 
+
+00:10:30.320 --> 00:10:31.030 align:start position:0%
+ 
+
+
+00:10:31.030 --> 00:10:32.630 align:start position:0%
+ 
+ 
+
+00:10:32.630 --> 00:10:34.710 align:start position:0%
+ 
+ 
+
+00:10:34.710 --> 00:10:36.069 align:start position:0%
+ 
+ 
+
+00:10:36.069 --> 00:10:37.910 align:start position:0%
+ 
+ 
+
+00:10:37.910 --> 00:10:39.509 align:start position:0%
+ 
+ 
+
+00:10:39.509 --> 00:10:41.509 align:start position:0%
+ 
+ 
+
+00:10:41.509 --> 00:10:43.350 align:start position:0%
+ 
+ 
+
+00:10:43.350 --> 00:10:44.829 align:start position:0%
+ 
+ 
+
+00:10:44.829 --> 00:10:47.829 align:start position:0%
+ 
+ 
+
+00:10:47.829 --> 00:10:49.990 align:start position:0%
+ 
+ 
+
+00:10:49.990 --> 00:10:50.870 align:start position:0%
+ 
+ 
+
+00:10:50.870 --> 00:10:52.870 align:start position:0%
+ 
+ 
+
+00:10:52.870 --> 00:10:54.389 align:start position:0%
+ 
+ 
+
+00:10:54.389 --> 00:10:56.790 align:start position:0%
+ 
+ 
+
+00:10:56.790 --> 00:10:58.389 align:start position:0%
+ 
+ 
+
+00:10:58.389 --> 00:11:00.069 align:start position:0%
+ 
+ 
+
+00:11:00.069 --> 00:11:02.790 align:start position:0%
+ 
+ 
+
+00:11:02.790 --> 00:11:04.310 align:start position:0%
+ 
+ 
+
+00:11:04.310 --> 00:11:04.320 align:start position:0%
+ 
+ 
+
+00:11:04.320 --> 00:11:05.430 align:start position:0%
+ 
+
+
+00:11:05.430 --> 00:11:07.190 align:start position:0%
+ 
+ 
+
+00:11:07.190 --> 00:11:08.470 align:start position:0%
+ 
+ 
+
+00:11:08.470 --> 00:11:08.480 align:start position:0%
+ 
+ 
+
+00:11:08.480 --> 00:11:09.190 align:start position:0%
+ 
+
+
+00:11:09.190 --> 00:11:14.630 align:start position:0%
+ 
+ 
+
+00:11:14.630 --> 00:11:16.630 align:start position:0%
+ 
+ 
+
+00:11:16.630 --> 00:11:17.670 align:start position:0%
+ 
+ 
+
+00:11:17.670 --> 00:11:19.910 align:start position:0%
+ 
+ 
+
+00:11:19.910 --> 00:11:21.670 align:start position:0%
+ 
+ 
+
+00:11:21.670 --> 00:11:23.670 align:start position:0%
+ 
+ 
+
+00:11:23.670 --> 00:11:23.680 align:start position:0%
+ 
+ 
+
+00:11:23.680 --> 00:11:24.710 align:start position:0%
+ 
+
+
+00:11:24.710 --> 00:11:26.710 align:start position:0%
+ 
+ 
+
+00:11:26.710 --> 00:11:27.990 align:start position:0%
+ 
+ 
+
+00:11:27.990 --> 00:11:29.190 align:start position:0%
+ 
+ 
+
+00:11:29.190 --> 00:11:31.030 align:start position:0%
+ 
+ 
+
+00:11:31.030 --> 00:11:32.949 align:start position:0%
+ 
+ 
+
+00:11:32.949 --> 00:11:35.030 align:start position:0%
+ 
+ 
+
+00:11:35.030 --> 00:11:36.870 align:start position:0%
+ 
+ 
+
+00:11:36.870 --> 00:11:37.670 align:start position:0%
+ 
+ 
+
+00:11:37.670 --> 00:11:39.670 align:start position:0%
+ 
+ 
+
+00:11:39.670 --> 00:11:41.590 align:start position:0%
+ 
+ 
+
+00:11:41.590 --> 00:11:43.350 align:start position:0%
+ 
+ 
+
+00:11:43.350 --> 00:11:45.509 align:start position:0%
+ 
+ 
+
+00:11:45.509 --> 00:11:48.069 align:start position:0%
+ 
+ 
+
+00:11:48.069 --> 00:11:51.670 align:start position:0%
+ 
+ 
+
+00:11:51.670 --> 00:11:53.430 align:start position:0%
+ 
+ 
+
+00:11:53.430 --> 00:11:54.949 align:start position:0%
+ 
+ 
+
+00:11:54.949 --> 00:11:56.949 align:start position:0%
+ 
+ 
+
+00:11:56.949 --> 00:11:56.959 align:start position:0%
+ 
+ 
+
+00:11:56.959 --> 00:11:57.350 align:start position:0%
+ 
+
+
+00:11:57.350 --> 00:12:01.030 align:start position:0%
+ 
+ 
+
+00:12:01.030 --> 00:12:04.389 align:start position:0%
+ 
+ 
+
+00:12:04.389 --> 00:12:06.230 align:start position:0%
+ 
+ 
+
+00:12:06.230 --> 00:12:07.190 align:start position:0%
+ 
+ 
+
+00:12:07.190 --> 00:12:08.389 align:start position:0%
+ 
+ 
+
+00:12:08.389 --> 00:12:10.470 align:start position:0%
+ 
+ 
+
+00:12:10.470 --> 00:12:11.670 align:start position:0%
+ 
+ 
+
+00:12:11.670 --> 00:12:13.190 align:start position:0%
+ 
+ 
+
+00:12:13.190 --> 00:12:15.430 align:start position:0%
+ 
+ 
+
+00:12:15.430 --> 00:12:16.470 align:start position:0%
+ 
+ 
+
+00:12:16.470 --> 00:12:18.150 align:start position:0%
+ 
+ 
+
+00:12:18.150 --> 00:12:20.230 align:start position:0%
+ 
+ 
+
+00:12:20.230 --> 00:12:23.509 align:start position:0%
+ 
+ 
+
+00:12:23.509 --> 00:12:23.990 align:start position:0%
+ 
+ 
+
+00:12:23.990 --> 00:12:25.670 align:start position:0%
+ 
+ 
+
+00:12:25.670 --> 00:12:27.430 align:start position:0%
+ 
+ 
+
+00:12:27.430 --> 00:12:28.230 align:start position:0%
+ 
+ 
+
+00:12:28.230 --> 00:12:30.230 align:start position:0%
+ 
+ 
+
+00:12:30.230 --> 00:12:33.509 align:start position:0%
+ 
+ 
+
+00:12:33.509 --> 00:12:35.269 align:start position:0%
+ 
+ 
+
+00:12:35.269 --> 00:12:37.829 align:start position:0%
+ 
+ 
+
+00:12:37.829 --> 00:12:39.269 align:start position:0%
+ 
+ 
+
+00:12:39.269 --> 00:12:40.470 align:start position:0%
+ 
+ 
+
+00:12:40.470 --> 00:12:41.750 align:start position:0%
+ 
+ 
+
+00:12:41.750 --> 00:12:42.949 align:start position:0%
+ 
+ 
+
+00:12:42.949 --> 00:12:44.629 align:start position:0%
+ 
+ 
+
+00:12:44.629 --> 00:12:46.069 align:start position:0%
+ 
+ 
+
+00:12:46.069 --> 00:12:48.870 align:start position:0%
+ 
+ 
+
+00:12:48.870 --> 00:12:51.110 align:start position:0%
+ 
+ 
+
+00:12:51.110 --> 00:12:53.030 align:start position:0%
+ 
+ 
+
+00:12:53.030 --> 00:12:54.550 align:start position:0%
+ 
+ 
+
+00:12:54.550 --> 00:12:56.629 align:start position:0%
+ 
+ 
+
+00:12:56.629 --> 00:12:58.470 align:start position:0%
+ 
+ 
+
+00:12:58.470 --> 00:12:59.990 align:start position:0%
+ 
+ 
+
+00:12:59.990 --> 00:13:01.910 align:start position:0%
+ 
+ 
+
+00:13:01.910 --> 00:13:03.430 align:start position:0%
+ 
+ 
+
+00:13:03.430 --> 00:13:05.670 align:start position:0%
+ 
+ 
+
+00:13:05.670 --> 00:13:07.190 align:start position:0%
+ 
+ 
+
+00:13:07.190 --> 00:13:09.110 align:start position:0%
+ 
+ 
+
+00:13:09.110 --> 00:13:10.550 align:start position:0%
+ 
+ 
+
+00:13:10.550 --> 00:13:12.870 align:start position:0%
+ 
+ 
+
+00:13:12.870 --> 00:13:14.790 align:start position:0%
+ 
+ 
+
+00:13:14.790 --> 00:13:16.629 align:start position:0%
+ 
+ 
+
+00:13:16.629 --> 00:13:19.350 align:start position:0%
+ 
+ 
+
+00:13:19.350 --> 00:13:20.470 align:start position:0%
+ 
+ 
+
+00:13:20.470 --> 00:13:22.949 align:start position:0%
+ 
+ 
+
+00:13:22.949 --> 00:13:25.030 align:start position:0%
+ 
+ 
+
+00:13:25.030 --> 00:13:27.430 align:start position:0%
+ 
+ 
+
+00:13:27.430 --> 00:13:29.190 align:start position:0%
+ 
+ 
+
+00:13:29.190 --> 00:13:31.430 align:start position:0%
+ 
+ 
+
+00:13:31.430 --> 00:13:31.440 align:start position:0%
+ 
+ 
+
+00:13:31.440 --> 00:13:31.990 align:start position:0%
+ 
+
+
+00:13:31.990 --> 00:13:35.269 align:start position:0%
+ 
+ 
+
+00:13:35.269 --> 00:13:38.150 align:start position:0%
+ 
+ 
+
+00:13:38.150 --> 00:13:38.949 align:start position:0%
+ 
+ 
+
+00:13:38.949 --> 00:13:41.269 align:start position:0%
+ 
+ 
+
+00:13:41.269 --> 00:13:42.230 align:start position:0%
+ 
+ 
+
+00:13:42.230 --> 00:13:44.470 align:start position:0%
+ 
+ 
+
+00:13:44.470 --> 00:13:44.480 align:start position:0%
+ 
+ 
+
+00:13:44.480 --> 00:13:46.389 align:start position:0%
+ 
+
+
+00:13:46.389 --> 00:13:47.990 align:start position:0%
+ 
+ 
+
+00:13:47.990 --> 00:13:49.430 align:start position:0%
+ 
+ 
+
+00:13:49.430 --> 00:13:51.910 align:start position:0%
+ 
+ 
+
+00:13:51.910 --> 00:13:53.829 align:start position:0%
+ 
+ 
+
+00:13:53.829 --> 00:13:55.189 align:start position:0%
+ 
+ 
+
+00:13:55.189 --> 00:13:57.670 align:start position:0%
+ 
+ 
+
+00:13:57.670 --> 00:14:00.150 align:start position:0%
+ 
+ 
+
+00:14:00.150 --> 00:14:01.189 align:start position:0%
+ 
+ 
+
+00:14:01.189 --> 00:14:04.150 align:start position:0%
+ 
+ 
+
+00:14:04.150 --> 00:14:05.030 align:start position:0%
+ 
+ 
+
+00:14:05.030 --> 00:14:07.509 align:start position:0%
+ 
+ 
+
+00:14:07.509 --> 00:14:09.829 align:start position:0%
+ 
+ 
+
+00:14:09.829 --> 00:14:11.829 align:start position:0%
+ 
+ 
+
+00:14:11.829 --> 00:14:13.910 align:start position:0%
+ 
+ 
+
+00:14:13.910 --> 00:14:15.670 align:start position:0%
+ 
+ 
+
+00:14:15.670 --> 00:14:17.910 align:start position:0%
+ 
+ 
+
+00:14:17.910 --> 00:14:19.829 align:start position:0%
+ 
+ 
+
+00:14:19.829 --> 00:14:21.350 align:start position:0%
+ 
+ 
+
+00:14:21.350 --> 00:14:23.670 align:start position:0%
+ 
+ 
+
+00:14:23.670 --> 00:14:27.670 align:start position:0%
+ 
+ 
+
+00:14:27.670 --> 00:14:29.030 align:start position:0%
+ 
+ 
+
+00:14:29.030 --> 00:14:30.870 align:start position:0%
+ 
+ 
+
+00:14:30.870 --> 00:14:32.389 align:start position:0%
+ 
+ 
+
+00:14:32.389 --> 00:14:33.990 align:start position:0%
+ 
+ 
+
+00:14:33.990 --> 00:14:35.910 align:start position:0%
+ 
+ 
+
+00:14:35.910 --> 00:14:38.150 align:start position:0%
+ 
+ 
+
+00:14:38.150 --> 00:14:39.590 align:start position:0%
+ 
+ 
+
+00:14:39.590 --> 00:14:41.269 align:start position:0%
+ 
+ 
+
+00:14:41.269 --> 00:14:43.189 align:start position:0%
+ 
+ 
+
+00:14:43.189 --> 00:14:44.790 align:start position:0%
+ 
+ 
+
+00:14:44.790 --> 00:14:46.470 align:start position:0%
+ 
+ 
+
+00:14:46.470 --> 00:14:48.389 align:start position:0%
+ 
+ 
+
+00:14:48.389 --> 00:14:50.150 align:start position:0%
+ 
+ 
+
+00:14:50.150 --> 00:14:52.949 align:start position:0%
+ 
+ 
+
+00:14:52.949 --> 00:14:54.310 align:start position:0%
+ 
+ 
+
+00:14:54.310 --> 00:14:55.910 align:start position:0%
+ 
+ 
+
+00:14:55.910 --> 00:14:57.829 align:start position:0%
+ 
+ 
+
+00:14:57.829 --> 00:14:59.590 align:start position:0%
+ 
+ 
+
+00:14:59.590 --> 00:15:02.470 align:start position:0%
+ 
+ 
+
+00:15:02.470 --> 00:15:05.829 align:start position:0%
+ 
+ 
+
+00:15:05.829 --> 00:15:06.949 align:start position:0%
+ 
+ 
+
+00:15:06.949 --> 00:15:09.269 align:start position:0%
+ 
+ 
+
+00:15:09.269 --> 00:15:11.509 align:start position:0%
+ 
+ 
+
+00:15:11.509 --> 00:15:13.110 align:start position:0%
+ 
+ 
+
+00:15:13.110 --> 00:15:14.710 align:start position:0%
+ 
+ 
+
+00:15:14.710 --> 00:15:14.720 align:start position:0%
+ 
+ 
+
+00:15:14.720 --> 00:15:17.829 align:start position:0%
+ 
+
+
+00:15:17.829 --> 00:15:18.710 align:start position:0%
+ 
+ 
+
+00:15:18.710 --> 00:15:19.990 align:start position:0%
+ 
+ 
+
+00:15:19.990 --> 00:15:21.350 align:start position:0%
+ 
+ 
+
+00:15:21.350 --> 00:15:22.150 align:start position:0%
+ 
+ 
+
+00:15:22.150 --> 00:15:25.430 align:start position:0%
+ 
+ 
+
+00:15:25.430 --> 00:15:26.629 align:start position:0%
+ 
+ 
+
+00:15:26.629 --> 00:15:27.509 align:start position:0%
+ 
+ 
+
+00:15:27.509 --> 00:15:29.509 align:start position:0%
+ 
+ 
+
+00:15:29.509 --> 00:15:31.590 align:start position:0%
+ 
+ 
+
+00:15:31.590 --> 00:15:33.430 align:start position:0%
+ 
+ 
+
+00:15:33.430 --> 00:15:34.790 align:start position:0%
+ 
+ 
+
+00:15:34.790 --> 00:15:37.189 align:start position:0%
+ 
+ 
+
+00:15:37.189 --> 00:15:37.199 align:start position:0%
+ 
+ 
+
+00:15:37.199 --> 00:15:37.910 align:start position:0%
+ 
+
+
+00:15:37.910 --> 00:15:39.910 align:start position:0%
+ 
+ 
+
+00:15:39.910 --> 00:15:41.749 align:start position:0%
+ 
+ 
+
+00:15:41.749 --> 00:15:41.759 align:start position:0%
+ 
+ 
+
+00:15:41.759 --> 00:15:42.949 align:start position:0%
+ 
+
+
+00:15:42.949 --> 00:15:44.949 align:start position:0%
+ 
+ 
+
+00:15:44.949 --> 00:15:46.870 align:start position:0%
+ 
+ 
+
+00:15:46.870 --> 00:15:48.790 align:start position:0%
+ 
+ 
+
+00:15:48.790 --> 00:15:49.350 align:start position:0%
+ 
+ 
+
+00:15:49.350 --> 00:15:51.430 align:start position:0%
+ 
+ 
+
+00:15:51.430 --> 00:15:53.509 align:start position:0%
+ 
+ 
+
+00:15:53.509 --> 00:15:54.069 align:start position:0%
+ 
+ 
+
+00:15:54.069 --> 00:15:56.790 align:start position:0%
+ 
+ 
+
+00:15:56.790 --> 00:15:56.800 align:start position:0%
+ 
+ 
+
+00:15:56.800 --> 00:15:57.269 align:start position:0%
+ 
+
+
+00:15:57.269 --> 00:15:58.790 align:start position:0%
+ 
+ 
+
+00:15:58.790 --> 00:16:00.470 align:start position:0%
+ 
+ 
+
+00:16:00.470 --> 00:16:00.480 align:start position:0%
+ 
+ 
+
+00:16:00.480 --> 00:16:01.030 align:start position:0%
+ 
+
+
+00:16:01.030 --> 00:16:02.870 align:start position:0%
+ 
+ 
+
+00:16:02.870 --> 00:16:04.870 align:start position:0%
+ 
+ 
+
+00:16:04.870 --> 00:16:07.590 align:start position:0%
+ 
+ 
+
+00:16:07.590 --> 00:16:09.110 align:start position:0%
+ 
+ 
+
+00:16:09.110 --> 00:16:10.710 align:start position:0%
+ 
+ 
+
+00:16:10.710 --> 00:16:13.030 align:start position:0%
+ 
+ 
+
+00:16:13.030 --> 00:16:14.470 align:start position:0%
+ 
+ 
+
+00:16:14.470 --> 00:16:16.389 align:start position:0%
+ 
+ 
+
+00:16:16.389 --> 00:16:18.069 align:start position:0%
+ 
+ 
+
+00:16:18.069 --> 00:16:19.670 align:start position:0%
+ 
+ 
+
+00:16:19.670 --> 00:16:21.990 align:start position:0%
+ 
+ 
+
+00:16:21.990 --> 00:16:23.670 align:start position:0%
+ 
+ 
+
+00:16:23.670 --> 00:16:24.870 align:start position:0%
+ 
+ 
+
+00:16:24.870 --> 00:16:26.870 align:start position:0%
+ 
+ 
+
+00:16:26.870 --> 00:16:28.310 align:start position:0%
+ 
+ 
+
+00:16:28.310 --> 00:16:30.230 align:start position:0%
+ 
+ 
+
+00:16:30.230 --> 00:16:32.230 align:start position:0%
+ 
+ 
+
+00:16:32.230 --> 00:16:33.110 align:start position:0%
+ 
+ 
+
+00:16:33.110 --> 00:16:34.829 align:start position:0%
+ 
+ 
+
+00:16:34.829 --> 00:16:34.839 align:start position:0%
+ 
+ 
+
+00:16:34.839 --> 00:16:36.470 align:start position:0%
+ 
+
+
+00:16:36.470 --> 00:16:38.470 align:start position:0%
+ 
+ 
+
+00:16:38.470 --> 00:16:39.749 align:start position:0%
+ 
+ 
+
+00:16:39.749 --> 00:16:41.189 align:start position:0%
+ 
+ 
+
+00:16:41.189 --> 00:16:43.829 align:start position:0%
+ 
+ 
+
+00:16:43.829 --> 00:16:45.189 align:start position:0%
+ 
+ 
+
+00:16:45.189 --> 00:16:47.749 align:start position:0%
+ 
+ 
+
+00:16:47.749 --> 00:16:49.670 align:start position:0%
+ 
+ 
+
+00:16:49.670 --> 00:16:51.749 align:start position:0%
+ 
+ 
+
+00:16:51.749 --> 00:16:53.590 align:start position:0%
+ 
+ 
+
+00:16:53.590 --> 00:16:55.110 align:start position:0%
+ 
+ 
+
+00:16:55.110 --> 00:16:57.350 align:start position:0%
+ 
+ 
+
+00:16:57.350 --> 00:16:59.670 align:start position:0%
+ 
+ 
+
+00:16:59.670 --> 00:17:01.430 align:start position:0%
+ 
+ 
+
+00:17:01.430 --> 00:17:04.150 align:start position:0%
+ 
+ 
+
+00:17:04.150 --> 00:17:05.669 align:start position:0%
+ 
+ 
+
+00:17:05.669 --> 00:17:07.189 align:start position:0%
+ 
+ 
+
+00:17:07.189 --> 00:17:10.230 align:start position:0%
+ 
+ 
+
+00:17:10.230 --> 00:17:11.909 align:start position:0%
+ 
+ 
+
+00:17:11.909 --> 00:17:13.590 align:start position:0%
+ 
+ 
+
+00:17:13.590 --> 00:17:14.870 align:start position:0%
+ 
+ 
+
+00:17:14.870 --> 00:17:14.880 align:start position:0%
+ 
+ 
+
+00:17:14.880 --> 00:17:17.270 align:start position:0%
+ 
+
+
+00:17:17.270 --> 00:17:18.870 align:start position:0%
+ 
+ 
+
+00:17:18.870 --> 00:17:20.549 align:start position:0%
+ 
+ 
+
+00:17:20.549 --> 00:17:21.990 align:start position:0%
+ 
+ 
+
+00:17:21.990 --> 00:17:23.510 align:start position:0%
+ 
+ 
+
+00:17:23.510 --> 00:17:24.470 align:start position:0%
+ 
+ 
+
+00:17:24.470 --> 00:17:26.390 align:start position:0%
+ 
+ 
+
+00:17:26.390 --> 00:17:27.990 align:start position:0%
+ 
+ 
+
+00:17:27.990 --> 00:17:29.430 align:start position:0%
+ 
+ 
+
+00:17:29.430 --> 00:17:30.710 align:start position:0%
+ 
+ 
+
+00:17:30.710 --> 00:17:32.150 align:start position:0%
+ 
+ 
+
+00:17:32.150 --> 00:17:33.909 align:start position:0%
+ 
+ 
+
+00:17:33.909 --> 00:17:35.029 align:start position:0%
+ 
+ 
+
+00:17:35.029 --> 00:17:35.909 align:start position:0%
+ 
+ 
+
+00:17:35.909 --> 00:17:37.510 align:start position:0%
+ 
+ 
+
+00:17:37.510 --> 00:17:39.110 align:start position:0%
+ 
+ 
+
+00:17:39.110 --> 00:17:39.120 align:start position:0%
+ 
+ 
+
+00:17:39.120 --> 00:17:39.750 align:start position:0%
+ 
+
+
+00:17:39.750 --> 00:17:42.710 align:start position:0%
+ 
+ 
+
+00:17:42.710 --> 00:17:44.230 align:start position:0%
+ 
+ 
+
+00:17:44.230 --> 00:17:46.549 align:start position:0%
+ 
+ 
+
+00:17:46.549 --> 00:17:48.070 align:start position:0%
+ 
+ 
+
+00:17:48.070 --> 00:17:49.510 align:start position:0%
+ 
+ 
+
+00:17:49.510 --> 00:17:51.669 align:start position:0%
+ 
+ 
+
+00:17:51.669 --> 00:17:54.150 align:start position:0%
+ 
+ 
+
+00:17:54.150 --> 00:17:55.350 align:start position:0%
+ 
+ 
+
+00:17:55.350 --> 00:17:57.350 align:start position:0%
+ 
+ 
+
+00:17:57.350 --> 00:17:59.270 align:start position:0%
+ 
+ 
+
+00:17:59.270 --> 00:18:02.789 align:start position:0%
+ 
+ 
+
+00:18:02.789 --> 00:18:04.470 align:start position:0%
+ 
+ 
+
+00:18:04.470 --> 00:18:06.950 align:start position:0%
+ 
+ 
+
+00:18:06.950 --> 00:18:08.150 align:start position:0%
+ 
+ 
+
+00:18:08.150 --> 00:18:11.190 align:start position:0%
+ 
+ 
+
+00:18:11.190 --> 00:18:15.510 align:start position:0%
+ 
+ 
+
+00:18:15.510 --> 00:18:17.430 align:start position:0%
+ 
+ 
+
+00:18:17.430 --> 00:18:18.950 align:start position:0%
+ 
+ 
+
+00:18:18.950 --> 00:18:20.230 align:start position:0%
+ 
+ 
+
+00:18:20.230 --> 00:18:21.909 align:start position:0%
+ 
+ 
+
+00:18:21.909 --> 00:18:24.390 align:start position:0%
+ 
+ 
+
+00:18:24.390 --> 00:18:26.230 align:start position:0%
+ 
+ 
+
+00:18:26.230 --> 00:18:27.909 align:start position:0%
+ 
+ 
+
+00:18:27.909 --> 00:18:27.919 align:start position:0%
+ 
+ 
+
+00:18:27.919 --> 00:18:30.230 align:start position:0%
+ 
+
+
+00:18:30.230 --> 00:18:31.830 align:start position:0%
+ 
+ 
+
+00:18:31.830 --> 00:18:34.310 align:start position:0%
+ 
+ 
+
+00:18:34.310 --> 00:18:36.789 align:start position:0%
+ 
+ 
+
+00:18:36.789 --> 00:18:37.590 align:start position:0%
+ 
+ 
+
+00:18:37.590 --> 00:18:39.669 align:start position:0%
+ 
+ 
+
+00:18:39.669 --> 00:18:41.029 align:start position:0%
+ 
+ 
+
+00:18:41.029 --> 00:18:43.270 align:start position:0%
+ 
+ 
+
+00:18:43.270 --> 00:18:44.549 align:start position:0%
+ 
+ 
+
+00:18:44.549 --> 00:18:46.390 align:start position:0%
+ 
+ 
+
+00:18:46.390 --> 00:18:49.190 align:start position:0%
+ 
+ 
+
+00:18:49.190 --> 00:18:50.789 align:start position:0%
+ 
+ 
+
+00:18:50.789 --> 00:18:53.350 align:start position:0%
+ 
+ 
+
+00:18:53.350 --> 00:18:53.360 align:start position:0%
+ 
+ 
+
+00:18:53.360 --> 00:18:53.830 align:start position:0%
+ 
+
+
+00:18:53.830 --> 00:18:55.510 align:start position:0%
+ 
+ 
+
+00:18:55.510 --> 00:18:57.669 align:start position:0%
+ 
+ 
+
+00:18:57.669 --> 00:18:59.510 align:start position:0%
+ 
+ 
+
+00:18:59.510 --> 00:19:01.029 align:start position:0%
+ 
+ 
+
+00:19:01.029 --> 00:19:02.470 align:start position:0%
+ 
+ 
+
+00:19:02.470 --> 00:19:03.909 align:start position:0%
+ 
+ 
+
+00:19:03.909 --> 00:19:03.919 align:start position:0%
+ 
+ 
+
+00:19:03.919 --> 00:19:04.390 align:start position:0%
+ 
+
+
+00:19:04.390 --> 00:19:05.669 align:start position:0%
+ 
+ 
+
+00:19:05.669 --> 00:19:07.909 align:start position:0%
+ 
+ 
+
+00:19:07.909 --> 00:19:09.990 align:start position:0%
+ 
+ 
+
+00:19:09.990 --> 00:19:11.990 align:start position:0%
+ 
+ 
+
+00:19:11.990 --> 00:19:13.110 align:start position:0%
+ 
+ 
+
+00:19:13.110 --> 00:19:15.909 align:start position:0%
+ 
+ 
+
+00:19:15.909 --> 00:19:15.919 align:start position:0%
+ 
+ 
+
+00:19:15.919 --> 00:19:16.310 align:start position:0%
+ 
+
+
+00:19:16.310 --> 00:19:19.270 align:start position:0%
+ 
+ 
+
+00:19:19.270 --> 00:19:20.789 align:start position:0%
+ 
+ 
+
+00:19:20.789 --> 00:19:22.549 align:start position:0%
+ 
+ 
+
+00:19:22.549 --> 00:19:24.390 align:start position:0%
+ 
+ 
+
+00:19:24.390 --> 00:19:25.909 align:start position:0%
+ 
+ 
+
+00:19:25.909 --> 00:19:27.270 align:start position:0%
+ 
+ 
+
+00:19:27.270 --> 00:19:28.789 align:start position:0%
+ 
+ 
+
+00:19:28.789 --> 00:19:28.799 align:start position:0%
+ 
+ 
+
+00:19:28.799 --> 00:19:29.430 align:start position:0%
+ 
+
+
+00:19:29.430 --> 00:19:31.430 align:start position:0%
+ 
+ 
+
+00:19:31.430 --> 00:19:33.110 align:start position:0%
+ 
+ 
+
+00:19:33.110 --> 00:19:34.390 align:start position:0%
+ 
+ 
+
+00:19:34.390 --> 00:19:35.510 align:start position:0%
+ 
+ 
+
+00:19:35.510 --> 00:19:38.630 align:start position:0%
+ 
+ 
+
+00:19:38.630 --> 00:19:47.190 align:start position:0%
+ 
+ 
+
+00:19:47.190 --> 00:19:52.070 align:start position:0%
+ 
+ 
+
+00:19:52.070 --> 00:19:54.070 align:start position:0%
+ 
+ 
+
+00:19:54.070 --> 00:19:54.080 align:start position:0%
+ 
+ 
+
+00:19:54.080 --> 00:19:56.950 align:start position:0%
+ 
+
+
+00:19:56.950 --> 00:20:00.310 align:start position:0%
+ 
+ 
+
+00:20:00.310 --> 00:20:01.430 align:start position:0%
+ 
+ 
+
+00:20:01.430 --> 00:20:03.110 align:start position:0%
+ 
+ 
+
+00:20:03.110 --> 00:20:05.270 align:start position:0%
+ 
+ 
+
+00:20:05.270 --> 00:20:07.029 align:start position:0%
+ 
+ 
+
+00:20:07.029 --> 00:20:08.390 align:start position:0%
+ 
+ 
+
+00:20:08.390 --> 00:20:09.830 align:start position:0%
+ 
+ 
+
+00:20:09.830 --> 00:20:09.840 align:start position:0%
+ 
+ 
+
+00:20:09.840 --> 00:20:10.789 align:start position:0%
+ 
+
+
+00:20:10.789 --> 00:20:14.230 align:start position:0%
+ 
+ 
+
+00:20:14.230 --> 00:20:19.510 align:start position:0%
+ 
+ 
+
+00:20:19.510 --> 00:20:26.230 align:start position:0%
+ 
+ 
+
+00:20:26.230 --> 00:20:28.470 align:start position:0%
+ 
+ 
+
+00:20:28.470 --> 00:20:31.029 align:start position:0%
+ 
+ 
+
+00:20:31.029 --> 00:20:34.149 align:start position:0%
+ 
+ 
+
+00:20:34.149 --> 00:20:37.750 align:start position:0%
+ 
+ 
+
+00:20:37.750 --> 00:20:37.760 align:start position:0%
+ 
+ 
+
+00:20:37.760 --> 00:20:38.310 align:start position:0%
+ 
+
+
+00:20:38.310 --> 00:20:41.830 align:start position:0%
+ 
+ 
+
+00:20:41.830 --> 00:20:43.270 align:start position:0%
+ 
+ 
+
+00:20:43.270 --> 00:20:45.909 align:start position:0%
+ 
+ 
+
+00:20:45.909 --> 00:20:48.149 align:start position:0%
+ 
+ 
+
+00:20:48.149 --> 00:20:52.230 align:start position:0%
+ 
+ 
+
+00:20:52.230 --> 00:20:53.990 align:start position:0%
+ 
+ 
+
+00:20:53.990 --> 00:20:56.710 align:start position:0%
+ 
+ 
+
+00:20:56.710 --> 00:20:58.310 align:start position:0%
+ 
+ 
+
+00:20:58.310 --> 00:20:59.909 align:start position:0%
+ 
+ 
+
+00:20:59.909 --> 00:21:01.990 align:start position:0%
+ 
+ 
+
+00:21:01.990 --> 00:21:03.190 align:start position:0%
+ 
+ 
+
+00:21:03.190 --> 00:21:04.950 align:start position:0%
+ 
+ 
+
+00:21:04.950 --> 00:21:06.870 align:start position:0%
+ 
+ 
+
+00:21:06.870 --> 00:21:09.029 align:start position:0%
+ 
+ 
+
+00:21:09.029 --> 00:21:11.110 align:start position:0%
+ 
+ 
+
+00:21:11.110 --> 00:21:12.470 align:start position:0%
+ 
+ 
+
+00:21:12.470 --> 00:21:13.590 align:start position:0%
+ 
+ 
+
+00:21:13.590 --> 00:21:15.190 align:start position:0%
+ 
+ 
+
+00:21:15.190 --> 00:21:17.029 align:start position:0%
+ 
+ 
+
+00:21:17.029 --> 00:21:18.710 align:start position:0%
+ 
+ 
+
+00:21:18.710 --> 00:21:19.750 align:start position:0%
+ 
+ 
+
+00:21:19.750 --> 00:21:21.510 align:start position:0%
+ 
+ 
+
+00:21:21.510 --> 00:21:24.789 align:start position:0%
+ 
+ 
+
+00:21:24.789 --> 00:21:27.909 align:start position:0%
+ 
+ 
+
+00:21:27.909 --> 00:21:30.070 align:start position:0%
+ 
+ 
+
+00:21:30.070 --> 00:21:31.510 align:start position:0%
+ 
+ 
+
+00:21:31.510 --> 00:21:33.110 align:start position:0%
+ 
+ 
+
+00:21:33.110 --> 00:21:34.870 align:start position:0%
+ 
+ 
+
+00:21:34.870 --> 00:21:36.149 align:start position:0%
+ 
+ 
+
+00:21:36.149 --> 00:21:37.510 align:start position:0%
+ 
+ 
+
+00:21:37.510 --> 00:21:38.789 align:start position:0%
+ 
+ 
+
+00:21:38.789 --> 00:21:40.070 align:start position:0%
+ 
+ 
+
+00:21:40.070 --> 00:21:42.710 align:start position:0%
+ 
+ 
+
+00:21:42.710 --> 00:21:44.630 align:start position:0%
+ 
+ 
+
+00:21:44.630 --> 00:21:46.390 align:start position:0%
+ 
+ 
+
+00:21:46.390 --> 00:21:46.400 align:start position:0%
+ 
+ 
+
+00:21:46.400 --> 00:21:46.950 align:start position:0%
+ 
+
+
+00:21:46.950 --> 00:21:49.110 align:start position:0%
+ 
+ 
+
+00:21:49.110 --> 00:21:50.149 align:start position:0%
+ 
+ 
+
+00:21:50.149 --> 00:21:51.750 align:start position:0%
+ 
+ 
+
+00:21:51.750 --> 00:21:53.270 align:start position:0%
+ 
+ 
+
+00:21:53.270 --> 00:21:53.669 align:start position:0%
+ 
+ 
+
+00:21:53.669 --> 00:21:57.110 align:start position:0%
+ 
+ 
+
+00:21:57.110 --> 00:21:58.789 align:start position:0%
+ 
+ 
+
+00:21:58.789 --> 00:21:58.799 align:start position:0%
+ 
+ 
+
+00:21:58.799 --> 00:22:00.789 align:start position:0%
+ 
+
+
+00:22:00.789 --> 00:22:02.710 align:start position:0%
+ 
+ 
+
+00:22:02.710 --> 00:22:04.630 align:start position:0%
+ 
+ 
+
+00:22:04.630 --> 00:22:07.270 align:start position:0%
+ 
+ 
+
+00:22:07.270 --> 00:22:13.669 align:start position:0%
+ 
+ 
+
+00:22:13.669 --> 00:22:15.350 align:start position:0%
+ 
+ 
+
+00:22:15.350 --> 00:22:19.830 align:start position:0%
+ 
+ 
+
+00:22:19.830 --> 00:22:22.950 align:start position:0%
+ 
+ 
+
+00:22:22.950 --> 00:22:25.510 align:start position:0%
+ 
+ 
+
+00:22:25.510 --> 00:22:25.520 align:start position:0%
+ 
+ 
+
+00:22:25.520 --> 00:22:26.310 align:start position:0%
+ 
+
+
+00:22:26.310 --> 00:22:27.750 align:start position:0%
+ 
+ 
+
+00:22:27.750 --> 00:22:29.909 align:start position:0%
+ 
+ 
+
+00:22:29.909 --> 00:22:31.669 align:start position:0%
+ 
+ 
+
+00:22:31.669 --> 00:22:33.350 align:start position:0%
+ 
+ 
+
+00:22:33.350 --> 00:22:35.990 align:start position:0%
+ 
+ 
+
+00:22:35.990 --> 00:22:37.830 align:start position:0%
+ 
+ 
+
+00:22:37.830 --> 00:22:39.750 align:start position:0%
+ 
+ 
+
+00:22:39.750 --> 00:22:41.510 align:start position:0%
+ 
+ 
+
+00:22:41.510 --> 00:22:43.110 align:start position:0%
+ 
+ 
+
+00:22:43.110 --> 00:22:45.110 align:start position:0%
+ 
+ 
+
+00:22:45.110 --> 00:22:46.310 align:start position:0%
+ 
+ 
+
+00:22:46.310 --> 00:22:48.710 align:start position:0%
+ 
+ 
+
+00:22:48.710 --> 00:22:49.909 align:start position:0%
+ 
+ 
+
+00:22:49.909 --> 00:22:53.750 align:start position:0%
+ 
+ 
+
+00:22:53.750 --> 00:22:55.830 align:start position:0%
+ 
+ 
+
+00:22:55.830 --> 00:22:57.750 align:start position:0%
+ 
+ 
+
+00:22:57.750 --> 00:22:59.270 align:start position:0%
+ 
+ 
+
+00:22:59.270 --> 00:23:00.390 align:start position:0%
+ 
+ 
+
+00:23:00.390 --> 00:23:02.549 align:start position:0%
+ 
+ 
+
+00:23:02.549 --> 00:23:04.230 align:start position:0%
+ 
+ 
+
+00:23:04.230 --> 00:23:06.070 align:start position:0%
+ 
+ 
+
+00:23:06.070 --> 00:23:07.909 align:start position:0%
+ 
+ 
+
+00:23:07.909 --> 00:23:09.190 align:start position:0%
+ 
+ 
+
+00:23:09.190 --> 00:23:11.350 align:start position:0%
+ 
+ 
+
+00:23:11.350 --> 00:23:12.789 align:start position:0%
+ 
+ 
+
+00:23:12.789 --> 00:23:14.149 align:start position:0%
+ 
+ 
+
+00:23:14.149 --> 00:23:16.549 align:start position:0%
+ 
+ 
+
+00:23:16.549 --> 00:23:20.830 align:start position:0%
+ 
+ 
+
+00:23:20.830 --> 00:23:20.840 align:start position:0%
+ 
+ 
+
+00:23:20.840 --> 00:23:24.070 align:start position:0%
+ 
+
+
+00:23:24.070 --> 00:23:27.510 align:start position:0%
+ 
+ 
+
+00:23:27.510 --> 00:23:29.110 align:start position:0%
+ 
+ 
+
+00:23:29.110 --> 00:23:30.549 align:start position:0%
+ 
+ 
+
+00:23:30.549 --> 00:23:31.750 align:start position:0%
+ 
+ 
+
+00:23:31.750 --> 00:23:34.149 align:start position:0%
+ 
+ 
+
+00:23:34.149 --> 00:23:34.159 align:start position:0%
+ 
+ 
+
+00:23:34.159 --> 00:23:34.870 align:start position:0%
+ 
+
+
+00:23:34.870 --> 00:23:37.270 align:start position:0%
+ 
+ 
+
+00:23:37.270 --> 00:23:39.270 align:start position:0%
+ 
+ 
+
+00:23:39.270 --> 00:23:41.190 align:start position:0%
+ 
+ 
+
+00:23:41.190 --> 00:23:43.990 align:start position:0%
+ 
+ 
+
+00:23:43.990 --> 00:23:45.830 align:start position:0%
+ 
+ 
+
+00:23:45.830 --> 00:23:47.430 align:start position:0%
+ 
+ 
+
+00:23:47.430 --> 00:23:49.590 align:start position:0%
+ 
+ 
+
+00:23:49.590 --> 00:23:50.470 align:start position:0%
+ 
+ 
+
+00:23:50.470 --> 00:23:51.750 align:start position:0%
+ 
+ 
+
+00:23:51.750 --> 00:23:53.909 align:start position:0%
+ 
+ 
+
+00:23:53.909 --> 00:23:56.630 align:start position:0%
+ 
+ 
+
+00:23:56.630 --> 00:23:57.669 align:start position:0%
+ 
+ 
+
+00:23:57.669 --> 00:24:00.470 align:start position:0%
+ 
+ 
+
+00:24:00.470 --> 00:24:00.480 align:start position:0%
+ 
+ 
+
+00:24:00.480 --> 00:24:01.190 align:start position:0%
+ 
+
+
+00:24:01.190 --> 00:24:04.230 align:start position:0%
+ 
+ 
+
+00:24:04.230 --> 00:24:05.430 align:start position:0%
+ 
+ 
+
+00:24:05.430 --> 00:24:07.029 align:start position:0%
+ 
+ 
+
+00:24:07.029 --> 00:24:07.909 align:start position:0%
+ 
+ 
+
+00:24:07.909 --> 00:24:11.350 align:start position:0%
+ 
+ 
+
+00:24:11.350 --> 00:24:12.789 align:start position:0%
+ 
+ 
+
+00:24:12.789 --> 00:24:15.190 align:start position:0%
+ 
+ 
+
+00:24:15.190 --> 00:24:16.789 align:start position:0%
+ 
+ 
+
+00:24:16.789 --> 00:24:18.390 align:start position:0%
+ 
+ 
+
+00:24:18.390 --> 00:24:19.590 align:start position:0%
+ 
+ 
+
+00:24:19.590 --> 00:24:20.310 align:start position:0%
+ 
+ 
+
+00:24:20.310 --> 00:24:21.750 align:start position:0%
+ 
+ 
+
+00:24:21.750 --> 00:24:23.190 align:start position:0%
+ 
+ 
+
+00:24:23.190 --> 00:24:24.230 align:start position:0%
+ 
+ 
+
+00:24:24.230 --> 00:24:26.470 align:start position:0%
+ 
+ 
+
+00:24:26.470 --> 00:24:29.510 align:start position:0%
+ 
+ 
+
+00:24:29.510 --> 00:24:32.230 align:start position:0%
+ 
+ 
+
+00:24:32.230 --> 00:24:34.950 align:start position:0%
+ 
+ 
+
+00:24:34.950 --> 00:24:36.630 align:start position:0%
+ 
+ 
+
+00:24:36.630 --> 00:24:38.390 align:start position:0%
+ 
+ 
+
+00:24:38.390 --> 00:24:40.789 align:start position:0%
+ 
+ 
+
+00:24:40.789 --> 00:24:42.390 align:start position:0%
+ 
+ 
+
+00:24:42.390 --> 00:24:43.990 align:start position:0%
+ 
+ 
+
+00:24:43.990 --> 00:24:46.070 align:start position:0%
+ 
+ 
+
+00:24:46.070 --> 00:24:46.080 align:start position:0%
+ 
+ 
+
+00:24:46.080 --> 00:24:47.269 align:start position:0%
+ 
+
+
+00:24:47.269 --> 00:24:49.909 align:start position:0%
+ 
+ 
+
+00:24:49.909 --> 00:24:51.110 align:start position:0%
+ 
+ 
+
+00:24:51.110 --> 00:24:54.230 align:start position:0%
+ 
+ 
+
+00:24:54.230 --> 00:24:54.950 align:start position:0%
+ 
+ 
+
+00:24:54.950 --> 00:24:56.630 align:start position:0%
+ 
+ 
+
+00:24:56.630 --> 00:24:58.230 align:start position:0%
+ 
+ 
+
+00:24:58.230 --> 00:24:59.110 align:start position:0%
+ 
+ 
+
+00:24:59.110 --> 00:25:01.350 align:start position:0%
+ 
+ 
+
+00:25:01.350 --> 00:25:02.870 align:start position:0%
+ 
+ 
+
+00:25:02.870 --> 00:25:05.269 align:start position:0%
+ 
+ 
+
+00:25:05.269 --> 00:25:06.870 align:start position:0%
+ 
+ 
+
+00:25:06.870 --> 00:25:08.470 align:start position:0%
+ 
+ 
+
+00:25:08.470 --> 00:25:10.390 align:start position:0%
+ 
+ 
+
+00:25:10.390 --> 00:25:12.470 align:start position:0%
+ 
+ 
+
+00:25:12.470 --> 00:25:12.480 align:start position:0%
+ 
+ 
+
+00:25:12.480 --> 00:25:13.110 align:start position:0%
+ 
+
+
+00:25:13.110 --> 00:25:15.269 align:start position:0%
+ 
+ 
+
+00:25:15.269 --> 00:25:17.830 align:start position:0%
+ 
+ 
+
+00:25:17.830 --> 00:25:19.830 align:start position:0%
+ 
+ 
+
+00:25:19.830 --> 00:25:21.430 align:start position:0%
+ 
+ 
+
+00:25:21.430 --> 00:25:23.190 align:start position:0%
+ 
+ 
+
+00:25:23.190 --> 00:25:24.710 align:start position:0%
+ 
+ 
+
+00:25:24.710 --> 00:25:25.350 align:start position:0%
+ 
+ 
+
+00:25:25.350 --> 00:25:28.230 align:start position:0%
+ 
+ 
+
+00:25:28.230 --> 00:25:29.269 align:start position:0%
+ 
+ 
+
+00:25:29.269 --> 00:25:31.750 align:start position:0%
+ 
+ 
+
+00:25:31.750 --> 00:25:33.350 align:start position:0%
+ 
+ 
+
+00:25:33.350 --> 00:25:35.190 align:start position:0%
+ 
+ 
+
+00:25:35.190 --> 00:25:36.950 align:start position:0%
+ 
+ 
+
+00:25:36.950 --> 00:25:39.029 align:start position:0%
+ 
+ 
+
+00:25:39.029 --> 00:25:40.789 align:start position:0%
+ 
+ 
+
+00:25:40.789 --> 00:25:42.950 align:start position:0%
+ 
+ 
+
+00:25:42.950 --> 00:25:44.549 align:start position:0%
+ 
+ 
+
+00:25:44.549 --> 00:25:47.029 align:start position:0%
+ 
+ 
+
+00:25:47.029 --> 00:25:48.149 align:start position:0%
+ 
+ 
+
+00:25:48.149 --> 00:25:50.470 align:start position:0%
+ 
+ 
+
+00:25:50.470 --> 00:25:52.549 align:start position:0%
+ 
+ 
+
+00:25:52.549 --> 00:25:52.559 align:start position:0%
+ 
+ 
+
+00:25:52.559 --> 00:25:53.350 align:start position:0%
+ 
+
+
+00:25:53.350 --> 00:25:55.190 align:start position:0%
+ 
+ 
+
+00:25:55.190 --> 00:25:56.630 align:start position:0%
+ 
+ 
+
+00:25:56.630 --> 00:25:58.870 align:start position:0%
+ 
+ 
+
+00:25:58.870 --> 00:26:01.510 align:start position:0%
+ 
+ 
+
+00:26:01.510 --> 00:26:01.520 align:start position:0%
+ 
+ 
+
+00:26:01.520 --> 00:26:02.470 align:start position:0%
+ 
+
+
+00:26:02.470 --> 00:26:03.750 align:start position:0%
+ 
+ 
+
+00:26:03.750 --> 00:26:06.390 align:start position:0%
+ 
+ 
+
+00:26:06.390 --> 00:26:09.110 align:start position:0%
+ 
+ 
+
+00:26:09.110 --> 00:26:11.909 align:start position:0%
+ 
+ 
+
+00:26:11.909 --> 00:26:13.510 align:start position:0%
+ 
+ 
+
+00:26:13.510 --> 00:26:16.070 align:start position:0%
+ 
+ 
+
+00:26:16.070 --> 00:26:16.080 align:start position:0%
+ 
+ 
+
+00:26:16.080 --> 00:26:17.350 align:start position:0%
+ 
+
+
+00:26:17.350 --> 00:26:19.750 align:start position:0%
+ 
+ 
+
+00:26:19.750 --> 00:26:21.590 align:start position:0%
+ 
+ 
+
+00:26:21.590 --> 00:26:22.310 align:start position:0%
+ 
+ 
+
+00:26:22.310 --> 00:26:23.830 align:start position:0%
+ 
+ 
+
+00:26:23.830 --> 00:26:25.590 align:start position:0%
+ 
+ 
+
+00:26:25.590 --> 00:26:26.950 align:start position:0%
+ 
+ 
+
+00:26:26.950 --> 00:26:28.549 align:start position:0%
+ 
+ 
+
+00:26:28.549 --> 00:26:30.310 align:start position:0%
+ 
+ 
+
+00:26:30.310 --> 00:26:30.320 align:start position:0%
+ 
+ 
+
+00:26:30.320 --> 00:26:30.870 align:start position:0%
+ 
+
+
+00:26:30.870 --> 00:26:33.190 align:start position:0%
+ 
+ 
+
+00:26:33.190 --> 00:26:34.549 align:start position:0%
+ 
+ 
+
+00:26:34.549 --> 00:26:35.830 align:start position:0%
+ 
+ 
+
+00:26:35.830 --> 00:26:35.840 align:start position:0%
+ 
+ 
+
+00:26:35.840 --> 00:26:37.029 align:start position:0%
+ 
+
+
+00:26:37.029 --> 00:26:39.990 align:start position:0%
+ 
+ 
+
+00:26:39.990 --> 00:26:41.269 align:start position:0%
+ 
+ 
+
+00:26:41.269 --> 00:26:43.510 align:start position:0%
+ 
+ 
+
+00:26:43.510 --> 00:26:44.549 align:start position:0%
+ 
+ 
+
+00:26:44.549 --> 00:26:46.549 align:start position:0%
+ 
+ 
+
+00:26:46.549 --> 00:26:47.830 align:start position:0%
+ 
+ 
+
+00:26:47.830 --> 00:26:48.630 align:start position:0%
+ 
+ 
+
+00:26:48.630 --> 00:26:51.029 align:start position:0%
+ 
+ 
+
+00:26:51.029 --> 00:26:52.149 align:start position:0%
+ 
+ 
+
+00:26:52.149 --> 00:26:56.390 align:start position:0%
+ 
+ 
+
+00:26:56.390 --> 00:27:07.909 align:start position:0%
+ 
+ 
+
+00:27:07.909 --> 00:27:09.350 align:start position:0%
+ 
+ 
+
+00:27:09.350 --> 00:27:11.350 align:start position:0%
+ 
+ 
+
+00:27:11.350 --> 00:27:11.360 align:start position:0%
+ 
+ 
+
+00:27:11.360 --> 00:27:12.390 align:start position:0%
+ 
+
+
+00:27:12.390 --> 00:27:16.950 align:start position:0%
+ 
+ 
+
+00:27:16.950 --> 00:27:20.310 align:start position:0%
+ 
+ 
+
+00:27:20.310 --> 00:27:23.110 align:start position:0%
+ 
+ 
+
+00:27:23.110 --> 00:27:24.870 align:start position:0%
+ 
+ 
+
+00:27:24.870 --> 00:27:25.990 align:start position:0%
+ 
+ 
+
+00:27:25.990 --> 00:27:27.350 align:start position:0%
+ 
+ 
+
+00:27:27.350 --> 00:27:29.029 align:start position:0%
+ 
+ 
+
+00:27:29.029 --> 00:27:32.310 align:start position:0%
+ 
+ 
+
+00:27:32.310 --> 00:27:33.909 align:start position:0%
+ 
+ 
+
+00:27:33.909 --> 00:27:35.590 align:start position:0%
+ 
+ 
+
+00:27:35.590 --> 00:27:37.350 align:start position:0%
+ 
+ 
+
+00:27:37.350 --> 00:27:39.110 align:start position:0%
+ 
+ 
+
+00:27:39.110 --> 00:27:40.470 align:start position:0%
+ 
+ 
+
+00:27:40.470 --> 00:27:42.389 align:start position:0%
+ 
+ 
+
+00:27:42.389 --> 00:27:44.630 align:start position:0%
+ 
+ 
+
+00:27:44.630 --> 00:27:44.640 align:start position:0%
+ 
+ 
+
+00:27:44.640 --> 00:27:46.389 align:start position:0%
+ 
+
+
+00:27:46.389 --> 00:27:48.630 align:start position:0%
+ 
+ 
+
+00:27:48.630 --> 00:27:50.389 align:start position:0%
+ 
+ 
+
+00:27:50.389 --> 00:27:52.389 align:start position:0%
+ 
+ 
+
+00:27:52.389 --> 00:27:54.310 align:start position:0%
+ 
+ 
+
+00:27:54.310 --> 00:27:55.990 align:start position:0%
+ 
+ 
+
+00:27:55.990 --> 00:27:57.430 align:start position:0%
+ 
+ 
+
+00:27:57.430 --> 00:28:00.470 align:start position:0%
+ 
+ 
+
+00:28:00.470 --> 00:28:01.510 align:start position:0%
+ 
+ 
+
+00:28:01.510 --> 00:28:01.520 align:start position:0%
+ 
+ 
+
+00:28:01.520 --> 00:28:02.070 align:start position:0%
+ 
+
+
+00:28:02.070 --> 00:28:03.909 align:start position:0%
+ 
+ 
+
+00:28:03.909 --> 00:28:05.510 align:start position:0%
+ 
+ 
+
+00:28:05.510 --> 00:28:07.510 align:start position:0%
+ 
+ 
+
+00:28:07.510 --> 00:28:09.750 align:start position:0%
+ 
+ 
+
+00:28:09.750 --> 00:28:11.590 align:start position:0%
+ 
+ 
+
+00:28:11.590 --> 00:28:12.630 align:start position:0%
+ 
+ 
+
+00:28:12.630 --> 00:28:14.549 align:start position:0%
+ 
+ 
+
+00:28:14.549 --> 00:28:16.310 align:start position:0%
+ 
+ 
+
+00:28:16.310 --> 00:28:17.269 align:start position:0%
+ 
+ 
+
+00:28:17.269 --> 00:28:19.510 align:start position:0%
+ 
+ 
+
+00:28:19.510 --> 00:28:20.870 align:start position:0%
+ 
+ 
+
+00:28:20.870 --> 00:28:20.880 align:start position:0%
+ 
+ 
+
+00:28:20.880 --> 00:28:21.990 align:start position:0%
+ 
+
+
+00:28:21.990 --> 00:28:23.669 align:start position:0%
+ 
+ 
+
+00:28:23.669 --> 00:28:23.679 align:start position:0%
+ 
+ 
+
+00:28:23.679 --> 00:28:25.190 align:start position:0%
+ 
+
+
+00:28:25.190 --> 00:28:26.870 align:start position:0%
+ 
+ 
+
+00:28:26.870 --> 00:28:28.310 align:start position:0%
+ 
+ 
+
+00:28:28.310 --> 00:28:28.320 align:start position:0%
+ 
+ 
+
+00:28:28.320 --> 00:28:28.870 align:start position:0%
+ 
+
+
+00:28:28.870 --> 00:28:30.149 align:start position:0%
+ 
+ 
+
+00:28:30.149 --> 00:28:31.909 align:start position:0%
+ 
+ 
+
+00:28:31.909 --> 00:28:33.269 align:start position:0%
+ 
+ 
+
+00:28:33.269 --> 00:28:34.950 align:start position:0%
+ 
+ 
+
+00:28:34.950 --> 00:28:50.230 align:start position:0%
+ 
+ 
+
+00:28:50.230 --> 00:28:50.240 align:start position:0%
+ 
+ 
+
+00:28:50.240 --> 00:28:52.320 align:start position:0%
+ 
+
+
