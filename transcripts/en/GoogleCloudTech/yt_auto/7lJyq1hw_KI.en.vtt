@@ -1,0 +1,4068 @@
+WEBVTT
+Kind: captions
+Language: en
+
+00:00:00.340 --> 00:00:06.909 align:start position:0%
+ 
+[Music]  joining me today is Oliver Tweety from  sky director of data engineering and  today we're going to be talking through  real-time streaming analytics with data  flow common use cases and patterns but  before we dive straight into patterns  it's important to understand streaming  and why it matters and a couple of  things that the Apache beam SDK and  dataflow do to solve some of the common  problems that you may run into so we can  have data that we're processing and that  data can be big for instance we can be  processing from gigabytes to terabytes  it could be really really big so we may  have huge amounts of data that we want  to process every day in multiple days  that we want to process and that data  can also be infinitely big so we may  have streaming data that's constantly  coming it never stops  and this gives a problem with processing  especially with unknown delays so one of  the more difficult things with unbounded  data is unknown delays so assuming that  every record has an event timestamp  hopefully we would see the records show  up shortly after the event that occurred  so we're going to look over here the red  record here happened at 8 a.m. and it  showed up in the system shortly after  the yellow record happened at 8 a.m. and  showed up in the system slightly delayed  but then we have this green act record  over here that has an event timestamp of  8 a.m. but showed up at 2:30 which is  about a 6 hour delay and there's several  reasons why these delays may happen the  most common case is actually mobile  devices so with mobile devices you can  imagine that you get on a plane you turn  your plane your phone onto you airplane  mode you play a game on your mobile  device the entire plane ride when you  get off you turn your airplane mode off  and all those events shoot up to the  cloud and so you get all these events  into your data pipeline all at once  because we had no connectivity during  that period now if we were doing element  wise transforms such as just  filtering out for the yellow records  here that's relatively simple we don't  care about processing time or event time  it's easy because it's a continuous  transform but when we get to grouping  data via processing time windows so  let's say we want to do an aggregation  we want to count the number of events  that happened per user for batch it's  easy because it's bounded we just read  the input stream and then as soon as  there's no more data we stop processing  and we calculate the result and omit it  for streaming we can't do that you never  run out of data so there's no way of  saying like this is the time where I  output the count that I've seen so what  we most commonly what people want to do  is group data into processing time  windows or windows rather and divide  data up into small chunks so that they  can compute aggregations over that chunk  of time and then output results so  initial approach is to use processing  time windows essentially when a job sees  a record it looks at the wall clock it  does that for a minute and then outputs  a record but what we really may want to  do is actually group that by event time  so instead of viewing something as time  on the wall clock viewing data as a  stream and group by our event timestamps  within our data and output them as we  see them this allows us to perform  calculations over the event time  interval which the events have occurred  so essentially what we do is we take the  input which is all the events occurring  at processing time we regroup them and  shuffle them to group them into event  time and calculate meaningful analytics  over our data so I mentioned Windows  what is a window a window is just a  function to divide data into chunks  within the Apache beam SDK and dataflow  we provide several different window  types to slice and dice your data in  different ways so for inches here's some  some of the more common ones fixed  windows in sliding windows so a fixed  window you can think of it as  scene data from like 1 2 2 2 2 3 so on  and so forth  and so you're pretty much dividing up  your data into time chunks and then  grouping it and providing some  aggregation on that data sliding window  so you can think of those as overlapping  fixed windows so an event that happened  may actually end up in multiple  different windows so say that I had a  sliding window that was an hour and it  slides every minute I essentially have  windows that end up being 12:01 2 101  102 or 1202 to 102 so on and so forth so  I could have a lot of overlapping  windows and this is useful when you're  doing things like analysis on maybe the  input rate of the data or calculating  how many events that I've seen in the  past minute or 10 minutes for a  particular event type in beam we also  support data dependent windows so what  if I wanted to group by something that  was in my my event itself so I want to  create windows for users for instance  this is what we would call sessions so  every key here ends up in a different  window sessions are defined by whenever  there's a burst of activity I want to  group that into a window for processing  and calculate statistics over that and  then when there's no data for a period  of time such as a gap I'm going to close  that window and fire it off this is a  common thing you may want to do in  analytics and it supported  out-of-the-box and data flow and Apache  beam so I've talked a little bit about  the windowing semantics and how we would  divide our data up and maybe do  computations over it within a real-time  analytics pipeline but when does the  answer come out this is problematic  because you have to know when to emit  the result for the data that you're  seeing for that window by default what  we have is something called a watermark  the watermark tries to know when we were  done with data for a window  so if the watermark says 12 o'clock it  means to the best of our knowledge  there's no more data left before 12  o'clock and we can calculate the result  in a minute downstream for external  sources it has to be somewhat heuristic  so for instance for pub/sub we can  actually do a read ahead of the pub/sub  buffer to essentially look at is there  any more messages left before a certain  period of time and then know that we can  effectively emit the results now going  back to the mobile phone on a plain  example you could have someone who has  data from 11 o'clock on their phone they  don't have any internet connectivity and  obviously we can't know about that so  that actually becomes late data so if we  look at the heuristic watermark here  essentially you can see that while it  does pretty well it doesn't catch the 9  that happens a lot later than we  expected for the perfect watermark it is  perfect it knows about everything  including events that may happen in the  future so what happens when you have  late data in the beam SDK we have a way  of saying that I want to process late  data you can add triggering to your  windows to indicates you want to process  that late data and there's several  different ways of processing it so for  instance using accumulating processing  means that if I have late say to show up  I want to add that late data to my  previous aggregation so for instance if  I was counting elements and I had a  count to 50 before and that late data  shows up I give I fire off that late  data and I get back a result of 52  instead of the original 50 when it went  to a late elements show up I can also  say I want to discard late data or  discard fired panes rather so  essentially if I wanted to do this  counting compute the sum I could have 50  elements that show up on time I could  have two elements that show up late and  as opposed to recalculating the results  and firing off 52 I may say forget about  the 50 that I had previously calculated  I only want to get the count of two and  discard those previous  fired pains so in this other animation  you can actually see some of our  speculative in late firings so in this  case the heuristic watermark is actually  firing speculatively for for records  that show up before the watermark and  then also catching those late records  for a given period of time so we're  actually able to capture a lot of that  data that does not show up when we would  expect it so that was a little bit about  streaming and sort of the common  challenges in how data flow and the  Apache beam SDK helps address some of  those challenges for the subsequent  section we're actually going to talk  about building a pipeline using some  common patterns so from simple  element-wise transforms to you know  grouping aggregations and that type  stuff for this we're actually going to  use the scenario that I've been alluding  to previously of capturing events and  analyzing them for a mobile game so  let's imagine we have a mobile game and  we want to build a real-time analytics  pipelines who analyze those game events  that may be happening and so and we want  our game to be popular too so we want to  be able to handle these events at scale  and be able to do interesting things  like compute aggregations over how many  events that we're seeing per user or  analyze the user behavior within the  game app we'll start out with exactly  once processing so starting to build  this pipeline from the most simple case  we may have our gaming devices  publishing up data into pub/sub then  data flow processing that data and then  bigquery finally landing that data into  our data warehouse we using pub/sub  because it's a reliable globally  available message delivery service and  we expect our game to be popular  worldwide so why not now if we're  analyzing user behavior duplicates which  may answer our system may throw off our  analytics right so if I'm calculating  counts if I'm doing averages if I allow  duplicates into my system I'm going to  throw off the analytics that I'm doing  and thus make them substantially less  valuable and this is also critical in  other industries such as you know retail  or finance so imagine I have a POS  system which is generating transaction  events I obviously wouldn't want to  double count those transactions and same  thing with trades or Holdings in this  example zooming in on to the to cloud  pub/sub you may think that it may cause  a problem because it has at least once  delivery semantics so inherently by  using pub/sub we may receive duplicates  within our system here the colors  indicate unique keys for the records so  we have red yellow green kameena  and we may have duplicate records that  come out however when combining pub/sub  with dataflow we're actually able to  achieve this exactly once semantics  within our pipeline and it's with  relatively little effort so we're gonna  zoom in a little bit on the records  coming into our pipeline they may look  like this we have attributes in a  payload but that comprises the message  that's going into pub some attributes  are key value pairs you can think of it  as a header on the message it allows you  to sort of inspect the message and maybe  route it in different ways to perform  other operations without having to  actually deserialize the payload and the  payload contains the serialized payload  of our message in this case we're  publishing JSON events up into our pub  subtopic and you'll see that we have a  unique identifier within the message  payload in event ID so the first step to  actually processing this in exactly once  fashion is that will promote this event  ID into our attributes and this allows  us to instruct data flow to react to it  within our pipeline and start  deduplicating these messages so we take  a look at our example pipeline here for  our game events it may look like the  following so essentially we have a pub  sub bio transform it's reading some data  from a subscription and that is passing  down data downstream to our transforms  so the first step was to add in that  event ID into our action  buttes now we need to instruct dataflow  to react to that event ID and that's  relatively simple here as opposed to  just having a very vanilla transform  with just specifying the subscription we  add in this dot with ID attribute and  this allows data flow to know I'm gonna  look at this event ID and D duplicate on  that as messages come in to their the  pipeline now this will D duplicate  messages that are being caused by  pub/sub so any messages that are  duplicated as part of pub subs at least  once delivery semantics will be  duplicated automatically within the  pipeline there's also other areas in  which we could receive duplicate  messages such as a publisher may be  publishing a message twice this will  also pick that up as well but it will  only do that within a 10-minute window  so we don't keep around the event ID  deduplication table for a past 10  minutes so if you had a publisher maybe  going publishing a message at minute 1  and then they publish the same duplicate  message at you know hour 1 minute 1 you  would then have to account for that  elsewhere in your pipeline such as using  a unique transform so we're achieving  exactly once semantics within our  pipeline the next thing we may want to  do is think about how we deal with bad  data in order to deal with bad data  coming into our system we're actually  going to add some things to our  architecture such as pub sub to handle  as a dead-letter topic and claude  functions than to alert on messages  which ended up in that dead letter topic  so this so what does this look like in  actuality so we have this this message  being published in you can notice that  this message is malformed in some way we  don't have a closing tag on our JSON  object the event ID is is no longer in  the proper format so we were expecting a  string and now it's it doesn't have the  quotes around it so by default if this  was to enter our pipeline it's going to  fail when we try to parse these messages  right in data flow will actually try to  reprocess those messages forever in  streaming mode because we don't want to  lose that  data so if that data fails and it throws  an exception right we don't want to just  drop it on the floor so we'll continue  to reprocess it forever or until you  tell us what to do with it  such as updating your pipeline or  creating a new path within your pipeline  to deal with the bad data so what do we  do we can actually edit our pardhu  function so each one of those boxes is a  pardhu function essentially you could  think of a pardhu function as almost  like a map in MapReduce pardhu function  has a process element method which where  it performs the computation and so as  opposed to just performing our  computation and outputting records what  we'll do is we'll wrap it in a try-catch  block and then we'll output filled  records for any exception to our  dead-letter tag and that dead-letter tag  allows us to then retrieve those  messages later on in our pipeline and  then do something with them such as  output them to a persistent store so if  we to go back to our pipeline here in  this case we are now redirecting our  messages to a different location we're  taking that dead letter tag and we are  then routing it to both bigquery and  pub/sub routing to bigquery and pub/sub  because we want our support team to be  able to analyze those bad data to be  able to inspect it within bigquery and  then we also want to output it to  pub/sub for ease of reprocessing and  alerting within our cloud function and  so in this example this is an example of  a bigquery table that you may see for  dead letter processing where we're  storing maybe the event timestamp the  payload in bytes and maybe the try to  convert the payload to a string to you  know show more data about that payload  so someone has more context so are the  attributes and the error message in the  stack trace and this way you know  someone can go in there see what the  problem is and then hopefully rectify it  so we've added handling for bad data  within our pipeline but we also may  actually have another case which may  cause failures and that's a schema  changes so for a mobile game  mention that we have partners that are  publishing this data so our partners are  publishing this data and they may want  to update the schema at some point and  we need to react to that within our  pipeline so we may need to add  additional fields within our pipeline  dynamically now we could do this not  dynamically we could have coordination  like we could call up the partner and  say we're gonna coordinate a release on  this date and have a lot of operational  overhead but we actually want to  dynamically handle this because then  we're free from that operational  overhead of handing having to manage it  so looking back at our messages we may  have a the message on the Left which is  the yellow message which is coming in  you know just as we expected in the  schema that we expected we also may have  a message on the right with like the the  green message here that has an  additional field so the partner may have  added like a device IP or some  contextual information that's that's  useful for them and we want to capture  that but if they added an additional  field we may fail on our insert into  bigquery so we're gonna have to account  for that within our pipeline so there's  a couple things that bigquery and  dataflow our couple features of bigquery  and data flow that allow us to do this  fairly efficiently bigquery allows for  schema changes which are additive within  the same table so schema changes happen  online and require no downtime and the  bigquery sink within data flow allows  that you're the retrieval of failed  inserts combining all these things  together we can actually achieve this  dynamic mutating schema within our  pipeline if we were to look at our  pipeline again we may add in the get  filled inserts when we're writing out -  ready now to bigquery this allows us to  retrieve everything that has failed  insertion to bigquery then we may invoke  a function which dynamically mutates our  schema so everything that failed insert  inspect it add the additional field to  bigquery and then pass it downstream and  then finally writing those mutated  records out  now this allows us to do this fairly  efficiently so alternatively what we  could have done is we could have  inspected every single message which  enters our pipeline and that's fairly  inefficient because you're doing an  operation on a bunch of elements that  you may not need to write this schema  change may only happen occasionally and  so you're just adding overhead to your  pipeline so as opposed to doing that  reacting to the failed inserts and then  mutating the schema dynamically and  rewriting those records out to bigquery  allows us to have efficient dynamic  mutating schemas within data flow so if  we were to look at our pipeline again  how does this look  we have messages that may have mutated  schema and essentially we've added a  whole new path here in which errors come  out and then we validate and we mutate  that schema and then we re out put it to  bigquery and so without having to have  this complexity of managing changes with  our partners we're able to react to it  automatically within our pipeline  another common use case is real-time  denormalization so in order to provide a  summary view in our data warehouse we  may want to look up reference data  before we output events in our mobile  gaming use case this could be looking up  reference data like on the user or on  the partner adding contextual  information that will help us do our  analysis later in order to accomplish  this we'll need to add an additional  datastore to our architecture in this  case we'll choose BigTable because of  the scalability and latency requirements  that we may have our game is popular we  may be processing thousands hundreds of  thousands or million of events per  second so we need something that can  scale to that before we implement the  per record lookups we want to consider  both the performance of the database so  if we're doing this is within GCP we're  gonna prefer BigTable or data store to  do these per record lookups because  they'll give us the performance metrics  that we need if we were to reach out to  bigquery it'd be quite a bit slower  because you're talking  the orders of seconds as opposed to on  the orders of tens of milliseconds for  you that each individual lookup and we  also want something that's scalable too  because if we put let's say a single  Postgres instance to do our lookups data  flow is like a cannon we shoot at GCP  products and so you can easily make a  single instance fall over so we want to  keep that in mind when we're doing our  per record lookups and finally we also  want to utilize the right areas to  initialize and teardown our connections  pardhu's within data flow have a life  cycle and I'll speak to that life cycle  in just a second but essentially we want  to make sure that we're initializing in  Theriault on these connections in the  proper place within our pipeline so  within the app setup method of the do  function and within the app teardown  method of the do function to close the  connect connection so we to look at the  pardhu life cycle this is sort of a  crude representation of what it might  look like we have at setup start bundle  and process elements and then we also  have you finish bundle and teardown  so where do we do our connection  initialization and and teardown we're  gonna do that in setup and teardown just  like it sounds like and the reason being  is because it's executed once per doofen  instance so as these functions are  distributed across your worker pool  within your job it's executed once and  so you don't have a ton of setup and  teardown connections it is rather  expensive to create new connections and  tear them down all the time start bundle  and finish bundle are executed once per  bundle of Records so within the pipeline  data flow will actually bundle records  up and then process them to each  transform and this allows it to do to be  more efficient and not have to  materialize the output for each  individual record and we could have done  it here but this would be executed a lot  more frequently because there's going to  be a lot more bundles within the  pipeline than there are instances of the  do fund so this would be a decent place  to actually initialize and teardown our  connections but it would not provide the  performance that we would like and  finally we have the process element  method  this is executed once per worker if you  do really expensive things in the  process element method this is where you  can slow down your pipeline so for  instance initializing connections and  tearing them down if you're doing that  for each individual record and you're  processing sitting records at hundreds  of thousands or millions per second you  are going to slow down your pipeline  quite a bit and so that's why it's  pretty critical to connect and tear down  your connections to do these external  lookups in the correct place within your  do fund so zooming in on our pipeline  again we want to add rich data from an  external store and essentially we just  have added a couple different methods to  the enriched messages do fund  essentially now we're in the app setup  method we're initializing that  connection we're calling a method to  enrich the record which will then call  out to our external data store and then  we in our teardown method we're closing  down that connection and this allows us  to have efficient per record lookups  within our pipeline then if we look at  what our pipeline looks like as we add  in this functionality essentially we  have this additional lookup here  connecting to BigTable doing the per  record lookup and richen the data with  either user data or partner data for a  game events and then passing that data  downstream so now that we've done a lot  of the common functionality that we may  have to our pipeline we may want to  perform analysis on the data that's  moving through so this is where we may  want to utilize some of the window and  techniques that I had mentioned earlier  so here we don't need to add any  additional components to our  architecture because windowing is  handled within data flow itself so  there's nothing that's that needs to be  added here and for our analysis as I  alluded to earlier we want to do some  analysis to perform how long is the user  spent playing a game we may also want to  possibly know when the user stopped  playing we may want to do things like  for a session grouped together all the  events and then compute an output one  aggregate record that contains an array  using big queries nested and repeated  fields to our advantage  and so here we'll actually do the you  know how long is a user spent playing a  game now if we were to use fixed windows  we inherently have problems because we  may have family members that use the  same device and so if we were just to  group by fixed windows of a period of  time from like twelve to one or  something like that we may actually end  up with different individual users  within that time period and so that  would throw off our analysis of the  count of messages that we're seeing per  user or even any additional analysis  that we're doing on the user behavior so  this would have incorrect correlations  what we really want is utilize the  session name that I had mentioned  earlier because with session windows  what we achieve is what we really want  we basically group together the events  by a key and that key being a user ID  for instance and then we're able to get  all the events for a particular user  into one window and then compute  aggregations and do analysis on that  window before passing that data  downstream and so this gives us exactly  the subdivisions that we want so looking  at our pipeline code we window the  sessions with a gap of five minutes so  essentially we are going to look at  bursts of activity and whenever we do  not see activity for five minutes we  will close that window and we'll fire it  off and that will trigger the  aggregation downstream in our processing  after that we're going to key by the  user ID so essentially we're gonna take  that game event coming in and then we're  going to get the user ID and this would  actually creates a key value pair that  we can then group by so essentially  we're keen these records before we group  them so we can get their records into  the right place then we're going to  group by those records so we're going to  group by that key that we have with the  game events and that's basically going  to create a grouping of a key  to an array of all the records that map  to that key within that session and then  finally we're going to call a method or  class which is going to analyze our  events so within this this class we can  do the the counting or the averaging of  those records we can do the behavior  analysis that we want to and really we  can do any analysis that we see fit for  the our use case so now looking at our  updated pipeline we have this whole new  path after converting two rows we output  to session windows we key by the user we  group by the key and then we analyze the  events and it all happens before we pass  it downstream to bigquery so in this  example we did is we D duplicated  records using exactly once we handled  bad data we handled mutating data we  handled in rich in data in real time  with with these records and then we also  were able to then window these records  into meaningful windows for our use case  and compute analytics that that we  preferred them and so now I'm going to  hand it over to Oliver to talk us  through data flow at Skye  just to introduce myself I'm Oliver 280  I'm director of data engineering at Skye  and for those of people who who've not  heard a sky we're one of the leading TV  companies in Europe we've got 22 million  subscribers across the UK Italy Germany  and Austria and we're a quad play  provider so we do TV broadband phone and  mobile services and we selected Google  in 2017 primarily for its data  capabilities so we spent about four  months getting Google cloud set up for  Sky and designing our target  architecture and we've been open running  and live for eight months now so we  consider GCP to be a great data and  analytics platform as a service so today  I'm going to talk about Sky Q now Sky Q  is our flagship TV platform it's a TV  box and it we think it offers one of the  best TV experiences in  the UK in terms of quality of the  platform and the range of content  available for the box so sky queue as a  satellite tuner it is video on-demand it  does live streaming it does HD and UHD  content and what we do is we collect  diagnostic data from Sky Q boxes in  every customer's home and that's sort of  three million boxes at the moment as  live in the field so we want to collect  diagnostic data so we can understand  user journeys we want to be able to  optimize those G's attorneys so our  customers can find the TV content they  love easily so that means fewest clicks  or shortage shortest searches easy to  navigate UI promotions and  personalization so for example someone  clicks on the home menu they go to  movies they select a genre they find the  movie they press play so our original  solution for Sky Q analytics was based  on a Hadoop cluster it was a fixed sized  cluster on Prem and Sky Q great product  really successful but the problem was  that we had to deal with lots of peaks  of data so TV diagnostic data has large  Peaks so in the UK we don't have the  Webber of California unfortunately it  rains a lot when it rains people go  indoors they watch more TV they generate  more diagnostic events also we can have  news events we can have sports events  and on those days we get more diagnostic  events so the problem with our fixed  size system is that we have to over  provision so effectively from a yet if  we're provisioning to the yellow line we  have a lot of capacity that's wasted  whereas in worst case we under provision  the system and that means our batch  processing or real time jobs take longer  or worst case we lose data altogether  the other problem that we had was that  we spent a lot of time tuning our Hadoop  cluster I don't know how many people in  the audience run Hadoop but our ops team  spent time tuning yarn on a regular  basis and dealing with managing yarn  contain  we had a platform with mixed workloads  so it's very difficult to get those  workflows correct when things changed  over time so not a big surprise we move  to GCP and our architecture is designed  around pub/sub quiet dataflow and  bigquery the reason is that we chose  this is it's Google's canonical  architecture so really good integration  between all those components and we took  the opportunity to move the pipeline  from batch processing to streaming  because our modern key boxes report back  in real time over IP and the other thing  is that we chose to use dataflow to gain  the benefits of auto scaling serverless  architecture and out of order data  processing so much like Ryan's example  with mobile gaming people turn off our  TV boxes at night quite often we get  data turning up late so out of order  data processing is really important to  us so features in the beam model really  important and we also think that beam  model is becoming much more mature and  we like this sort of separation between  the runner and the SDK I think it's a  good thing to be able to abstract the  data pipeline itself from the  infrastructure or the runner so moving  on to talk about our architecture  effectively what we do here is we take  data in streaming mode in the India  stage so it's JSON data just like in the  mobile gaming example we take it from  our cue box into pub/sub separately we  take reference data batch mode into GCS  so then in our process stage what we do  is process this in data flow so in  streaming path we clean the data we are  additional attributes we assign join IDs  we session eyes the data so session  windows we turn a sequence of user  events into distinct TV sessions and  these are enriched with session IDs  at times and the event number of  sessions so we think that the ability to  dynamically add columns in bigquery when  our JSON schema changes is a great  feature and we make use of this so this  means we can have non breaking changes  with the source system so our source  system team just adds an element to the  JSON message and that manifests itself  in bigquery as a new column so what  we've got is also a separation between  our first stage of processing and  enrichment and the reason that we do  this is that we use our granular data  for multiple use cases and we don't  always want to be able to use the rich  enriched data in those separate use  cases so we have two stages of  processing in our architecture so in the  rich stage what we do is we create this  notion of cubox journeys and these box  journeys add things like the customer  details they add information around how  the planner works and different  reference data relating to the tiles on  the UI so for example we can see then  that somebody started searching for data  on the box they found Game of Thrones  and then they started watching Game of  Thrones and engaged in a big game of  Thrones TV marathon finally we display  all this in tableau so we've got a  number of aggregates that sit under  tableau and allow tableau to perform  effectively and give everyone really  kind of snappy performance so again like  in the example that Ryan was talking  about we make use of sessioning for our  TV events so sky processed sessions  based on a continuous stream of  diagnostic events each one of those is  calculated for an individual Sky key box  and we do this based on a four-hour gap  of inactivity so essentially what we're  looking for is that for our gap of of  inactivity and then everything in that  window before it becomes a session  we've got a hard cutoff after 24 hours  on the basis that we think no one  watches TV for more than 24 hours  so we also make use of auto scaling so  also scaling happens transparently but  interestingly the rules for auto scaling  are quite sophisticated so don't expect  auto scaling to happen immediately when  there's an influx of new work to do  sometimes it takes a while for data flow  to scale up and that's because it's got  a sophisticated heuristic in the  background working and optimizing the  number of workers in the data flow  pipelines so essentially it might add  workers to keep up with the input rate  so it knows the amount of unprocessed  work in pubsub or the queue depth and it  might also need to catch up with the  backlog and it's smart enough to  understand the rate of processing and  whether it's worth scaling up those  extra workers to process that backlog of  work so sometimes it might not scale up  because it'll realise that by the time  you scaled up and added more workers the  work would be done so what we've got now  is a situation where we can process many  hundreds of millions of records without  having to manage any of the  infrastructure and be able to cope with  those Peaks entirely dynamically so  we're regularly processing more than 300  million messages to a day in some cases  now well over 400 million it's been a  great success in the business it only  took five weeks to develop this solution  from end to end and we organised a bit  about whether we should pour our  existing apache spark code over and run  it on data proc and we think we right  made the right decision not to do that  and rewrite everything in data flow just  because we've taken all the benefit of  not having to manage the cluster we also  partnered with data tonic who may have  in the audience but data tonic are  experts in data engineering and machine  learning and  they were able to get our team up to  speed with Apache beam pub/sub bigquery  really quickly we do a/b testing on the  box software so we can determine whether  from one release of the key software to  the next that we're actually seeing  material benefits and improvements in  the software so typically what we do is  we take a small population of boxes we  roll those boxes up to the new revision  and we watch whether both old and new  cohorts of box users are performing as  we would expect and whether the new  cohort is seeing a material benefit and  in many cases we can now find that we're  seeing more than double-digit  improvements in performance of the UI  and user experience so quick summary of  before and after so before we had an  on-prem Hadoop cluster we have to manage  network servers software upgrades we had  to patch everything we had a lot to  maintain now we've got a completely  server list as a service model we can  scale in no time at all like 90 seconds  to add more work as whereas before we  were talking months to add new servers  where we may have to even put in a  request to Finance and deal with all of  the capital expenditure outlay so it's  high fixed costs with the existing  solution and now we can just pay for  what we use one of the biggest  improvements has been in development  time before with the fixed size system  on-premise it was almost impossible to  recreate that production workload  especially with multiple workloads  running on the same system so  development time took a long time  because it was very difficult to test  things and replicate the production  workload now we can replay all our  messages back into pub/sub through into  data flow and into the new developed  version of our pipeline and it's very  much very much simpler to test and  that's meant that development now  happening in weeks not months  and ops are delighted rather than  spending two days a week  cheating yarn it's near zero ops so gain  great success for sky and also a great  success for the business so Dan Connell  who heads up our products product  experience now fig feels that this is an  extension of the product design and  development capability so he says this  capability has the power to change the  way we develop our products and has made  me very proud of what we've built  together and finally I just like to say  a couple of thankies say data tonic who  partnered with us to build this and also  agile solutions who helped do some of  the project management so thanks to  Louie and Andrew on the technical side  at Data tonic and Steven from our gel  solutions  [Music]  [Applause]  [Music]  [Applause]  [Music]
+
+00:00:06.909 --> 00:00:10.940 align:start position:0%
+[Music]  joining me today is Oliver Tweety from  sky director of data engineering and  today we're going to be talking through  real-time streaming analytics with data  flow common use cases and patterns but  before we dive straight into patterns  it's important to understand streaming  and why it matters and a couple of  things that the Apache beam SDK and  dataflow do to solve some of the common  problems that you may run into so we can  have data that we're processing and that  data can be big for instance we can be  processing from gigabytes to terabytes  it could be really really big so we may  have huge amounts of data that we want  to process every day in multiple days  that we want to process and that data  can also be infinitely big so we may  have streaming data that's constantly  coming it never stops  and this gives a problem with processing  especially with unknown delays so one of  the more difficult things with unbounded  data is unknown delays so assuming that  every record has an event timestamp  hopefully we would see the records show  up shortly after the event that occurred  so we're going to look over here the red  record here happened at 8 a.m. and it  showed up in the system shortly after  the yellow record happened at 8 a.m. and  showed up in the system slightly delayed  but then we have this green act record  over here that has an event timestamp of  8 a.m. but showed up at 2:30 which is  about a 6 hour delay and there's several  reasons why these delays may happen the  most common case is actually mobile  devices so with mobile devices you can  imagine that you get on a plane you turn  your plane your phone onto you airplane  mode you play a game on your mobile  device the entire plane ride when you  get off you turn your airplane mode off  and all those events shoot up to the  cloud and so you get all these events  into your data pipeline all at once  because we had no connectivity during  that period now if we were doing element  wise transforms such as just  filtering out for the yellow records  here that's relatively simple we don't  care about processing time or event time  it's easy because it's a continuous  transform but when we get to grouping  data via processing time windows so  let's say we want to do an aggregation  we want to count the number of events  that happened per user for batch it's  easy because it's bounded we just read  the input stream and then as soon as  there's no more data we stop processing  and we calculate the result and omit it  for streaming we can't do that you never  run out of data so there's no way of  saying like this is the time where I  output the count that I've seen so what  we most commonly what people want to do  is group data into processing time  windows or windows rather and divide  data up into small chunks so that they  can compute aggregations over that chunk  of time and then output results so  initial approach is to use processing  time windows essentially when a job sees  a record it looks at the wall clock it  does that for a minute and then outputs  a record but what we really may want to  do is actually group that by event time  so instead of viewing something as time  on the wall clock viewing data as a  stream and group by our event timestamps  within our data and output them as we  see them this allows us to perform  calculations over the event time  interval which the events have occurred  so essentially what we do is we take the  input which is all the events occurring  at processing time we regroup them and  shuffle them to group them into event  time and calculate meaningful analytics  over our data so I mentioned Windows  what is a window a window is just a  function to divide data into chunks  within the Apache beam SDK and dataflow  we provide several different window  types to slice and dice your data in  different ways so for inches here's some  some of the more common ones fixed  windows in sliding windows so a fixed  window you can think of it as  scene data from like 1 2 2 2 2 3 so on  and so forth  and so you're pretty much dividing up  your data into time chunks and then  grouping it and providing some  aggregation on that data sliding window  so you can think of those as overlapping  fixed windows so an event that happened  may actually end up in multiple  different windows so say that I had a  sliding window that was an hour and it  slides every minute I essentially have  windows that end up being 12:01 2 101  102 or 1202 to 102 so on and so forth so  I could have a lot of overlapping  windows and this is useful when you're  doing things like analysis on maybe the  input rate of the data or calculating  how many events that I've seen in the  past minute or 10 minutes for a  particular event type in beam we also  support data dependent windows so what  if I wanted to group by something that  was in my my event itself so I want to  create windows for users for instance  this is what we would call sessions so  every key here ends up in a different  window sessions are defined by whenever  there's a burst of activity I want to  group that into a window for processing  and calculate statistics over that and  then when there's no data for a period  of time such as a gap I'm going to close  that window and fire it off this is a  common thing you may want to do in  analytics and it supported  out-of-the-box and data flow and Apache  beam so I've talked a little bit about  the windowing semantics and how we would  divide our data up and maybe do  computations over it within a real-time  analytics pipeline but when does the  answer come out this is problematic  because you have to know when to emit  the result for the data that you're  seeing for that window by default what  we have is something called a watermark  the watermark tries to know when we were  done with data for a window  so if the watermark says 12 o'clock it  means to the best of our knowledge  there's no more data left before 12  o'clock and we can calculate the result  in a minute downstream for external  sources it has to be somewhat heuristic  so for instance for pub/sub we can  actually do a read ahead of the pub/sub  buffer to essentially look at is there  any more messages left before a certain  period of time and then know that we can  effectively emit the results now going  back to the mobile phone on a plain  example you could have someone who has  data from 11 o'clock on their phone they  don't have any internet connectivity and  obviously we can't know about that so  that actually becomes late data so if we  look at the heuristic watermark here  essentially you can see that while it  does pretty well it doesn't catch the 9  that happens a lot later than we  expected for the perfect watermark it is  perfect it knows about everything  including events that may happen in the  future so what happens when you have  late data in the beam SDK we have a way  of saying that I want to process late  data you can add triggering to your  windows to indicates you want to process  that late data and there's several  different ways of processing it so for  instance using accumulating processing  means that if I have late say to show up  I want to add that late data to my  previous aggregation so for instance if  I was counting elements and I had a  count to 50 before and that late data  shows up I give I fire off that late  data and I get back a result of 52  instead of the original 50 when it went  to a late elements show up I can also  say I want to discard late data or  discard fired panes rather so  essentially if I wanted to do this  counting compute the sum I could have 50  elements that show up on time I could  have two elements that show up late and  as opposed to recalculating the results  and firing off 52 I may say forget about  the 50 that I had previously calculated  I only want to get the count of two and  discard those previous  fired pains so in this other animation  you can actually see some of our  speculative in late firings so in this  case the heuristic watermark is actually  firing speculatively for for records  that show up before the watermark and  then also catching those late records  for a given period of time so we're  actually able to capture a lot of that  data that does not show up when we would  expect it so that was a little bit about  streaming and sort of the common  challenges in how data flow and the  Apache beam SDK helps address some of  those challenges for the subsequent  section we're actually going to talk  about building a pipeline using some  common patterns so from simple  element-wise transforms to you know  grouping aggregations and that type  stuff for this we're actually going to  use the scenario that I've been alluding  to previously of capturing events and  analyzing them for a mobile game so  let's imagine we have a mobile game and  we want to build a real-time analytics  pipelines who analyze those game events  that may be happening and so and we want  our game to be popular too so we want to  be able to handle these events at scale  and be able to do interesting things  like compute aggregations over how many  events that we're seeing per user or  analyze the user behavior within the  game app we'll start out with exactly  once processing so starting to build  this pipeline from the most simple case  we may have our gaming devices  publishing up data into pub/sub then  data flow processing that data and then  bigquery finally landing that data into  our data warehouse we using pub/sub  because it's a reliable globally  available message delivery service and  we expect our game to be popular  worldwide so why not now if we're  analyzing user behavior duplicates which  may answer our system may throw off our  analytics right so if I'm calculating  counts if I'm doing averages if I allow  duplicates into my system I'm going to  throw off the analytics that I'm doing  and thus make them substantially less  valuable and this is also critical in  other industries such as you know retail  or finance so imagine I have a POS  system which is generating transaction  events I obviously wouldn't want to  double count those transactions and same  thing with trades or Holdings in this  example zooming in on to the to cloud  pub/sub you may think that it may cause  a problem because it has at least once  delivery semantics so inherently by  using pub/sub we may receive duplicates  within our system here the colors  indicate unique keys for the records so  we have red yellow green kameena  and we may have duplicate records that  come out however when combining pub/sub  with dataflow we're actually able to  achieve this exactly once semantics  within our pipeline and it's with  relatively little effort so we're gonna  zoom in a little bit on the records  coming into our pipeline they may look  like this we have attributes in a  payload but that comprises the message  that's going into pub some attributes  are key value pairs you can think of it  as a header on the message it allows you  to sort of inspect the message and maybe  route it in different ways to perform  other operations without having to  actually deserialize the payload and the  payload contains the serialized payload  of our message in this case we're  publishing JSON events up into our pub  subtopic and you'll see that we have a  unique identifier within the message  payload in event ID so the first step to  actually processing this in exactly once  fashion is that will promote this event  ID into our attributes and this allows  us to instruct data flow to react to it  within our pipeline and start  deduplicating these messages so we take  a look at our example pipeline here for  our game events it may look like the  following so essentially we have a pub  sub bio transform it's reading some data  from a subscription and that is passing  down data downstream to our transforms  so the first step was to add in that  event ID into our action  buttes now we need to instruct dataflow  to react to that event ID and that's  relatively simple here as opposed to  just having a very vanilla transform  with just specifying the subscription we  add in this dot with ID attribute and  this allows data flow to know I'm gonna  look at this event ID and D duplicate on  that as messages come in to their the  pipeline now this will D duplicate  messages that are being caused by  pub/sub so any messages that are  duplicated as part of pub subs at least  once delivery semantics will be  duplicated automatically within the  pipeline there's also other areas in  which we could receive duplicate  messages such as a publisher may be  publishing a message twice this will  also pick that up as well but it will  only do that within a 10-minute window  so we don't keep around the event ID  deduplication table for a past 10  minutes so if you had a publisher maybe  going publishing a message at minute 1  and then they publish the same duplicate  message at you know hour 1 minute 1 you  would then have to account for that  elsewhere in your pipeline such as using  a unique transform so we're achieving  exactly once semantics within our  pipeline the next thing we may want to  do is think about how we deal with bad  data in order to deal with bad data  coming into our system we're actually  going to add some things to our  architecture such as pub sub to handle  as a dead-letter topic and claude  functions than to alert on messages  which ended up in that dead letter topic  so this so what does this look like in  actuality so we have this this message  being published in you can notice that  this message is malformed in some way we  don't have a closing tag on our JSON  object the event ID is is no longer in  the proper format so we were expecting a  string and now it's it doesn't have the  quotes around it so by default if this  was to enter our pipeline it's going to  fail when we try to parse these messages  right in data flow will actually try to  reprocess those messages forever in  streaming mode because we don't want to  lose that  data so if that data fails and it throws  an exception right we don't want to just  drop it on the floor so we'll continue  to reprocess it forever or until you  tell us what to do with it  such as updating your pipeline or  creating a new path within your pipeline  to deal with the bad data so what do we  do we can actually edit our pardhu  function so each one of those boxes is a  pardhu function essentially you could  think of a pardhu function as almost  like a map in MapReduce pardhu function  has a process element method which where  it performs the computation and so as  opposed to just performing our  computation and outputting records what  we'll do is we'll wrap it in a try-catch  block and then we'll output filled  records for any exception to our  dead-letter tag and that dead-letter tag  allows us to then retrieve those  messages later on in our pipeline and  then do something with them such as  output them to a persistent store so if  we to go back to our pipeline here in  this case we are now redirecting our  messages to a different location we're  taking that dead letter tag and we are  then routing it to both bigquery and  pub/sub routing to bigquery and pub/sub  because we want our support team to be  able to analyze those bad data to be  able to inspect it within bigquery and  then we also want to output it to  pub/sub for ease of reprocessing and  alerting within our cloud function and  so in this example this is an example of  a bigquery table that you may see for  dead letter processing where we're  storing maybe the event timestamp the  payload in bytes and maybe the try to  convert the payload to a string to you  know show more data about that payload  so someone has more context so are the  attributes and the error message in the  stack trace and this way you know  someone can go in there see what the  problem is and then hopefully rectify it  so we've added handling for bad data  within our pipeline but we also may  actually have another case which may  cause failures and that's a schema  changes so for a mobile game  mention that we have partners that are  publishing this data so our partners are  publishing this data and they may want  to update the schema at some point and  we need to react to that within our  pipeline so we may need to add  additional fields within our pipeline  dynamically now we could do this not  dynamically we could have coordination  like we could call up the partner and  say we're gonna coordinate a release on  this date and have a lot of operational  overhead but we actually want to  dynamically handle this because then  we're free from that operational  overhead of handing having to manage it  so looking back at our messages we may  have a the message on the Left which is  the yellow message which is coming in  you know just as we expected in the  schema that we expected we also may have  a message on the right with like the the  green message here that has an  additional field so the partner may have  added like a device IP or some  contextual information that's that's  useful for them and we want to capture  that but if they added an additional  field we may fail on our insert into  bigquery so we're gonna have to account  for that within our pipeline so there's  a couple things that bigquery and  dataflow our couple features of bigquery  and data flow that allow us to do this  fairly efficiently bigquery allows for  schema changes which are additive within  the same table so schema changes happen  online and require no downtime and the  bigquery sink within data flow allows  that you're the retrieval of failed  inserts combining all these things  together we can actually achieve this  dynamic mutating schema within our  pipeline if we were to look at our  pipeline again we may add in the get  filled inserts when we're writing out -  ready now to bigquery this allows us to  retrieve everything that has failed  insertion to bigquery then we may invoke  a function which dynamically mutates our  schema so everything that failed insert  inspect it add the additional field to  bigquery and then pass it downstream and  then finally writing those mutated  records out  now this allows us to do this fairly  efficiently so alternatively what we  could have done is we could have  inspected every single message which  enters our pipeline and that's fairly  inefficient because you're doing an  operation on a bunch of elements that  you may not need to write this schema  change may only happen occasionally and  so you're just adding overhead to your  pipeline so as opposed to doing that  reacting to the failed inserts and then  mutating the schema dynamically and  rewriting those records out to bigquery  allows us to have efficient dynamic  mutating schemas within data flow so if  we were to look at our pipeline again  how does this look  we have messages that may have mutated  schema and essentially we've added a  whole new path here in which errors come  out and then we validate and we mutate  that schema and then we re out put it to  bigquery and so without having to have  this complexity of managing changes with  our partners we're able to react to it  automatically within our pipeline  another common use case is real-time  denormalization so in order to provide a  summary view in our data warehouse we  may want to look up reference data  before we output events in our mobile  gaming use case this could be looking up  reference data like on the user or on  the partner adding contextual  information that will help us do our  analysis later in order to accomplish  this we'll need to add an additional  datastore to our architecture in this  case we'll choose BigTable because of  the scalability and latency requirements  that we may have our game is popular we  may be processing thousands hundreds of  thousands or million of events per  second so we need something that can  scale to that before we implement the  per record lookups we want to consider  both the performance of the database so  if we're doing this is within GCP we're  gonna prefer BigTable or data store to  do these per record lookups because  they'll give us the performance metrics  that we need if we were to reach out to  bigquery it'd be quite a bit slower  because you're talking  the orders of seconds as opposed to on  the orders of tens of milliseconds for  you that each individual lookup and we  also want something that's scalable too  because if we put let's say a single  Postgres instance to do our lookups data  flow is like a cannon we shoot at GCP  products and so you can easily make a  single instance fall over so we want to  keep that in mind when we're doing our  per record lookups and finally we also  want to utilize the right areas to  initialize and teardown our connections  pardhu's within data flow have a life  cycle and I'll speak to that life cycle  in just a second but essentially we want  to make sure that we're initializing in  Theriault on these connections in the  proper place within our pipeline so  within the app setup method of the do  function and within the app teardown  method of the do function to close the  connect connection so we to look at the  pardhu life cycle this is sort of a  crude representation of what it might  look like we have at setup start bundle  and process elements and then we also  have you finish bundle and teardown  so where do we do our connection  initialization and and teardown we're  gonna do that in setup and teardown just  like it sounds like and the reason being  is because it's executed once per doofen  instance so as these functions are  distributed across your worker pool  within your job it's executed once and  so you don't have a ton of setup and  teardown connections it is rather  expensive to create new connections and  tear them down all the time start bundle  and finish bundle are executed once per  bundle of Records so within the pipeline  data flow will actually bundle records  up and then process them to each  transform and this allows it to do to be  more efficient and not have to  materialize the output for each  individual record and we could have done  it here but this would be executed a lot  more frequently because there's going to  be a lot more bundles within the  pipeline than there are instances of the  do fund so this would be a decent place  to actually initialize and teardown our  connections but it would not provide the  performance that we would like and  finally we have the process element  method  this is executed once per worker if you  do really expensive things in the  process element method this is where you  can slow down your pipeline so for  instance initializing connections and  tearing them down if you're doing that  for each individual record and you're  processing sitting records at hundreds  of thousands or millions per second you  are going to slow down your pipeline  quite a bit and so that's why it's  pretty critical to connect and tear down  your connections to do these external  lookups in the correct place within your  do fund so zooming in on our pipeline  again we want to add rich data from an  external store and essentially we just  have added a couple different methods to  the enriched messages do fund  essentially now we're in the app setup  method we're initializing that  connection we're calling a method to  enrich the record which will then call  out to our external data store and then  we in our teardown method we're closing  down that connection and this allows us  to have efficient per record lookups  within our pipeline then if we look at  what our pipeline looks like as we add  in this functionality essentially we  have this additional lookup here  connecting to BigTable doing the per  record lookup and richen the data with  either user data or partner data for a  game events and then passing that data  downstream so now that we've done a lot  of the common functionality that we may  have to our pipeline we may want to  perform analysis on the data that's  moving through so this is where we may  want to utilize some of the window and  techniques that I had mentioned earlier  so here we don't need to add any  additional components to our  architecture because windowing is  handled within data flow itself so  there's nothing that's that needs to be  added here and for our analysis as I  alluded to earlier we want to do some  analysis to perform how long is the user  spent playing a game we may also want to  possibly know when the user stopped  playing we may want to do things like  for a session grouped together all the  events and then compute an output one  aggregate record that contains an array  using big queries nested and repeated  fields to our advantage  and so here we'll actually do the you  know how long is a user spent playing a  game now if we were to use fixed windows  we inherently have problems because we  may have family members that use the  same device and so if we were just to  group by fixed windows of a period of  time from like twelve to one or  something like that we may actually end  up with different individual users  within that time period and so that  would throw off our analysis of the  count of messages that we're seeing per  user or even any additional analysis  that we're doing on the user behavior so  this would have incorrect correlations  what we really want is utilize the  session name that I had mentioned  earlier because with session windows  what we achieve is what we really want  we basically group together the events  by a key and that key being a user ID  for instance and then we're able to get  all the events for a particular user  into one window and then compute  aggregations and do analysis on that  window before passing that data  downstream and so this gives us exactly  the subdivisions that we want so looking  at our pipeline code we window the  sessions with a gap of five minutes so  essentially we are going to look at  bursts of activity and whenever we do  not see activity for five minutes we  will close that window and we'll fire it  off and that will trigger the  aggregation downstream in our processing  after that we're going to key by the  user ID so essentially we're gonna take  that game event coming in and then we're  going to get the user ID and this would  actually creates a key value pair that  we can then group by so essentially  we're keen these records before we group  them so we can get their records into  the right place then we're going to  group by those records so we're going to  group by that key that we have with the  game events and that's basically going  to create a grouping of a key  to an array of all the records that map  to that key within that session and then  finally we're going to call a method or  class which is going to analyze our  events so within this this class we can  do the the counting or the averaging of  those records we can do the behavior  analysis that we want to and really we  can do any analysis that we see fit for  the our use case so now looking at our  updated pipeline we have this whole new  path after converting two rows we output  to session windows we key by the user we  group by the key and then we analyze the  events and it all happens before we pass  it downstream to bigquery so in this  example we did is we D duplicated  records using exactly once we handled  bad data we handled mutating data we  handled in rich in data in real time  with with these records and then we also  were able to then window these records  into meaningful windows for our use case  and compute analytics that that we  preferred them and so now I'm going to  hand it over to Oliver to talk us  through data flow at Skye  just to introduce myself I'm Oliver 280  I'm director of data engineering at Skye  and for those of people who who've not  heard a sky we're one of the leading TV  companies in Europe we've got 22 million  subscribers across the UK Italy Germany  and Austria and we're a quad play  provider so we do TV broadband phone and  mobile services and we selected Google  in 2017 primarily for its data  capabilities so we spent about four  months getting Google cloud set up for  Sky and designing our target  architecture and we've been open running  and live for eight months now so we  consider GCP to be a great data and  analytics platform as a service so today  I'm going to talk about Sky Q now Sky Q  is our flagship TV platform it's a TV  box and it we think it offers one of the  best TV experiences in  the UK in terms of quality of the  platform and the range of content  available for the box so sky queue as a  satellite tuner it is video on-demand it  does live streaming it does HD and UHD  content and what we do is we collect  diagnostic data from Sky Q boxes in  every customer's home and that's sort of  three million boxes at the moment as  live in the field so we want to collect  diagnostic data so we can understand  user journeys we want to be able to  optimize those G's attorneys so our  customers can find the TV content they  love easily so that means fewest clicks  or shortage shortest searches easy to  navigate UI promotions and  personalization so for example someone  clicks on the home menu they go to  movies they select a genre they find the  movie they press play so our original  solution for Sky Q analytics was based  on a Hadoop cluster it was a fixed sized  cluster on Prem and Sky Q great product  really successful but the problem was  that we had to deal with lots of peaks  of data so TV diagnostic data has large  Peaks so in the UK we don't have the  Webber of California unfortunately it  rains a lot when it rains people go  indoors they watch more TV they generate  more diagnostic events also we can have  news events we can have sports events  and on those days we get more diagnostic  events so the problem with our fixed  size system is that we have to over  provision so effectively from a yet if  we're provisioning to the yellow line we  have a lot of capacity that's wasted  whereas in worst case we under provision  the system and that means our batch  processing or real time jobs take longer  or worst case we lose data altogether  the other problem that we had was that  we spent a lot of time tuning our Hadoop  cluster I don't know how many people in  the audience run Hadoop but our ops team  spent time tuning yarn on a regular  basis and dealing with managing yarn  contain  we had a platform with mixed workloads  so it's very difficult to get those  workflows correct when things changed  over time so not a big surprise we move  to GCP and our architecture is designed  around pub/sub quiet dataflow and  bigquery the reason is that we chose  this is it's Google's canonical  architecture so really good integration  between all those components and we took  the opportunity to move the pipeline  from batch processing to streaming  because our modern key boxes report back  in real time over IP and the other thing  is that we chose to use dataflow to gain  the benefits of auto scaling serverless  architecture and out of order data  processing so much like Ryan's example  with mobile gaming people turn off our  TV boxes at night quite often we get  data turning up late so out of order  data processing is really important to  us so features in the beam model really  important and we also think that beam  model is becoming much more mature and  we like this sort of separation between  the runner and the SDK I think it's a  good thing to be able to abstract the  data pipeline itself from the  infrastructure or the runner so moving  on to talk about our architecture  effectively what we do here is we take  data in streaming mode in the India  stage so it's JSON data just like in the  mobile gaming example we take it from  our cue box into pub/sub separately we  take reference data batch mode into GCS  so then in our process stage what we do  is process this in data flow so in  streaming path we clean the data we are  additional attributes we assign join IDs  we session eyes the data so session  windows we turn a sequence of user  events into distinct TV sessions and  these are enriched with session IDs  at times and the event number of  sessions so we think that the ability to  dynamically add columns in bigquery when  our JSON schema changes is a great  feature and we make use of this so this  means we can have non breaking changes  with the source system so our source  system team just adds an element to the  JSON message and that manifests itself  in bigquery as a new column so what  we've got is also a separation between  our first stage of processing and  enrichment and the reason that we do  this is that we use our granular data  for multiple use cases and we don't  always want to be able to use the rich  enriched data in those separate use  cases so we have two stages of  processing in our architecture so in the  rich stage what we do is we create this  notion of cubox journeys and these box  journeys add things like the customer  details they add information around how  the planner works and different  reference data relating to the tiles on  the UI so for example we can see then  that somebody started searching for data  on the box they found Game of Thrones  and then they started watching Game of  Thrones and engaged in a big game of  Thrones TV marathon finally we display  all this in tableau so we've got a  number of aggregates that sit under  tableau and allow tableau to perform  effectively and give everyone really  kind of snappy performance so again like  in the example that Ryan was talking  about we make use of sessioning for our  TV events so sky processed sessions  based on a continuous stream of  diagnostic events each one of those is  calculated for an individual Sky key box  and we do this based on a four-hour gap  of inactivity so essentially what we're  looking for is that for our gap of of  inactivity and then everything in that  window before it becomes a session  we've got a hard cutoff after 24 hours  on the basis that we think no one  watches TV for more than 24 hours  so we also make use of auto scaling so  also scaling happens transparently but  interestingly the rules for auto scaling  are quite sophisticated so don't expect  auto scaling to happen immediately when  there's an influx of new work to do  sometimes it takes a while for data flow  to scale up and that's because it's got  a sophisticated heuristic in the  background working and optimizing the  number of workers in the data flow  pipelines so essentially it might add  workers to keep up with the input rate  so it knows the amount of unprocessed  work in pubsub or the queue depth and it  might also need to catch up with the  backlog and it's smart enough to  understand the rate of processing and  whether it's worth scaling up those  extra workers to process that backlog of  work so sometimes it might not scale up  because it'll realise that by the time  you scaled up and added more workers the  work would be done so what we've got now  is a situation where we can process many  hundreds of millions of records without  having to manage any of the  infrastructure and be able to cope with  those Peaks entirely dynamically so  we're regularly processing more than 300  million messages to a day in some cases  now well over 400 million it's been a  great success in the business it only  took five weeks to develop this solution  from end to end and we organised a bit  about whether we should pour our  existing apache spark code over and run  it on data proc and we think we right  made the right decision not to do that  and rewrite everything in data flow just  because we've taken all the benefit of  not having to manage the cluster we also  partnered with data tonic who may have  in the audience but data tonic are  experts in data engineering and machine  learning and  they were able to get our team up to  speed with Apache beam pub/sub bigquery  really quickly we do a/b testing on the  box software so we can determine whether  from one release of the key software to  the next that we're actually seeing  material benefits and improvements in  the software so typically what we do is  we take a small population of boxes we  roll those boxes up to the new revision  and we watch whether both old and new  cohorts of box users are performing as  we would expect and whether the new  cohort is seeing a material benefit and  in many cases we can now find that we're  seeing more than double-digit  improvements in performance of the UI  and user experience so quick summary of  before and after so before we had an  on-prem Hadoop cluster we have to manage  network servers software upgrades we had  to patch everything we had a lot to  maintain now we've got a completely  server list as a service model we can  scale in no time at all like 90 seconds  to add more work as whereas before we  were talking months to add new servers  where we may have to even put in a  request to Finance and deal with all of  the capital expenditure outlay so it's  high fixed costs with the existing  solution and now we can just pay for  what we use one of the biggest  improvements has been in development  time before with the fixed size system  on-premise it was almost impossible to  recreate that production workload  especially with multiple workloads  running on the same system so  development time took a long time  because it was very difficult to test  things and replicate the production  workload now we can replay all our  messages back into pub/sub through into  data flow and into the new developed  version of our pipeline and it's very  much very much simpler to test and  that's meant that development now  happening in weeks not months  and ops are delighted rather than  spending two days a week  cheating yarn it's near zero ops so gain  great success for sky and also a great  success for the business so Dan Connell  who heads up our products product  experience now fig feels that this is an  extension of the product design and  development capability so he says this  capability has the power to change the  way we develop our products and has made  me very proud of what we've built  together and finally I just like to say  a couple of thankies say data tonic who  partnered with us to build this and also  agile solutions who helped do some of  the project management so thanks to  Louie and Andrew on the technical side  at Data tonic and Steven from our gel  solutions  [Music]  [Applause]  [Music]  [Applause]  [Music]
+ 
+
+00:00:10.940 --> 00:00:13.820 align:start position:0%
+ 
+ 
+
+00:00:13.820 --> 00:00:15.700 align:start position:0%
+ 
+ 
+
+00:00:15.700 --> 00:00:17.840 align:start position:0%
+ 
+ 
+
+00:00:17.840 --> 00:00:22.099 align:start position:0%
+ 
+ 
+
+00:00:22.099 --> 00:00:23.269 align:start position:0%
+ 
+ 
+
+00:00:23.269 --> 00:00:25.790 align:start position:0%
+ 
+ 
+
+00:00:25.790 --> 00:00:27.589 align:start position:0%
+ 
+ 
+
+00:00:27.589 --> 00:00:29.120 align:start position:0%
+ 
+ 
+
+00:00:29.120 --> 00:00:31.429 align:start position:0%
+ 
+ 
+
+00:00:31.429 --> 00:00:35.180 align:start position:0%
+ 
+ 
+
+00:00:35.180 --> 00:00:38.090 align:start position:0%
+ 
+ 
+
+00:00:38.090 --> 00:00:40.880 align:start position:0%
+ 
+ 
+
+00:00:40.880 --> 00:00:43.840 align:start position:0%
+ 
+ 
+
+00:00:43.840 --> 00:00:47.150 align:start position:0%
+ 
+ 
+
+00:00:47.150 --> 00:00:49.369 align:start position:0%
+ 
+ 
+
+00:00:49.369 --> 00:00:50.959 align:start position:0%
+ 
+ 
+
+00:00:50.959 --> 00:00:54.170 align:start position:0%
+ 
+ 
+
+00:00:54.170 --> 00:00:57.319 align:start position:0%
+ 
+ 
+
+00:00:57.319 --> 00:00:58.760 align:start position:0%
+ 
+ 
+
+00:00:58.760 --> 00:01:00.229 align:start position:0%
+ 
+ 
+
+00:01:00.229 --> 00:01:02.360 align:start position:0%
+ 
+ 
+
+00:01:02.360 --> 00:01:06.679 align:start position:0%
+ 
+ 
+
+00:01:06.679 --> 00:01:08.480 align:start position:0%
+ 
+ 
+
+00:01:08.480 --> 00:01:11.060 align:start position:0%
+ 
+ 
+
+00:01:11.060 --> 00:01:14.560 align:start position:0%
+ 
+ 
+
+00:01:14.560 --> 00:01:16.580 align:start position:0%
+ 
+ 
+
+00:01:16.580 --> 00:01:19.120 align:start position:0%
+ 
+ 
+
+00:01:19.120 --> 00:01:21.679 align:start position:0%
+ 
+ 
+
+00:01:21.679 --> 00:01:24.590 align:start position:0%
+ 
+ 
+
+00:01:24.590 --> 00:01:26.050 align:start position:0%
+ 
+ 
+
+00:01:26.050 --> 00:01:28.700 align:start position:0%
+ 
+ 
+
+00:01:28.700 --> 00:01:30.859 align:start position:0%
+ 
+ 
+
+00:01:30.859 --> 00:01:32.899 align:start position:0%
+ 
+ 
+
+00:01:32.899 --> 00:01:34.550 align:start position:0%
+ 
+ 
+
+00:01:34.550 --> 00:01:38.179 align:start position:0%
+ 
+ 
+
+00:01:38.179 --> 00:01:41.270 align:start position:0%
+ 
+ 
+
+00:01:41.270 --> 00:01:43.819 align:start position:0%
+ 
+ 
+
+00:01:43.819 --> 00:01:45.710 align:start position:0%
+ 
+ 
+
+00:01:45.710 --> 00:01:48.590 align:start position:0%
+ 
+ 
+
+00:01:48.590 --> 00:01:50.600 align:start position:0%
+ 
+ 
+
+00:01:50.600 --> 00:01:52.460 align:start position:0%
+ 
+ 
+
+00:01:52.460 --> 00:01:55.130 align:start position:0%
+ 
+ 
+
+00:01:55.130 --> 00:01:57.560 align:start position:0%
+ 
+ 
+
+00:01:57.560 --> 00:01:59.240 align:start position:0%
+ 
+ 
+
+00:01:59.240 --> 00:02:01.219 align:start position:0%
+ 
+ 
+
+00:02:01.219 --> 00:02:03.649 align:start position:0%
+ 
+ 
+
+00:02:03.649 --> 00:02:05.440 align:start position:0%
+ 
+ 
+
+00:02:05.440 --> 00:02:07.850 align:start position:0%
+ 
+ 
+
+00:02:07.850 --> 00:02:11.360 align:start position:0%
+ 
+ 
+
+00:02:11.360 --> 00:02:13.640 align:start position:0%
+ 
+ 
+
+00:02:13.640 --> 00:02:15.589 align:start position:0%
+ 
+ 
+
+00:02:15.589 --> 00:02:18.530 align:start position:0%
+ 
+ 
+
+00:02:18.530 --> 00:02:21.199 align:start position:0%
+ 
+ 
+
+00:02:21.199 --> 00:02:23.119 align:start position:0%
+ 
+ 
+
+00:02:23.119 --> 00:02:28.490 align:start position:0%
+ 
+ 
+
+00:02:28.490 --> 00:02:31.069 align:start position:0%
+ 
+ 
+
+00:02:31.069 --> 00:02:32.690 align:start position:0%
+ 
+ 
+
+00:02:32.690 --> 00:02:34.940 align:start position:0%
+ 
+ 
+
+00:02:34.940 --> 00:02:37.550 align:start position:0%
+ 
+ 
+
+00:02:37.550 --> 00:02:40.160 align:start position:0%
+ 
+ 
+
+00:02:40.160 --> 00:02:41.960 align:start position:0%
+ 
+ 
+
+00:02:41.960 --> 00:02:44.720 align:start position:0%
+ 
+ 
+
+00:02:44.720 --> 00:02:46.420 align:start position:0%
+ 
+ 
+
+00:02:46.420 --> 00:02:49.729 align:start position:0%
+ 
+ 
+
+00:02:49.729 --> 00:02:51.710 align:start position:0%
+ 
+ 
+
+00:02:51.710 --> 00:02:54.349 align:start position:0%
+ 
+ 
+
+00:02:54.349 --> 00:02:57.860 align:start position:0%
+ 
+ 
+
+00:02:57.860 --> 00:02:59.240 align:start position:0%
+ 
+ 
+
+00:02:59.240 --> 00:03:01.819 align:start position:0%
+ 
+ 
+
+00:03:01.819 --> 00:03:04.550 align:start position:0%
+ 
+ 
+
+00:03:04.550 --> 00:03:06.949 align:start position:0%
+ 
+ 
+
+00:03:06.949 --> 00:03:09.080 align:start position:0%
+ 
+ 
+
+00:03:09.080 --> 00:03:11.839 align:start position:0%
+ 
+ 
+
+00:03:11.839 --> 00:03:13.429 align:start position:0%
+ 
+ 
+
+00:03:13.429 --> 00:03:16.429 align:start position:0%
+ 
+ 
+
+00:03:16.429 --> 00:03:18.650 align:start position:0%
+ 
+ 
+
+00:03:18.650 --> 00:03:20.360 align:start position:0%
+ 
+ 
+
+00:03:20.360 --> 00:03:26.479 align:start position:0%
+ 
+ 
+
+00:03:26.479 --> 00:03:28.960 align:start position:0%
+ 
+ 
+
+00:03:28.960 --> 00:03:32.539 align:start position:0%
+ 
+ 
+
+00:03:32.539 --> 00:03:34.789 align:start position:0%
+ 
+ 
+
+00:03:34.789 --> 00:03:38.449 align:start position:0%
+ 
+ 
+
+00:03:38.449 --> 00:03:40.580 align:start position:0%
+ 
+ 
+
+00:03:40.580 --> 00:03:42.800 align:start position:0%
+ 
+ 
+
+00:03:42.800 --> 00:03:45.439 align:start position:0%
+ 
+ 
+
+00:03:45.439 --> 00:03:47.319 align:start position:0%
+ 
+ 
+
+00:03:47.319 --> 00:03:50.449 align:start position:0%
+ 
+ 
+
+00:03:50.449 --> 00:03:52.250 align:start position:0%
+ 
+ 
+
+00:03:52.250 --> 00:03:54.830 align:start position:0%
+ 
+ 
+
+00:03:54.830 --> 00:03:57.409 align:start position:0%
+ 
+ 
+
+00:03:57.409 --> 00:03:59.449 align:start position:0%
+ 
+ 
+
+00:03:59.449 --> 00:04:04.189 align:start position:0%
+ 
+ 
+
+00:04:04.189 --> 00:04:06.770 align:start position:0%
+ 
+ 
+
+00:04:06.770 --> 00:04:09.280 align:start position:0%
+ 
+ 
+
+00:04:09.280 --> 00:04:12.229 align:start position:0%
+ 
+ 
+
+00:04:12.229 --> 00:04:14.390 align:start position:0%
+ 
+ 
+
+00:04:14.390 --> 00:04:16.699 align:start position:0%
+ 
+ 
+
+00:04:16.699 --> 00:04:20.120 align:start position:0%
+ 
+ 
+
+00:04:20.120 --> 00:04:21.830 align:start position:0%
+ 
+ 
+
+00:04:21.830 --> 00:04:25.159 align:start position:0%
+ 
+ 
+
+00:04:25.159 --> 00:04:27.020 align:start position:0%
+ 
+ 
+
+00:04:27.020 --> 00:04:30.680 align:start position:0%
+ 
+ 
+
+00:04:30.680 --> 00:04:31.940 align:start position:0%
+ 
+ 
+
+00:04:31.940 --> 00:04:33.350 align:start position:0%
+ 
+ 
+
+00:04:33.350 --> 00:04:36.020 align:start position:0%
+ 
+ 
+
+00:04:36.020 --> 00:04:37.640 align:start position:0%
+ 
+ 
+
+00:04:37.640 --> 00:04:40.820 align:start position:0%
+ 
+ 
+
+00:04:40.820 --> 00:04:42.710 align:start position:0%
+ 
+ 
+
+00:04:42.710 --> 00:04:45.890 align:start position:0%
+ 
+ 
+
+00:04:45.890 --> 00:04:47.629 align:start position:0%
+ 
+ 
+
+00:04:47.629 --> 00:04:49.640 align:start position:0%
+ 
+ 
+
+00:04:49.640 --> 00:04:52.100 align:start position:0%
+ 
+ 
+
+00:04:52.100 --> 00:04:55.460 align:start position:0%
+ 
+ 
+
+00:04:55.460 --> 00:04:59.260 align:start position:0%
+ 
+ 
+
+00:04:59.260 --> 00:05:03.680 align:start position:0%
+ 
+ 
+
+00:05:03.680 --> 00:05:05.000 align:start position:0%
+ 
+ 
+
+00:05:05.000 --> 00:05:06.890 align:start position:0%
+ 
+ 
+
+00:05:06.890 --> 00:05:09.830 align:start position:0%
+ 
+ 
+
+00:05:09.830 --> 00:05:14.440 align:start position:0%
+ 
+ 
+
+00:05:14.440 --> 00:05:16.880 align:start position:0%
+ 
+ 
+
+00:05:16.880 --> 00:05:20.540 align:start position:0%
+ 
+ 
+
+00:05:20.540 --> 00:05:25.670 align:start position:0%
+ 
+ 
+
+00:05:25.670 --> 00:05:29.210 align:start position:0%
+ 
+ 
+
+00:05:29.210 --> 00:05:32.180 align:start position:0%
+ 
+ 
+
+00:05:32.180 --> 00:05:36.320 align:start position:0%
+ 
+ 
+
+00:05:36.320 --> 00:05:40.630 align:start position:0%
+ 
+ 
+
+00:05:40.630 --> 00:05:43.460 align:start position:0%
+ 
+ 
+
+00:05:43.460 --> 00:05:45.500 align:start position:0%
+ 
+ 
+
+00:05:45.500 --> 00:05:49.130 align:start position:0%
+ 
+ 
+
+00:05:49.130 --> 00:05:51.560 align:start position:0%
+ 
+ 
+
+00:05:51.560 --> 00:05:53.450 align:start position:0%
+ 
+ 
+
+00:05:53.450 --> 00:05:55.250 align:start position:0%
+ 
+ 
+
+00:05:55.250 --> 00:05:57.529 align:start position:0%
+ 
+ 
+
+00:05:57.529 --> 00:06:00.290 align:start position:0%
+ 
+ 
+
+00:06:00.290 --> 00:06:03.800 align:start position:0%
+ 
+ 
+
+00:06:03.800 --> 00:06:05.240 align:start position:0%
+ 
+ 
+
+00:06:05.240 --> 00:06:06.770 align:start position:0%
+ 
+ 
+
+00:06:06.770 --> 00:06:08.330 align:start position:0%
+ 
+ 
+
+00:06:08.330 --> 00:06:15.560 align:start position:0%
+ 
+ 
+
+00:06:15.560 --> 00:06:18.050 align:start position:0%
+ 
+ 
+
+00:06:18.050 --> 00:06:19.550 align:start position:0%
+ 
+ 
+
+00:06:19.550 --> 00:06:21.500 align:start position:0%
+ 
+ 
+
+00:06:21.500 --> 00:06:23.840 align:start position:0%
+ 
+ 
+
+00:06:23.840 --> 00:06:26.180 align:start position:0%
+ 
+ 
+
+00:06:26.180 --> 00:06:28.070 align:start position:0%
+ 
+ 
+
+00:06:28.070 --> 00:06:30.320 align:start position:0%
+ 
+ 
+
+00:06:30.320 --> 00:06:34.159 align:start position:0%
+ 
+ 
+
+00:06:34.159 --> 00:06:35.860 align:start position:0%
+ 
+ 
+
+00:06:35.860 --> 00:06:39.529 align:start position:0%
+ 
+ 
+
+00:06:39.529 --> 00:06:40.929 align:start position:0%
+ 
+ 
+
+00:06:40.929 --> 00:06:43.790 align:start position:0%
+ 
+ 
+
+00:06:43.790 --> 00:06:44.869 align:start position:0%
+ 
+ 
+
+00:06:44.869 --> 00:06:48.290 align:start position:0%
+ 
+ 
+
+00:06:48.290 --> 00:06:50.839 align:start position:0%
+ 
+ 
+
+00:06:50.839 --> 00:06:53.749 align:start position:0%
+ 
+ 
+
+00:06:53.749 --> 00:06:55.540 align:start position:0%
+ 
+ 
+
+00:06:55.540 --> 00:06:58.309 align:start position:0%
+ 
+ 
+
+00:06:58.309 --> 00:07:00.140 align:start position:0%
+ 
+ 
+
+00:07:00.140 --> 00:07:04.159 align:start position:0%
+ 
+ 
+
+00:07:04.159 --> 00:07:05.839 align:start position:0%
+ 
+ 
+
+00:07:05.839 --> 00:07:08.719 align:start position:0%
+ 
+ 
+
+00:07:08.719 --> 00:07:12.290 align:start position:0%
+ 
+ 
+
+00:07:12.290 --> 00:07:14.719 align:start position:0%
+ 
+ 
+
+00:07:14.719 --> 00:07:17.480 align:start position:0%
+ 
+ 
+
+00:07:17.480 --> 00:07:20.719 align:start position:0%
+ 
+ 
+
+00:07:20.719 --> 00:07:23.119 align:start position:0%
+ 
+ 
+
+00:07:23.119 --> 00:07:25.070 align:start position:0%
+ 
+ 
+
+00:07:25.070 --> 00:07:27.230 align:start position:0%
+ 
+ 
+
+00:07:27.230 --> 00:07:28.959 align:start position:0%
+ 
+ 
+
+00:07:28.959 --> 00:07:31.459 align:start position:0%
+ 
+ 
+
+00:07:31.459 --> 00:07:34.010 align:start position:0%
+ 
+ 
+
+00:07:34.010 --> 00:07:36.260 align:start position:0%
+ 
+ 
+
+00:07:36.260 --> 00:07:38.779 align:start position:0%
+ 
+ 
+
+00:07:38.779 --> 00:07:41.540 align:start position:0%
+ 
+ 
+
+00:07:41.540 --> 00:07:43.339 align:start position:0%
+ 
+ 
+
+00:07:43.339 --> 00:07:47.240 align:start position:0%
+ 
+ 
+
+00:07:47.240 --> 00:07:50.149 align:start position:0%
+ 
+ 
+
+00:07:50.149 --> 00:07:52.010 align:start position:0%
+ 
+ 
+
+00:07:52.010 --> 00:07:54.379 align:start position:0%
+ 
+ 
+
+00:07:54.379 --> 00:07:56.839 align:start position:0%
+ 
+ 
+
+00:07:56.839 --> 00:07:58.339 align:start position:0%
+ 
+ 
+
+00:07:58.339 --> 00:08:01.339 align:start position:0%
+ 
+ 
+
+00:08:01.339 --> 00:08:04.459 align:start position:0%
+ 
+ 
+
+00:08:04.459 --> 00:08:07.159 align:start position:0%
+ 
+ 
+
+00:08:07.159 --> 00:08:10.730 align:start position:0%
+ 
+ 
+
+00:08:10.730 --> 00:08:12.950 align:start position:0%
+ 
+ 
+
+00:08:12.950 --> 00:08:14.510 align:start position:0%
+ 
+ 
+
+00:08:14.510 --> 00:08:16.459 align:start position:0%
+ 
+ 
+
+00:08:16.459 --> 00:08:20.719 align:start position:0%
+ 
+ 
+
+00:08:20.719 --> 00:08:22.839 align:start position:0%
+ 
+ 
+
+00:08:22.839 --> 00:08:25.519 align:start position:0%
+ 
+ 
+
+00:08:25.519 --> 00:08:28.100 align:start position:0%
+ 
+ 
+
+00:08:28.100 --> 00:08:31.969 align:start position:0%
+ 
+ 
+
+00:08:31.969 --> 00:08:34.750 align:start position:0%
+ 
+ 
+
+00:08:34.750 --> 00:08:37.279 align:start position:0%
+ 
+ 
+
+00:08:37.279 --> 00:08:40.579 align:start position:0%
+ 
+ 
+
+00:08:40.579 --> 00:08:42.500 align:start position:0%
+ 
+ 
+
+00:08:42.500 --> 00:08:44.149 align:start position:0%
+ 
+ 
+
+00:08:44.149 --> 00:08:47.090 align:start position:0%
+ 
+ 
+
+00:08:47.090 --> 00:08:49.730 align:start position:0%
+ 
+ 
+
+00:08:49.730 --> 00:08:51.319 align:start position:0%
+ 
+ 
+
+00:08:51.319 --> 00:08:53.389 align:start position:0%
+ 
+ 
+
+00:08:53.389 --> 00:08:54.410 align:start position:0%
+ 
+ 
+
+00:08:54.410 --> 00:08:57.110 align:start position:0%
+ 
+ 
+
+00:08:57.110 --> 00:08:59.870 align:start position:0%
+ 
+ 
+
+00:08:59.870 --> 00:09:03.259 align:start position:0%
+ 
+ 
+
+00:09:03.259 --> 00:09:06.230 align:start position:0%
+ 
+ 
+
+00:09:06.230 --> 00:09:09.769 align:start position:0%
+ 
+ 
+
+00:09:09.769 --> 00:09:11.300 align:start position:0%
+ 
+ 
+
+00:09:11.300 --> 00:09:13.370 align:start position:0%
+ 
+ 
+
+00:09:13.370 --> 00:09:15.800 align:start position:0%
+ 
+ 
+
+00:09:15.800 --> 00:09:17.840 align:start position:0%
+ 
+ 
+
+00:09:17.840 --> 00:09:20.750 align:start position:0%
+ 
+ 
+
+00:09:20.750 --> 00:09:25.850 align:start position:0%
+ 
+ 
+
+00:09:25.850 --> 00:09:27.259 align:start position:0%
+ 
+ 
+
+00:09:27.259 --> 00:09:29.240 align:start position:0%
+ 
+ 
+
+00:09:29.240 --> 00:09:31.009 align:start position:0%
+ 
+ 
+
+00:09:31.009 --> 00:09:32.870 align:start position:0%
+ 
+ 
+
+00:09:32.870 --> 00:09:34.250 align:start position:0%
+ 
+ 
+
+00:09:34.250 --> 00:09:36.710 align:start position:0%
+ 
+ 
+
+00:09:36.710 --> 00:09:39.860 align:start position:0%
+ 
+ 
+
+00:09:39.860 --> 00:09:42.379 align:start position:0%
+ 
+ 
+
+00:09:42.379 --> 00:09:44.150 align:start position:0%
+ 
+ 
+
+00:09:44.150 --> 00:09:46.879 align:start position:0%
+ 
+ 
+
+00:09:46.879 --> 00:09:48.590 align:start position:0%
+ 
+ 
+
+00:09:48.590 --> 00:09:51.560 align:start position:0%
+ 
+ 
+
+00:09:51.560 --> 00:09:54.860 align:start position:0%
+ 
+ 
+
+00:09:54.860 --> 00:09:56.960 align:start position:0%
+ 
+ 
+
+00:09:56.960 --> 00:09:59.420 align:start position:0%
+ 
+ 
+
+00:09:59.420 --> 00:10:01.340 align:start position:0%
+ 
+ 
+
+00:10:01.340 --> 00:10:04.400 align:start position:0%
+ 
+ 
+
+00:10:04.400 --> 00:10:05.990 align:start position:0%
+ 
+ 
+
+00:10:05.990 --> 00:10:08.420 align:start position:0%
+ 
+ 
+
+00:10:08.420 --> 00:10:10.220 align:start position:0%
+ 
+ 
+
+00:10:10.220 --> 00:10:12.860 align:start position:0%
+ 
+ 
+
+00:10:12.860 --> 00:10:14.680 align:start position:0%
+ 
+ 
+
+00:10:14.680 --> 00:10:17.210 align:start position:0%
+ 
+ 
+
+00:10:17.210 --> 00:10:21.560 align:start position:0%
+ 
+ 
+
+00:10:21.560 --> 00:10:25.069 align:start position:0%
+ 
+ 
+
+00:10:25.069 --> 00:10:27.290 align:start position:0%
+ 
+ 
+
+00:10:27.290 --> 00:10:30.189 align:start position:0%
+ 
+ 
+
+00:10:30.189 --> 00:10:34.850 align:start position:0%
+ 
+ 
+
+00:10:34.850 --> 00:10:37.309 align:start position:0%
+ 
+ 
+
+00:10:37.309 --> 00:10:39.860 align:start position:0%
+ 
+ 
+
+00:10:39.860 --> 00:10:43.040 align:start position:0%
+ 
+ 
+
+00:10:43.040 --> 00:10:44.840 align:start position:0%
+ 
+ 
+
+00:10:44.840 --> 00:10:46.670 align:start position:0%
+ 
+ 
+
+00:10:46.670 --> 00:10:48.290 align:start position:0%
+ 
+ 
+
+00:10:48.290 --> 00:10:51.019 align:start position:0%
+ 
+ 
+
+00:10:51.019 --> 00:10:53.809 align:start position:0%
+ 
+ 
+
+00:10:53.809 --> 00:10:55.639 align:start position:0%
+ 
+ 
+
+00:10:55.639 --> 00:10:58.689 align:start position:0%
+ 
+ 
+
+00:10:58.689 --> 00:11:01.790 align:start position:0%
+ 
+ 
+
+00:11:01.790 --> 00:11:03.740 align:start position:0%
+ 
+ 
+
+00:11:03.740 --> 00:11:06.480 align:start position:0%
+ 
+ 
+
+00:11:06.480 --> 00:11:09.750 align:start position:0%
+ 
+ 
+
+00:11:09.750 --> 00:11:12.600 align:start position:0%
+ 
+ 
+
+00:11:12.600 --> 00:11:14.579 align:start position:0%
+ 
+ 
+
+00:11:14.579 --> 00:11:17.100 align:start position:0%
+ 
+ 
+
+00:11:17.100 --> 00:11:19.889 align:start position:0%
+ 
+ 
+
+00:11:19.889 --> 00:11:21.389 align:start position:0%
+ 
+ 
+
+00:11:21.389 --> 00:11:23.730 align:start position:0%
+ 
+ 
+
+00:11:23.730 --> 00:11:27.720 align:start position:0%
+ 
+ 
+
+00:11:27.720 --> 00:11:29.790 align:start position:0%
+ 
+ 
+
+00:11:29.790 --> 00:11:32.639 align:start position:0%
+ 
+ 
+
+00:11:32.639 --> 00:11:34.800 align:start position:0%
+ 
+ 
+
+00:11:34.800 --> 00:11:37.769 align:start position:0%
+ 
+ 
+
+00:11:37.769 --> 00:11:39.750 align:start position:0%
+ 
+ 
+
+00:11:39.750 --> 00:11:43.380 align:start position:0%
+ 
+ 
+
+00:11:43.380 --> 00:11:45.470 align:start position:0%
+ 
+ 
+
+00:11:45.470 --> 00:11:48.960 align:start position:0%
+ 
+ 
+
+00:11:48.960 --> 00:11:50.970 align:start position:0%
+ 
+ 
+
+00:11:50.970 --> 00:11:54.570 align:start position:0%
+ 
+ 
+
+00:11:54.570 --> 00:11:55.889 align:start position:0%
+ 
+ 
+
+00:11:55.889 --> 00:11:58.620 align:start position:0%
+ 
+ 
+
+00:11:58.620 --> 00:12:00.120 align:start position:0%
+ 
+ 
+
+00:12:00.120 --> 00:12:04.260 align:start position:0%
+ 
+ 
+
+00:12:04.260 --> 00:12:06.180 align:start position:0%
+ 
+ 
+
+00:12:06.180 --> 00:12:07.769 align:start position:0%
+ 
+ 
+
+00:12:07.769 --> 00:12:11.460 align:start position:0%
+ 
+ 
+
+00:12:11.460 --> 00:12:13.680 align:start position:0%
+ 
+ 
+
+00:12:13.680 --> 00:12:16.260 align:start position:0%
+ 
+ 
+
+00:12:16.260 --> 00:12:18.449 align:start position:0%
+ 
+ 
+
+00:12:18.449 --> 00:12:20.699 align:start position:0%
+ 
+ 
+
+00:12:20.699 --> 00:12:23.430 align:start position:0%
+ 
+ 
+
+00:12:23.430 --> 00:12:24.960 align:start position:0%
+ 
+ 
+
+00:12:24.960 --> 00:12:27.240 align:start position:0%
+ 
+ 
+
+00:12:27.240 --> 00:12:29.699 align:start position:0%
+ 
+ 
+
+00:12:29.699 --> 00:12:32.490 align:start position:0%
+ 
+ 
+
+00:12:32.490 --> 00:12:33.690 align:start position:0%
+ 
+ 
+
+00:12:33.690 --> 00:12:36.569 align:start position:0%
+ 
+ 
+
+00:12:36.569 --> 00:12:39.600 align:start position:0%
+ 
+ 
+
+00:12:39.600 --> 00:12:43.050 align:start position:0%
+ 
+ 
+
+00:12:43.050 --> 00:12:46.079 align:start position:0%
+ 
+ 
+
+00:12:46.079 --> 00:12:48.120 align:start position:0%
+ 
+ 
+
+00:12:48.120 --> 00:12:50.850 align:start position:0%
+ 
+ 
+
+00:12:50.850 --> 00:12:54.030 align:start position:0%
+ 
+ 
+
+00:12:54.030 --> 00:12:57.150 align:start position:0%
+ 
+ 
+
+00:12:57.150 --> 00:12:58.680 align:start position:0%
+ 
+ 
+
+00:12:58.680 --> 00:13:02.639 align:start position:0%
+ 
+ 
+
+00:13:02.639 --> 00:13:05.040 align:start position:0%
+ 
+ 
+
+00:13:05.040 --> 00:13:07.050 align:start position:0%
+ 
+ 
+
+00:13:07.050 --> 00:13:08.970 align:start position:0%
+ 
+ 
+
+00:13:08.970 --> 00:13:11.220 align:start position:0%
+ 
+ 
+
+00:13:11.220 --> 00:13:13.350 align:start position:0%
+ 
+ 
+
+00:13:13.350 --> 00:13:16.370 align:start position:0%
+ 
+ 
+
+00:13:16.370 --> 00:13:18.840 align:start position:0%
+ 
+ 
+
+00:13:18.840 --> 00:13:20.249 align:start position:0%
+ 
+ 
+
+00:13:20.249 --> 00:13:22.590 align:start position:0%
+ 
+ 
+
+00:13:22.590 --> 00:13:25.109 align:start position:0%
+ 
+ 
+
+00:13:25.109 --> 00:13:27.619 align:start position:0%
+ 
+ 
+
+00:13:27.619 --> 00:13:30.479 align:start position:0%
+ 
+ 
+
+00:13:30.479 --> 00:13:33.150 align:start position:0%
+ 
+ 
+
+00:13:33.150 --> 00:13:35.669 align:start position:0%
+ 
+ 
+
+00:13:35.669 --> 00:13:38.729 align:start position:0%
+ 
+ 
+
+00:13:38.729 --> 00:13:41.099 align:start position:0%
+ 
+ 
+
+00:13:41.099 --> 00:13:42.599 align:start position:0%
+ 
+ 
+
+00:13:42.599 --> 00:13:44.729 align:start position:0%
+ 
+ 
+
+00:13:44.729 --> 00:13:46.739 align:start position:0%
+ 
+ 
+
+00:13:46.739 --> 00:13:49.349 align:start position:0%
+ 
+ 
+
+00:13:49.349 --> 00:13:51.059 align:start position:0%
+ 
+ 
+
+00:13:51.059 --> 00:13:52.619 align:start position:0%
+ 
+ 
+
+00:13:52.619 --> 00:13:54.210 align:start position:0%
+ 
+ 
+
+00:13:54.210 --> 00:13:57.299 align:start position:0%
+ 
+ 
+
+00:13:57.299 --> 00:13:58.349 align:start position:0%
+ 
+ 
+
+00:13:58.349 --> 00:14:00.689 align:start position:0%
+ 
+ 
+
+00:14:00.689 --> 00:14:03.599 align:start position:0%
+ 
+ 
+
+00:14:03.599 --> 00:14:06.239 align:start position:0%
+ 
+ 
+
+00:14:06.239 --> 00:14:07.619 align:start position:0%
+ 
+ 
+
+00:14:07.619 --> 00:14:11.249 align:start position:0%
+ 
+ 
+
+00:14:11.249 --> 00:14:13.799 align:start position:0%
+ 
+ 
+
+00:14:13.799 --> 00:14:15.509 align:start position:0%
+ 
+ 
+
+00:14:15.509 --> 00:14:18.479 align:start position:0%
+ 
+ 
+
+00:14:18.479 --> 00:14:20.099 align:start position:0%
+ 
+ 
+
+00:14:20.099 --> 00:14:23.729 align:start position:0%
+ 
+ 
+
+00:14:23.729 --> 00:14:24.689 align:start position:0%
+ 
+ 
+
+00:14:24.689 --> 00:14:26.609 align:start position:0%
+ 
+ 
+
+00:14:26.609 --> 00:14:32.369 align:start position:0%
+ 
+ 
+
+00:14:32.369 --> 00:14:34.769 align:start position:0%
+ 
+ 
+
+00:14:34.769 --> 00:14:35.999 align:start position:0%
+ 
+ 
+
+00:14:35.999 --> 00:14:37.739 align:start position:0%
+ 
+ 
+
+00:14:37.739 --> 00:14:40.889 align:start position:0%
+ 
+ 
+
+00:14:40.889 --> 00:14:42.059 align:start position:0%
+ 
+ 
+
+00:14:42.059 --> 00:14:43.379 align:start position:0%
+ 
+ 
+
+00:14:43.379 --> 00:14:45.809 align:start position:0%
+ 
+ 
+
+00:14:45.809 --> 00:14:48.329 align:start position:0%
+ 
+ 
+
+00:14:48.329 --> 00:14:50.039 align:start position:0%
+ 
+ 
+
+00:14:50.039 --> 00:14:54.859 align:start position:0%
+ 
+ 
+
+00:14:54.859 --> 00:14:57.179 align:start position:0%
+ 
+ 
+
+00:14:57.179 --> 00:14:59.489 align:start position:0%
+ 
+ 
+
+00:14:59.489 --> 00:15:01.979 align:start position:0%
+ 
+ 
+
+00:15:01.979 --> 00:15:05.519 align:start position:0%
+ 
+ 
+
+00:15:05.519 --> 00:15:07.679 align:start position:0%
+ 
+ 
+
+00:15:07.679 --> 00:15:12.049 align:start position:0%
+ 
+ 
+
+00:15:12.049 --> 00:15:15.210 align:start position:0%
+ 
+ 
+
+00:15:15.210 --> 00:15:17.999 align:start position:0%
+ 
+ 
+
+00:15:17.999 --> 00:15:21.659 align:start position:0%
+ 
+ 
+
+00:15:21.659 --> 00:15:23.849 align:start position:0%
+ 
+ 
+
+00:15:23.849 --> 00:15:25.499 align:start position:0%
+ 
+ 
+
+00:15:25.499 --> 00:15:28.769 align:start position:0%
+ 
+ 
+
+00:15:28.769 --> 00:15:30.629 align:start position:0%
+ 
+ 
+
+00:15:30.629 --> 00:15:32.759 align:start position:0%
+ 
+ 
+
+00:15:32.759 --> 00:15:33.689 align:start position:0%
+ 
+ 
+
+00:15:33.689 --> 00:15:35.579 align:start position:0%
+ 
+ 
+
+00:15:35.579 --> 00:15:37.319 align:start position:0%
+ 
+ 
+
+00:15:37.319 --> 00:15:39.389 align:start position:0%
+ 
+ 
+
+00:15:39.389 --> 00:15:43.139 align:start position:0%
+ 
+ 
+
+00:15:43.139 --> 00:15:44.340 align:start position:0%
+ 
+ 
+
+00:15:44.340 --> 00:15:46.109 align:start position:0%
+ 
+ 
+
+00:15:46.109 --> 00:15:47.519 align:start position:0%
+ 
+ 
+
+00:15:47.519 --> 00:15:53.309 align:start position:0%
+ 
+ 
+
+00:15:53.309 --> 00:15:56.729 align:start position:0%
+ 
+ 
+
+00:15:56.729 --> 00:15:58.590 align:start position:0%
+ 
+ 
+
+00:15:58.590 --> 00:16:00.809 align:start position:0%
+ 
+ 
+
+00:16:00.809 --> 00:16:02.879 align:start position:0%
+ 
+ 
+
+00:16:02.879 --> 00:16:05.699 align:start position:0%
+ 
+ 
+
+00:16:05.699 --> 00:16:08.729 align:start position:0%
+ 
+ 
+
+00:16:08.729 --> 00:16:11.189 align:start position:0%
+ 
+ 
+
+00:16:11.189 --> 00:16:13.169 align:start position:0%
+ 
+ 
+
+00:16:13.169 --> 00:16:15.509 align:start position:0%
+ 
+ 
+
+00:16:15.509 --> 00:16:16.769 align:start position:0%
+ 
+ 
+
+00:16:16.769 --> 00:16:19.470 align:start position:0%
+ 
+ 
+
+00:16:19.470 --> 00:16:21.359 align:start position:0%
+ 
+ 
+
+00:16:21.359 --> 00:16:24.179 align:start position:0%
+ 
+ 
+
+00:16:24.179 --> 00:16:25.590 align:start position:0%
+ 
+ 
+
+00:16:25.590 --> 00:16:27.689 align:start position:0%
+ 
+ 
+
+00:16:27.689 --> 00:16:29.009 align:start position:0%
+ 
+ 
+
+00:16:29.009 --> 00:16:33.449 align:start position:0%
+ 
+ 
+
+00:16:33.449 --> 00:16:36.439 align:start position:0%
+ 
+ 
+
+00:16:36.439 --> 00:16:40.349 align:start position:0%
+ 
+ 
+
+00:16:40.349 --> 00:16:42.749 align:start position:0%
+ 
+ 
+
+00:16:42.749 --> 00:16:44.939 align:start position:0%
+ 
+ 
+
+00:16:44.939 --> 00:16:46.919 align:start position:0%
+ 
+ 
+
+00:16:46.919 --> 00:16:50.639 align:start position:0%
+ 
+ 
+
+00:16:50.639 --> 00:16:52.529 align:start position:0%
+ 
+ 
+
+00:16:52.529 --> 00:16:55.470 align:start position:0%
+ 
+ 
+
+00:16:55.470 --> 00:16:58.619 align:start position:0%
+ 
+ 
+
+00:16:58.619 --> 00:17:00.449 align:start position:0%
+ 
+ 
+
+00:17:00.449 --> 00:17:02.340 align:start position:0%
+ 
+ 
+
+00:17:02.340 --> 00:17:07.949 align:start position:0%
+ 
+ 
+
+00:17:07.949 --> 00:17:10.079 align:start position:0%
+ 
+ 
+
+00:17:10.079 --> 00:17:12.960 align:start position:0%
+ 
+ 
+
+00:17:12.960 --> 00:17:15.299 align:start position:0%
+ 
+ 
+
+00:17:15.299 --> 00:17:17.970 align:start position:0%
+ 
+ 
+
+00:17:17.970 --> 00:17:19.949 align:start position:0%
+ 
+ 
+
+00:17:19.949 --> 00:17:22.019 align:start position:0%
+ 
+ 
+
+00:17:22.019 --> 00:17:24.090 align:start position:0%
+ 
+ 
+
+00:17:24.090 --> 00:17:26.069 align:start position:0%
+ 
+ 
+
+00:17:26.069 --> 00:17:28.289 align:start position:0%
+ 
+ 
+
+00:17:28.289 --> 00:17:30.480 align:start position:0%
+ 
+ 
+
+00:17:30.480 --> 00:17:31.950 align:start position:0%
+ 
+ 
+
+00:17:31.950 --> 00:17:36.560 align:start position:0%
+ 
+ 
+
+00:17:36.560 --> 00:17:39.299 align:start position:0%
+ 
+ 
+
+00:17:39.299 --> 00:17:41.399 align:start position:0%
+ 
+ 
+
+00:17:41.399 --> 00:17:42.779 align:start position:0%
+ 
+ 
+
+00:17:42.779 --> 00:17:45.389 align:start position:0%
+ 
+ 
+
+00:17:45.389 --> 00:17:47.610 align:start position:0%
+ 
+ 
+
+00:17:47.610 --> 00:17:48.900 align:start position:0%
+ 
+ 
+
+00:17:48.900 --> 00:17:51.600 align:start position:0%
+ 
+ 
+
+00:17:51.600 --> 00:17:53.010 align:start position:0%
+ 
+ 
+
+00:17:53.010 --> 00:17:55.710 align:start position:0%
+ 
+ 
+
+00:17:55.710 --> 00:17:57.000 align:start position:0%
+ 
+ 
+
+00:17:57.000 --> 00:18:00.180 align:start position:0%
+ 
+ 
+
+00:18:00.180 --> 00:18:03.360 align:start position:0%
+ 
+ 
+
+00:18:03.360 --> 00:18:06.090 align:start position:0%
+ 
+ 
+
+00:18:06.090 --> 00:18:07.680 align:start position:0%
+ 
+ 
+
+00:18:07.680 --> 00:18:09.810 align:start position:0%
+ 
+ 
+
+00:18:09.810 --> 00:18:11.100 align:start position:0%
+ 
+ 
+
+00:18:11.100 --> 00:18:14.460 align:start position:0%
+ 
+ 
+
+00:18:14.460 --> 00:18:16.320 align:start position:0%
+ 
+ 
+
+00:18:16.320 --> 00:18:18.420 align:start position:0%
+ 
+ 
+
+00:18:18.420 --> 00:18:21.030 align:start position:0%
+ 
+ 
+
+00:18:21.030 --> 00:18:24.470 align:start position:0%
+ 
+ 
+
+00:18:24.470 --> 00:18:27.180 align:start position:0%
+ 
+ 
+
+00:18:27.180 --> 00:18:29.280 align:start position:0%
+ 
+ 
+
+00:18:29.280 --> 00:18:32.250 align:start position:0%
+ 
+ 
+
+00:18:32.250 --> 00:18:33.690 align:start position:0%
+ 
+ 
+
+00:18:33.690 --> 00:18:36.120 align:start position:0%
+ 
+ 
+
+00:18:36.120 --> 00:18:38.730 align:start position:0%
+ 
+ 
+
+00:18:38.730 --> 00:18:41.370 align:start position:0%
+ 
+ 
+
+00:18:41.370 --> 00:18:43.320 align:start position:0%
+ 
+ 
+
+00:18:43.320 --> 00:18:45.390 align:start position:0%
+ 
+ 
+
+00:18:45.390 --> 00:18:47.400 align:start position:0%
+ 
+ 
+
+00:18:47.400 --> 00:18:49.620 align:start position:0%
+ 
+ 
+
+00:18:49.620 --> 00:18:52.500 align:start position:0%
+ 
+ 
+
+00:18:52.500 --> 00:18:54.870 align:start position:0%
+ 
+ 
+
+00:18:54.870 --> 00:18:56.580 align:start position:0%
+ 
+ 
+
+00:18:56.580 --> 00:19:00.030 align:start position:0%
+ 
+ 
+
+00:19:00.030 --> 00:19:01.950 align:start position:0%
+ 
+ 
+
+00:19:01.950 --> 00:19:04.169 align:start position:0%
+ 
+ 
+
+00:19:04.169 --> 00:19:05.700 align:start position:0%
+ 
+ 
+
+00:19:05.700 --> 00:19:08.640 align:start position:0%
+ 
+ 
+
+00:19:08.640 --> 00:19:10.890 align:start position:0%
+ 
+ 
+
+00:19:10.890 --> 00:19:14.130 align:start position:0%
+ 
+ 
+
+00:19:14.130 --> 00:19:18.030 align:start position:0%
+ 
+ 
+
+00:19:18.030 --> 00:19:19.500 align:start position:0%
+ 
+ 
+
+00:19:19.500 --> 00:19:21.630 align:start position:0%
+ 
+ 
+
+00:19:21.630 --> 00:19:24.780 align:start position:0%
+ 
+ 
+
+00:19:24.780 --> 00:19:27.330 align:start position:0%
+ 
+ 
+
+00:19:27.330 --> 00:19:29.340 align:start position:0%
+ 
+ 
+
+00:19:29.340 --> 00:19:32.549 align:start position:0%
+ 
+ 
+
+00:19:32.549 --> 00:19:37.260 align:start position:0%
+ 
+ 
+
+00:19:37.260 --> 00:19:39.799 align:start position:0%
+ 
+ 
+
+00:19:39.799 --> 00:19:42.600 align:start position:0%
+ 
+ 
+
+00:19:42.600 --> 00:19:44.299 align:start position:0%
+ 
+ 
+
+00:19:44.299 --> 00:19:47.640 align:start position:0%
+ 
+ 
+
+00:19:47.640 --> 00:19:49.770 align:start position:0%
+ 
+ 
+
+00:19:49.770 --> 00:19:53.000 align:start position:0%
+ 
+ 
+
+00:19:53.000 --> 00:19:55.919 align:start position:0%
+ 
+ 
+
+00:19:55.919 --> 00:19:58.020 align:start position:0%
+ 
+ 
+
+00:19:58.020 --> 00:20:00.180 align:start position:0%
+ 
+ 
+
+00:20:00.180 --> 00:20:01.070 align:start position:0%
+ 
+ 
+
+00:20:01.070 --> 00:20:03.390 align:start position:0%
+ 
+ 
+
+00:20:03.390 --> 00:20:05.580 align:start position:0%
+ 
+ 
+
+00:20:05.580 --> 00:20:06.390 align:start position:0%
+ 
+ 
+
+00:20:06.390 --> 00:20:08.490 align:start position:0%
+ 
+ 
+
+00:20:08.490 --> 00:20:10.530 align:start position:0%
+ 
+ 
+
+00:20:10.530 --> 00:20:12.300 align:start position:0%
+ 
+ 
+
+00:20:12.300 --> 00:20:13.980 align:start position:0%
+ 
+ 
+
+00:20:13.980 --> 00:20:16.680 align:start position:0%
+ 
+ 
+
+00:20:16.680 --> 00:20:18.930 align:start position:0%
+ 
+ 
+
+00:20:18.930 --> 00:20:20.820 align:start position:0%
+ 
+ 
+
+00:20:20.820 --> 00:20:23.670 align:start position:0%
+ 
+ 
+
+00:20:23.670 --> 00:20:25.710 align:start position:0%
+ 
+ 
+
+00:20:25.710 --> 00:20:27.270 align:start position:0%
+ 
+ 
+
+00:20:27.270 --> 00:20:29.100 align:start position:0%
+ 
+ 
+
+00:20:29.100 --> 00:20:31.740 align:start position:0%
+ 
+ 
+
+00:20:31.740 --> 00:20:35.790 align:start position:0%
+ 
+ 
+
+00:20:35.790 --> 00:20:36.720 align:start position:0%
+ 
+ 
+
+00:20:36.720 --> 00:20:38.430 align:start position:0%
+ 
+ 
+
+00:20:38.430 --> 00:20:40.230 align:start position:0%
+ 
+ 
+
+00:20:40.230 --> 00:20:43.260 align:start position:0%
+ 
+ 
+
+00:20:43.260 --> 00:20:46.110 align:start position:0%
+ 
+ 
+
+00:20:46.110 --> 00:20:49.020 align:start position:0%
+ 
+ 
+
+00:20:49.020 --> 00:20:51.120 align:start position:0%
+ 
+ 
+
+00:20:51.120 --> 00:20:55.170 align:start position:0%
+ 
+ 
+
+00:20:55.170 --> 00:20:58.110 align:start position:0%
+ 
+ 
+
+00:20:58.110 --> 00:21:00.510 align:start position:0%
+ 
+ 
+
+00:21:00.510 --> 00:21:05.420 align:start position:0%
+ 
+ 
+
+00:21:05.420 --> 00:21:07.590 align:start position:0%
+ 
+ 
+
+00:21:07.590 --> 00:21:11.300 align:start position:0%
+ 
+ 
+
+00:21:11.300 --> 00:21:14.160 align:start position:0%
+ 
+ 
+
+00:21:14.160 --> 00:21:15.690 align:start position:0%
+ 
+ 
+
+00:21:15.690 --> 00:21:18.900 align:start position:0%
+ 
+ 
+
+00:21:18.900 --> 00:21:20.580 align:start position:0%
+ 
+ 
+
+00:21:20.580 --> 00:21:23.040 align:start position:0%
+ 
+ 
+
+00:21:23.040 --> 00:21:26.040 align:start position:0%
+ 
+ 
+
+00:21:26.040 --> 00:21:27.450 align:start position:0%
+ 
+ 
+
+00:21:27.450 --> 00:21:31.860 align:start position:0%
+ 
+ 
+
+00:21:31.860 --> 00:21:34.290 align:start position:0%
+ 
+ 
+
+00:21:34.290 --> 00:21:37.050 align:start position:0%
+ 
+ 
+
+00:21:37.050 --> 00:21:39.510 align:start position:0%
+ 
+ 
+
+00:21:39.510 --> 00:21:41.640 align:start position:0%
+ 
+ 
+
+00:21:41.640 --> 00:21:43.890 align:start position:0%
+ 
+ 
+
+00:21:43.890 --> 00:21:46.620 align:start position:0%
+ 
+ 
+
+00:21:46.620 --> 00:21:49.020 align:start position:0%
+ 
+ 
+
+00:21:49.020 --> 00:21:50.610 align:start position:0%
+ 
+ 
+
+00:21:50.610 --> 00:21:55.740 align:start position:0%
+ 
+ 
+
+00:21:55.740 --> 00:21:59.190 align:start position:0%
+ 
+ 
+
+00:21:59.190 --> 00:22:01.920 align:start position:0%
+ 
+ 
+
+00:22:01.920 --> 00:22:04.680 align:start position:0%
+ 
+ 
+
+00:22:04.680 --> 00:22:06.210 align:start position:0%
+ 
+ 
+
+00:22:06.210 --> 00:22:08.760 align:start position:0%
+ 
+ 
+
+00:22:08.760 --> 00:22:10.590 align:start position:0%
+ 
+ 
+
+00:22:10.590 --> 00:22:11.850 align:start position:0%
+ 
+ 
+
+00:22:11.850 --> 00:22:13.470 align:start position:0%
+ 
+ 
+
+00:22:13.470 --> 00:22:14.810 align:start position:0%
+ 
+ 
+
+00:22:14.810 --> 00:22:16.940 align:start position:0%
+ 
+ 
+
+00:22:16.940 --> 00:22:18.830 align:start position:0%
+ 
+ 
+
+00:22:18.830 --> 00:22:21.889 align:start position:0%
+ 
+ 
+
+00:22:21.889 --> 00:22:23.330 align:start position:0%
+ 
+ 
+
+00:22:23.330 --> 00:22:25.850 align:start position:0%
+ 
+ 
+
+00:22:25.850 --> 00:22:29.060 align:start position:0%
+ 
+ 
+
+00:22:29.060 --> 00:22:31.190 align:start position:0%
+ 
+ 
+
+00:22:31.190 --> 00:22:34.340 align:start position:0%
+ 
+ 
+
+00:22:34.340 --> 00:22:36.919 align:start position:0%
+ 
+ 
+
+00:22:36.919 --> 00:22:38.539 align:start position:0%
+ 
+ 
+
+00:22:38.539 --> 00:22:42.620 align:start position:0%
+ 
+ 
+
+00:22:42.620 --> 00:22:45.019 align:start position:0%
+ 
+ 
+
+00:22:45.019 --> 00:22:47.740 align:start position:0%
+ 
+ 
+
+00:22:47.740 --> 00:22:50.360 align:start position:0%
+ 
+ 
+
+00:22:50.360 --> 00:22:52.820 align:start position:0%
+ 
+ 
+
+00:22:52.820 --> 00:22:55.070 align:start position:0%
+ 
+ 
+
+00:22:55.070 --> 00:22:56.299 align:start position:0%
+ 
+ 
+
+00:22:56.299 --> 00:22:57.830 align:start position:0%
+ 
+ 
+
+00:22:57.830 --> 00:22:59.810 align:start position:0%
+ 
+ 
+
+00:22:59.810 --> 00:23:01.850 align:start position:0%
+ 
+ 
+
+00:23:01.850 --> 00:23:04.129 align:start position:0%
+ 
+ 
+
+00:23:04.129 --> 00:23:05.840 align:start position:0%
+ 
+ 
+
+00:23:05.840 --> 00:23:08.930 align:start position:0%
+ 
+ 
+
+00:23:08.930 --> 00:23:11.629 align:start position:0%
+ 
+ 
+
+00:23:11.629 --> 00:23:13.340 align:start position:0%
+ 
+ 
+
+00:23:13.340 --> 00:23:16.399 align:start position:0%
+ 
+ 
+
+00:23:16.399 --> 00:23:18.440 align:start position:0%
+ 
+ 
+
+00:23:18.440 --> 00:23:21.110 align:start position:0%
+ 
+ 
+
+00:23:21.110 --> 00:23:24.070 align:start position:0%
+ 
+ 
+
+00:23:24.070 --> 00:23:26.749 align:start position:0%
+ 
+ 
+
+00:23:26.749 --> 00:23:28.430 align:start position:0%
+ 
+ 
+
+00:23:28.430 --> 00:23:30.529 align:start position:0%
+ 
+ 
+
+00:23:30.529 --> 00:23:32.419 align:start position:0%
+ 
+ 
+
+00:23:32.419 --> 00:23:35.269 align:start position:0%
+ 
+ 
+
+00:23:35.269 --> 00:23:37.759 align:start position:0%
+ 
+ 
+
+00:23:37.759 --> 00:23:40.190 align:start position:0%
+ 
+ 
+
+00:23:40.190 --> 00:23:42.139 align:start position:0%
+ 
+ 
+
+00:23:42.139 --> 00:23:44.149 align:start position:0%
+ 
+ 
+
+00:23:44.149 --> 00:23:46.610 align:start position:0%
+ 
+ 
+
+00:23:46.610 --> 00:23:50.539 align:start position:0%
+ 
+ 
+
+00:23:50.539 --> 00:23:53.899 align:start position:0%
+ 
+ 
+
+00:23:53.899 --> 00:23:56.629 align:start position:0%
+ 
+ 
+
+00:23:56.629 --> 00:23:58.310 align:start position:0%
+ 
+ 
+
+00:23:58.310 --> 00:24:00.409 align:start position:0%
+ 
+ 
+
+00:24:00.409 --> 00:24:03.799 align:start position:0%
+ 
+ 
+
+00:24:03.799 --> 00:24:04.850 align:start position:0%
+ 
+ 
+
+00:24:04.850 --> 00:24:07.070 align:start position:0%
+ 
+ 
+
+00:24:07.070 --> 00:24:09.950 align:start position:0%
+ 
+ 
+
+00:24:09.950 --> 00:24:11.899 align:start position:0%
+ 
+ 
+
+00:24:11.899 --> 00:24:13.580 align:start position:0%
+ 
+ 
+
+00:24:13.580 --> 00:24:14.749 align:start position:0%
+ 
+ 
+
+00:24:14.749 --> 00:24:16.279 align:start position:0%
+ 
+ 
+
+00:24:16.279 --> 00:24:19.549 align:start position:0%
+ 
+ 
+
+00:24:19.549 --> 00:24:20.990 align:start position:0%
+ 
+ 
+
+00:24:20.990 --> 00:24:23.450 align:start position:0%
+ 
+ 
+
+00:24:23.450 --> 00:24:25.659 align:start position:0%
+ 
+ 
+
+00:24:25.659 --> 00:24:27.980 align:start position:0%
+ 
+ 
+
+00:24:27.980 --> 00:24:27.990 align:start position:0%
+ 
+ 
+
+00:24:27.990 --> 00:24:28.460 align:start position:0%
+ 
+
+
+00:24:28.460 --> 00:24:31.159 align:start position:0%
+ 
+ 
+
+00:24:31.159 --> 00:24:33.409 align:start position:0%
+ 
+ 
+
+00:24:33.409 --> 00:24:35.120 align:start position:0%
+ 
+ 
+
+00:24:35.120 --> 00:24:37.370 align:start position:0%
+ 
+ 
+
+00:24:37.370 --> 00:24:39.890 align:start position:0%
+ 
+ 
+
+00:24:39.890 --> 00:24:41.360 align:start position:0%
+ 
+ 
+
+00:24:41.360 --> 00:24:43.760 align:start position:0%
+ 
+ 
+
+00:24:43.760 --> 00:24:45.799 align:start position:0%
+ 
+ 
+
+00:24:45.799 --> 00:24:48.320 align:start position:0%
+ 
+ 
+
+00:24:48.320 --> 00:24:49.549 align:start position:0%
+ 
+ 
+
+00:24:49.549 --> 00:24:51.260 align:start position:0%
+ 
+ 
+
+00:24:51.260 --> 00:24:54.380 align:start position:0%
+ 
+ 
+
+00:24:54.380 --> 00:24:56.690 align:start position:0%
+ 
+ 
+
+00:24:56.690 --> 00:24:58.399 align:start position:0%
+ 
+ 
+
+00:24:58.399 --> 00:25:02.210 align:start position:0%
+ 
+ 
+
+00:25:02.210 --> 00:25:04.880 align:start position:0%
+ 
+ 
+
+00:25:04.880 --> 00:25:07.820 align:start position:0%
+ 
+ 
+
+00:25:07.820 --> 00:25:09.860 align:start position:0%
+ 
+ 
+
+00:25:09.860 --> 00:25:12.549 align:start position:0%
+ 
+ 
+
+00:25:12.549 --> 00:25:15.020 align:start position:0%
+ 
+ 
+
+00:25:15.020 --> 00:25:16.159 align:start position:0%
+ 
+ 
+
+00:25:16.159 --> 00:25:19.039 align:start position:0%
+ 
+ 
+
+00:25:19.039 --> 00:25:21.169 align:start position:0%
+ 
+ 
+
+00:25:21.169 --> 00:25:24.080 align:start position:0%
+ 
+ 
+
+00:25:24.080 --> 00:25:25.669 align:start position:0%
+ 
+ 
+
+00:25:25.669 --> 00:25:28.430 align:start position:0%
+ 
+ 
+
+00:25:28.430 --> 00:25:30.860 align:start position:0%
+ 
+ 
+
+00:25:30.860 --> 00:25:35.480 align:start position:0%
+ 
+ 
+
+00:25:35.480 --> 00:25:37.490 align:start position:0%
+ 
+ 
+
+00:25:37.490 --> 00:25:40.669 align:start position:0%
+ 
+ 
+
+00:25:40.669 --> 00:25:43.840 align:start position:0%
+ 
+ 
+
+00:25:43.840 --> 00:25:46.760 align:start position:0%
+ 
+ 
+
+00:25:46.760 --> 00:25:48.560 align:start position:0%
+ 
+ 
+
+00:25:48.560 --> 00:25:50.810 align:start position:0%
+ 
+ 
+
+00:25:50.810 --> 00:25:52.730 align:start position:0%
+ 
+ 
+
+00:25:52.730 --> 00:26:00.409 align:start position:0%
+ 
+ 
+
+00:26:00.409 --> 00:26:02.870 align:start position:0%
+ 
+ 
+
+00:26:02.870 --> 00:26:04.580 align:start position:0%
+ 
+ 
+
+00:26:04.580 --> 00:26:08.000 align:start position:0%
+ 
+ 
+
+00:26:08.000 --> 00:26:11.210 align:start position:0%
+ 
+ 
+
+00:26:11.210 --> 00:26:12.740 align:start position:0%
+ 
+ 
+
+00:26:12.740 --> 00:26:15.159 align:start position:0%
+ 
+ 
+
+00:26:15.159 --> 00:26:17.840 align:start position:0%
+ 
+ 
+
+00:26:17.840 --> 00:26:20.870 align:start position:0%
+ 
+ 
+
+00:26:20.870 --> 00:26:22.250 align:start position:0%
+ 
+ 
+
+00:26:22.250 --> 00:26:24.260 align:start position:0%
+ 
+ 
+
+00:26:24.260 --> 00:26:25.970 align:start position:0%
+ 
+ 
+
+00:26:25.970 --> 00:26:31.760 align:start position:0%
+ 
+ 
+
+00:26:31.760 --> 00:26:33.680 align:start position:0%
+ 
+ 
+
+00:26:33.680 --> 00:26:36.620 align:start position:0%
+ 
+ 
+
+00:26:36.620 --> 00:26:39.620 align:start position:0%
+ 
+ 
+
+00:26:39.620 --> 00:26:42.080 align:start position:0%
+ 
+ 
+
+00:26:42.080 --> 00:26:44.480 align:start position:0%
+ 
+ 
+
+00:26:44.480 --> 00:26:47.000 align:start position:0%
+ 
+ 
+
+00:26:47.000 --> 00:26:49.220 align:start position:0%
+ 
+ 
+
+00:26:49.220 --> 00:26:50.930 align:start position:0%
+ 
+ 
+
+00:26:50.930 --> 00:26:52.909 align:start position:0%
+ 
+ 
+
+00:26:52.909 --> 00:26:55.010 align:start position:0%
+ 
+ 
+
+00:26:55.010 --> 00:26:58.640 align:start position:0%
+ 
+ 
+
+00:26:58.640 --> 00:27:00.470 align:start position:0%
+ 
+ 
+
+00:27:00.470 --> 00:27:04.669 align:start position:0%
+ 
+ 
+
+00:27:04.669 --> 00:27:07.340 align:start position:0%
+ 
+ 
+
+00:27:07.340 --> 00:27:09.590 align:start position:0%
+ 
+ 
+
+00:27:09.590 --> 00:27:11.630 align:start position:0%
+ 
+ 
+
+00:27:11.630 --> 00:27:14.299 align:start position:0%
+ 
+ 
+
+00:27:14.299 --> 00:27:16.730 align:start position:0%
+ 
+ 
+
+00:27:16.730 --> 00:27:18.260 align:start position:0%
+ 
+ 
+
+00:27:18.260 --> 00:27:20.120 align:start position:0%
+ 
+ 
+
+00:27:20.120 --> 00:27:22.250 align:start position:0%
+ 
+ 
+
+00:27:22.250 --> 00:27:24.799 align:start position:0%
+ 
+ 
+
+00:27:24.799 --> 00:27:26.360 align:start position:0%
+ 
+ 
+
+00:27:26.360 --> 00:27:29.269 align:start position:0%
+ 
+ 
+
+00:27:29.269 --> 00:27:32.269 align:start position:0%
+ 
+ 
+
+00:27:32.269 --> 00:27:34.630 align:start position:0%
+ 
+ 
+
+00:27:34.630 --> 00:27:37.340 align:start position:0%
+ 
+ 
+
+00:27:37.340 --> 00:27:38.600 align:start position:0%
+ 
+ 
+
+00:27:38.600 --> 00:27:41.080 align:start position:0%
+ 
+ 
+
+00:27:41.080 --> 00:27:43.610 align:start position:0%
+ 
+ 
+
+00:27:43.610 --> 00:27:46.519 align:start position:0%
+ 
+ 
+
+00:27:46.519 --> 00:27:49.760 align:start position:0%
+ 
+ 
+
+00:27:49.760 --> 00:27:51.860 align:start position:0%
+ 
+ 
+
+00:27:51.860 --> 00:27:53.600 align:start position:0%
+ 
+ 
+
+00:27:53.600 --> 00:27:56.870 align:start position:0%
+ 
+ 
+
+00:27:56.870 --> 00:27:59.330 align:start position:0%
+ 
+ 
+
+00:27:59.330 --> 00:28:01.399 align:start position:0%
+ 
+ 
+
+00:28:01.399 --> 00:28:03.350 align:start position:0%
+ 
+ 
+
+00:28:03.350 --> 00:28:07.909 align:start position:0%
+ 
+ 
+
+00:28:07.909 --> 00:28:11.480 align:start position:0%
+ 
+ 
+
+00:28:11.480 --> 00:28:13.909 align:start position:0%
+ 
+ 
+
+00:28:13.909 --> 00:28:16.100 align:start position:0%
+ 
+ 
+
+00:28:16.100 --> 00:28:17.990 align:start position:0%
+ 
+ 
+
+00:28:17.990 --> 00:28:20.210 align:start position:0%
+ 
+ 
+
+00:28:20.210 --> 00:28:21.740 align:start position:0%
+ 
+ 
+
+00:28:21.740 --> 00:28:23.750 align:start position:0%
+ 
+ 
+
+00:28:23.750 --> 00:28:26.409 align:start position:0%
+ 
+ 
+
+00:28:26.409 --> 00:28:29.210 align:start position:0%
+ 
+ 
+
+00:28:29.210 --> 00:28:30.980 align:start position:0%
+ 
+ 
+
+00:28:30.980 --> 00:28:33.230 align:start position:0%
+ 
+ 
+
+00:28:33.230 --> 00:28:35.840 align:start position:0%
+ 
+ 
+
+00:28:35.840 --> 00:28:38.930 align:start position:0%
+ 
+ 
+
+00:28:38.930 --> 00:28:40.549 align:start position:0%
+ 
+ 
+
+00:28:40.549 --> 00:28:42.110 align:start position:0%
+ 
+ 
+
+00:28:42.110 --> 00:28:43.580 align:start position:0%
+ 
+ 
+
+00:28:43.580 --> 00:28:45.950 align:start position:0%
+ 
+ 
+
+00:28:45.950 --> 00:28:48.139 align:start position:0%
+ 
+ 
+
+00:28:48.139 --> 00:28:50.570 align:start position:0%
+ 
+ 
+
+00:28:50.570 --> 00:28:51.919 align:start position:0%
+ 
+ 
+
+00:28:51.919 --> 00:28:55.180 align:start position:0%
+ 
+ 
+
+00:28:55.180 --> 00:28:57.610 align:start position:0%
+ 
+ 
+
+00:28:57.610 --> 00:29:00.580 align:start position:0%
+ 
+ 
+
+00:29:00.580 --> 00:29:02.320 align:start position:0%
+ 
+ 
+
+00:29:02.320 --> 00:29:04.570 align:start position:0%
+ 
+ 
+
+00:29:04.570 --> 00:29:07.540 align:start position:0%
+ 
+ 
+
+00:29:07.540 --> 00:29:10.330 align:start position:0%
+ 
+ 
+
+00:29:10.330 --> 00:29:12.610 align:start position:0%
+ 
+ 
+
+00:29:12.610 --> 00:29:16.030 align:start position:0%
+ 
+ 
+
+00:29:16.030 --> 00:29:18.700 align:start position:0%
+ 
+ 
+
+00:29:18.700 --> 00:29:22.780 align:start position:0%
+ 
+ 
+
+00:29:22.780 --> 00:29:24.940 align:start position:0%
+ 
+ 
+
+00:29:24.940 --> 00:29:29.290 align:start position:0%
+ 
+ 
+
+00:29:29.290 --> 00:29:31.960 align:start position:0%
+ 
+ 
+
+00:29:31.960 --> 00:29:33.400 align:start position:0%
+ 
+ 
+
+00:29:33.400 --> 00:29:35.530 align:start position:0%
+ 
+ 
+
+00:29:35.530 --> 00:29:39.940 align:start position:0%
+ 
+ 
+
+00:29:39.940 --> 00:29:44.980 align:start position:0%
+ 
+ 
+
+00:29:44.980 --> 00:29:48.700 align:start position:0%
+ 
+ 
+
+00:29:48.700 --> 00:29:51.820 align:start position:0%
+ 
+ 
+
+00:29:51.820 --> 00:29:53.290 align:start position:0%
+ 
+ 
+
+00:29:53.290 --> 00:29:56.410 align:start position:0%
+ 
+ 
+
+00:29:56.410 --> 00:29:59.340 align:start position:0%
+ 
+ 
+
+00:29:59.340 --> 00:30:03.250 align:start position:0%
+ 
+ 
+
+00:30:03.250 --> 00:30:05.230 align:start position:0%
+ 
+ 
+
+00:30:05.230 --> 00:30:07.720 align:start position:0%
+ 
+ 
+
+00:30:07.720 --> 00:30:11.020 align:start position:0%
+ 
+ 
+
+00:30:11.020 --> 00:30:13.000 align:start position:0%
+ 
+ 
+
+00:30:13.000 --> 00:30:15.460 align:start position:0%
+ 
+ 
+
+00:30:15.460 --> 00:30:17.560 align:start position:0%
+ 
+ 
+
+00:30:17.560 --> 00:30:20.200 align:start position:0%
+ 
+ 
+
+00:30:20.200 --> 00:30:22.630 align:start position:0%
+ 
+ 
+
+00:30:22.630 --> 00:30:25.510 align:start position:0%
+ 
+ 
+
+00:30:25.510 --> 00:30:28.570 align:start position:0%
+ 
+ 
+
+00:30:28.570 --> 00:30:30.070 align:start position:0%
+ 
+ 
+
+00:30:30.070 --> 00:30:33.430 align:start position:0%
+ 
+ 
+
+00:30:33.430 --> 00:30:36.340 align:start position:0%
+ 
+ 
+
+00:30:36.340 --> 00:30:38.410 align:start position:0%
+ 
+ 
+
+00:30:38.410 --> 00:30:41.200 align:start position:0%
+ 
+ 
+
+00:30:41.200 --> 00:30:44.050 align:start position:0%
+ 
+ 
+
+00:30:44.050 --> 00:30:45.460 align:start position:0%
+ 
+ 
+
+00:30:45.460 --> 00:30:47.530 align:start position:0%
+ 
+ 
+
+00:30:47.530 --> 00:30:50.230 align:start position:0%
+ 
+ 
+
+00:30:50.230 --> 00:30:52.630 align:start position:0%
+ 
+ 
+
+00:30:52.630 --> 00:30:57.250 align:start position:0%
+ 
+ 
+
+00:30:57.250 --> 00:31:00.610 align:start position:0%
+ 
+ 
+
+00:31:00.610 --> 00:31:04.300 align:start position:0%
+ 
+ 
+
+00:31:04.300 --> 00:31:06.100 align:start position:0%
+ 
+ 
+
+00:31:06.100 --> 00:31:08.330 align:start position:0%
+ 
+ 
+
+00:31:08.330 --> 00:31:10.130 align:start position:0%
+ 
+ 
+
+00:31:10.130 --> 00:31:12.740 align:start position:0%
+ 
+ 
+
+00:31:12.740 --> 00:31:15.350 align:start position:0%
+ 
+ 
+
+00:31:15.350 --> 00:31:18.289 align:start position:0%
+ 
+ 
+
+00:31:18.289 --> 00:31:21.799 align:start position:0%
+ 
+ 
+
+00:31:21.799 --> 00:31:24.289 align:start position:0%
+ 
+ 
+
+00:31:24.289 --> 00:31:27.769 align:start position:0%
+ 
+ 
+
+00:31:27.769 --> 00:31:29.750 align:start position:0%
+ 
+ 
+
+00:31:29.750 --> 00:31:31.610 align:start position:0%
+ 
+ 
+
+00:31:31.610 --> 00:31:34.640 align:start position:0%
+ 
+ 
+
+00:31:34.640 --> 00:31:36.799 align:start position:0%
+ 
+ 
+
+00:31:36.799 --> 00:31:39.260 align:start position:0%
+ 
+ 
+
+00:31:39.260 --> 00:31:42.260 align:start position:0%
+ 
+ 
+
+00:31:42.260 --> 00:31:44.539 align:start position:0%
+ 
+ 
+
+00:31:44.539 --> 00:31:47.330 align:start position:0%
+ 
+ 
+
+00:31:47.330 --> 00:31:50.779 align:start position:0%
+ 
+ 
+
+00:31:50.779 --> 00:31:53.060 align:start position:0%
+ 
+ 
+
+00:31:53.060 --> 00:31:55.940 align:start position:0%
+ 
+ 
+
+00:31:55.940 --> 00:31:57.980 align:start position:0%
+ 
+ 
+
+00:31:57.980 --> 00:32:00.830 align:start position:0%
+ 
+ 
+
+00:32:00.830 --> 00:32:03.769 align:start position:0%
+ 
+ 
+
+00:32:03.769 --> 00:32:06.529 align:start position:0%
+ 
+ 
+
+00:32:06.529 --> 00:32:08.360 align:start position:0%
+ 
+ 
+
+00:32:08.360 --> 00:32:13.190 align:start position:0%
+ 
+ 
+
+00:32:13.190 --> 00:32:14.899 align:start position:0%
+ 
+ 
+
+00:32:14.899 --> 00:32:18.049 align:start position:0%
+ 
+ 
+
+00:32:18.049 --> 00:32:22.460 align:start position:0%
+ 
+ 
+
+00:32:22.460 --> 00:32:25.159 align:start position:0%
+ 
+ 
+
+00:32:25.159 --> 00:32:27.740 align:start position:0%
+ 
+ 
+
+00:32:27.740 --> 00:32:30.380 align:start position:0%
+ 
+ 
+
+00:32:30.380 --> 00:32:32.960 align:start position:0%
+ 
+ 
+
+00:32:32.960 --> 00:32:35.570 align:start position:0%
+ 
+ 
+
+00:32:35.570 --> 00:32:38.810 align:start position:0%
+ 
+ 
+
+00:32:38.810 --> 00:32:40.820 align:start position:0%
+ 
+ 
+
+00:32:40.820 --> 00:32:43.159 align:start position:0%
+ 
+ 
+
+00:32:43.159 --> 00:32:47.360 align:start position:0%
+ 
+ 
+
+00:32:47.360 --> 00:32:50.210 align:start position:0%
+ 
+ 
+
+00:32:50.210 --> 00:32:52.070 align:start position:0%
+ 
+ 
+
+00:32:52.070 --> 00:32:54.310 align:start position:0%
+ 
+ 
+
+00:32:54.310 --> 00:32:57.680 align:start position:0%
+ 
+ 
+
+00:32:57.680 --> 00:33:00.110 align:start position:0%
+ 
+ 
+
+00:33:00.110 --> 00:33:02.960 align:start position:0%
+ 
+ 
+
+00:33:02.960 --> 00:33:06.430 align:start position:0%
+ 
+ 
+
+00:33:06.430 --> 00:33:08.750 align:start position:0%
+ 
+ 
+
+00:33:08.750 --> 00:33:11.029 align:start position:0%
+ 
+ 
+
+00:33:11.029 --> 00:33:13.399 align:start position:0%
+ 
+ 
+
+00:33:13.399 --> 00:33:16.190 align:start position:0%
+ 
+ 
+
+00:33:16.190 --> 00:33:18.950 align:start position:0%
+ 
+ 
+
+00:33:18.950 --> 00:33:21.320 align:start position:0%
+ 
+ 
+
+00:33:21.320 --> 00:33:21.330 align:start position:0%
+ 
+ 
+
+00:33:21.330 --> 00:33:21.890 align:start position:0%
+ 
+
+
+00:33:21.890 --> 00:33:24.440 align:start position:0%
+ 
+ 
+
+00:33:24.440 --> 00:33:26.600 align:start position:0%
+ 
+ 
+
+00:33:26.600 --> 00:33:29.240 align:start position:0%
+ 
+ 
+
+00:33:29.240 --> 00:33:33.860 align:start position:0%
+ 
+ 
+
+00:33:33.860 --> 00:33:36.260 align:start position:0%
+ 
+ 
+
+00:33:36.260 --> 00:33:38.870 align:start position:0%
+ 
+ 
+
+00:33:38.870 --> 00:33:42.380 align:start position:0%
+ 
+ 
+
+00:33:42.380 --> 00:33:44.030 align:start position:0%
+ 
+ 
+
+00:33:44.030 --> 00:33:46.040 align:start position:0%
+ 
+ 
+
+00:33:46.040 --> 00:33:49.100 align:start position:0%
+ 
+ 
+
+00:33:49.100 --> 00:33:51.530 align:start position:0%
+ 
+ 
+
+00:33:51.530 --> 00:33:53.510 align:start position:0%
+ 
+ 
+
+00:33:53.510 --> 00:33:56.480 align:start position:0%
+ 
+ 
+
+00:33:56.480 --> 00:34:00.140 align:start position:0%
+ 
+ 
+
+00:34:00.140 --> 00:34:02.390 align:start position:0%
+ 
+ 
+
+00:34:02.390 --> 00:34:05.030 align:start position:0%
+ 
+ 
+
+00:34:05.030 --> 00:34:06.919 align:start position:0%
+ 
+ 
+
+00:34:06.919 --> 00:34:10.159 align:start position:0%
+ 
+ 
+
+00:34:10.159 --> 00:34:13.100 align:start position:0%
+ 
+ 
+
+00:34:13.100 --> 00:34:16.100 align:start position:0%
+ 
+ 
+
+00:34:16.100 --> 00:34:19.250 align:start position:0%
+ 
+ 
+
+00:34:19.250 --> 00:34:21.320 align:start position:0%
+ 
+ 
+
+00:34:21.320 --> 00:34:29.180 align:start position:0%
+ 
+ 
+
+00:34:29.180 --> 00:34:32.060 align:start position:0%
+ 
+ 
+
+00:34:32.060 --> 00:34:34.550 align:start position:0%
+ 
+ 
+
+00:34:34.550 --> 00:34:36.320 align:start position:0%
+ 
+ 
+
+00:34:36.320 --> 00:34:40.360 align:start position:0%
+ 
+ 
+
+00:34:40.360 --> 00:34:42.590 align:start position:0%
+ 
+ 
+
+00:34:42.590 --> 00:34:44.030 align:start position:0%
+ 
+ 
+
+00:34:44.030 --> 00:34:48.260 align:start position:0%
+ 
+ 
+
+00:34:48.260 --> 00:34:50.290 align:start position:0%
+ 
+ 
+
+00:34:50.290 --> 00:34:53.270 align:start position:0%
+ 
+ 
+
+00:34:53.270 --> 00:34:55.550 align:start position:0%
+ 
+ 
+
+00:34:55.550 --> 00:34:58.940 align:start position:0%
+ 
+ 
+
+00:34:58.940 --> 00:35:03.320 align:start position:0%
+ 
+ 
+
+00:35:03.320 --> 00:35:07.010 align:start position:0%
+ 
+ 
+
+00:35:07.010 --> 00:35:11.380 align:start position:0%
+ 
+ 
+
+00:35:11.380 --> 00:35:14.330 align:start position:0%
+ 
+ 
+
+00:35:14.330 --> 00:35:17.390 align:start position:0%
+ 
+ 
+
+00:35:17.390 --> 00:35:20.060 align:start position:0%
+ 
+ 
+
+00:35:20.060 --> 00:35:23.240 align:start position:0%
+ 
+ 
+
+00:35:23.240 --> 00:35:26.360 align:start position:0%
+ 
+ 
+
+00:35:26.360 --> 00:35:29.710 align:start position:0%
+ 
+ 
+
+00:35:29.710 --> 00:35:32.870 align:start position:0%
+ 
+ 
+
+00:35:32.870 --> 00:35:35.690 align:start position:0%
+ 
+ 
+
+00:35:35.690 --> 00:35:38.359 align:start position:0%
+ 
+ 
+
+00:35:38.359 --> 00:35:42.640 align:start position:0%
+ 
+ 
+
+00:35:42.640 --> 00:35:47.240 align:start position:0%
+ 
+ 
+
+00:35:47.240 --> 00:35:49.130 align:start position:0%
+ 
+ 
+
+00:35:49.130 --> 00:35:50.870 align:start position:0%
+ 
+ 
+
+00:35:50.870 --> 00:35:53.510 align:start position:0%
+ 
+ 
+
+00:35:53.510 --> 00:35:55.819 align:start position:0%
+ 
+ 
+
+00:35:55.819 --> 00:35:58.160 align:start position:0%
+ 
+ 
+
+00:35:58.160 --> 00:36:00.530 align:start position:0%
+ 
+ 
+
+00:36:00.530 --> 00:36:04.730 align:start position:0%
+ 
+ 
+
+00:36:04.730 --> 00:36:06.650 align:start position:0%
+ 
+ 
+
+00:36:06.650 --> 00:36:08.930 align:start position:0%
+ 
+ 
+
+00:36:08.930 --> 00:36:11.390 align:start position:0%
+ 
+ 
+
+00:36:11.390 --> 00:36:14.150 align:start position:0%
+ 
+ 
+
+00:36:14.150 --> 00:36:16.849 align:start position:0%
+ 
+ 
+
+00:36:16.849 --> 00:36:19.550 align:start position:0%
+ 
+ 
+
+00:36:19.550 --> 00:36:22.280 align:start position:0%
+ 
+ 
+
+00:36:22.280 --> 00:36:24.020 align:start position:0%
+ 
+ 
+
+00:36:24.020 --> 00:36:26.569 align:start position:0%
+ 
+ 
+
+00:36:26.569 --> 00:36:29.480 align:start position:0%
+ 
+ 
+
+00:36:29.480 --> 00:36:33.380 align:start position:0%
+ 
+ 
+
+00:36:33.380 --> 00:36:36.319 align:start position:0%
+ 
+ 
+
+00:36:36.319 --> 00:36:39.440 align:start position:0%
+ 
+ 
+
+00:36:39.440 --> 00:36:42.140 align:start position:0%
+ 
+ 
+
+00:36:42.140 --> 00:36:44.329 align:start position:0%
+ 
+ 
+
+00:36:44.329 --> 00:36:47.780 align:start position:0%
+ 
+ 
+
+00:36:47.780 --> 00:36:49.720 align:start position:0%
+ 
+ 
+
+00:36:49.720 --> 00:36:52.250 align:start position:0%
+ 
+ 
+
+00:36:52.250 --> 00:36:54.920 align:start position:0%
+ 
+ 
+
+00:36:54.920 --> 00:36:56.540 align:start position:0%
+ 
+ 
+
+00:36:56.540 --> 00:37:04.040 align:start position:0%
+ 
+ 
+
+00:37:04.040 --> 00:37:05.780 align:start position:0%
+ 
+ 
+
+00:37:05.780 --> 00:37:07.760 align:start position:0%
+ 
+ 
+
+00:37:07.760 --> 00:37:11.440 align:start position:0%
+ 
+ 
+
+00:37:11.440 --> 00:37:13.400 align:start position:0%
+ 
+ 
+
+00:37:13.400 --> 00:37:19.520 align:start position:0%
+ 
+ 
+
+00:37:19.520 --> 00:37:20.900 align:start position:0%
+ 
+ 
+
+00:37:20.900 --> 00:37:23.930 align:start position:0%
+ 
+ 
+
+00:37:23.930 --> 00:37:26.750 align:start position:0%
+ 
+ 
+
+00:37:26.750 --> 00:37:28.220 align:start position:0%
+ 
+ 
+
+00:37:28.220 --> 00:37:32.230 align:start position:0%
+ 
+ 
+
+00:37:32.230 --> 00:37:35.319 align:start position:0%
+ 
+ 
+
+00:37:35.319 --> 00:37:39.339 align:start position:0%
+ 
+ 
+
+00:37:39.339 --> 00:37:42.170 align:start position:0%
+ 
+ 
+
+00:37:42.170 --> 00:37:44.120 align:start position:0%
+ 
+ 
+
+00:37:44.120 --> 00:37:46.970 align:start position:0%
+ 
+ 
+
+00:37:46.970 --> 00:37:49.520 align:start position:0%
+ 
+ 
+
+00:37:49.520 --> 00:37:51.680 align:start position:0%
+ 
+ 
+
+00:37:51.680 --> 00:37:54.320 align:start position:0%
+ 
+ 
+
+00:37:54.320 --> 00:37:59.170 align:start position:0%
+ 
+ 
+
+00:37:59.170 --> 00:38:02.810 align:start position:0%
+ 
+ 
+
+00:38:02.810 --> 00:38:05.930 align:start position:0%
+ 
+ 
+
+00:38:05.930 --> 00:38:08.630 align:start position:0%
+ 
+ 
+
+00:38:08.630 --> 00:38:11.150 align:start position:0%
+ 
+ 
+
+00:38:11.150 --> 00:38:13.550 align:start position:0%
+ 
+ 
+
+00:38:13.550 --> 00:38:16.240 align:start position:0%
+ 
+ 
+
+00:38:16.240 --> 00:38:20.450 align:start position:0%
+ 
+ 
+
+00:38:20.450 --> 00:38:22.190 align:start position:0%
+ 
+ 
+
+00:38:22.190 --> 00:38:24.650 align:start position:0%
+ 
+ 
+
+00:38:24.650 --> 00:38:27.230 align:start position:0%
+ 
+ 
+
+00:38:27.230 --> 00:38:29.470 align:start position:0%
+ 
+ 
+
+00:38:29.470 --> 00:38:32.180 align:start position:0%
+ 
+ 
+
+00:38:32.180 --> 00:38:34.730 align:start position:0%
+ 
+ 
+
+00:38:34.730 --> 00:38:37.100 align:start position:0%
+ 
+ 
+
+00:38:37.100 --> 00:38:41.330 align:start position:0%
+ 
+ 
+
+00:38:41.330 --> 00:38:42.890 align:start position:0%
+ 
+ 
+
+00:38:42.890 --> 00:38:44.270 align:start position:0%
+ 
+ 
+
+00:38:44.270 --> 00:38:46.580 align:start position:0%
+ 
+ 
+
+00:38:46.580 --> 00:38:48.410 align:start position:0%
+ 
+ 
+
+00:38:48.410 --> 00:38:51.830 align:start position:0%
+ 
+ 
+
+00:38:51.830 --> 00:38:54.470 align:start position:0%
+ 
+ 
+
+00:38:54.470 --> 00:38:56.600 align:start position:0%
+ 
+ 
+
+00:38:56.600 --> 00:38:59.360 align:start position:0%
+ 
+ 
+
+00:38:59.360 --> 00:39:04.310 align:start position:0%
+ 
+ 
+
+00:39:04.310 --> 00:39:08.810 align:start position:0%
+ 
+ 
+
+00:39:08.810 --> 00:39:11.480 align:start position:0%
+ 
+ 
+
+00:39:11.480 --> 00:39:12.710 align:start position:0%
+ 
+ 
+
+00:39:12.710 --> 00:39:15.410 align:start position:0%
+ 
+ 
+
+00:39:15.410 --> 00:39:18.320 align:start position:0%
+ 
+ 
+
+00:39:18.320 --> 00:39:21.410 align:start position:0%
+ 
+ 
+
+00:39:21.410 --> 00:39:24.380 align:start position:0%
+ 
+ 
+
+00:39:24.380 --> 00:39:28.970 align:start position:0%
+ 
+ 
+
+00:39:28.970 --> 00:39:31.580 align:start position:0%
+ 
+ 
+
+00:39:31.580 --> 00:39:33.920 align:start position:0%
+ 
+ 
+
+00:39:33.920 --> 00:39:36.680 align:start position:0%
+ 
+ 
+
+00:39:36.680 --> 00:39:38.300 align:start position:0%
+ 
+ 
+
+00:39:38.300 --> 00:39:41.840 align:start position:0%
+ 
+ 
+
+00:39:41.840 --> 00:39:44.810 align:start position:0%
+ 
+ 
+
+00:39:44.810 --> 00:39:46.610 align:start position:0%
+ 
+ 
+
+00:39:46.610 --> 00:39:49.820 align:start position:0%
+ 
+ 
+
+00:39:49.820 --> 00:39:52.250 align:start position:0%
+ 
+ 
+
+00:39:52.250 --> 00:39:54.650 align:start position:0%
+ 
+ 
+
+00:39:54.650 --> 00:39:57.830 align:start position:0%
+ 
+ 
+
+00:39:57.830 --> 00:39:59.810 align:start position:0%
+ 
+ 
+
+00:39:59.810 --> 00:40:01.760 align:start position:0%
+ 
+ 
+
+00:40:01.760 --> 00:40:02.870 align:start position:0%
+ 
+ 
+
+00:40:02.870 --> 00:40:04.759 align:start position:0%
+ 
+ 
+
+00:40:04.759 --> 00:40:11.089 align:start position:0%
+ 
+ 
+
+00:40:11.089 --> 00:40:14.660 align:start position:0%
+ 
+ 
+
+00:40:14.660 --> 00:40:16.670 align:start position:0%
+ 
+ 
+
+00:40:16.670 --> 00:40:19.370 align:start position:0%
+ 
+ 
+
+00:40:19.370 --> 00:40:20.539 align:start position:0%
+ 
+ 
+
+00:40:20.539 --> 00:40:23.329 align:start position:0%
+ 
+ 
+
+00:40:23.329 --> 00:40:26.059 align:start position:0%
+ 
+ 
+
+00:40:26.059 --> 00:40:28.759 align:start position:0%
+ 
+ 
+
+00:40:28.759 --> 00:40:31.789 align:start position:0%
+ 
+ 
+
+00:40:31.789 --> 00:40:35.809 align:start position:0%
+ 
+ 
+
+00:40:35.809 --> 00:40:39.079 align:start position:0%
+ 
+ 
+
+00:40:39.079 --> 00:40:40.460 align:start position:0%
+ 
+ 
+
+00:40:40.460 --> 00:40:43.880 align:start position:0%
+ 
+ 
+
+00:40:43.880 --> 00:40:46.819 align:start position:0%
+ 
+ 
+
+00:40:46.819 --> 00:40:48.710 align:start position:0%
+ 
+ 
+
+00:40:48.710 --> 00:40:51.920 align:start position:0%
+ 
+ 
+
+00:40:51.920 --> 00:40:56.480 align:start position:0%
+ 
+ 
+
+00:40:56.480 --> 00:40:59.450 align:start position:0%
+ 
+ 
+
+00:40:59.450 --> 00:41:02.029 align:start position:0%
+ 
+ 
+
+00:41:02.029 --> 00:41:06.349 align:start position:0%
+ 
+ 
+
+00:41:06.349 --> 00:41:08.450 align:start position:0%
+ 
+ 
+
+00:41:08.450 --> 00:41:10.400 align:start position:0%
+ 
+ 
+
+00:41:10.400 --> 00:41:14.240 align:start position:0%
+ 
+ 
+
+00:41:14.240 --> 00:41:19.700 align:start position:0%
+ 
+ 
+
+00:41:19.700 --> 00:41:22.099 align:start position:0%
+ 
+ 
+
+00:41:22.099 --> 00:41:24.039 align:start position:0%
+ 
+ 
+
+00:41:24.039 --> 00:41:26.299 align:start position:0%
+ 
+ 
+
+00:41:26.299 --> 00:41:28.700 align:start position:0%
+ 
+ 
+
+00:41:28.700 --> 00:41:31.519 align:start position:0%
+ 
+ 
+
+00:41:31.519 --> 00:41:33.920 align:start position:0%
+ 
+ 
+
+00:41:33.920 --> 00:41:35.480 align:start position:0%
+ 
+ 
+
+00:41:35.480 --> 00:41:38.420 align:start position:0%
+ 
+ 
+
+00:41:38.420 --> 00:41:39.799 align:start position:0%
+ 
+ 
+
+00:41:39.799 --> 00:41:43.609 align:start position:0%
+ 
+ 
+
+00:41:43.609 --> 00:41:45.920 align:start position:0%
+ 
+ 
+
+00:41:45.920 --> 00:41:48.380 align:start position:0%
+ 
+ 
+
+00:41:48.380 --> 00:41:49.819 align:start position:0%
+ 
+ 
+
+00:41:49.819 --> 00:41:52.279 align:start position:0%
+ 
+ 
+
+00:41:52.279 --> 00:41:53.660 align:start position:0%
+ 
+ 
+
+00:41:53.660 --> 00:41:55.549 align:start position:0%
+ 
+ 
+
+00:41:55.549 --> 00:41:58.099 align:start position:0%
+ 
+ 
+
+00:41:58.099 --> 00:42:00.529 align:start position:0%
+ 
+ 
+
+00:42:00.529 --> 00:42:03.650 align:start position:0%
+ 
+ 
+
+00:42:03.650 --> 00:42:06.730 align:start position:0%
+ 
+ 
+
+00:42:06.730 --> 00:42:09.319 align:start position:0%
+ 
+ 
+
+00:42:09.319 --> 00:42:12.259 align:start position:0%
+ 
+ 
+
+00:42:12.259 --> 00:42:13.609 align:start position:0%
+ 
+ 
+
+00:42:13.609 --> 00:42:16.130 align:start position:0%
+ 
+ 
+
+00:42:16.130 --> 00:42:19.340 align:start position:0%
+ 
+ 
+
+00:42:19.340 --> 00:42:20.780 align:start position:0%
+ 
+ 
+
+00:42:20.780 --> 00:42:29.290 align:start position:0%
+ 
+ 
+
+00:42:29.290 --> 00:42:32.570 align:start position:0%
+ 
+ 
+
+00:42:32.570 --> 00:42:35.030 align:start position:0%
+ 
+ 
+
+00:42:35.030 --> 00:42:37.010 align:start position:0%
+ 
+ 
+
+00:42:37.010 --> 00:42:39.530 align:start position:0%
+ 
+ 
+
+00:42:39.530 --> 00:42:43.610 align:start position:0%
+ 
+ 
+
+00:42:43.610 --> 00:42:46.400 align:start position:0%
+ 
+ 
+
+00:42:46.400 --> 00:42:48.590 align:start position:0%
+ 
+ 
+
+00:42:48.590 --> 00:42:51.050 align:start position:0%
+ 
+ 
+
+00:42:51.050 --> 00:42:53.150 align:start position:0%
+ 
+ 
+
+00:42:53.150 --> 00:42:56.150 align:start position:0%
+ 
+ 
+
+00:42:56.150 --> 00:42:58.460 align:start position:0%
+ 
+ 
+
+00:42:58.460 --> 00:43:00.710 align:start position:0%
+ 
+ 
+
+00:43:00.710 --> 00:43:03.830 align:start position:0%
+ 
+ 
+
+00:43:03.830 --> 00:43:05.390 align:start position:0%
+ 
+ 
+
+00:43:05.390 --> 00:43:07.490 align:start position:0%
+ 
+ 
+
+00:43:07.490 --> 00:43:10.130 align:start position:0%
+ 
+ 
+
+00:43:10.130 --> 00:43:10.140 align:start position:0%
+ 
+ 
+
+00:43:10.140 --> 00:43:10.980 align:start position:0%
+ 
+
+
+00:43:10.980 --> 00:43:10.990 align:start position:0%
+ 
+ 
+
+00:43:10.990 --> 00:43:12.540 align:start position:0%
+ 
+
+
+00:43:12.540 --> 00:43:12.550 align:start position:0%
+ 
+ 
+
+00:43:12.550 --> 00:43:14.680 align:start position:0%
+ 
+
+
+00:43:14.680 --> 00:43:14.690 align:start position:0%
+ 
+ 
+
+00:43:14.690 --> 00:43:15.340 align:start position:0%
+ 
+
+
+00:43:15.340 --> 00:43:15.350 align:start position:0%
+ 
+ 
+
+00:43:15.350 --> 00:43:18.080 align:start position:0%
+ 
+
+
+00:43:18.080 --> 00:43:18.090 align:start position:0%
+ 
+ 
+
+00:43:18.090 --> 00:43:35.530 align:start position:0%
+ 
+
+
