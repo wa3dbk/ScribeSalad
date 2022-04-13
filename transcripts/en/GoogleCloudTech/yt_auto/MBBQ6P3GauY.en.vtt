@@ -1,0 +1,3840 @@
+WEBVTT
+Kind: captions
+Language: en
+
+00:00:00.340 --> 00:00:06.249 align:start position:0%
+ 
+[Music]  the sessions called life of a service  event really the intent here is to just  a little bit lift the cover on what goes  on underneath in the service  infrastructure that we have in cloud  what the building blocks that we've  built on to provide the the service  products that you can use so before we  get started I just wanted to level set  on an assumption here and the assumption  is that we all agree in principle that  service generally is the place that we  want to be you're not managing  infrastructure you're not dealing with  load spikes we'll deal with that for you  you're not spending time managing things  that don't add value to your business  you've elevated yourself to a to a  higher plane of existence however there  are some problems definitionally we gave  you a black box and we said you don't  have to worry about all this magic we'll  do it for you but that leads to some  issues in terms of visibility and  transparency you might see some latency  and increase and how do you reason about  what that might be maybe your build  times suddenly got longer why is that  and then you might see different  behavior in one environment versus  another or you're hitting some weed  quota limit and how do you reason about  it so the theory is great you don't have  to worry about it anything the reality  is you still have to worry about these  things so the purpose of this session is  to just give you an insight into what's  going on underneath there so that you  can reason about these with with more  intelligence and obviously you would  have logging and monitoring and all  sorts of things in place but as  engineers I think it's useful to know  what are the mechanics going on under  here so we'll cover these four topics  first of all what's the definition of  service compute on cloud platform  secondly what happens when you deploy  what steps do we actually take when you  when you write that command line  g-cloud functions deploy what happens  when Reis we receive an event or a  request how does that travel through the  system and what happens and then we'll  close with some best practices what do  you do with this information once we've  revealed it to you so let's compute on  cloud platform covers two products  mainly cloud functions an app engine  I'll be referring to these throughout  the talk as as an app and a function you  deploy an app with App Engine you deploy  a function with cloud functions and  there's just a distinction that I've  made there an app is something that  reacts to requests a function is  something that reacts to events you know  there's many distinctions you can make  that's that's just illustrative okay how  do we build a service compute platform  now if you wanted to go and build your  own server list compute platform I'm  going to tell you how to do it now so  take notes and if you want to go out and  start building your own then this is how  you do it step one you need a global  footprint of data centers it's pretty  simple there are actually servers  underneath service as you would know  google has a global distribution of  machines in data centers so it all  starts there the next layer that we have  is something that we've talked publicly  about it's this thing called Borg and  what it is is a shared compute  infrastructure that runs pretty much  every service in Google everything from  Google Maps to YouTube to search and and  also cloud and it's premise is that  Google engineers in fact operate service  Lee and have done for a very very long  time  they don't reason about physical  infrastructure they just create tasks in  Borg and those tasks go and execute the  caveat is that it only runs trusted code  it runs code that is cryptic  cryptographically verifiable as goo  code and your code I hate to say it is  untrusted so how do we run untrusted  code earlier in the year at Q con we  talked about the open sourcing of a  project we called G visor and G visor is  a unique technology that we've created  that is a sandboxing technology it  allows us to isolate processes on a  shared computer infrastructure from a  security standpoint so process a has no  mechanism by which it can interfere with  process B this allows us to run  untrusted code on an otherwise trusted  infrastructure so above the data center  above Bourg above these secured  processes we have a serving routing and  scheduling layer the serving is the data  plane that receives requests it's  responsible for routing it does things  like if a zone in a data center is  unavailable it will automatically move  an application to a zone that is  available for that sort of failover  guarantee and the scheduling part of it  is the thing that decides whether a new  instance of your application needs to be  created whether there's an old instance  that can be evicted and and makes those  decisions to to auto scale you up and  down and above all of that is a Google  front-end the Google front-end sit at  the edge they sit in front of every  single Google service once the request  hits the Google front end from that  moment onwards it's on the Google  Network so on the Google operator  network from the Google front end and it  does some has some other characteristics  like it does SSL termination it does  some amount of denial service protection  and that's the main entry point at the  edge okay so does all of these layers  does it all work if we send this many  requests per year one hundred and seven  two hundred and twenty seven trillion  that's a meaningless number but really  it's about four million QPS on this  infrastructure this service  infrastructure across both cloud  functions and herp engine  that's a pretty big number okay let's  get to the good stuff I'm gonna talk  about the lifecycle what happens when  you deploy when you execute that CLI  command what's actually happening and  then once your application is serving  traffic how do we route the request to  you and what's going on how are we  scaling up and down and what are some of  the side effects of of the  implementation we have okay first of all  deployment you in to enter this command  into your CLI or you use the UI and the  first thing that happens is build we're  going to build your concretely in the  case of App Engine and cloud functions  we're going to build a container image  and the latency there is going to be a  function primarily of the file size and  in network speed to get the data up to  us then we're going to actually crunch  that together into an image and most of  the time spent there is resolving  dependencies particularly in cloud  functions we have this ability to  resolve the dependencies for you if  there's any no js' developers in the  audience who recognize this as a package  like JSON file that you will upload  along with your source code that  declares a set of dependencies in python  and requirements txt we will go and  resolve those for you and bake it into  an image so you don't need to upload all  of your dependencies in one going once  it's built we create or update that  instance on the infrastructure and the  latency there is a function of two  things one is cold starts which I'm  going to talk a lot about today and the  other is a rolling deploy which doesn't  seem like a latency impacting thing but  the idea here is that you already have a  version of your application running you  want to make a change to it that version  is already serving traffic you don't  want to kill that traffic you want to  gradually roll that out so the time  between when you made the change when  you updated the function and it becoming  available across the fleet is not  instant it's never atomic and so there's  an amount of time that that's going to  take that could be perceived as sort of  deploy time just reiterating  at the point we build this dependency  resolution we have some caching  mechanisms there if you depend on a  particular version of a particular  module or library and and we can  reliably identify that you've seen that  before  we'll pull it from cache and then the  rollin deploy again it's not atomic it  happens over the course of time  depending on how much traffic you have  you have a lot of traffic and there's a  lot of instances of you of the old  version then it will take longer for the  rollout to complete if dependencies  change a side effect of the caching  obviously if if dependencies change then  the build time might take longer because  they're not cached ok what happens when  we serve so we have the from the diagram  before serving and scheduling these red  boxes represent the instances of your  application a request comes in if we  don't have a instance that is available  to serve a request then we'll create a  new one we'll scale up and this implies  a cold start I might be preaching to the  converted here in the sense of what a  cold start is but it it warrants some  some some detail ok I'm gonna take a  quick detour I put this slide in to  remind me that it's a detour and we'll  talk about three things really quickly  this is a little bit complicated but  I'll do my best  concurrency and billing products like  cloud functions one of the advantages of  this is you're not paying when you're  not using it and even more fine-grain  than that you're only paying while your  code is executing now you can imagine  that let's say I have a function and  I've said I I would like 512 megabytes  of RAM please and my function executes  for 10 seconds and so I'm paying for 10  seconds of wall clock time multiplied by  the amount of memory and the amount of  CPU that I've been granted for that  period of time if I was to put another  request at the same time in there the  billing gets  a little bit complicated am I being  charged for both requests at 512  megabyte am i sharing it somehow what if  they're not at the same time one starts  now one starts halfway through it starts  to get very very complicated the  simplicity of the billing model means  that we're constrained to a single  request for instance so a function is  billed per request independent of the  instance it's not your problem whether  there's a thousand instances or one  instance to serve that request we might  be doing a really poor job of our  scheduling and have a thousand instances  sitting around costing us money but it's  not costing you anything an app  conversely you pay for the lifecycle of  the instance independent of the request  this is a fundamental difference in the  model and the reason I have the slide  here is just to make this clear an app  will deal with many concurrent requests  because it doesn't affect the billing at  all the only thing that affects the  billing is the life cycle of that  instance and that instance will stay  alive as long as it's serving requests  so this has an implication to things  like cold start this chart along the  bottom I have the frequency of cold  starts how often do they occur and on  the y-axis upwards I have the duration  how long does each cold start take these  two heavy phases are places that we  would be okay with one where a cold stop  happens a lot but it doesn't take very  long and the other where it might take a  long time to start but it doesn't happen  very frequently a virtual machine is  very much on the top left and we hope a  cloud function is very much on the  bottom right it is necessarily  definitionally going to have more cold  starts because it deals with a single  concurrent requests and we're scaling up  and down we don't want a lot of machines  sitting around costing us money that  means we have to charge you more so  we're going to try to be reactive very  quickly to these spikes and troughs in  traffic but it means that you want the  cold start time to be low  typically this manifests in a difference  between the primitive an app or  typically cold-start less frequently and  you can imagine this scenario an app  let's say it takes ten concurrent  requests before its resources are  exhausted within another instance of it  if you only have ten requests between  QPS let's say you don't need one  instance so that you're starting very  infrequently you definitely don't want  to be this person very frequent cold  starts that take a long time that's the  worst place to be this would be the  awesome place to be but it's a bit  mythical very very infrequent cold  starts that don't take very much time at  all  I mean it does happen you might have a  function that has a very quick cold  start that's called once a day and  that's great but if you're building a  large application the likelihood of this  happening is pretty low but as long as  you're in one of those green spots  you're probably okay okay so this makes  the distinction the the choice you're  making between the primitive pretty  important if you're building something  that is multi-purpose so it has many  endpoints like imagine a restful api  that has many endpoints maybe there's  some shared state maybe you have a  connection pool or some bit of memory  that you're sharing between requests and  you want to deal with many concurrent  requests at once because of this shared  state then you would err on the side of  an app if however your compute unit is  single purpose it really just has one  job there's no shared state all the  state is stored outside and you're okay  with a single request at a time  and by the way single request at a time  is often much simpler you have to deal  with far fewer race conditions when you  only have a single request in scope any  one moment then a function is where you  would tend to tend to find yourself okay  there's the end of my detour okay  again on this idea of app versus  function in the app case and this chart  represents CPU time so you know M cycles  or clock cycles and then along the  x-axis the the wall time the time back  in the real world imagine you have two  requests sequentially one request starts  and finishes second request starts and  finishes and some amount of time in  between the blue line here represents  CPU usage effectively so in an app let's  say the first request uses a little bit  of CPU the second request uses what uses  a lot and there's this time in the  middle where the CPU is being used this  is important because as I said before  the billing model says I'm paying for  the life cycle of an instance so I  should be able to do anything I like  during that life cycle and this is true  in the case of CPU usage if I'm only  paying while my request is in scope as  in the function case then there's not  going to be any CPU activity in between  those requests because there's no  billing model that accommodates for it  so request number one the billing starts  on the left and then when that request  ends we stop charging you if we allowed  your CPU usage in that gap free bitcoins  for everyone so this will become  important further on ok so an app model  builds for the life cycle of an instance  it handles concurrent requests and  accommodates for compute time outside of  the scope of a request a function builds  for a lifetime of a request handles a  single concurrent request and assumes  this sort of freeze-thaw model in  between requests where no CPU activity  is going to be allowed to happen  ok eviction so we talked about request  comes in we don't have an instance  available so we're going to create an  instance for you and then you have a  trough in your traffic and we have a  thousand instances lying around what  policy do we use to evict these  instances to remove them from our  infrastructure  okay that's just showing one in division  is so generally instance eviction is  lazy meaning that we will tend towards  evicting instances when we need the  infrastructure that they are consuming  but not before the reason for that is  that the machines on the data center  floor largely have a fixed cost whether  your process is running there or not  there's an opportunity cost to us if  that you have a process that's running  and we need that space for somebody else  and you're not using that space in which  case we'll kick you out generally though  what we try to optimize for is not  whether we are creating or destroying  instances that's much much more of an  implementation detail we just try to  optimize for performance we monitor  things like latency we monitor things  like cold starts because they're bad for  performance and we try to optimize the  scheduling algorithms too or try to  alter the scheduling algorithms to  optimize for those two things as a side  effect of the concurrency that I  described before apps will tend to have  cold starts less frequently and that's  because when each subsequent request  comes in it can be dealt with on the  same instance and the the time between  well the number of instances we have to  create to serve the same QPS is fewer  and then the last point is sometimes  instances just go bad maybe you hit an  out of memory error and even though that  request that caused the out of memory  error is long gone the machine has found  itself in all the instances found itself  in a bad state will detect that and will  cease to send traffic to them because  we're ceasing to send traffic to them  they will become viable for eviction at  some later point okay quick recap  service is awesome it's also not awesome  when you can't know what's going on  Google knows how to service you all due  to now so I expect to see many service  compute competitors emerging after this  presentation and then we talked about  the lifecycle what happens at deployment  we talked about atomicity of deployment  instance creation destruction cold  starts apps versus functions background  theories we didn't talk about  specifically but this was the compute  time in between the requests okay but  what do I do with all this amazing  information that I've just been told  okay there's some sort of patterns and  ante patterns that I want to talk about  so let's look at some common some common  pitfalls that people fall into number  one are we choosing the right primitive  are we trying to jam an entire java  spring application into a function and  is that the right thing to do how do we  how do we what can we do to improve our  cold start time what are the what are  the best practices there oops I'm sorry  what do we do with background threads I  have this thread that's running in the  background a common pattern in in web  applications is received at a request  respond quickly and do some work in the  background well that's not going to work  in a function because once you've sent  the request the response back that's a  signal to us that you're done and we're  gonna throw a little CPU down and your  background task may or may not complete  what do you do with this auto-scaling  where we scale out beautifully and you  don't know how of service your own  database because it can't deal with the  traffic that we've been sending it  because we auto scale and I'll talk a  little bit about idempotency towards the  end okay not number one choose the right  primitive do you want to put your big  Java monolith into a cloud function  probably not you can you're going to  have a horrendous cold start times and  then I haven't very frequently and and  everyone has a bad time do I put my big  Java monolith in to App Engine maybe why  wouldn't I well I wouldn't if I'm  relying a lot on state service compute  products work best when they assume that  they're stateless if you have to persist  state you might find you will find  circumstances where the requests where  you assume that state was there finds  that it's not there now it's a great  performance optimization that you might  be cashing things and if it's there it  works faster and it's not you can go get  it and that's fine but this is why I say  maybe the best thing to do is to make  sure that the application has the  appropriate granularity of services very  very tiny services cloud functions and  medium sized services app engine some  anti-patterns with relation to cold  starts again if you assume a stateful  environment then this might be  problematic what I mean by that is that  you know in a classic monolithic web app  it's very common for the start to load a  bunch of state maybe it's loading things  from a database into cache  maybe it's instantiated objects ahead of  time and Stanzione in Singleton's  whatever the case may be this design  pattern assumes essentially the virtual  machine style of mode of operating where  you start up the VM it does a bunch of  work it might take five minutes to stop  that's okay because you're only doing it  like once a month this doesn't translate  well to service because this start/stop  cadence is much more frequent and then  the last point there is this primitive  choice choose the right primitive now we  knit we Google need to do the right job  in making that easy for you but really  choosing the right primitive set you off  on the right foot from the beginning  okay here's some code in case you didn't  notice if there's any nodejs developers  in the audience don't come and attack me  afterwards because what I'm going to  show you is pretty much the antithesis  of what a node.js developer will tell  you is best practice and they'd be right  but I'm going to show it to you anyway  because I think it's a good illustration  this would be pretty common  in in a node application and I'll just  unpack what's happening here I have some  libraries some dependencies they are  being required at the top of my file the  first thing that happens and then I have  two functions declared in the same  JavaScript file do something and do  something else  each function uses only one of those  dependencies and I said this would be a  totally sane pattern in an application  model or on a virtual machine the first  function uses the first dependency the  second function uses the second  dependency everyone's happy the problem  is the second function doesn't use the  first dependency so if I was deploying  these as separate cloud functions even  though they are in the same source file  the do something else would be its own  function but at cold start time it would  be loading the first library even though  it never ever uses it now multiply this  by 10 how do you know that all of the  things that you're doing at the start  and I'm not I'm doing something pretty  innocent here all I'm doing is following  node best-practice I'm just requiring  much I'm not loading a case I'm not  doing anything silly I follow what they  told me but the side effect of this is  that each function when deployed  individually is bearing the cost of all  the other functions so this is unwanted  cold start time it doesn't offer me  anything it just cost me money it's more  insidious example the function is using  both libraries but only conditionally so  if my query string foo only equals bar  in one out of a million requests then  all the other requests are paying the  price for that in terms of cold start  time this takes a little bit of  relearning in how we do things we have  to be mindful of what's going to happen  at startup when I deploy this thing we  often hear oh such-and-such product or  such-and-such platform has has good or  bad cold start times but largely it's  dependent on this code that we write  okay this is where I'm gonna get in big  trouble I'm not saying necessarily do  this but this would help I only require  the library when it's actually required  now really great feature of note is that  that require statement will be cashed  and so the subsequent invocation of that  on the same on a hot instance it's  effectively a no op but this is again  just illustrative the else condition  that happens in most cases let's say  doesn't pay the cost of the some huge  Lib that's loaded in the if condition I  hope that makes sense okay I want to  invite my colleague Monica on stage  she's going to give you a demo can we  switch to demo please so my name is moon  Canaveral I'm software engineer in cloud  functions team and for the purpose of  this talk I created the demo that  illustrates what Jason has just said so  it operates on cold start and life cycle  of cloud function so in my demo I  created the functions or rather every  functions that two more do more or less  the same thing but in a slightly  different way so I integrated functions  with slack so slack is cloud-based tool  that aids team collaboration so I have a  my slack channel and I also created a  free custom commands that are hood with  functions so integrations is very easy  as you can see there's a command and  there's URL that should be called  whenever this command is called and it  points to a function so let's try our  first function  [Music]  so dysfunction well all of this function  do the same thing as I said before so it  they expect a term in the slack channel  and then they put this term in the  knowledge graph API and threat reef  information about this term from  knowledge graph and then returns a  response which contains the data from  the knowledge graph so you can learn  something about this particular thing  from knowledge graph API so the first  function is written in application like  style so as you can see first we extract  the text so the term that was written in  this doctrinal then we use a local cache  so first we try to retrieve information  from the cache and if it's not there  then we are making the actual query the  query is done here so we just put the  query to the knowledge graph API and we  extract the first math the first result  and then we do the formatting so we are  converting the message returned from the  API to the format that can be displayed  on a snack Channel so because it's  application like style function I also  do some pre loading so let's say that my  slack channel is about traveling and  people often look for information on the  countries so I want to make this  experience for them really good he'll be  fast so I'm pre loading some data  associated with countries so in another  file I have the list of all countries so  now let me go to my slack channel and  try this try to call the first function  and what actually happened is that slack  has quite aggressive timeline that  timeout for the responses and from the  web hooks hood for the comments and  because we are doing this pre loading we  experience the situation when actually  the function was executed correctly but  just like didn't wait for the result  however like any further  for the crawl for the API should be  extremely extremely quick so now let me  go to the lots of dysfunction just to  see what exactly was worth the number so  how much did he take for a function to  execute so as you can see the first name  equation took more than three seconds  just because we were holding all the  terms however any consecutive request  was processes very quickly because we  could serve the response directly from  the cache so now let's go to the second  function which would be written in a way  that it's completely stateless so this  is kind of thing that you can expect  when writing code functions so again I'm  extracting text from the request then  I'm not using a local cache as before  I'm just directly calling knowledge  graph API each time I am calling this  function I have also this dysfunction  that form as the query I am done and I  do not do any pre loading so now let's  go back to the channel and try the  second function so as you can see I'm  receiving the results recently quickly  [Music]  so drawn you can see it works so let's  again look up the exact numbers how long  this function was executed each time so  as you can see like each time it takes a  few hundred milliseconds to finish  however the user experience is  definitely better but still that times  are not not perfect so really the the  best approach would be the one presented  in the first function  and so you can go to the source  so again extracting the query but we  also use a local cache and so we are  trying to retrieve the result from local  cache if it's there if it's not we are  acquiring a knowledge graph API however  we don't use any pre loading so we  optimize for concept but we still think  that it it might be it makes sense to  use a cache on best of all basis so  let's see how it works so for different  terms its  it works similar to the previous  function however for the terms that I'm  executing for the second time the  function executes much quicker because  they could be served from the cache so  let me see the logs so as you can see  there is still a cold start that is that  takes longer than consecutive indication  because this new instance needed to be  created however the any consecutive  request for the same term can be very  quick  so to summarize like this demo shows two  things the first that you should really  optimize for a cold start because they  happen they happen any time traffic  pattern changes a new function instance  need to be created and like as you can  see in this example this cold start cold  start time if it's too long may mean  that your function is unavailable for  the user and the second thing that  platform is smart enough  so we not disposed your function  instance just after it was executed  because it can anticipate that there  will be some traffic so it still makes  sense to use a local cache to optimize  the results so this all that I prepared  so we can switch back to the  presentation thanks Monica  yeah so what we just saw there was a  much better version of what I put on  screen actually done by real engineer  okay  so just to summarize it's important to  understand and optimize for cold starts  they happen when a new instance is  created we will create new instances  when they're needed and then because  functions only servicing will current  request because billing it happens even  more frequently in the functions case  again this period of time in between  requests in the function case and what  do you do with that with with background  threads or background tasks that you  might be running as I said it's very  common in the sort of web application  world that you might want to early  respond to a request and then do some  work some more heavy lifting in the  background this is not going to work  very well in a function abstraction  because of this CPU throttling behavior  the best practice here is if possible  wait for all the work to complete before  you return if you want to give the user  or the caller a response early then you  should you it's we would recommend that  you use some sort of event bus like a  pub sub n queue a message on that event  bus have some other function somewhere  else that's going to do that background  processing and then return and it's not  just because of this CPU throttling  behavior that we would say this you can  imagine the request comes in I spawn a  thread I'm going to do some heavy  lifting over here but I'm responding  immediately and then I get halfway  through the heavy lifting and this  anything crashes for whatever reason out  of memory process dies what happened to  that work what are the guarantees that  I'm providing myself over that work  probably much better is to have an at  least once guarantee on an event bus  like pub/sub so that if it does fail it  will retry and eventually succeed  can i special call-out to connection  pools somewhat unsolved problem  traditional database my sequel Postgres  take your pick will have a finite number  of connections that can deal with on a  particular instance or in aggregate you  have a spike in traffic and overwhelms  the database too many connections and  this is displayed here in my nice  graphic there's a couple of things you  can do here there isn't really a silver  bullet for this because it's a  fundamental mismatch there's a  fundamental sort of impedance mismatch  between a finitely scaled resource and I  I hesitate to say infinitely but much  larger scaled compute layer above that a  couple of things you can do data access  service pattern and scaling controls I  think I repeat myself there so limit  exposure to the database to only the  services that need it don't just throw  your connection pool into every single  function you do be diligent and  judicious about who is accessing  accessing the database one other idea is  to break your database up itself now  sometimes difficult if you're relying on  foreign keys and things like that but as  a pattern it can be useful limit  connection pools the connection pool  size and we have this sort of somewhat  strange recommendation that we make in  cloud functions where you create a  connection pool to a database like my  sequel and you limit it to a size of one  why do I need a pool if it's a pool of  one why don't I just make a connection  well  it's limited to one because first of all  you're only dealing with a single  concurrent request so the likelihood  would be ever needing more than one is  pretty low and secondly if you just left  it default and let's say the connection  pool framework you're using says I'm  going to create ten connections by  default every single instance of that  function is going to create ten database  connections you're going to run out of  connections pretty quickly the reason we  say to use a connection pool is really  just a convenience because many  connection pool frameworks will do  things like reestablish the connection  if  found to be bad and so you just get  greater reliability by leveraging that  kind of retry behavior that's that's  native to the connection pool another  thing you can do is use rate limits at  an API level or scaling limits at the  infrastructure level for those who saw  the presentation yesterday we talked  about a new feature in functions that's  coming soon which allows you to limit  the amount that we scale up so you can  have some levers there to say please  don't ddos my database I can only deal  with a hundred or a hundred connections  I know I have one connection for  instance I know I have a hundred  instances maximum or use a quote unquote  serverless database like cloud datastore  where we handle that scaling for you  okay last point idempotency I have a  quote there yeah which is sort of often  attributed to Einstein I'm not sure if  he actually said it doing the same thing  over and over again expecting different  results  was he talking about idempotency I'm not  sure  so idempotency is when I perform some  operation and no matter how many times I  perform that operation the outcome  doesn't change it changes the first time  and then doesn't change thereafter so  this is really important because in many  circumstances particularly in  asynchronous event-based functions the  guarantees are at least once at least  once means will execute you at least  once but not exactly once and there are  circumstances where you will will you be  executing more than once and you know I  have a reference to something like an  upset there where you can mutate the  data but if you do it again nothing  changes  a concrete example this is actually my  inbox from about two or three weeks ago  I don't know if this was an item potency  thing but it seems like it might have  been I received and actually it was more  than 19 I took the screenshot to  prematurely but you can imagine this  situation where you have a bit of code  and it's sending an email but it's  sending in the email and then it's doing  something else and there's something  else fails and they have a retry policy  and so it's sending the email in failing  and then sending email in failing so it  is not idempotent so a failure that  leads to a retry is correct behavior you  want this thing to happen but a failure  that does causes mutations or sends SMS  messages or whatever it might be and  then fails is definitionally not  idempotent so there's many ways to solve  for this we're not going to dig deep on  that now just something to be mindful of  particularly in service particularly in  asynchronous where at least once  guarantees other norm  [Music]
+
+00:00:06.249 --> 00:00:09.140 align:start position:0%
+ 
+ 
+
+00:00:09.140 --> 00:00:12.709 align:start position:0%
+ 
+ 
+
+00:00:12.709 --> 00:00:15.350 align:start position:0%
+ 
+ 
+
+00:00:15.350 --> 00:00:17.540 align:start position:0%
+ 
+ 
+
+00:00:17.540 --> 00:00:19.390 align:start position:0%
+ 
+ 
+
+00:00:19.390 --> 00:00:21.529 align:start position:0%
+ 
+ 
+
+00:00:21.529 --> 00:00:24.769 align:start position:0%
+ 
+ 
+
+00:00:24.769 --> 00:00:29.179 align:start position:0%
+ 
+ 
+
+00:00:29.179 --> 00:00:31.550 align:start position:0%
+ 
+ 
+
+00:00:31.550 --> 00:00:34.190 align:start position:0%
+ 
+ 
+
+00:00:34.190 --> 00:00:36.139 align:start position:0%
+ 
+ 
+
+00:00:36.139 --> 00:00:38.780 align:start position:0%
+ 
+ 
+
+00:00:38.780 --> 00:00:40.369 align:start position:0%
+ 
+ 
+
+00:00:40.369 --> 00:00:42.650 align:start position:0%
+ 
+ 
+
+00:00:42.650 --> 00:00:44.740 align:start position:0%
+ 
+ 
+
+00:00:44.740 --> 00:00:47.990 align:start position:0%
+ 
+ 
+
+00:00:47.990 --> 00:00:49.310 align:start position:0%
+ 
+ 
+
+00:00:49.310 --> 00:00:51.979 align:start position:0%
+ 
+ 
+
+00:00:51.979 --> 00:00:57.439 align:start position:0%
+ 
+ 
+
+00:00:57.439 --> 00:01:00.830 align:start position:0%
+ 
+ 
+
+00:01:00.830 --> 00:01:02.930 align:start position:0%
+ 
+ 
+
+00:01:02.930 --> 00:01:04.880 align:start position:0%
+ 
+ 
+
+00:01:04.880 --> 00:01:07.310 align:start position:0%
+ 
+ 
+
+00:01:07.310 --> 00:01:09.289 align:start position:0%
+ 
+ 
+
+00:01:09.289 --> 00:01:12.080 align:start position:0%
+ 
+ 
+
+00:01:12.080 --> 00:01:14.149 align:start position:0%
+ 
+ 
+
+00:01:14.149 --> 00:01:16.850 align:start position:0%
+ 
+ 
+
+00:01:16.850 --> 00:01:19.990 align:start position:0%
+ 
+ 
+
+00:01:19.990 --> 00:01:22.399 align:start position:0%
+ 
+ 
+
+00:01:22.399 --> 00:01:25.249 align:start position:0%
+ 
+ 
+
+00:01:25.249 --> 00:01:27.350 align:start position:0%
+ 
+ 
+
+00:01:27.350 --> 00:01:29.270 align:start position:0%
+ 
+ 
+
+00:01:29.270 --> 00:01:32.359 align:start position:0%
+ 
+ 
+
+00:01:32.359 --> 00:01:34.340 align:start position:0%
+ 
+ 
+
+00:01:34.340 --> 00:01:35.899 align:start position:0%
+ 
+ 
+
+00:01:35.899 --> 00:01:38.240 align:start position:0%
+ 
+ 
+
+00:01:38.240 --> 00:01:40.670 align:start position:0%
+ 
+ 
+
+00:01:40.670 --> 00:01:43.789 align:start position:0%
+ 
+ 
+
+00:01:43.789 --> 00:01:47.359 align:start position:0%
+ 
+ 
+
+00:01:47.359 --> 00:01:50.120 align:start position:0%
+ 
+ 
+
+00:01:50.120 --> 00:01:51.830 align:start position:0%
+ 
+ 
+
+00:01:51.830 --> 00:01:53.289 align:start position:0%
+ 
+ 
+
+00:01:53.289 --> 00:01:55.670 align:start position:0%
+ 
+ 
+
+00:01:55.670 --> 00:01:57.499 align:start position:0%
+ 
+ 
+
+00:01:57.499 --> 00:02:02.050 align:start position:0%
+ 
+ 
+
+00:02:02.050 --> 00:02:05.030 align:start position:0%
+ 
+ 
+
+00:02:05.030 --> 00:02:07.930 align:start position:0%
+ 
+ 
+
+00:02:07.930 --> 00:02:10.130 align:start position:0%
+ 
+ 
+
+00:02:10.130 --> 00:02:12.260 align:start position:0%
+ 
+ 
+
+00:02:12.260 --> 00:02:13.790 align:start position:0%
+ 
+ 
+
+00:02:13.790 --> 00:02:17.600 align:start position:0%
+ 
+ 
+
+00:02:17.600 --> 00:02:19.730 align:start position:0%
+ 
+ 
+
+00:02:19.730 --> 00:02:21.860 align:start position:0%
+ 
+ 
+
+00:02:21.860 --> 00:02:23.870 align:start position:0%
+ 
+ 
+
+00:02:23.870 --> 00:02:26.180 align:start position:0%
+ 
+ 
+
+00:02:26.180 --> 00:02:28.250 align:start position:0%
+ 
+ 
+
+00:02:28.250 --> 00:02:33.550 align:start position:0%
+ 
+ 
+
+00:02:33.550 --> 00:02:36.560 align:start position:0%
+ 
+ 
+
+00:02:36.560 --> 00:02:38.830 align:start position:0%
+ 
+ 
+
+00:02:38.830 --> 00:02:41.270 align:start position:0%
+ 
+ 
+
+00:02:41.270 --> 00:02:44.180 align:start position:0%
+ 
+ 
+
+00:02:44.180 --> 00:02:46.250 align:start position:0%
+ 
+ 
+
+00:02:46.250 --> 00:02:48.500 align:start position:0%
+ 
+ 
+
+00:02:48.500 --> 00:02:50.180 align:start position:0%
+ 
+ 
+
+00:02:50.180 --> 00:02:53.210 align:start position:0%
+ 
+ 
+
+00:02:53.210 --> 00:02:54.950 align:start position:0%
+ 
+ 
+
+00:02:54.950 --> 00:02:58.310 align:start position:0%
+ 
+ 
+
+00:02:58.310 --> 00:02:59.810 align:start position:0%
+ 
+ 
+
+00:02:59.810 --> 00:03:05.870 align:start position:0%
+ 
+ 
+
+00:03:05.870 --> 00:03:08.990 align:start position:0%
+ 
+ 
+
+00:03:08.990 --> 00:03:11.690 align:start position:0%
+ 
+ 
+
+00:03:11.690 --> 00:03:15.230 align:start position:0%
+ 
+ 
+
+00:03:15.230 --> 00:03:17.060 align:start position:0%
+ 
+ 
+
+00:03:17.060 --> 00:03:19.250 align:start position:0%
+ 
+ 
+
+00:03:19.250 --> 00:03:21.320 align:start position:0%
+ 
+ 
+
+00:03:21.320 --> 00:03:24.980 align:start position:0%
+ 
+ 
+
+00:03:24.980 --> 00:03:27.230 align:start position:0%
+ 
+ 
+
+00:03:27.230 --> 00:03:32.150 align:start position:0%
+ 
+ 
+
+00:03:32.150 --> 00:03:35.000 align:start position:0%
+ 
+ 
+
+00:03:35.000 --> 00:03:39.470 align:start position:0%
+ 
+ 
+
+00:03:39.470 --> 00:03:41.150 align:start position:0%
+ 
+ 
+
+00:03:41.150 --> 00:03:44.810 align:start position:0%
+ 
+ 
+
+00:03:44.810 --> 00:03:47.240 align:start position:0%
+ 
+ 
+
+00:03:47.240 --> 00:03:49.610 align:start position:0%
+ 
+ 
+
+00:03:49.610 --> 00:03:51.949 align:start position:0%
+ 
+ 
+
+00:03:51.949 --> 00:03:54.290 align:start position:0%
+ 
+ 
+
+00:03:54.290 --> 00:03:56.630 align:start position:0%
+ 
+ 
+
+00:03:56.630 --> 00:04:00.770 align:start position:0%
+ 
+ 
+
+00:04:00.770 --> 00:04:05.680 align:start position:0%
+ 
+ 
+
+00:04:05.680 --> 00:04:08.990 align:start position:0%
+ 
+ 
+
+00:04:08.990 --> 00:04:11.510 align:start position:0%
+ 
+ 
+
+00:04:11.510 --> 00:04:11.520 align:start position:0%
+ 
+ 
+
+00:04:11.520 --> 00:04:11.810 align:start position:0%
+ 
+
+
+00:04:11.810 --> 00:04:13.610 align:start position:0%
+ 
+ 
+
+00:04:13.610 --> 00:04:16.430 align:start position:0%
+ 
+ 
+
+00:04:16.430 --> 00:04:19.430 align:start position:0%
+ 
+ 
+
+00:04:19.430 --> 00:04:22.460 align:start position:0%
+ 
+ 
+
+00:04:22.460 --> 00:04:25.360 align:start position:0%
+ 
+ 
+
+00:04:25.360 --> 00:04:27.750 align:start position:0%
+ 
+ 
+
+00:04:27.750 --> 00:04:30.540 align:start position:0%
+ 
+ 
+
+00:04:30.540 --> 00:04:34.560 align:start position:0%
+ 
+ 
+
+00:04:34.560 --> 00:04:38.730 align:start position:0%
+ 
+ 
+
+00:04:38.730 --> 00:04:42.060 align:start position:0%
+ 
+ 
+
+00:04:42.060 --> 00:04:46.320 align:start position:0%
+ 
+ 
+
+00:04:46.320 --> 00:04:48.360 align:start position:0%
+ 
+ 
+
+00:04:48.360 --> 00:04:51.090 align:start position:0%
+ 
+ 
+
+00:04:51.090 --> 00:04:53.640 align:start position:0%
+ 
+ 
+
+00:04:53.640 --> 00:04:55.890 align:start position:0%
+ 
+ 
+
+00:04:55.890 --> 00:04:59.280 align:start position:0%
+ 
+ 
+
+00:04:59.280 --> 00:05:01.320 align:start position:0%
+ 
+ 
+
+00:05:01.320 --> 00:05:04.380 align:start position:0%
+ 
+ 
+
+00:05:04.380 --> 00:05:06.780 align:start position:0%
+ 
+ 
+
+00:05:06.780 --> 00:05:11.490 align:start position:0%
+ 
+ 
+
+00:05:11.490 --> 00:05:14.760 align:start position:0%
+ 
+ 
+
+00:05:14.760 --> 00:05:17.490 align:start position:0%
+ 
+ 
+
+00:05:17.490 --> 00:05:21.090 align:start position:0%
+ 
+ 
+
+00:05:21.090 --> 00:05:24.120 align:start position:0%
+ 
+ 
+
+00:05:24.120 --> 00:05:26.130 align:start position:0%
+ 
+ 
+
+00:05:26.130 --> 00:05:28.830 align:start position:0%
+ 
+ 
+
+00:05:28.830 --> 00:05:30.810 align:start position:0%
+ 
+ 
+
+00:05:30.810 --> 00:05:33.150 align:start position:0%
+ 
+ 
+
+00:05:33.150 --> 00:05:34.980 align:start position:0%
+ 
+ 
+
+00:05:34.980 --> 00:05:37.500 align:start position:0%
+ 
+ 
+
+00:05:37.500 --> 00:05:39.540 align:start position:0%
+ 
+ 
+
+00:05:39.540 --> 00:05:41.220 align:start position:0%
+ 
+ 
+
+00:05:41.220 --> 00:05:42.990 align:start position:0%
+ 
+ 
+
+00:05:42.990 --> 00:05:46.800 align:start position:0%
+ 
+ 
+
+00:05:46.800 --> 00:05:49.230 align:start position:0%
+ 
+ 
+
+00:05:49.230 --> 00:05:54.210 align:start position:0%
+ 
+ 
+
+00:05:54.210 --> 00:05:56.430 align:start position:0%
+ 
+ 
+
+00:05:56.430 --> 00:05:58.170 align:start position:0%
+ 
+ 
+
+00:05:58.170 --> 00:06:00.930 align:start position:0%
+ 
+ 
+
+00:06:00.930 --> 00:06:02.700 align:start position:0%
+ 
+ 
+
+00:06:02.700 --> 00:06:04.110 align:start position:0%
+ 
+ 
+
+00:06:04.110 --> 00:06:05.880 align:start position:0%
+ 
+ 
+
+00:06:05.880 --> 00:06:08.070 align:start position:0%
+ 
+ 
+
+00:06:08.070 --> 00:06:10.020 align:start position:0%
+ 
+ 
+
+00:06:10.020 --> 00:06:12.210 align:start position:0%
+ 
+ 
+
+00:06:12.210 --> 00:06:14.240 align:start position:0%
+ 
+ 
+
+00:06:14.240 --> 00:06:17.250 align:start position:0%
+ 
+ 
+
+00:06:17.250 --> 00:06:22.470 align:start position:0%
+ 
+ 
+
+00:06:22.470 --> 00:06:27.300 align:start position:0%
+ 
+ 
+
+00:06:27.300 --> 00:06:30.120 align:start position:0%
+ 
+ 
+
+00:06:30.120 --> 00:06:31.530 align:start position:0%
+ 
+ 
+
+00:06:31.530 --> 00:06:33.390 align:start position:0%
+ 
+ 
+
+00:06:33.390 --> 00:06:36.690 align:start position:0%
+ 
+ 
+
+00:06:36.690 --> 00:06:37.950 align:start position:0%
+ 
+ 
+
+00:06:37.950 --> 00:06:39.570 align:start position:0%
+ 
+ 
+
+00:06:39.570 --> 00:06:40.879 align:start position:0%
+ 
+ 
+
+00:06:40.879 --> 00:06:45.379 align:start position:0%
+ 
+ 
+
+00:06:45.379 --> 00:06:47.330 align:start position:0%
+ 
+ 
+
+00:06:47.330 --> 00:06:49.790 align:start position:0%
+ 
+ 
+
+00:06:49.790 --> 00:06:52.070 align:start position:0%
+ 
+ 
+
+00:06:52.070 --> 00:06:53.629 align:start position:0%
+ 
+ 
+
+00:06:53.629 --> 00:06:55.999 align:start position:0%
+ 
+ 
+
+00:06:55.999 --> 00:06:58.249 align:start position:0%
+ 
+ 
+
+00:06:58.249 --> 00:06:59.510 align:start position:0%
+ 
+ 
+
+00:06:59.510 --> 00:07:01.249 align:start position:0%
+ 
+ 
+
+00:07:01.249 --> 00:07:03.320 align:start position:0%
+ 
+ 
+
+00:07:03.320 --> 00:07:07.309 align:start position:0%
+ 
+ 
+
+00:07:07.309 --> 00:07:10.309 align:start position:0%
+ 
+ 
+
+00:07:10.309 --> 00:07:13.279 align:start position:0%
+ 
+ 
+
+00:07:13.279 --> 00:07:16.159 align:start position:0%
+ 
+ 
+
+00:07:16.159 --> 00:07:19.700 align:start position:0%
+ 
+ 
+
+00:07:19.700 --> 00:07:21.589 align:start position:0%
+ 
+ 
+
+00:07:21.589 --> 00:07:22.969 align:start position:0%
+ 
+ 
+
+00:07:22.969 --> 00:07:25.969 align:start position:0%
+ 
+ 
+
+00:07:25.969 --> 00:07:29.779 align:start position:0%
+ 
+ 
+
+00:07:29.779 --> 00:07:31.550 align:start position:0%
+ 
+ 
+
+00:07:31.550 --> 00:07:34.820 align:start position:0%
+ 
+ 
+
+00:07:34.820 --> 00:07:37.700 align:start position:0%
+ 
+ 
+
+00:07:37.700 --> 00:07:39.409 align:start position:0%
+ 
+ 
+
+00:07:39.409 --> 00:07:41.839 align:start position:0%
+ 
+ 
+
+00:07:41.839 --> 00:07:44.179 align:start position:0%
+ 
+ 
+
+00:07:44.179 --> 00:07:46.459 align:start position:0%
+ 
+ 
+
+00:07:46.459 --> 00:07:47.990 align:start position:0%
+ 
+ 
+
+00:07:47.990 --> 00:07:50.450 align:start position:0%
+ 
+ 
+
+00:07:50.450 --> 00:07:52.369 align:start position:0%
+ 
+ 
+
+00:07:52.369 --> 00:07:54.260 align:start position:0%
+ 
+ 
+
+00:07:54.260 --> 00:07:56.240 align:start position:0%
+ 
+ 
+
+00:07:56.240 --> 00:07:58.610 align:start position:0%
+ 
+ 
+
+00:07:58.610 --> 00:08:01.040 align:start position:0%
+ 
+ 
+
+00:08:01.040 --> 00:08:03.320 align:start position:0%
+ 
+ 
+
+00:08:03.320 --> 00:08:07.100 align:start position:0%
+ 
+ 
+
+00:08:07.100 --> 00:08:09.679 align:start position:0%
+ 
+ 
+
+00:08:09.679 --> 00:08:12.050 align:start position:0%
+ 
+ 
+
+00:08:12.050 --> 00:08:14.779 align:start position:0%
+ 
+ 
+
+00:08:14.779 --> 00:08:16.700 align:start position:0%
+ 
+ 
+
+00:08:16.700 --> 00:08:19.010 align:start position:0%
+ 
+ 
+
+00:08:19.010 --> 00:08:21.260 align:start position:0%
+ 
+ 
+
+00:08:21.260 --> 00:08:23.570 align:start position:0%
+ 
+ 
+
+00:08:23.570 --> 00:08:26.510 align:start position:0%
+ 
+ 
+
+00:08:26.510 --> 00:08:28.399 align:start position:0%
+ 
+ 
+
+00:08:28.399 --> 00:08:30.619 align:start position:0%
+ 
+ 
+
+00:08:30.619 --> 00:08:32.120 align:start position:0%
+ 
+ 
+
+00:08:32.120 --> 00:08:33.560 align:start position:0%
+ 
+ 
+
+00:08:33.560 --> 00:08:35.899 align:start position:0%
+ 
+ 
+
+00:08:35.899 --> 00:08:38.120 align:start position:0%
+ 
+ 
+
+00:08:38.120 --> 00:08:39.920 align:start position:0%
+ 
+ 
+
+00:08:39.920 --> 00:08:41.870 align:start position:0%
+ 
+ 
+
+00:08:41.870 --> 00:08:44.240 align:start position:0%
+ 
+ 
+
+00:08:44.240 --> 00:08:45.500 align:start position:0%
+ 
+ 
+
+00:08:45.500 --> 00:08:47.630 align:start position:0%
+ 
+ 
+
+00:08:47.630 --> 00:08:53.720 align:start position:0%
+ 
+ 
+
+00:08:53.720 --> 00:08:57.440 align:start position:0%
+ 
+ 
+
+00:08:57.440 --> 00:08:58.730 align:start position:0%
+ 
+ 
+
+00:08:58.730 --> 00:09:00.770 align:start position:0%
+ 
+ 
+
+00:09:00.770 --> 00:09:02.410 align:start position:0%
+ 
+ 
+
+00:09:02.410 --> 00:09:06.620 align:start position:0%
+ 
+ 
+
+00:09:06.620 --> 00:09:09.230 align:start position:0%
+ 
+ 
+
+00:09:09.230 --> 00:09:09.240 align:start position:0%
+ 
+ 
+
+00:09:09.240 --> 00:09:09.770 align:start position:0%
+ 
+
+
+00:09:09.770 --> 00:09:12.230 align:start position:0%
+ 
+ 
+
+00:09:12.230 --> 00:09:16.340 align:start position:0%
+ 
+ 
+
+00:09:16.340 --> 00:09:18.260 align:start position:0%
+ 
+ 
+
+00:09:18.260 --> 00:09:19.760 align:start position:0%
+ 
+ 
+
+00:09:19.760 --> 00:09:21.530 align:start position:0%
+ 
+ 
+
+00:09:21.530 --> 00:09:23.750 align:start position:0%
+ 
+ 
+
+00:09:23.750 --> 00:09:27.230 align:start position:0%
+ 
+ 
+
+00:09:27.230 --> 00:09:30.680 align:start position:0%
+ 
+ 
+
+00:09:30.680 --> 00:09:32.240 align:start position:0%
+ 
+ 
+
+00:09:32.240 --> 00:09:35.120 align:start position:0%
+ 
+ 
+
+00:09:35.120 --> 00:09:36.380 align:start position:0%
+ 
+ 
+
+00:09:36.380 --> 00:09:43.130 align:start position:0%
+ 
+ 
+
+00:09:43.130 --> 00:09:47.420 align:start position:0%
+ 
+ 
+
+00:09:47.420 --> 00:09:49.130 align:start position:0%
+ 
+ 
+
+00:09:49.130 --> 00:09:50.960 align:start position:0%
+ 
+ 
+
+00:09:50.960 --> 00:09:55.880 align:start position:0%
+ 
+ 
+
+00:09:55.880 --> 00:09:58.340 align:start position:0%
+ 
+ 
+
+00:09:58.340 --> 00:10:01.310 align:start position:0%
+ 
+ 
+
+00:10:01.310 --> 00:10:04.640 align:start position:0%
+ 
+ 
+
+00:10:04.640 --> 00:10:07.610 align:start position:0%
+ 
+ 
+
+00:10:07.610 --> 00:10:09.230 align:start position:0%
+ 
+ 
+
+00:10:09.230 --> 00:10:12.860 align:start position:0%
+ 
+ 
+
+00:10:12.860 --> 00:10:17.570 align:start position:0%
+ 
+ 
+
+00:10:17.570 --> 00:10:19.820 align:start position:0%
+ 
+ 
+
+00:10:19.820 --> 00:10:22.160 align:start position:0%
+ 
+ 
+
+00:10:22.160 --> 00:10:23.570 align:start position:0%
+ 
+ 
+
+00:10:23.570 --> 00:10:25.640 align:start position:0%
+ 
+ 
+
+00:10:25.640 --> 00:10:27.700 align:start position:0%
+ 
+ 
+
+00:10:27.700 --> 00:10:32.210 align:start position:0%
+ 
+ 
+
+00:10:32.210 --> 00:10:34.880 align:start position:0%
+ 
+ 
+
+00:10:34.880 --> 00:10:36.530 align:start position:0%
+ 
+ 
+
+00:10:36.530 --> 00:10:38.870 align:start position:0%
+ 
+ 
+
+00:10:38.870 --> 00:10:41.330 align:start position:0%
+ 
+ 
+
+00:10:41.330 --> 00:10:43.970 align:start position:0%
+ 
+ 
+
+00:10:43.970 --> 00:10:46.100 align:start position:0%
+ 
+ 
+
+00:10:46.100 --> 00:10:49.250 align:start position:0%
+ 
+ 
+
+00:10:49.250 --> 00:10:52.370 align:start position:0%
+ 
+ 
+
+00:10:52.370 --> 00:10:55.790 align:start position:0%
+ 
+ 
+
+00:10:55.790 --> 00:10:57.710 align:start position:0%
+ 
+ 
+
+00:10:57.710 --> 00:10:59.240 align:start position:0%
+ 
+ 
+
+00:10:59.240 --> 00:11:01.400 align:start position:0%
+ 
+ 
+
+00:11:01.400 --> 00:11:03.860 align:start position:0%
+ 
+ 
+
+00:11:03.860 --> 00:11:06.320 align:start position:0%
+ 
+ 
+
+00:11:06.320 --> 00:11:07.280 align:start position:0%
+ 
+ 
+
+00:11:07.280 --> 00:11:10.009 align:start position:0%
+ 
+ 
+
+00:11:10.009 --> 00:11:12.499 align:start position:0%
+ 
+ 
+
+00:11:12.499 --> 00:11:14.540 align:start position:0%
+ 
+ 
+
+00:11:14.540 --> 00:11:17.300 align:start position:0%
+ 
+ 
+
+00:11:17.300 --> 00:11:19.579 align:start position:0%
+ 
+ 
+
+00:11:19.579 --> 00:11:21.259 align:start position:0%
+ 
+ 
+
+00:11:21.259 --> 00:11:24.710 align:start position:0%
+ 
+ 
+
+00:11:24.710 --> 00:11:26.600 align:start position:0%
+ 
+ 
+
+00:11:26.600 --> 00:11:29.569 align:start position:0%
+ 
+ 
+
+00:11:29.569 --> 00:11:32.150 align:start position:0%
+ 
+ 
+
+00:11:32.150 --> 00:11:33.980 align:start position:0%
+ 
+ 
+
+00:11:33.980 --> 00:11:35.480 align:start position:0%
+ 
+ 
+
+00:11:35.480 --> 00:11:38.480 align:start position:0%
+ 
+ 
+
+00:11:38.480 --> 00:11:39.829 align:start position:0%
+ 
+ 
+
+00:11:39.829 --> 00:11:41.809 align:start position:0%
+ 
+ 
+
+00:11:41.809 --> 00:11:43.730 align:start position:0%
+ 
+ 
+
+00:11:43.730 --> 00:11:45.939 align:start position:0%
+ 
+ 
+
+00:11:45.939 --> 00:11:50.420 align:start position:0%
+ 
+ 
+
+00:11:50.420 --> 00:11:52.579 align:start position:0%
+ 
+ 
+
+00:11:52.579 --> 00:11:54.710 align:start position:0%
+ 
+ 
+
+00:11:54.710 --> 00:11:56.059 align:start position:0%
+ 
+ 
+
+00:11:56.059 --> 00:11:58.790 align:start position:0%
+ 
+ 
+
+00:11:58.790 --> 00:12:00.949 align:start position:0%
+ 
+ 
+
+00:12:00.949 --> 00:12:02.780 align:start position:0%
+ 
+ 
+
+00:12:02.780 --> 00:12:04.100 align:start position:0%
+ 
+ 
+
+00:12:04.100 --> 00:12:05.600 align:start position:0%
+ 
+ 
+
+00:12:05.600 --> 00:12:07.400 align:start position:0%
+ 
+ 
+
+00:12:07.400 --> 00:12:12.670 align:start position:0%
+ 
+ 
+
+00:12:12.670 --> 00:12:15.710 align:start position:0%
+ 
+ 
+
+00:12:15.710 --> 00:12:18.470 align:start position:0%
+ 
+ 
+
+00:12:18.470 --> 00:12:20.480 align:start position:0%
+ 
+ 
+
+00:12:20.480 --> 00:12:23.480 align:start position:0%
+ 
+ 
+
+00:12:23.480 --> 00:12:25.670 align:start position:0%
+ 
+ 
+
+00:12:25.670 --> 00:12:29.540 align:start position:0%
+ 
+ 
+
+00:12:29.540 --> 00:12:32.180 align:start position:0%
+ 
+ 
+
+00:12:32.180 --> 00:12:35.059 align:start position:0%
+ 
+ 
+
+00:12:35.059 --> 00:12:37.040 align:start position:0%
+ 
+ 
+
+00:12:37.040 --> 00:12:40.189 align:start position:0%
+ 
+ 
+
+00:12:40.189 --> 00:12:41.930 align:start position:0%
+ 
+ 
+
+00:12:41.930 --> 00:12:44.449 align:start position:0%
+ 
+ 
+
+00:12:44.449 --> 00:12:47.420 align:start position:0%
+ 
+ 
+
+00:12:47.420 --> 00:12:49.189 align:start position:0%
+ 
+ 
+
+00:12:49.189 --> 00:12:51.439 align:start position:0%
+ 
+ 
+
+00:12:51.439 --> 00:12:53.600 align:start position:0%
+ 
+ 
+
+00:12:53.600 --> 00:12:55.639 align:start position:0%
+ 
+ 
+
+00:12:55.639 --> 00:12:58.129 align:start position:0%
+ 
+ 
+
+00:12:58.129 --> 00:13:00.470 align:start position:0%
+ 
+ 
+
+00:13:00.470 --> 00:13:02.509 align:start position:0%
+ 
+ 
+
+00:13:02.509 --> 00:13:04.370 align:start position:0%
+ 
+ 
+
+00:13:04.370 --> 00:13:06.290 align:start position:0%
+ 
+ 
+
+00:13:06.290 --> 00:13:08.780 align:start position:0%
+ 
+ 
+
+00:13:08.780 --> 00:13:11.689 align:start position:0%
+ 
+ 
+
+00:13:11.689 --> 00:13:16.310 align:start position:0%
+ 
+ 
+
+00:13:16.310 --> 00:13:18.710 align:start position:0%
+ 
+ 
+
+00:13:18.710 --> 00:13:20.690 align:start position:0%
+ 
+ 
+
+00:13:20.690 --> 00:13:24.200 align:start position:0%
+ 
+ 
+
+00:13:24.200 --> 00:13:26.150 align:start position:0%
+ 
+ 
+
+00:13:26.150 --> 00:13:27.740 align:start position:0%
+ 
+ 
+
+00:13:27.740 --> 00:13:29.900 align:start position:0%
+ 
+ 
+
+00:13:29.900 --> 00:13:31.490 align:start position:0%
+ 
+ 
+
+00:13:31.490 --> 00:13:34.430 align:start position:0%
+ 
+ 
+
+00:13:34.430 --> 00:13:36.710 align:start position:0%
+ 
+ 
+
+00:13:36.710 --> 00:13:38.390 align:start position:0%
+ 
+ 
+
+00:13:38.390 --> 00:13:43.220 align:start position:0%
+ 
+ 
+
+00:13:43.220 --> 00:13:47.270 align:start position:0%
+ 
+ 
+
+00:13:47.270 --> 00:13:48.830 align:start position:0%
+ 
+ 
+
+00:13:48.830 --> 00:13:51.620 align:start position:0%
+ 
+ 
+
+00:13:51.620 --> 00:13:53.870 align:start position:0%
+ 
+ 
+
+00:13:53.870 --> 00:13:59.150 align:start position:0%
+ 
+ 
+
+00:13:59.150 --> 00:14:01.250 align:start position:0%
+ 
+ 
+
+00:14:01.250 --> 00:14:01.260 align:start position:0%
+ 
+ 
+
+00:14:01.260 --> 00:14:01.520 align:start position:0%
+ 
+
+
+00:14:01.520 --> 00:14:02.870 align:start position:0%
+ 
+ 
+
+00:14:02.870 --> 00:14:05.180 align:start position:0%
+ 
+ 
+
+00:14:05.180 --> 00:14:06.680 align:start position:0%
+ 
+ 
+
+00:14:06.680 --> 00:14:08.780 align:start position:0%
+ 
+ 
+
+00:14:08.780 --> 00:14:11.570 align:start position:0%
+ 
+ 
+
+00:14:11.570 --> 00:14:14.210 align:start position:0%
+ 
+ 
+
+00:14:14.210 --> 00:14:15.470 align:start position:0%
+ 
+ 
+
+00:14:15.470 --> 00:14:19.280 align:start position:0%
+ 
+ 
+
+00:14:19.280 --> 00:14:21.260 align:start position:0%
+ 
+ 
+
+00:14:21.260 --> 00:14:22.670 align:start position:0%
+ 
+ 
+
+00:14:22.670 --> 00:14:25.100 align:start position:0%
+ 
+ 
+
+00:14:25.100 --> 00:14:28.490 align:start position:0%
+ 
+ 
+
+00:14:28.490 --> 00:14:30.410 align:start position:0%
+ 
+ 
+
+00:14:30.410 --> 00:14:33.080 align:start position:0%
+ 
+ 
+
+00:14:33.080 --> 00:14:34.520 align:start position:0%
+ 
+ 
+
+00:14:34.520 --> 00:14:36.590 align:start position:0%
+ 
+ 
+
+00:14:36.590 --> 00:14:38.810 align:start position:0%
+ 
+ 
+
+00:14:38.810 --> 00:14:41.570 align:start position:0%
+ 
+ 
+
+00:14:41.570 --> 00:14:43.370 align:start position:0%
+ 
+ 
+
+00:14:43.370 --> 00:14:45.710 align:start position:0%
+ 
+ 
+
+00:14:45.710 --> 00:14:49.280 align:start position:0%
+ 
+ 
+
+00:14:49.280 --> 00:14:50.330 align:start position:0%
+ 
+ 
+
+00:14:50.330 --> 00:14:52.460 align:start position:0%
+ 
+ 
+
+00:14:52.460 --> 00:14:55.430 align:start position:0%
+ 
+ 
+
+00:14:55.430 --> 00:14:57.260 align:start position:0%
+ 
+ 
+
+00:14:57.260 --> 00:14:59.450 align:start position:0%
+ 
+ 
+
+00:14:59.450 --> 00:15:02.000 align:start position:0%
+ 
+ 
+
+00:15:02.000 --> 00:15:03.860 align:start position:0%
+ 
+ 
+
+00:15:03.860 --> 00:15:05.810 align:start position:0%
+ 
+ 
+
+00:15:05.810 --> 00:15:08.210 align:start position:0%
+ 
+ 
+
+00:15:08.210 --> 00:15:11.750 align:start position:0%
+ 
+ 
+
+00:15:11.750 --> 00:15:16.120 align:start position:0%
+ 
+ 
+
+00:15:16.120 --> 00:15:19.749 align:start position:0%
+ 
+ 
+
+00:15:19.749 --> 00:15:23.350 align:start position:0%
+ 
+ 
+
+00:15:23.350 --> 00:15:26.290 align:start position:0%
+ 
+ 
+
+00:15:26.290 --> 00:15:29.050 align:start position:0%
+ 
+ 
+
+00:15:29.050 --> 00:15:32.199 align:start position:0%
+ 
+ 
+
+00:15:32.199 --> 00:15:35.620 align:start position:0%
+ 
+ 
+
+00:15:35.620 --> 00:15:38.920 align:start position:0%
+ 
+ 
+
+00:15:38.920 --> 00:15:40.540 align:start position:0%
+ 
+ 
+
+00:15:40.540 --> 00:15:41.949 align:start position:0%
+ 
+ 
+
+00:15:41.949 --> 00:15:46.240 align:start position:0%
+ 
+ 
+
+00:15:46.240 --> 00:15:50.350 align:start position:0%
+ 
+ 
+
+00:15:50.350 --> 00:15:51.939 align:start position:0%
+ 
+ 
+
+00:15:51.939 --> 00:15:54.009 align:start position:0%
+ 
+ 
+
+00:15:54.009 --> 00:15:56.019 align:start position:0%
+ 
+ 
+
+00:15:56.019 --> 00:15:59.230 align:start position:0%
+ 
+ 
+
+00:15:59.230 --> 00:16:00.930 align:start position:0%
+ 
+ 
+
+00:16:00.930 --> 00:16:03.730 align:start position:0%
+ 
+ 
+
+00:16:03.730 --> 00:16:06.430 align:start position:0%
+ 
+ 
+
+00:16:06.430 --> 00:16:07.900 align:start position:0%
+ 
+ 
+
+00:16:07.900 --> 00:16:10.269 align:start position:0%
+ 
+ 
+
+00:16:10.269 --> 00:16:13.360 align:start position:0%
+ 
+ 
+
+00:16:13.360 --> 00:16:18.180 align:start position:0%
+ 
+ 
+
+00:16:18.180 --> 00:16:23.230 align:start position:0%
+ 
+ 
+
+00:16:23.230 --> 00:16:25.780 align:start position:0%
+ 
+ 
+
+00:16:25.780 --> 00:16:27.550 align:start position:0%
+ 
+ 
+
+00:16:27.550 --> 00:16:29.259 align:start position:0%
+ 
+ 
+
+00:16:29.259 --> 00:16:32.410 align:start position:0%
+ 
+ 
+
+00:16:32.410 --> 00:16:35.199 align:start position:0%
+ 
+ 
+
+00:16:35.199 --> 00:16:37.900 align:start position:0%
+ 
+ 
+
+00:16:37.900 --> 00:16:41.800 align:start position:0%
+ 
+ 
+
+00:16:41.800 --> 00:16:45.429 align:start position:0%
+ 
+ 
+
+00:16:45.429 --> 00:16:48.910 align:start position:0%
+ 
+ 
+
+00:16:48.910 --> 00:16:51.100 align:start position:0%
+ 
+ 
+
+00:16:51.100 --> 00:16:52.900 align:start position:0%
+ 
+ 
+
+00:16:52.900 --> 00:16:55.030 align:start position:0%
+ 
+ 
+
+00:16:55.030 --> 00:16:57.939 align:start position:0%
+ 
+ 
+
+00:16:57.939 --> 00:17:00.490 align:start position:0%
+ 
+ 
+
+00:17:00.490 --> 00:17:02.829 align:start position:0%
+ 
+ 
+
+00:17:02.829 --> 00:17:04.809 align:start position:0%
+ 
+ 
+
+00:17:04.809 --> 00:17:07.510 align:start position:0%
+ 
+ 
+
+00:17:07.510 --> 00:17:11.279 align:start position:0%
+ 
+ 
+
+00:17:11.279 --> 00:17:14.529 align:start position:0%
+ 
+ 
+
+00:17:14.529 --> 00:17:17.020 align:start position:0%
+ 
+ 
+
+00:17:17.020 --> 00:17:18.520 align:start position:0%
+ 
+ 
+
+00:17:18.520 --> 00:17:20.529 align:start position:0%
+ 
+ 
+
+00:17:20.529 --> 00:17:22.870 align:start position:0%
+ 
+ 
+
+00:17:22.870 --> 00:17:24.490 align:start position:0%
+ 
+ 
+
+00:17:24.490 --> 00:17:26.530 align:start position:0%
+ 
+ 
+
+00:17:26.530 --> 00:17:28.000 align:start position:0%
+ 
+ 
+
+00:17:28.000 --> 00:17:28.010 align:start position:0%
+ 
+ 
+
+00:17:28.010 --> 00:17:29.960 align:start position:0%
+ 
+
+
+00:17:29.960 --> 00:17:31.520 align:start position:0%
+ 
+ 
+
+00:17:31.520 --> 00:17:36.260 align:start position:0%
+ 
+ 
+
+00:17:36.260 --> 00:17:40.850 align:start position:0%
+ 
+ 
+
+00:17:40.850 --> 00:17:43.190 align:start position:0%
+ 
+ 
+
+00:17:43.190 --> 00:17:44.780 align:start position:0%
+ 
+ 
+
+00:17:44.780 --> 00:17:48.020 align:start position:0%
+ 
+ 
+
+00:17:48.020 --> 00:17:50.330 align:start position:0%
+ 
+ 
+
+00:17:50.330 --> 00:17:52.940 align:start position:0%
+ 
+ 
+
+00:17:52.940 --> 00:17:54.730 align:start position:0%
+ 
+ 
+
+00:17:54.730 --> 00:17:57.440 align:start position:0%
+ 
+ 
+
+00:17:57.440 --> 00:17:59.720 align:start position:0%
+ 
+ 
+
+00:17:59.720 --> 00:18:02.450 align:start position:0%
+ 
+ 
+
+00:18:02.450 --> 00:18:04.190 align:start position:0%
+ 
+ 
+
+00:18:04.190 --> 00:18:07.820 align:start position:0%
+ 
+ 
+
+00:18:07.820 --> 00:18:10.490 align:start position:0%
+ 
+ 
+
+00:18:10.490 --> 00:18:12.080 align:start position:0%
+ 
+ 
+
+00:18:12.080 --> 00:18:14.900 align:start position:0%
+ 
+ 
+
+00:18:14.900 --> 00:18:16.850 align:start position:0%
+ 
+ 
+
+00:18:16.850 --> 00:18:19.190 align:start position:0%
+ 
+ 
+
+00:18:19.190 --> 00:18:20.960 align:start position:0%
+ 
+ 
+
+00:18:20.960 --> 00:18:23.480 align:start position:0%
+ 
+ 
+
+00:18:23.480 --> 00:18:25.640 align:start position:0%
+ 
+ 
+
+00:18:25.640 --> 00:18:28.640 align:start position:0%
+ 
+ 
+
+00:18:28.640 --> 00:18:29.990 align:start position:0%
+ 
+ 
+
+00:18:29.990 --> 00:18:32.750 align:start position:0%
+ 
+ 
+
+00:18:32.750 --> 00:18:34.730 align:start position:0%
+ 
+ 
+
+00:18:34.730 --> 00:18:40.400 align:start position:0%
+ 
+ 
+
+00:18:40.400 --> 00:18:43.040 align:start position:0%
+ 
+ 
+
+00:18:43.040 --> 00:18:45.800 align:start position:0%
+ 
+ 
+
+00:18:45.800 --> 00:18:48.560 align:start position:0%
+ 
+ 
+
+00:18:48.560 --> 00:18:51.070 align:start position:0%
+ 
+ 
+
+00:18:51.070 --> 00:18:53.630 align:start position:0%
+ 
+ 
+
+00:18:53.630 --> 00:18:56.560 align:start position:0%
+ 
+ 
+
+00:18:56.560 --> 00:18:59.480 align:start position:0%
+ 
+ 
+
+00:18:59.480 --> 00:19:02.360 align:start position:0%
+ 
+ 
+
+00:19:02.360 --> 00:19:04.850 align:start position:0%
+ 
+ 
+
+00:19:04.850 --> 00:19:06.290 align:start position:0%
+ 
+ 
+
+00:19:06.290 --> 00:19:09.290 align:start position:0%
+ 
+ 
+
+00:19:09.290 --> 00:19:10.910 align:start position:0%
+ 
+ 
+
+00:19:10.910 --> 00:19:13.970 align:start position:0%
+ 
+ 
+
+00:19:13.970 --> 00:19:16.280 align:start position:0%
+ 
+ 
+
+00:19:16.280 --> 00:19:17.750 align:start position:0%
+ 
+ 
+
+00:19:17.750 --> 00:19:19.580 align:start position:0%
+ 
+ 
+
+00:19:19.580 --> 00:19:25.000 align:start position:0%
+ 
+ 
+
+00:19:25.000 --> 00:19:28.520 align:start position:0%
+ 
+ 
+
+00:19:28.520 --> 00:19:30.130 align:start position:0%
+ 
+ 
+
+00:19:30.130 --> 00:19:32.900 align:start position:0%
+ 
+ 
+
+00:19:32.900 --> 00:19:36.260 align:start position:0%
+ 
+ 
+
+00:19:36.260 --> 00:19:38.060 align:start position:0%
+ 
+ 
+
+00:19:38.060 --> 00:19:40.790 align:start position:0%
+ 
+ 
+
+00:19:40.790 --> 00:19:43.100 align:start position:0%
+ 
+ 
+
+00:19:43.100 --> 00:19:44.830 align:start position:0%
+ 
+ 
+
+00:19:44.830 --> 00:19:47.299 align:start position:0%
+ 
+ 
+
+00:19:47.299 --> 00:19:49.820 align:start position:0%
+ 
+ 
+
+00:19:49.820 --> 00:19:50.510 align:start position:0%
+ 
+ 
+
+00:19:50.510 --> 00:19:53.180 align:start position:0%
+ 
+ 
+
+00:19:53.180 --> 00:19:55.669 align:start position:0%
+ 
+ 
+
+00:19:55.669 --> 00:19:58.730 align:start position:0%
+ 
+ 
+
+00:19:58.730 --> 00:20:01.570 align:start position:0%
+ 
+ 
+
+00:20:01.570 --> 00:20:08.150 align:start position:0%
+ 
+ 
+
+00:20:08.150 --> 00:20:09.880 align:start position:0%
+ 
+ 
+
+00:20:09.880 --> 00:20:13.400 align:start position:0%
+ 
+ 
+
+00:20:13.400 --> 00:20:16.190 align:start position:0%
+ 
+ 
+
+00:20:16.190 --> 00:20:19.450 align:start position:0%
+ 
+ 
+
+00:20:19.450 --> 00:20:23.390 align:start position:0%
+ 
+ 
+
+00:20:23.390 --> 00:20:25.789 align:start position:0%
+ 
+ 
+
+00:20:25.789 --> 00:20:29.620 align:start position:0%
+ 
+ 
+
+00:20:29.620 --> 00:20:32.840 align:start position:0%
+ 
+ 
+
+00:20:32.840 --> 00:20:34.610 align:start position:0%
+ 
+ 
+
+00:20:34.610 --> 00:20:37.510 align:start position:0%
+ 
+ 
+
+00:20:37.510 --> 00:20:39.620 align:start position:0%
+ 
+ 
+
+00:20:39.620 --> 00:20:40.640 align:start position:0%
+ 
+ 
+
+00:20:40.640 --> 00:20:43.010 align:start position:0%
+ 
+ 
+
+00:20:43.010 --> 00:20:45.289 align:start position:0%
+ 
+ 
+
+00:20:45.289 --> 00:20:47.330 align:start position:0%
+ 
+ 
+
+00:20:47.330 --> 00:20:49.520 align:start position:0%
+ 
+ 
+
+00:20:49.520 --> 00:20:51.260 align:start position:0%
+ 
+ 
+
+00:20:51.260 --> 00:20:53.210 align:start position:0%
+ 
+ 
+
+00:20:53.210 --> 00:20:54.950 align:start position:0%
+ 
+ 
+
+00:20:54.950 --> 00:20:56.510 align:start position:0%
+ 
+ 
+
+00:20:56.510 --> 00:20:59.200 align:start position:0%
+ 
+ 
+
+00:20:59.200 --> 00:21:01.340 align:start position:0%
+ 
+ 
+
+00:21:01.340 --> 00:21:04.070 align:start position:0%
+ 
+ 
+
+00:21:04.070 --> 00:21:05.690 align:start position:0%
+ 
+ 
+
+00:21:05.690 --> 00:21:07.340 align:start position:0%
+ 
+ 
+
+00:21:07.340 --> 00:21:08.630 align:start position:0%
+ 
+ 
+
+00:21:08.630 --> 00:21:10.850 align:start position:0%
+ 
+ 
+
+00:21:10.850 --> 00:21:12.890 align:start position:0%
+ 
+ 
+
+00:21:12.890 --> 00:21:19.400 align:start position:0%
+ 
+ 
+
+00:21:19.400 --> 00:21:22.880 align:start position:0%
+ 
+ 
+
+00:21:22.880 --> 00:21:24.799 align:start position:0%
+ 
+ 
+
+00:21:24.799 --> 00:21:28.280 align:start position:0%
+ 
+ 
+
+00:21:28.280 --> 00:21:29.690 align:start position:0%
+ 
+ 
+
+00:21:29.690 --> 00:21:32.060 align:start position:0%
+ 
+ 
+
+00:21:32.060 --> 00:21:36.440 align:start position:0%
+ 
+ 
+
+00:21:36.440 --> 00:21:41.180 align:start position:0%
+ 
+ 
+
+00:21:41.180 --> 00:21:43.159 align:start position:0%
+ 
+ 
+
+00:21:43.159 --> 00:21:47.630 align:start position:0%
+ 
+ 
+
+00:21:47.630 --> 00:21:50.390 align:start position:0%
+ 
+ 
+
+00:21:50.390 --> 00:21:53.659 align:start position:0%
+ 
+ 
+
+00:21:53.659 --> 00:21:56.780 align:start position:0%
+ 
+ 
+
+00:21:56.780 --> 00:21:59.330 align:start position:0%
+ 
+ 
+
+00:21:59.330 --> 00:22:01.880 align:start position:0%
+ 
+ 
+
+00:22:01.880 --> 00:22:03.770 align:start position:0%
+ 
+ 
+
+00:22:03.770 --> 00:22:05.450 align:start position:0%
+ 
+ 
+
+00:22:05.450 --> 00:22:06.890 align:start position:0%
+ 
+ 
+
+00:22:06.890 --> 00:22:08.420 align:start position:0%
+ 
+ 
+
+00:22:08.420 --> 00:22:11.000 align:start position:0%
+ 
+ 
+
+00:22:11.000 --> 00:22:14.900 align:start position:0%
+ 
+ 
+
+00:22:14.900 --> 00:22:17.420 align:start position:0%
+ 
+ 
+
+00:22:17.420 --> 00:22:21.740 align:start position:0%
+ 
+ 
+
+00:22:21.740 --> 00:22:23.600 align:start position:0%
+ 
+ 
+
+00:22:23.600 --> 00:22:30.560 align:start position:0%
+ 
+ 
+
+00:22:30.560 --> 00:22:32.930 align:start position:0%
+ 
+ 
+
+00:22:32.930 --> 00:22:37.490 align:start position:0%
+ 
+ 
+
+00:22:37.490 --> 00:22:40.700 align:start position:0%
+ 
+ 
+
+00:22:40.700 --> 00:22:43.330 align:start position:0%
+ 
+ 
+
+00:22:43.330 --> 00:22:46.310 align:start position:0%
+ 
+ 
+
+00:22:46.310 --> 00:22:49.850 align:start position:0%
+ 
+ 
+
+00:22:49.850 --> 00:22:51.710 align:start position:0%
+ 
+ 
+
+00:22:51.710 --> 00:22:54.280 align:start position:0%
+ 
+ 
+
+00:22:54.280 --> 00:22:57.230 align:start position:0%
+ 
+ 
+
+00:22:57.230 --> 00:22:58.790 align:start position:0%
+ 
+ 
+
+00:22:58.790 --> 00:23:01.400 align:start position:0%
+ 
+ 
+
+00:23:01.400 --> 00:23:03.650 align:start position:0%
+ 
+ 
+
+00:23:03.650 --> 00:23:06.440 align:start position:0%
+ 
+ 
+
+00:23:06.440 --> 00:23:08.480 align:start position:0%
+ 
+ 
+
+00:23:08.480 --> 00:23:10.040 align:start position:0%
+ 
+ 
+
+00:23:10.040 --> 00:23:11.330 align:start position:0%
+ 
+ 
+
+00:23:11.330 --> 00:23:14.930 align:start position:0%
+ 
+ 
+
+00:23:14.930 --> 00:23:17.660 align:start position:0%
+ 
+ 
+
+00:23:17.660 --> 00:23:22.370 align:start position:0%
+ 
+ 
+
+00:23:22.370 --> 00:23:25.460 align:start position:0%
+ 
+ 
+
+00:23:25.460 --> 00:23:29.210 align:start position:0%
+ 
+ 
+
+00:23:29.210 --> 00:23:31.010 align:start position:0%
+ 
+ 
+
+00:23:31.010 --> 00:23:36.730 align:start position:0%
+ 
+ 
+
+00:23:36.730 --> 00:23:39.080 align:start position:0%
+ 
+ 
+
+00:23:39.080 --> 00:23:43.810 align:start position:0%
+ 
+ 
+
+00:23:43.810 --> 00:23:47.690 align:start position:0%
+ 
+ 
+
+00:23:47.690 --> 00:23:51.980 align:start position:0%
+ 
+ 
+
+00:23:51.980 --> 00:23:55.040 align:start position:0%
+ 
+ 
+
+00:23:55.040 --> 00:23:56.180 align:start position:0%
+ 
+ 
+
+00:23:56.180 --> 00:23:58.760 align:start position:0%
+ 
+ 
+
+00:23:58.760 --> 00:24:00.770 align:start position:0%
+ 
+ 
+
+00:24:00.770 --> 00:24:03.640 align:start position:0%
+ 
+ 
+
+00:24:03.640 --> 00:24:05.570 align:start position:0%
+ 
+ 
+
+00:24:05.570 --> 00:24:07.270 align:start position:0%
+ 
+ 
+
+00:24:07.270 --> 00:24:09.900 align:start position:0%
+ 
+ 
+
+00:24:09.900 --> 00:24:12.960 align:start position:0%
+ 
+ 
+
+00:24:12.960 --> 00:24:15.600 align:start position:0%
+ 
+ 
+
+00:24:15.600 --> 00:24:17.880 align:start position:0%
+ 
+ 
+
+00:24:17.880 --> 00:24:20.820 align:start position:0%
+ 
+ 
+
+00:24:20.820 --> 00:24:23.070 align:start position:0%
+ 
+ 
+
+00:24:23.070 --> 00:24:24.870 align:start position:0%
+ 
+ 
+
+00:24:24.870 --> 00:24:27.240 align:start position:0%
+ 
+ 
+
+00:24:27.240 --> 00:24:27.930 align:start position:0%
+ 
+ 
+
+00:24:27.930 --> 00:24:30.390 align:start position:0%
+ 
+ 
+
+00:24:30.390 --> 00:24:32.850 align:start position:0%
+ 
+ 
+
+00:24:32.850 --> 00:24:35.820 align:start position:0%
+ 
+ 
+
+00:24:35.820 --> 00:24:38.940 align:start position:0%
+ 
+ 
+
+00:24:38.940 --> 00:24:41.070 align:start position:0%
+ 
+ 
+
+00:24:41.070 --> 00:24:42.330 align:start position:0%
+ 
+ 
+
+00:24:42.330 --> 00:24:45.360 align:start position:0%
+ 
+ 
+
+00:24:45.360 --> 00:24:47.700 align:start position:0%
+ 
+ 
+
+00:24:47.700 --> 00:24:49.590 align:start position:0%
+ 
+ 
+
+00:24:49.590 --> 00:24:51.780 align:start position:0%
+ 
+ 
+
+00:24:51.780 --> 00:24:53.690 align:start position:0%
+ 
+ 
+
+00:24:53.690 --> 00:24:56.250 align:start position:0%
+ 
+ 
+
+00:24:56.250 --> 00:24:58.770 align:start position:0%
+ 
+ 
+
+00:24:58.770 --> 00:25:00.360 align:start position:0%
+ 
+ 
+
+00:25:00.360 --> 00:25:03.780 align:start position:0%
+ 
+ 
+
+00:25:03.780 --> 00:25:07.020 align:start position:0%
+ 
+ 
+
+00:25:07.020 --> 00:25:08.100 align:start position:0%
+ 
+ 
+
+00:25:08.100 --> 00:25:09.690 align:start position:0%
+ 
+ 
+
+00:25:09.690 --> 00:25:10.830 align:start position:0%
+ 
+ 
+
+00:25:10.830 --> 00:25:13.140 align:start position:0%
+ 
+ 
+
+00:25:13.140 --> 00:25:15.150 align:start position:0%
+ 
+ 
+
+00:25:15.150 --> 00:25:17.010 align:start position:0%
+ 
+ 
+
+00:25:17.010 --> 00:25:19.890 align:start position:0%
+ 
+ 
+
+00:25:19.890 --> 00:25:23.460 align:start position:0%
+ 
+ 
+
+00:25:23.460 --> 00:25:25.680 align:start position:0%
+ 
+ 
+
+00:25:25.680 --> 00:25:30.210 align:start position:0%
+ 
+ 
+
+00:25:30.210 --> 00:25:32.040 align:start position:0%
+ 
+ 
+
+00:25:32.040 --> 00:25:37.590 align:start position:0%
+ 
+ 
+
+00:25:37.590 --> 00:25:41.550 align:start position:0%
+ 
+ 
+
+00:25:41.550 --> 00:25:45.300 align:start position:0%
+ 
+ 
+
+00:25:45.300 --> 00:25:49.620 align:start position:0%
+ 
+ 
+
+00:25:49.620 --> 00:25:53.360 align:start position:0%
+ 
+ 
+
+00:25:53.360 --> 00:25:55.890 align:start position:0%
+ 
+ 
+
+00:25:55.890 --> 00:25:57.750 align:start position:0%
+ 
+ 
+
+00:25:57.750 --> 00:26:00.390 align:start position:0%
+ 
+ 
+
+00:26:00.390 --> 00:26:03.360 align:start position:0%
+ 
+ 
+
+00:26:03.360 --> 00:26:05.550 align:start position:0%
+ 
+ 
+
+00:26:05.550 --> 00:26:08.580 align:start position:0%
+ 
+ 
+
+00:26:08.580 --> 00:26:11.190 align:start position:0%
+ 
+ 
+
+00:26:11.190 --> 00:26:13.590 align:start position:0%
+ 
+ 
+
+00:26:13.590 --> 00:26:16.770 align:start position:0%
+ 
+ 
+
+00:26:16.770 --> 00:26:20.730 align:start position:0%
+ 
+ 
+
+00:26:20.730 --> 00:26:22.230 align:start position:0%
+ 
+ 
+
+00:26:22.230 --> 00:26:28.260 align:start position:0%
+ 
+ 
+
+00:26:28.260 --> 00:26:35.399 align:start position:0%
+ 
+ 
+
+00:26:35.399 --> 00:26:38.789 align:start position:0%
+ 
+ 
+
+00:26:38.789 --> 00:26:41.220 align:start position:0%
+ 
+ 
+
+00:26:41.220 --> 00:26:43.200 align:start position:0%
+ 
+ 
+
+00:26:43.200 --> 00:26:46.620 align:start position:0%
+ 
+ 
+
+00:26:46.620 --> 00:26:49.049 align:start position:0%
+ 
+ 
+
+00:26:49.049 --> 00:26:52.289 align:start position:0%
+ 
+ 
+
+00:26:52.289 --> 00:26:54.590 align:start position:0%
+ 
+ 
+
+00:26:54.590 --> 00:26:58.310 align:start position:0%
+ 
+ 
+
+00:26:58.310 --> 00:27:01.710 align:start position:0%
+ 
+ 
+
+00:27:01.710 --> 00:27:05.240 align:start position:0%
+ 
+ 
+
+00:27:05.240 --> 00:27:08.880 align:start position:0%
+ 
+ 
+
+00:27:08.880 --> 00:27:10.950 align:start position:0%
+ 
+ 
+
+00:27:10.950 --> 00:27:15.690 align:start position:0%
+ 
+ 
+
+00:27:15.690 --> 00:27:21.090 align:start position:0%
+ 
+ 
+
+00:27:21.090 --> 00:27:23.460 align:start position:0%
+ 
+ 
+
+00:27:23.460 --> 00:27:25.919 align:start position:0%
+ 
+ 
+
+00:27:25.919 --> 00:27:28.470 align:start position:0%
+ 
+ 
+
+00:27:28.470 --> 00:27:31.139 align:start position:0%
+ 
+ 
+
+00:27:31.139 --> 00:27:34.980 align:start position:0%
+ 
+ 
+
+00:27:34.980 --> 00:27:39.180 align:start position:0%
+ 
+ 
+
+00:27:39.180 --> 00:27:42.090 align:start position:0%
+ 
+ 
+
+00:27:42.090 --> 00:27:45.060 align:start position:0%
+ 
+ 
+
+00:27:45.060 --> 00:27:46.470 align:start position:0%
+ 
+ 
+
+00:27:46.470 --> 00:27:51.480 align:start position:0%
+ 
+ 
+
+00:27:51.480 --> 00:27:54.690 align:start position:0%
+ 
+ 
+
+00:27:54.690 --> 00:27:58.980 align:start position:0%
+ 
+ 
+
+00:27:58.980 --> 00:28:02.490 align:start position:0%
+ 
+ 
+
+00:28:02.490 --> 00:28:06.930 align:start position:0%
+ 
+ 
+
+00:28:06.930 --> 00:28:09.899 align:start position:0%
+ 
+ 
+
+00:28:09.899 --> 00:28:12.450 align:start position:0%
+ 
+ 
+
+00:28:12.450 --> 00:28:14.610 align:start position:0%
+ 
+ 
+
+00:28:14.610 --> 00:28:16.799 align:start position:0%
+ 
+ 
+
+00:28:16.799 --> 00:28:22.860 align:start position:0%
+ 
+ 
+
+00:28:22.860 --> 00:28:28.920 align:start position:0%
+ 
+ 
+
+00:28:28.920 --> 00:28:28.930 align:start position:0%
+ 
+ 
+
+00:28:28.930 --> 00:28:30.110 align:start position:0%
+ 
+
+
+00:28:30.110 --> 00:28:35.000 align:start position:0%
+ 
+ 
+
+00:28:35.000 --> 00:28:37.190 align:start position:0%
+ 
+ 
+
+00:28:37.190 --> 00:28:39.830 align:start position:0%
+ 
+ 
+
+00:28:39.830 --> 00:28:42.169 align:start position:0%
+ 
+ 
+
+00:28:42.169 --> 00:28:43.940 align:start position:0%
+ 
+ 
+
+00:28:43.940 --> 00:28:46.279 align:start position:0%
+ 
+ 
+
+00:28:46.279 --> 00:28:48.620 align:start position:0%
+ 
+ 
+
+00:28:48.620 --> 00:28:51.380 align:start position:0%
+ 
+ 
+
+00:28:51.380 --> 00:28:53.000 align:start position:0%
+ 
+ 
+
+00:28:53.000 --> 00:28:55.460 align:start position:0%
+ 
+ 
+
+00:28:55.460 --> 00:28:57.710 align:start position:0%
+ 
+ 
+
+00:28:57.710 --> 00:29:00.440 align:start position:0%
+ 
+ 
+
+00:29:00.440 --> 00:29:05.210 align:start position:0%
+ 
+ 
+
+00:29:05.210 --> 00:29:08.600 align:start position:0%
+ 
+ 
+
+00:29:08.600 --> 00:29:11.510 align:start position:0%
+ 
+ 
+
+00:29:11.510 --> 00:29:13.870 align:start position:0%
+ 
+ 
+
+00:29:13.870 --> 00:29:16.220 align:start position:0%
+ 
+ 
+
+00:29:16.220 --> 00:29:20.360 align:start position:0%
+ 
+ 
+
+00:29:20.360 --> 00:29:23.450 align:start position:0%
+ 
+ 
+
+00:29:23.450 --> 00:29:25.940 align:start position:0%
+ 
+ 
+
+00:29:25.940 --> 00:29:28.310 align:start position:0%
+ 
+ 
+
+00:29:28.310 --> 00:29:31.789 align:start position:0%
+ 
+ 
+
+00:29:31.789 --> 00:29:34.730 align:start position:0%
+ 
+ 
+
+00:29:34.730 --> 00:29:38.240 align:start position:0%
+ 
+ 
+
+00:29:38.240 --> 00:29:41.450 align:start position:0%
+ 
+ 
+
+00:29:41.450 --> 00:29:43.940 align:start position:0%
+ 
+ 
+
+00:29:43.940 --> 00:29:46.970 align:start position:0%
+ 
+ 
+
+00:29:46.970 --> 00:29:49.310 align:start position:0%
+ 
+ 
+
+00:29:49.310 --> 00:29:52.610 align:start position:0%
+ 
+ 
+
+00:29:52.610 --> 00:29:54.320 align:start position:0%
+ 
+ 
+
+00:29:54.320 --> 00:29:57.350 align:start position:0%
+ 
+ 
+
+00:29:57.350 --> 00:30:00.560 align:start position:0%
+ 
+ 
+
+00:30:00.560 --> 00:30:02.570 align:start position:0%
+ 
+ 
+
+00:30:02.570 --> 00:30:06.080 align:start position:0%
+ 
+ 
+
+00:30:06.080 --> 00:30:09.080 align:start position:0%
+ 
+ 
+
+00:30:09.080 --> 00:30:16.220 align:start position:0%
+ 
+ 
+
+00:30:16.220 --> 00:30:19.460 align:start position:0%
+ 
+ 
+
+00:30:19.460 --> 00:30:22.810 align:start position:0%
+ 
+ 
+
+00:30:22.810 --> 00:30:26.750 align:start position:0%
+ 
+ 
+
+00:30:26.750 --> 00:30:29.810 align:start position:0%
+ 
+ 
+
+00:30:29.810 --> 00:30:33.970 align:start position:0%
+ 
+ 
+
+00:30:33.970 --> 00:30:36.230 align:start position:0%
+ 
+ 
+
+00:30:36.230 --> 00:30:38.840 align:start position:0%
+ 
+ 
+
+00:30:38.840 --> 00:30:41.029 align:start position:0%
+ 
+ 
+
+00:30:41.029 --> 00:30:44.090 align:start position:0%
+ 
+ 
+
+00:30:44.090 --> 00:30:48.930 align:start position:0%
+ 
+ 
+
+00:30:48.930 --> 00:30:53.940 align:start position:0%
+ 
+ 
+
+00:30:53.940 --> 00:30:55.950 align:start position:0%
+ 
+ 
+
+00:30:55.950 --> 00:30:59.300 align:start position:0%
+ 
+ 
+
+00:30:59.300 --> 00:31:02.460 align:start position:0%
+ 
+ 
+
+00:31:02.460 --> 00:31:05.790 align:start position:0%
+ 
+ 
+
+00:31:05.790 --> 00:31:08.910 align:start position:0%
+ 
+ 
+
+00:31:08.910 --> 00:31:10.710 align:start position:0%
+ 
+ 
+
+00:31:10.710 --> 00:31:14.180 align:start position:0%
+ 
+ 
+
+00:31:14.180 --> 00:31:17.010 align:start position:0%
+ 
+ 
+
+00:31:17.010 --> 00:31:19.620 align:start position:0%
+ 
+ 
+
+00:31:19.620 --> 00:31:23.970 align:start position:0%
+ 
+ 
+
+00:31:23.970 --> 00:31:28.350 align:start position:0%
+ 
+ 
+
+00:31:28.350 --> 00:31:31.710 align:start position:0%
+ 
+ 
+
+00:31:31.710 --> 00:31:35.520 align:start position:0%
+ 
+ 
+
+00:31:35.520 --> 00:31:39.630 align:start position:0%
+ 
+ 
+
+00:31:39.630 --> 00:31:44.340 align:start position:0%
+ 
+ 
+
+00:31:44.340 --> 00:31:46.950 align:start position:0%
+ 
+ 
+
+00:31:46.950 --> 00:31:49.830 align:start position:0%
+ 
+ 
+
+00:31:49.830 --> 00:31:52.350 align:start position:0%
+ 
+ 
+
+00:31:52.350 --> 00:31:57.210 align:start position:0%
+ 
+ 
+
+00:31:57.210 --> 00:31:59.100 align:start position:0%
+ 
+ 
+
+00:31:59.100 --> 00:32:02.760 align:start position:0%
+ 
+ 
+
+00:32:02.760 --> 00:32:05.580 align:start position:0%
+ 
+ 
+
+00:32:05.580 --> 00:32:10.710 align:start position:0%
+ 
+ 
+
+00:32:10.710 --> 00:32:19.900 align:start position:0%
+ 
+ 
+
+00:32:19.900 --> 00:32:19.910 align:start position:0%
+ 
+ 
+
+00:32:19.910 --> 00:32:21.410 align:start position:0%
+ 
+
+
+00:32:21.410 --> 00:32:26.250 align:start position:0%
+ 
+ 
+
+00:32:26.250 --> 00:32:29.100 align:start position:0%
+ 
+ 
+
+00:32:29.100 --> 00:32:34.170 align:start position:0%
+ 
+ 
+
+00:32:34.170 --> 00:32:37.280 align:start position:0%
+ 
+ 
+
+00:32:37.280 --> 00:32:41.060 align:start position:0%
+ 
+ 
+
+00:32:41.060 --> 00:32:46.290 align:start position:0%
+ 
+ 
+
+00:32:46.290 --> 00:32:48.810 align:start position:0%
+ 
+ 
+
+00:32:48.810 --> 00:32:52.620 align:start position:0%
+ 
+ 
+
+00:32:52.620 --> 00:32:55.500 align:start position:0%
+ 
+ 
+
+00:32:55.500 --> 00:32:57.200 align:start position:0%
+ 
+ 
+
+00:32:57.200 --> 00:33:00.930 align:start position:0%
+ 
+ 
+
+00:33:00.930 --> 00:33:04.860 align:start position:0%
+ 
+ 
+
+00:33:04.860 --> 00:33:07.920 align:start position:0%
+ 
+ 
+
+00:33:07.920 --> 00:33:12.060 align:start position:0%
+ 
+ 
+
+00:33:12.060 --> 00:33:14.400 align:start position:0%
+ 
+ 
+
+00:33:14.400 --> 00:33:17.250 align:start position:0%
+ 
+ 
+
+00:33:17.250 --> 00:33:19.020 align:start position:0%
+ 
+ 
+
+00:33:19.020 --> 00:33:22.290 align:start position:0%
+ 
+ 
+
+00:33:22.290 --> 00:33:25.680 align:start position:0%
+ 
+ 
+
+00:33:25.680 --> 00:33:30.830 align:start position:0%
+ 
+ 
+
+00:33:30.830 --> 00:33:40.380 align:start position:0%
+ 
+ 
+
+00:33:40.380 --> 00:33:41.720 align:start position:0%
+ 
+ 
+
+00:33:41.720 --> 00:33:47.580 align:start position:0%
+ 
+ 
+
+00:33:47.580 --> 00:33:49.770 align:start position:0%
+ 
+ 
+
+00:33:49.770 --> 00:33:52.080 align:start position:0%
+ 
+ 
+
+00:33:52.080 --> 00:33:54.510 align:start position:0%
+ 
+ 
+
+00:33:54.510 --> 00:33:58.890 align:start position:0%
+ 
+ 
+
+00:33:58.890 --> 00:34:01.410 align:start position:0%
+ 
+ 
+
+00:34:01.410 --> 00:34:04.590 align:start position:0%
+ 
+ 
+
+00:34:04.590 --> 00:34:06.930 align:start position:0%
+ 
+ 
+
+00:34:06.930 --> 00:34:09.030 align:start position:0%
+ 
+ 
+
+00:34:09.030 --> 00:34:13.169 align:start position:0%
+ 
+ 
+
+00:34:13.169 --> 00:34:15.300 align:start position:0%
+ 
+ 
+
+00:34:15.300 --> 00:34:15.310 align:start position:0%
+ 
+ 
+
+00:34:15.310 --> 00:34:16.340 align:start position:0%
+ 
+
+
+00:34:16.340 --> 00:34:20.100 align:start position:0%
+ 
+ 
+
+00:34:20.100 --> 00:34:22.800 align:start position:0%
+ 
+ 
+
+00:34:22.800 --> 00:34:25.169 align:start position:0%
+ 
+ 
+
+00:34:25.169 --> 00:34:27.330 align:start position:0%
+ 
+ 
+
+00:34:27.330 --> 00:34:29.820 align:start position:0%
+ 
+ 
+
+00:34:29.820 --> 00:34:35.070 align:start position:0%
+ 
+ 
+
+00:34:35.070 --> 00:34:38.360 align:start position:0%
+ 
+ 
+
+00:34:38.360 --> 00:34:41.820 align:start position:0%
+ 
+ 
+
+00:34:41.820 --> 00:34:44.399 align:start position:0%
+ 
+ 
+
+00:34:44.399 --> 00:34:47.550 align:start position:0%
+ 
+ 
+
+00:34:47.550 --> 00:34:49.649 align:start position:0%
+ 
+ 
+
+00:34:49.649 --> 00:34:51.960 align:start position:0%
+ 
+ 
+
+00:34:51.960 --> 00:34:54.750 align:start position:0%
+ 
+ 
+
+00:34:54.750 --> 00:34:56.970 align:start position:0%
+ 
+ 
+
+00:34:56.970 --> 00:34:59.040 align:start position:0%
+ 
+ 
+
+00:34:59.040 --> 00:35:02.370 align:start position:0%
+ 
+ 
+
+00:35:02.370 --> 00:35:05.970 align:start position:0%
+ 
+ 
+
+00:35:05.970 --> 00:35:08.100 align:start position:0%
+ 
+ 
+
+00:35:08.100 --> 00:35:15.020 align:start position:0%
+ 
+ 
+
+00:35:15.020 --> 00:35:17.520 align:start position:0%
+ 
+ 
+
+00:35:17.520 --> 00:35:19.830 align:start position:0%
+ 
+ 
+
+00:35:19.830 --> 00:35:23.840 align:start position:0%
+ 
+ 
+
+00:35:23.840 --> 00:35:23.850 align:start position:0%
+ 
+ 
+
+00:35:23.850 --> 00:35:24.960 align:start position:0%
+ 
+
+
+00:35:24.960 --> 00:35:29.040 align:start position:0%
+ 
+ 
+
+00:35:29.040 --> 00:35:30.810 align:start position:0%
+ 
+ 
+
+00:35:30.810 --> 00:35:32.520 align:start position:0%
+ 
+ 
+
+00:35:32.520 --> 00:35:35.160 align:start position:0%
+ 
+ 
+
+00:35:35.160 --> 00:35:37.530 align:start position:0%
+ 
+ 
+
+00:35:37.530 --> 00:35:39.420 align:start position:0%
+ 
+ 
+
+00:35:39.420 --> 00:35:42.420 align:start position:0%
+ 
+ 
+
+00:35:42.420 --> 00:35:46.190 align:start position:0%
+ 
+ 
+
+00:35:46.190 --> 00:35:49.590 align:start position:0%
+ 
+ 
+
+00:35:49.590 --> 00:35:51.390 align:start position:0%
+ 
+ 
+
+00:35:51.390 --> 00:35:55.230 align:start position:0%
+ 
+ 
+
+00:35:55.230 --> 00:35:57.360 align:start position:0%
+ 
+ 
+
+00:35:57.360 --> 00:35:58.860 align:start position:0%
+ 
+ 
+
+00:35:58.860 --> 00:36:01.770 align:start position:0%
+ 
+ 
+
+00:36:01.770 --> 00:36:04.230 align:start position:0%
+ 
+ 
+
+00:36:04.230 --> 00:36:06.120 align:start position:0%
+ 
+ 
+
+00:36:06.120 --> 00:36:07.470 align:start position:0%
+ 
+ 
+
+00:36:07.470 --> 00:36:10.140 align:start position:0%
+ 
+ 
+
+00:36:10.140 --> 00:36:12.600 align:start position:0%
+ 
+ 
+
+00:36:12.600 --> 00:36:15.530 align:start position:0%
+ 
+ 
+
+00:36:15.530 --> 00:36:18.000 align:start position:0%
+ 
+ 
+
+00:36:18.000 --> 00:36:20.820 align:start position:0%
+ 
+ 
+
+00:36:20.820 --> 00:36:23.910 align:start position:0%
+ 
+ 
+
+00:36:23.910 --> 00:36:28.680 align:start position:0%
+ 
+ 
+
+00:36:28.680 --> 00:36:31.140 align:start position:0%
+ 
+ 
+
+00:36:31.140 --> 00:36:33.030 align:start position:0%
+ 
+ 
+
+00:36:33.030 --> 00:36:36.060 align:start position:0%
+ 
+ 
+
+00:36:36.060 --> 00:36:38.160 align:start position:0%
+ 
+ 
+
+00:36:38.160 --> 00:36:39.390 align:start position:0%
+ 
+ 
+
+00:36:39.390 --> 00:36:42.600 align:start position:0%
+ 
+ 
+
+00:36:42.600 --> 00:36:45.180 align:start position:0%
+ 
+ 
+
+00:36:45.180 --> 00:36:47.250 align:start position:0%
+ 
+ 
+
+00:36:47.250 --> 00:36:50.160 align:start position:0%
+ 
+ 
+
+00:36:50.160 --> 00:36:51.390 align:start position:0%
+ 
+ 
+
+00:36:51.390 --> 00:36:52.770 align:start position:0%
+ 
+ 
+
+00:36:52.770 --> 00:36:54.330 align:start position:0%
+ 
+ 
+
+00:36:54.330 --> 00:36:55.530 align:start position:0%
+ 
+ 
+
+00:36:55.530 --> 00:36:57.570 align:start position:0%
+ 
+ 
+
+00:36:57.570 --> 00:37:00.270 align:start position:0%
+ 
+ 
+
+00:37:00.270 --> 00:37:01.800 align:start position:0%
+ 
+ 
+
+00:37:01.800 --> 00:37:04.020 align:start position:0%
+ 
+ 
+
+00:37:04.020 --> 00:37:07.050 align:start position:0%
+ 
+ 
+
+00:37:07.050 --> 00:37:09.870 align:start position:0%
+ 
+ 
+
+00:37:09.870 --> 00:37:13.020 align:start position:0%
+ 
+ 
+
+00:37:13.020 --> 00:37:18.560 align:start position:0%
+ 
+ 
+
+00:37:18.560 --> 00:37:21.590 align:start position:0%
+ 
+ 
+
+00:37:21.590 --> 00:37:24.610 align:start position:0%
+ 
+ 
+
+00:37:24.610 --> 00:37:27.470 align:start position:0%
+ 
+ 
+
+00:37:27.470 --> 00:37:31.700 align:start position:0%
+ 
+ 
+
+00:37:31.700 --> 00:37:33.110 align:start position:0%
+ 
+ 
+
+00:37:33.110 --> 00:37:36.590 align:start position:0%
+ 
+ 
+
+00:37:36.590 --> 00:37:39.890 align:start position:0%
+ 
+ 
+
+00:37:39.890 --> 00:37:44.650 align:start position:0%
+ 
+ 
+
+00:37:44.650 --> 00:37:47.360 align:start position:0%
+ 
+ 
+
+00:37:47.360 --> 00:37:51.860 align:start position:0%
+ 
+ 
+
+00:37:51.860 --> 00:37:55.280 align:start position:0%
+ 
+ 
+
+00:37:55.280 --> 00:37:56.480 align:start position:0%
+ 
+ 
+
+00:37:56.480 --> 00:37:57.740 align:start position:0%
+ 
+ 
+
+00:37:57.740 --> 00:37:59.510 align:start position:0%
+ 
+ 
+
+00:37:59.510 --> 00:38:03.740 align:start position:0%
+ 
+ 
+
+00:38:03.740 --> 00:38:06.410 align:start position:0%
+ 
+ 
+
+00:38:06.410 --> 00:38:10.070 align:start position:0%
+ 
+ 
+
+00:38:10.070 --> 00:38:14.360 align:start position:0%
+ 
+ 
+
+00:38:14.360 --> 00:38:16.970 align:start position:0%
+ 
+ 
+
+00:38:16.970 --> 00:38:21.770 align:start position:0%
+ 
+ 
+
+00:38:21.770 --> 00:38:23.540 align:start position:0%
+ 
+ 
+
+00:38:23.540 --> 00:38:24.980 align:start position:0%
+ 
+ 
+
+00:38:24.980 --> 00:38:26.360 align:start position:0%
+ 
+ 
+
+00:38:26.360 --> 00:38:28.610 align:start position:0%
+ 
+ 
+
+00:38:28.610 --> 00:38:30.770 align:start position:0%
+ 
+ 
+
+00:38:30.770 --> 00:38:34.040 align:start position:0%
+ 
+ 
+
+00:38:34.040 --> 00:38:36.410 align:start position:0%
+ 
+ 
+
+00:38:36.410 --> 00:38:38.510 align:start position:0%
+ 
+ 
+
+00:38:38.510 --> 00:38:40.490 align:start position:0%
+ 
+ 
+
+00:38:40.490 --> 00:38:43.520 align:start position:0%
+ 
+ 
+
+00:38:43.520 --> 00:38:45.770 align:start position:0%
+ 
+ 
+
+00:38:45.770 --> 00:38:48.500 align:start position:0%
+ 
+ 
+
+00:38:48.500 --> 00:38:50.750 align:start position:0%
+ 
+ 
+
+00:38:50.750 --> 00:38:52.520 align:start position:0%
+ 
+ 
+
+00:38:52.520 --> 00:38:54.350 align:start position:0%
+ 
+ 
+
+00:38:54.350 --> 00:38:56.150 align:start position:0%
+ 
+ 
+
+00:38:56.150 --> 00:38:58.190 align:start position:0%
+ 
+ 
+
+00:38:58.190 --> 00:38:59.690 align:start position:0%
+ 
+ 
+
+00:38:59.690 --> 00:38:59.700 align:start position:0%
+ 
+ 
+
+00:38:59.700 --> 00:39:00.680 align:start position:0%
+ 
+
+
+00:39:00.680 --> 00:39:04.580 align:start position:0%
+ 
+ 
+
+00:39:04.580 --> 00:39:05.540 align:start position:0%
+ 
+ 
+
+00:39:05.540 --> 00:39:06.980 align:start position:0%
+ 
+ 
+
+00:39:06.980 --> 00:39:08.660 align:start position:0%
+ 
+ 
+
+00:39:08.660 --> 00:39:12.290 align:start position:0%
+ 
+ 
+
+00:39:12.290 --> 00:39:13.730 align:start position:0%
+ 
+ 
+
+00:39:13.730 --> 00:39:15.050 align:start position:0%
+ 
+ 
+
+00:39:15.050 --> 00:39:16.250 align:start position:0%
+ 
+ 
+
+00:39:16.250 --> 00:39:18.230 align:start position:0%
+ 
+ 
+
+00:39:18.230 --> 00:39:20.450 align:start position:0%
+ 
+ 
+
+00:39:20.450 --> 00:39:21.890 align:start position:0%
+ 
+ 
+
+00:39:21.890 --> 00:39:24.110 align:start position:0%
+ 
+ 
+
+00:39:24.110 --> 00:39:26.060 align:start position:0%
+ 
+ 
+
+00:39:26.060 --> 00:39:27.770 align:start position:0%
+ 
+ 
+
+00:39:27.770 --> 00:39:29.780 align:start position:0%
+ 
+ 
+
+00:39:29.780 --> 00:39:31.520 align:start position:0%
+ 
+ 
+
+00:39:31.520 --> 00:39:31.530 align:start position:0%
+ 
+ 
+
+00:39:31.530 --> 00:39:31.750 align:start position:0%
+ 
+
+
+00:39:31.750 --> 00:39:33.820 align:start position:0%
+ 
+ 
+
+00:39:33.820 --> 00:39:35.860 align:start position:0%
+ 
+ 
+
+00:39:35.860 --> 00:39:37.690 align:start position:0%
+ 
+ 
+
+00:39:37.690 --> 00:39:40.570 align:start position:0%
+ 
+ 
+
+00:39:40.570 --> 00:39:43.570 align:start position:0%
+ 
+ 
+
+00:39:43.570 --> 00:39:45.730 align:start position:0%
+ 
+ 
+
+00:39:45.730 --> 00:39:47.710 align:start position:0%
+ 
+ 
+
+00:39:47.710 --> 00:39:49.210 align:start position:0%
+ 
+ 
+
+00:39:49.210 --> 00:39:51.100 align:start position:0%
+ 
+ 
+
+00:39:51.100 --> 00:39:53.140 align:start position:0%
+ 
+ 
+
+00:39:53.140 --> 00:39:55.270 align:start position:0%
+ 
+ 
+
+00:39:55.270 --> 00:39:57.760 align:start position:0%
+ 
+ 
+
+00:39:57.760 --> 00:40:00.640 align:start position:0%
+ 
+ 
+
+00:40:00.640 --> 00:40:03.340 align:start position:0%
+ 
+ 
+
+00:40:03.340 --> 00:40:05.230 align:start position:0%
+ 
+ 
+
+00:40:05.230 --> 00:40:06.910 align:start position:0%
+ 
+ 
+
+00:40:06.910 --> 00:40:12.010 align:start position:0%
+ 
+ 
+
+00:40:12.010 --> 00:40:14.530 align:start position:0%
+ 
+ 
+
+00:40:14.530 --> 00:40:18.960 align:start position:0%
+ 
+ 
+
+00:40:18.960 --> 00:40:25.630 align:start position:0%
+ 
+ 
+
+00:40:25.630 --> 00:40:29.470 align:start position:0%
+ 
+ 
+
+00:40:29.470 --> 00:40:31.600 align:start position:0%
+ 
+ 
+
+00:40:31.600 --> 00:40:34.360 align:start position:0%
+ 
+ 
+
+00:40:34.360 --> 00:40:35.890 align:start position:0%
+ 
+ 
+
+00:40:35.890 --> 00:40:35.900 align:start position:0%
+ 
+ 
+
+00:40:35.900 --> 00:40:36.720 align:start position:0%
+ 
+
+
+00:40:36.720 --> 00:40:39.370 align:start position:0%
+ 
+ 
+
+00:40:39.370 --> 00:40:39.380 align:start position:0%
+ 
+ 
+
+00:40:39.380 --> 00:40:40.230 align:start position:0%
+ 
+
+
+00:40:40.230 --> 00:40:44.350 align:start position:0%
+ 
+ 
+
+00:40:44.350 --> 00:40:46.900 align:start position:0%
+ 
+ 
+
+00:40:46.900 --> 00:40:48.790 align:start position:0%
+ 
+ 
+
+00:40:48.790 --> 00:40:50.470 align:start position:0%
+ 
+ 
+
+00:40:50.470 --> 00:40:54.250 align:start position:0%
+ 
+ 
+
+00:40:54.250 --> 00:40:56.080 align:start position:0%
+ 
+ 
+
+00:40:56.080 --> 00:40:58.390 align:start position:0%
+ 
+ 
+
+00:40:58.390 --> 00:41:00.490 align:start position:0%
+ 
+ 
+
+00:41:00.490 --> 00:41:03.190 align:start position:0%
+ 
+ 
+
+00:41:03.190 --> 00:41:04.810 align:start position:0%
+ 
+ 
+
+00:41:04.810 --> 00:41:07.510 align:start position:0%
+ 
+ 
+
+00:41:07.510 --> 00:41:10.660 align:start position:0%
+ 
+ 
+
+00:41:10.660 --> 00:41:17.050 align:start position:0%
+ 
+ 
+
+00:41:17.050 --> 00:41:18.550 align:start position:0%
+ 
+ 
+
+00:41:18.550 --> 00:41:20.080 align:start position:0%
+ 
+ 
+
+00:41:20.080 --> 00:41:22.030 align:start position:0%
+ 
+ 
+
+00:41:22.030 --> 00:41:22.040 align:start position:0%
+ 
+ 
+
+00:41:22.040 --> 00:41:29.250 align:start position:0%
+ 
+
+
+00:41:29.250 --> 00:41:32.040 align:start position:0%
+ 
+ 
+
+00:41:32.040 --> 00:41:34.110 align:start position:0%
+ 
+ 
+
+00:41:34.110 --> 00:41:37.020 align:start position:0%
+ 
+ 
+
+00:41:37.020 --> 00:41:39.300 align:start position:0%
+ 
+ 
+
+00:41:39.300 --> 00:41:42.600 align:start position:0%
+ 
+ 
+
+00:41:42.600 --> 00:41:44.340 align:start position:0%
+ 
+ 
+
+00:41:44.340 --> 00:41:47.160 align:start position:0%
+ 
+ 
+
+00:41:47.160 --> 00:41:49.020 align:start position:0%
+ 
+ 
+
+00:41:49.020 --> 00:41:51.420 align:start position:0%
+ 
+ 
+
+00:41:51.420 --> 00:41:52.860 align:start position:0%
+ 
+ 
+
+00:41:52.860 --> 00:41:54.690 align:start position:0%
+ 
+ 
+
+00:41:54.690 --> 00:41:56.520 align:start position:0%
+ 
+ 
+
+00:41:56.520 --> 00:41:58.890 align:start position:0%
+ 
+ 
+
+00:41:58.890 --> 00:42:01.080 align:start position:0%
+ 
+ 
+
+00:42:01.080 --> 00:42:03.750 align:start position:0%
+ 
+ 
+
+00:42:03.750 --> 00:42:05.580 align:start position:0%
+ 
+ 
+
+00:42:05.580 --> 00:42:07.800 align:start position:0%
+ 
+ 
+
+00:42:07.800 --> 00:42:10.950 align:start position:0%
+ 
+ 
+
+00:42:10.950 --> 00:42:12.780 align:start position:0%
+ 
+ 
+
+00:42:12.780 --> 00:42:14.640 align:start position:0%
+ 
+ 
+
+00:42:14.640 --> 00:42:18.300 align:start position:0%
+ 
+ 
+
+00:42:18.300 --> 00:42:19.920 align:start position:0%
+ 
+ 
+
+00:42:19.920 --> 00:42:22.650 align:start position:0%
+ 
+ 
+
+00:42:22.650 --> 00:42:24.210 align:start position:0%
+ 
+ 
+
+00:42:24.210 --> 00:42:25.980 align:start position:0%
+ 
+ 
+
+00:42:25.980 --> 00:42:27.920 align:start position:0%
+ 
+ 
+
+00:42:27.920 --> 00:42:27.930 align:start position:0%
+ 
+ 
+
+00:42:27.930 --> 00:42:52.479 align:start position:0%
+ 
+
+
