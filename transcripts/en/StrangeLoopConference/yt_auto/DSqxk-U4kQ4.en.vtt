@@ -1,0 +1,5536 @@
+WEBVTT
+Kind: captions
+Language: en
+
+00:00:03.919 --> 00:00:05.430 align:start position:0%
+ 
+talking to high availability braintree  i'm a software developer  uh you know feel free to ask me  questions about braintree after the  conference or after the talk if you're  interested in the things that i  don't cover so braintree we're a payment  gateway what that means is we  essentially have software to process  payments through mostly online or mobile  applications  uh generally we deal with credit cards  so these are some of our merchants  so the idea with braintree is like if  you go to github.com and you want to pay  for service  you type in your credit card info you  hit submit that credit card  info stuff comes to us and we do all the  payments related stuff so we charge the  cards we move the funds at night  we do tokenization so you can get back a  token and charge the card later without  having to store credit card details  so pretty much all of that all the  payments related stuff behind these  sites essentially  is us so  you know the question why is uptime  important to us we do roughly 10 billion  in processing at our current estimates  that comes out to be about 19 000 a  minute  so you know downtime is extremely costly  for our merchants  and besides just like the you know the  raw  cost for them and for us obviously we  take fees on this stuff  you know you may not know that a lot of  those merchants use braintree so if  we're down  and you go to check out at a site you  may get an error you may get like your  credit card's not valid when actually it  is valid  so you know we would make those sites  kind of look bad because you don't you  know we're behind the scenes you don't  know that those sites use braintree most  of them we're not like paypal where you  have like the pay with paypal button  we're more of like a silent partner so  you know downtime just makes  everyone that we work with look bad and  it loses them a ton of money very  quickly so we care  we care very deeply about uptime  so people talk a lot about uptime not a  lot of people know you know exactly what  the numbers kind of mean  so this this chart from wikipedia kind  of trimmed down it's pretty interesting  uh you know people kind of throw out  five nines as a target five nines is  extremely difficult  it's five minutes a year so if your  primary database crashes and you take  some kind of manual work to bring it  back up  you know that takes ten minutes let's  say you've blown five nines for the  whole year  um you know 26 seconds a month it's  almost nothing  i would say at braintree we're probably  closer to four nines we strive for five  but probably closer to four  although our uptime is actually really  hard to manage or sorry to measure  um due to some of this i'm going to talk  about later just we have a lot of kind  of pieces and players involved and so  it's hard to know exactly what our  uptime is for different merchants  um but yeah this just just to give you  an idea like five nines is  unbelievably difficult  okay so this talk i'm gonna cover three  main causes of downtime  planned maintenance so this is we know  we need to do something to the site or  to our infrastructure we're going to do  something  on purpose there's unplanned failure you  know parts of our infrastructure fail or  things that we depend on will fail and  then basically people mistakes people  doing stuff that they shouldn't have  done  causing problems okay so  plan downtime this is you know reducing  our maintenance windows  so for us the biggest thing we do the  biggest maintenance window we have is  code deploys we're  a fast-moving company we're constantly  deploying new versions of things  you know these are typically kind of  maintenance windows  so braintree the main gateway started as  a pretty typical ruby on rails app about  four years ago so ran on my sql  it used apache passenger just kind of  the typical stuff you would have seen  from a few years ago  so the way we would generally deploy  that time is we would put up a  maintenance page  we would deploy our code out you know  switch it all over to the new stuff  we would run all of our database  migrations so again like a fast moving  company fast moving code base we would  constantly change our database schema  and then we would take down the  maintenance page so for this we're  basically down for the entire time that  we're deploying the code which is very  quick you know just moving sim links  mostly  and then running database migrations and  those as we would grow would get slower  and slower over time  and so at a certain point like these  day-to-day migrations were just  overwhelming like we were down for  noticeable months of time it was a  really big problem  so one of the first things we did kind  of in the early days was we switched  from bicycle to postgresql  so postgres ddl migrations are extremely  fast  you can add add you know add rename edit  columns extremely quickly in my sql  mysql would you know copy the entire  table if you want to add a column  and so as your table start growing and  getting very big you know the time to  copy a table gets larger and larger  until it's minutes  i mean i've been on projects where my  sequel migrations took hours  so you know and and your site is  basically unusable at that time so  postgres on the other hand extremely  fast we're talking millisecond  operations for all this stuff  uh similarly you can also add indexes  and postgres really quickly so postgres  gives you this keyword concurrently  which lets you add indexes without  locking tables with mysql  we would try to add indexes the tables  would lock the site basically becomes  unusable  postgres largely unnoticeable it takes a  little bit extra cpu because it does  like two scans of the table  but you can do it while the site's up  and with pretty much no impact and then  the other big one was  postgres lets you wrap ddl migrations in  a transaction  so we use rails we use rails migrations  you know if your migration has 10  statements in it and the first five runs  successfully and then the sixth one  fails  your database is in a pretty bad state  and you have to usually either manually  try to roll it back or manually finish  the migration to get to a state where  you can  run the code again and so with postgres  you can wrap the migrations in a  transaction if it fails in the middle  the whole thing rolls back you're back  to the previous date you just put back  the old code and keep going  so you're not in this state where you  can't run the app anymore  and this i actually did a whole  presentation on just this topic um if  you're interested you can check out the  slides it's  the migration wasn't super simple but  it's it's very doable  um and you know we did it with that with  very little downtime as well  okay so given that we moved to postgres  now our new  deploy process is while the site's up  while we're running kind of the old  stuff we add new tables and columns so  we kind of get ready  so like these like i said these are  super fast millisecond operations we get  all the new schema stuff ready  and then we roll out the code server by  server so at an app server time we put  out new code  and we restart so again no downtime here  because we're doing one at a time  and then once and then one side's fully  on the new code then we can go back and  add all the indexes and all the things  we discovered with how new usage  patterns work  and we go back into that and this and  this has no downtime right we  we've done everything we can while the  site's up we put out the code server by  server  no down time so this is kind of what it  looks like for the migrations and rails  so people familiar with rails  rails gives you a db migrate task we  basically added two new ones migrate pre  and migrate post  we use the same rails code we just  pointed different folders  so now any migrations you put in the  migrate prefolder will run before  you know the code is out and any  migrations in the post will run  afterwards  so it's pretty pretty straightforward  okay so one problem with this is that  rails caches columns  so when rails starts up it interrogates  the database and it  caches the set of columns for every  table so what this means is you can't  actually delete columns  so even if your code is no longer using  a column if you try to delete it rails  will still send the same statements with  the column in it oftentimes and then  you'll get these errors like column does  not exist  so what we wanted was basically array a  way to tell rails to forget the column  and so we added it so it looks like this  so on our models and rails we just add a  method called deleted columns you list  out all the columns you no longer want  to use  this is implemented behind the scenes  with some kind of alias method chaining  stuff for people that are familiar with  it  basically we overwrite the columns  method in rails in activerecord  and we strip out all the columns you  told us to delete  so now after we deploy we put out the  new code with this deleted columns code  in there  rails you know when it restarts it  doesn't even know about the column  doesn't do  included in any queries and then we can  get in the post migrations we can then  drop old columns that we're no longer  using  and usually we we don't usually drop  columns right away we usually delay a  release  giving us the ability to roll back one  so we let's say we're no longer using a  column  we'll add the delete a column line  deploy that and then the next release in  the post migration will drop the column  so we can always roll back at least one  release because if you drop the column  right away and you try to roll back then  you have old code which needs a column  and the column's not there  so we generally delay one  okay so one thing i talked about a  little bit but didn't really go into yet  is that we actually run multiple  versions of the code at once  as we're doing the server by server  deploy one at a time for that you know  several minutes that we're doing that we  have the old code running on some app  servers and the new code running on  others  it turns out that that's actually fine  for most features like most things we do  are additive  you know some new feature will show up  maybe and not show up for like a moment  and come back or  we're changing it back in integration  and we'll start sending a new flag and  then but some requests won't have it yet  it turns out it's generally okay for for  places that it's not okay  we use a lot of feature switches so we  have the ability to turn things on for  one merchant or kind of globally  so with a lot of new features we'll  deploy it dark we'll get it all out  there make sure the site is fine  otherwise and then we'll turn on a  feature for just one merchant and we'll  watch it so we'll work with like beta  merchants for different features  and then we can watch the traffic watch  how it's doing we can turn it back off  if there's  a problem if it's going well we turn it  on for more merchants and eventually we  roll it out across the board  for things that aren't really merchant  specific that are more global we just  have global switches too so again we can  roll off features dark and then just  turn them on globally  and then once things have been out for a  long time and we know we're not going to  turn them back off we'll just remove the  switches just to kind of clean up  so we do we do this a lot we feature  switch almost all  new features just as a way to reduce  risk as well like we can put things out  know that they won't affect anything and  then turn them on and watch them  those you know also preventing the  ability you know the need to roll back  because rolling back is pretty  pretty large probably you know pretty  large hammer essentially to hit  something with  so you generally we want to just use  switches to turn these on and turn them  back off  so that's what i described is pretty  much the way we do 95 percent of our  deploys today we do them almost all  server by server  but there are some limitations with that  approach so  a big one is column renames so we can  add columns in a  pre-migration we can now drop them in a  post migration with the deleted stuff  but you can't really rename columns it's  really hard to rename a column while the  site's up because you need  you'd somehow need the code to know  about both the old name and the new name  and then understand when to switch over  it's just it's really difficult so we  just generally don't do it  there's other maintenance tasks like  database failover so that what i've  showed is works really well for code  deploys  but if we need to like take down our  primary database for security upgrades  just like that  you know nothing i've really talked  about handles this case and then just  other infrastructure similar to  databases there's lots of work we want  to do in our data center that requires  us moving like taking a primary load  balancer out or taking a primary  you know database out and nothing really  covers that so what we essentially  really wanted was a way to pause traffic  something that would allow us to do  other types of issues other types of  maintenance  without downtime and so that's that's  what we built  so this is what our architecture looks  like today  heavily simplified obviously so we have  um  you know we have a load balancing layer  coming into multiple apaches  i've drawn two here there's you know  more than two and then it goes to  something called the broxy which i'll go  into this is something we wrote  and then the proxy feeds into a redis  queue so we use an in-memory queue  in redis and then we have the  dispatchers reading out of redis  so the piece to note here is basically  put a redis queue in the middle of our  request processing  so the proxy it stands for braintree  proxy we're not we're not very clever  about naming  so it's a python tornado app so at the  time we wrote this which is it's been a  few years now we kind of looked around  for what to write it in  we're generally pretty polyglot at  braintree and we wanted something that  was very efficient  and it's kind of easy easy to write so  what this app is doing is it's taking  every request it's just shuffling  requests around so we like the idea of  something invented because it's going to  hold tons of open connections it's just  moving data around  it's very lightweight um at the time we  looked tornado  just seemed really nice it was running  you know with friend feed and  uh facebook is running a production it  has some really nice built-in testing  stuff so we decided to kind of go with  it  so like i said it accepts web requests  from apache and then all it does is it  bundles them up and puts them into a  redis queue so it takes  the body the headers pretty much  everything that comes in that request  puts it in a message and puts it in  redis and then on the way back it reads  out of a response redis cue and then it  responds back to the web request  so it's just feeding into redis and then  responding back out  so the dispatchers on the other side so  these are lightweight rack adapters  so for those who don't know rack is like  a ruby web server framework i guess  it's like all pretty much all the ruby  web servers now  adhere to a rack interface so the  dispatcher is a rack interface that  basically  integrates with rails so it takes the  request from redis  and then it processes them through rails  so we still use rails we just do it via  queue instead of a web server  and then it takes the response uh sorry  then it after it gets the response from  rails it puts it back into redis and it  goes back out to the proxy  so the dispatcher part looks like this  essentially  it's it's a ruby script we basically  load uh rail's root config environment  so at this point we have rails loaded we  have all the code available to us  and then we build our own rack app but  we use the action controller dispatcher  so we're building a rack app but we're  really using all of rail's code right we  don't really want to rewrite a web  server essentially so we're going to use  all the rail stuff  so then in a big loop we just pull the  request out of redis  and we build a rack request so rack  request is just a big hash of pretty  much everything rack needs  here i've shown two elements but there's  there's like 10  including the uri body headers pretty  much everything and then the last line  you see there we just do app.calls so  this  process through the whole rails stack we  go through all the middlewares pretty  much everything that rails normally does  for web server we just do  through this rack adapter and then once  we get the response we just turn that  back into a string  and then put it back in redis we put  back the status the body we put the  headers a bunch of other stuff  and we just send it back out so that  looks like this again  so now we want to suspend traffic all we  have to do is stop dispatchers  so we stopped the dispatchers the entire  top half of the half of the stack is  still working requests are coming in  they're in queueing  there's just nothing processing them and  since the dispatchers aren't running  nothing's using the database nothing's  using like our search servers pretty  much  everything in the bottom is unused so we  can do any kind of maintenance we want  we can  push out new code we can rename columns  we can do database failover pretty much  anything we want  and then when we're done we just restart  the dispatchers they clear out the queue  and everyone's happy so the users will  see  long requests but they won't see failed  requests and in general we feel like  that's  a better trade-off you know today people  have gotten pretty conditioned like if  you hit submit on a payment form  like you know sometimes it's going to  take a little while so instead of seeing  a two second request you'll see  a 20 second request but you'll still get  the proper request  or the proper response and that's and  that's pretty important  um and so as long as we can keep our  maintenance to around 20 or 30 seconds  that's kind of our  our window we can just do everything  without getting timeouts  so another you know another nice thing  is we provide client libraries so people  integrate with braintree through our  client libraries  so we know what the timeouts are we can  we can control the timeouts we can make  sure that the amount of time we keep the  dispatchers down for is less than the  timeouts at the top level  we control the proxy timeouts so we  basically know exactly how long we have  at every step  in our stack to do the kind of work we  need to do  and so we can you know we basically can  do a lot of work in 20 to 30 seconds  um you know like i said any kind of  failover we use this  technique to switch data centers at one  point where we actually move traffic  from one data center to another  um with a pause and not without losing  traffic so this works it works pretty  well  so just to summarize this section we  basically do  pre and post migrations we do as much  work as we can while the site's up  reducing risk also you know no downtime  and then we do rolling deploys for  nearly every deploy  we roll out code server by server  restart things you know keep the site up  as much as possible  we use postgres because it's really fast  at doing a lot of database work  we really like postgres in general it's  a great database and then for everything  where we can't do that we use the proxy  and that's  every kind of maintenance where we  actually need to just pause traffic to  get something  something larger done essentially  okay so that's that's plan failure  that's how we do the stuff we know we  need to do  then there's a whole set of unplanned  failure right servers fail  you know networks go down it's pretty  common  it you know essentially the unexpected  happens and all we can really do is  you know do our best to be resilient so  we try to build resilient systems such  that it can handle even  unexpected issues so start with server  failure  pretty typical way to handle silver  failure is load balancing this is in  this case we're no different  we build our own load balancers though  so that is actually pretty different  in general at braintree we just really  we like components that are  simple and easy to understand so we tend  to shy away from  black boxes and so load bouncers are a  giant kind of black  black box appliance um you know they  work well for some people  they also people love to complain about  them i mean if you you hear lots of  horror stories about like f5s and stuff  like that  so we prefer just to kind of build our  own we understand it at every level we  can tune it for availability for  security we can tweak it to our needs  so we just really like to control it so  what we use is we use  lvs or ipvs this is the linux virtual  server project or ipv virtual server  it's basically kernel level routing so  our load balancers are just linux  servers  traffic comes into them and then via  kernel level rules the traffic gets  routed to other backends  so it's pretty simple we manage a  cluster of them with pacemaker so it  handles failover if a load balancer dies  and then we have two components that we  wrote called big brother and limits  paper and i'll go into these in a moment  so this is you know the the diagram of  what it looks like so traffic comes in  either externally or internally we load  bounce a lot of internal services  it goes to a virtual ip living on one  load bouncer um each load balancer has  many ips for all the different services  and then the load balancer forwards the  traffic to back end in this case apaches  and the piece to note is that big  brother runs in the load balancer and  litmus paper runs on the back end  so big brother it's a ruby apple road it  like i said runs in load bouncers its  job is just to check the status of the  back ends  so every second it's just pulling back  end servers getting you know the status  of how they're doing  and then it updates ipvs rules so if it  discovers the back end's down or not  responding it updates the kernel level  rules to change the routing such that  new traffic won't flow  won't flow there and so it's just doing  that constantly it's just in a big loop  and big brother's open source you can  check it out on our github  so on the other side is litmus paper  limits paper is also ruby app  it's the piece that big brother is  querying via http  and the idea is with with limits paper  is it's a consistent interface that big  brother can query  so it runs on all of our back ends and  it returns a health level and  its job is to kind of map between  whatever it needs to do  to that health level so for an apache  server it probably just turns around and  curls apache  and if it patches up then it says i'm up  and then it combines that with  you know system level info so if the  load is high but apache is up maybe the  health isn't 100 it's  80. if it's totally down the health is  zero that kind of stuff so  limits paper just figures out what it  needs to do for that server for that  type and it returns a health level to  big brother  and this is also open source you can  check it out so there's the diagram  again  so like i said big brother is just  querying the back ends litmus papers  responding with the healths  and then based on big brother rules the  the load balancer will forward or not  forward traffic to those back ends  so it's pretty it's pretty  straightforward okay so that works  really well for stateless services  things like apache where you can send  traffic to three different apaches and  then if one you know goes down you just  send it to two apaches instead  we also have a class of state full  servers where you can't just send  all of your traffic to all of them so  load balancers are one of them you know  the virtual ip lives on one load  balancer  postgres is another big one so we have  you know primaries and standbys you  can't send all of your  traffic to all of your postcard servers  you need the rights to go to the  primaries  and just try to send right to the  standbys you'll get errors so for these  we use pacemaker to manage failover  so pacemaker just kind of manages a  cluster of things so it manages a  cluster of our postgres  it keeps track of which one's primary  which one's standby if the primary fails  pacemaker will do the failover for us  and they'll promote the standby  and then we just move virtual ips so the  app  just knows the virtual ip of like the  database the virtual ip of search the  virtual pa pretty much everything  and then when things die either the  unbounce or pacemaker will  move them and then the virtual ip just  moves along with it so we don't need to  reconfigure anything when things die  okay so that's server failure now we  have network failure  so fun site to look at internetpulse.com  it shows you  basically outages between different isps  internet service providers across the  internet  so i took this screenshot last week it  turns out that issues in isps are  actually very common  so you can see like um at the top you  can see the red box is between  centurylink and savis  so if you're running a service on status  and you're trying to connect to it from  your home which is centurylink let's say  you might have trouble connecting you  can see like there's  there's a lot of isp issues one of the  things i learned at braintree is that  it's like network issues are actually  very common it's amazing sometimes if  the internet actually works  because there are so many issues just  with connections across the wire  so pretty much if we see connection  issues we'll pull up this site and you  can kind of  we know which isps we serve out of which  data centers and you can kind of look at  the different connection issues with  other isps  okay so we have two kinds of networking  i want to talk about here so the first  one is inbound this is  a merchant wants to charge a credit card  so they make an api call to us so that's  inbound coming to us so for that we use  bgp  to route traffic through multiple isps  and data centers  so bgp is the border gateway protocol  it's essentially the protocol of the  internet  so it you know use dns to go from a name  to an ip address  so bgp is how you figure out where to go  with that ip address  so our routers participate in bgp they  broadcast  you know the ips that we handle and then  bgp handles like finding the best path  through the internet to get to us so if  an isp goes down  bgp will essentially unbalance it and  then it'll find another route to us  so in general bgp does shortest route  with some caveats  but if the route is down it'll find a  new route that's you know the one that's  up  so by participating in this you know we  have multiple paths coming into us  so depending on where the merchant is  where the customer is  the traffic will route to us via  different isps and different data  centers  and then we use monitoring services we  use pingdom pretty heavily and we use  our own kind of servers that we  scattered throughout the world  and we basically just do that to monitor  it so bgp is great it unbalances it it  works  but it's not always instantaneous we've  seen issues where especially when isp  outages are partial  we've seen issues where we see a lot of  problems coming in via one route  but bgb hasn't figured it out yet or  hasn't fully unbalanced  so since we have our own monitoring we  can kind of detect these cases and then  we just manually yank the bgp routes  and force the traffic over a different  path  so that's kind of how we so bcp  generally does its own thing it works  but we also  can do it manually if we need to based  on our own monitoring  okay so that's trouble coming to us we  also have the problem we  we are not the end point for most of  this traffic we need to go out  across the network to actually tell  whether their credit cards are valid or  whether they have enough money on that  so in general we don't we don't talk  about visa directly we talk to  what are called like merchant fires of  costing networks in general  so for people that know payments we  talked about like chase payment attack  thesis versus data  uh we talked to international talk a lot  of things directly  because we need essentially we need to  get back to whoever whichever issue bank  issues  to know if you have money on my credit  card so  if like if i leave here with a ton of  these coffee numbers but we need to  basically make outbound calls to them  so you may call to us we need to turn  around and make another call to figure  out  how much is available on this card and  so like i said the isp outages are very  are usually partial  it's rare that you have a total outage  it does happen i think last year there  was a construction in chicago and they  just  drilled right to the line like one of  the big issues in chicago and took out  the entire thing  but generally like a router fails  somewhere or there's some packet loss  so they're not usually full outages so  we've gotten into cases where  we have multiple isps but we can't reach  every endpoint we have to hit  on all of our xps so it's not like we  can say like oh we're having problems  with this one let's just take it out  we'll use the other one  maybe they're both having partial  outages and we can only reach some on  one and some on the other  and so we really wanted was a way to  choose an isp  for the end point we're trying to get to  so some are better than others for  certain paths we want to use the best  one for that path  and so we built our processor proxies  that's what we call them so instead of  the dispatcher connecting directly we  connect through a proxy  we run one proxy per endpoint so per  processor like we have one one for chase  let's say  pinned to a specific isp and then we can  load balance over them so if there are  issues we can we  allow our load balancing to take them  out  and this allows us to route around  issues on isps that are  partial essentially so the piece we  wrote to this is called mallory  it's also pilot tornado for the same  reasons it's just shoveling traffic back  and forth we find something very  lightweight  it proxies requests and this is a big  one so we looked around you know we  didn't essentially we didn't  want to write our own proxy but we kind  of looked around what was out there  and you know ssl verification is a big  it's kind of a big deal so ssl does  encryption  but it also does verification which is  you want to know that the end point  you're connected to is actually who you  think it is so most of the processing  networks use ssl  um and a lot of proxies will will do ssl  encryption but they don't have to do  verification so they'll ensure that your  traffic's encrypted  but not that you're connecting to who  you think you're connecting to and so  one of the things we do is  we strongly you know verify the sl  certificate so we can't get man in the  middle  so if somehow we were to get man in the  middle of upstream our request would  fail rather than send credit card data  to the wrong person  um and then we would we would notice  that our requests are failing we would  look into it  so it's really it's really unfortunate  that if you look online and you look at  you kind of google this  a lot of recommendations online are oh  just turn off sl encryption right curl  dash k like just turn it off  but i mean ssl is very powerful and you  should definitely use it  as much as possible even with  verification  so the other cool thing with mallory  another reason we wrote it is it acts  like limits paper  so the same way big brother is querying  litmus paper big brother can directly  query mallory  so mallory is doing the proxing and it's  keeping track of how that proxy is going  and then if the last few requests  haven't gone so well when big brother  queries it you can say like actually  proxy's not going that well i'm gonna  return to low health or zero health  saying that this route is just not good  right now  and mallory is also open source you can  check it out so this is kind of what the  diagram looks like  so the dispatcher is trying to make a  call to the processor on the right  it you know makes a call through a  virtual ip that's load balanced over two  mallories each mallory is pinned to an  isp  in that data center and then the traffic  will eventually route there so if  the isp1 goes down the top mallet will  unbalance and traffic will flow through  the bottom mallory  and this you know this works when we  look at the logs we see mallory's kind  of unbalancing periodically of today  like  little issues will happen but we  generally survive them without without  really noticing  so connection fails we do get connection  failures right  the way we know that a route is bad is  we will get a connection failure trying  to talk  over it so this is something we do have  to deal with our general  our general practice is we just let  things heal so in the case of mallory  we get a connection failure we know that  when big brother goes to query it will  unbalance it so we just let the system  heal  with things like the database we know  that pacemaker will handle the failover  so we just wait like we just wait for it  to handle the issue  and then we retry and we do retrying at  a lot of different levels of our stack  so in the case of processor calls we'll  often do several  two or three if we can't connect knowing  that if there's an issue mallory will  unbalance and then we'll reroute around  it  uh with things like the database if our  database our primary database were to  crash  we would we would lose the request in  flight there's you know  that's not what we can do about that but  before our dispatchers pick up another  request from redis  they do heartbeats and so they won't  pick up a request until they can  actually check that the whole app is  working again  and that means that the database has to  fully fail over the noon has to come up  then the heartbeat to start working and  then the dispatchers will pick up the  requests again  and so this is the way we kind of retry  there so we we won't pick up requests if  we know that things are busted we'll  wait until things have healed and then  start processing again  okay so just to summarize kind of the  unplanned failures load balancing we do  for  server failure and also kind of  components of network failure  we have redundancy across isps inbound  we use bgp  for routing outbound we use processor  proxies to kind of target the right isp  for the right endpoint  and then in general we just let things  heal and then try again and we do like i  said we do retrying at many different  levels of our stack  okay so the last section people make  mistakes  um it's it's inevitable right people can  cause outages you run the wrong command  you do the wrong thing  you cause an outage people can also make  things worse  you know let's say there's already an  outage and you just take a long time  fixing it or you run a command to try to  figure out what's going on and you just  make the outage worse  so you know people people can be a  problem  so here's a couple examples the big ec2  outage of 2011  they say that the traffic shift was  executed incorrectly so you know that  someone there just you know probably ran  the wrong set of commands  github outage also a few years ago  this one due to configuration error they  accidentally dropped their production  database rather than their test database  and had to then go restore their  production database from a backup and i  believe they were down for a good chunk  of that time  so that one you know they just ran the  wrong command in the wrong environment  pagerduty had an outage this this year  uh this one's really interesting they  actually call out due to the engineers  being extremely tired and burned out  after working for the night on the  upgrades  so this is i mean this is very common  right you have an issue you're working  on it all night  you're just more likely to make mistakes  once you're tired and i don't mean to  call these companies i think it's great  that these companies are so open that  they can publish these post-mortems and  then we can all as a community learn  from it  you know my point is just that every  company has people issues and everyone  will make mistakes at some point  so the so the goal is just kind of  reducing these mistakes you can't  entirely prevent them  so we just want to we want to reduce the  factor we know we can't get rid of it  entirely  so one of the big things we do is we  automate everything or as close to  everything as we can  so automation reduces errors right like  you're if you're running an automated  command it's less likely you'll forget  the wrong  command line flag or something dumb you  know you're more likely to run the right  thing at the right time  it also gives confidence that things  still work so you know like i said we're  a fascinating company infrastructure's  changing maybe the way you unbalance the  service  a month ago isn't the same way you  unbalance it today maybe the set of  commands have changed  if you rely on automation then when  things change the automated tasks will  change and then you know that when you  run the unbalanced command it will do  whatever the right set of things are  today to do the task you want  so over time you know that it's going to  do the right thing and you don't have to  worry about  hey what's the way i do this you know  how do i do this today versus how did i  do it a month ago  and then in general just speeds things  up right we have these proxy pauses for  20 30 seconds  you know if we have to do a lot of work  in there like you know complicated  failovers we don't want to  have the person typing commands and  hitting enter like we need to run those  very quickly and automation just takes  care of that  um just in general like the the less  you're in production the less likely you  are to make a mistake  so automation means less time in  production  and our tools are kept strong with  puppet so we use puppet to manage server  configs so we know that  every server is set up the same way or  in a consistent way so so you you know  that  the unbalance on one server is the exact  same as the unbounce on another because  both boxes were set up with puppet and  then we orchestrate everything through  capistrano  so all of our deploys all of our  failovers unbalancing we pretty much  have tasks for pretty much everything we  want to do  in production in in all of our  environments really  okay so besides automation we also add a  lot of safeguards  so one big one is dangerous tasks just  don't run a production so if you want to  drop a database like you would do in  test all the time  you try to run that in production it  just fails it says like you know we use  the environment to know like you can't  run some production doesn't blow up on  you  so we try to prevent you know the github  issue of dropping the wrong database  and so we have lots of dangerous things  like this that just won't run in certain  environments  we also add um the pr we also the  environment name to the prompt  so on your terminal line you're typing  commands at the beginning of your  line it says in red letters production  or if you're in a test environment  you'll say green letters test or  something like that  so as you're typing commands you know  you're looking right where that turn  where  you're typing you see in big red letters  production so you know exactly what  environment you're working in  and this is really helpful when you're  working in multiple environments you  know maybe you're testing something out  in tests but then running it in  production you're switching back and  forth  you know you want to know which ones are  in tests and which ones are in  production and we just put that right in  the prompt  we also have read-only databases and  logs so if you're you know interrogating  somebody trying to figure something out  you don't have to worry about  accidentally running a bad query you  know one year read-only you can't  destroy anything and two you're doing  read-only on a database that's not even  in the main you know database  in the data center so even if you were  to run a query that didn't modify  anything but was super slow and brought  down the database so you don't have to  worry about it  same thing with logs we you know you're  we look at logs on log servers that are  shipped out of our main  center so if you were to run a really  expensive graph and slow down the box  like you don't have to worry about  actually slowing down production  at that so basically just try to shield  you as much as possible from the actual  running software  and then the other thing is monitoring  so we use nagios pretty extensively  so we use so nagios monitors everything  from like the load on a box  uh uptime to we write a lot of custom  checks like did the nightly settlement  job finished successfully  um did we bill all the subscriptions  that we're supposed to build did we miss  any things like that we have a lot of  checks just at all levels we have that  hooked up to pagerduty so it'll call you  so a check fails it calls you so if  you're working in production you  generally have nagios open  and you have page duty set up to you so  if you do something  and something goes wrong you immediately  get a phone call and you know that you  did something and you're right there  ready to fix it  and then we also have this multi-app log  tail so our general way we use tmux we  split vertically  you know generally one side is the  command you're running the other side is  just a log  and we have a script that takes the logs  from multiple apps puts them together  strips them down to just the important  parts and colors them so you'll see like  greens for  you know http successes reds for  failures we also color by response  time and we show the total time and the  app time separately so you'll know if  the total time is really high but the  app time is low there's a queuing issue  and we just have this thing kind of  scrolling and because our apps are  pretty busy  these days we added sampling so maybe  you only want to look at three percent  of the traffic just so it's a reasonable  amount and you see these logs  if you're doing something and all of a  sudden you see red out of the corner of  your eye start to go you know you did  something wrong  you're right there you can fix it very  quickly you don't have to wait for  something else to happen  so like i said you can't always prevent  the error but the idea is catching it  really quickly and trying to fix it  before it becomes a really big issue  and then we use graphite immunity for  graphing we started with munin we're  moving most ever  most of our stuff to graphite now we  don't really alert on this stuff but  it's more like if you're doing some kind  of work let's say you're running a big  database load  you'll pull up the graphs for like the  database i o and the database boxes and  you'll kind of watch them  so if you see crazy spikes you know that  probably something's wrong and you can  act on it  so this is more just like you know  you're doing something and you want to  watch it we also have dashboards in the  offices and stuff like that  but just you want to keep an eye on what  you're doing so that if you do cause a  problem you can find it very quickly  and that's pretty much it so to  summarize that just automation pretty  much automated everything  reduce errors with safeguards just to  try to prevent people from doing the  wrong thing as much as possible and  when you're running commands to know the  environment you're running them in  and then just as much monitoring as we  can you know we have the monitoring that  opens at night so that you get a call if  something fails at night but then also  just keeping an eye on the monitoring  while you're doing work so that you know  if you cause a problem  and that's it thank you
+
+00:00:05.430 --> 00:00:06.869 align:start position:0%
+talking to high availability braintree  i'm a software developer  uh you know feel free to ask me  questions about braintree after the  conference or after the talk if you're  interested in the things that i  don't cover so braintree we're a payment  gateway what that means is we  essentially have software to process  payments through mostly online or mobile  applications  uh generally we deal with credit cards  so these are some of our merchants  so the idea with braintree is like if  you go to github.com and you want to pay  for service  you type in your credit card info you  hit submit that credit card  info stuff comes to us and we do all the  payments related stuff so we charge the  cards we move the funds at night  we do tokenization so you can get back a  token and charge the card later without  having to store credit card details  so pretty much all of that all the  payments related stuff behind these  sites essentially  is us so  you know the question why is uptime  important to us we do roughly 10 billion  in processing at our current estimates  that comes out to be about 19 000 a  minute  so you know downtime is extremely costly  for our merchants  and besides just like the you know the  raw  cost for them and for us obviously we  take fees on this stuff  you know you may not know that a lot of  those merchants use braintree so if  we're down  and you go to check out at a site you  may get an error you may get like your  credit card's not valid when actually it  is valid  so you know we would make those sites  kind of look bad because you don't you  know we're behind the scenes you don't  know that those sites use braintree most  of them we're not like paypal where you  have like the pay with paypal button  we're more of like a silent partner so  you know downtime just makes  everyone that we work with look bad and  it loses them a ton of money very  quickly so we care  we care very deeply about uptime  so people talk a lot about uptime not a  lot of people know you know exactly what  the numbers kind of mean  so this this chart from wikipedia kind  of trimmed down it's pretty interesting  uh you know people kind of throw out  five nines as a target five nines is  extremely difficult  it's five minutes a year so if your  primary database crashes and you take  some kind of manual work to bring it  back up  you know that takes ten minutes let's  say you've blown five nines for the  whole year  um you know 26 seconds a month it's  almost nothing  i would say at braintree we're probably  closer to four nines we strive for five  but probably closer to four  although our uptime is actually really  hard to manage or sorry to measure  um due to some of this i'm going to talk  about later just we have a lot of kind  of pieces and players involved and so  it's hard to know exactly what our  uptime is for different merchants  um but yeah this just just to give you  an idea like five nines is  unbelievably difficult  okay so this talk i'm gonna cover three  main causes of downtime  planned maintenance so this is we know  we need to do something to the site or  to our infrastructure we're going to do  something  on purpose there's unplanned failure you  know parts of our infrastructure fail or  things that we depend on will fail and  then basically people mistakes people  doing stuff that they shouldn't have  done  causing problems okay so  plan downtime this is you know reducing  our maintenance windows  so for us the biggest thing we do the  biggest maintenance window we have is  code deploys we're  a fast-moving company we're constantly  deploying new versions of things  you know these are typically kind of  maintenance windows  so braintree the main gateway started as  a pretty typical ruby on rails app about  four years ago so ran on my sql  it used apache passenger just kind of  the typical stuff you would have seen  from a few years ago  so the way we would generally deploy  that time is we would put up a  maintenance page  we would deploy our code out you know  switch it all over to the new stuff  we would run all of our database  migrations so again like a fast moving  company fast moving code base we would  constantly change our database schema  and then we would take down the  maintenance page so for this we're  basically down for the entire time that  we're deploying the code which is very  quick you know just moving sim links  mostly  and then running database migrations and  those as we would grow would get slower  and slower over time  and so at a certain point like these  day-to-day migrations were just  overwhelming like we were down for  noticeable months of time it was a  really big problem  so one of the first things we did kind  of in the early days was we switched  from bicycle to postgresql  so postgres ddl migrations are extremely  fast  you can add add you know add rename edit  columns extremely quickly in my sql  mysql would you know copy the entire  table if you want to add a column  and so as your table start growing and  getting very big you know the time to  copy a table gets larger and larger  until it's minutes  i mean i've been on projects where my  sequel migrations took hours  so you know and and your site is  basically unusable at that time so  postgres on the other hand extremely  fast we're talking millisecond  operations for all this stuff  uh similarly you can also add indexes  and postgres really quickly so postgres  gives you this keyword concurrently  which lets you add indexes without  locking tables with mysql  we would try to add indexes the tables  would lock the site basically becomes  unusable  postgres largely unnoticeable it takes a  little bit extra cpu because it does  like two scans of the table  but you can do it while the site's up  and with pretty much no impact and then  the other big one was  postgres lets you wrap ddl migrations in  a transaction  so we use rails we use rails migrations  you know if your migration has 10  statements in it and the first five runs  successfully and then the sixth one  fails  your database is in a pretty bad state  and you have to usually either manually  try to roll it back or manually finish  the migration to get to a state where  you can  run the code again and so with postgres  you can wrap the migrations in a  transaction if it fails in the middle  the whole thing rolls back you're back  to the previous date you just put back  the old code and keep going  so you're not in this state where you  can't run the app anymore  and this i actually did a whole  presentation on just this topic um if  you're interested you can check out the  slides it's  the migration wasn't super simple but  it's it's very doable  um and you know we did it with that with  very little downtime as well  okay so given that we moved to postgres  now our new  deploy process is while the site's up  while we're running kind of the old  stuff we add new tables and columns so  we kind of get ready  so like these like i said these are  super fast millisecond operations we get  all the new schema stuff ready  and then we roll out the code server by  server so at an app server time we put  out new code  and we restart so again no downtime here  because we're doing one at a time  and then once and then one side's fully  on the new code then we can go back and  add all the indexes and all the things  we discovered with how new usage  patterns work  and we go back into that and this and  this has no downtime right we  we've done everything we can while the  site's up we put out the code server by  server  no down time so this is kind of what it  looks like for the migrations and rails  so people familiar with rails  rails gives you a db migrate task we  basically added two new ones migrate pre  and migrate post  we use the same rails code we just  pointed different folders  so now any migrations you put in the  migrate prefolder will run before  you know the code is out and any  migrations in the post will run  afterwards  so it's pretty pretty straightforward  okay so one problem with this is that  rails caches columns  so when rails starts up it interrogates  the database and it  caches the set of columns for every  table so what this means is you can't  actually delete columns  so even if your code is no longer using  a column if you try to delete it rails  will still send the same statements with  the column in it oftentimes and then  you'll get these errors like column does  not exist  so what we wanted was basically array a  way to tell rails to forget the column  and so we added it so it looks like this  so on our models and rails we just add a  method called deleted columns you list  out all the columns you no longer want  to use  this is implemented behind the scenes  with some kind of alias method chaining  stuff for people that are familiar with  it  basically we overwrite the columns  method in rails in activerecord  and we strip out all the columns you  told us to delete  so now after we deploy we put out the  new code with this deleted columns code  in there  rails you know when it restarts it  doesn't even know about the column  doesn't do  included in any queries and then we can  get in the post migrations we can then  drop old columns that we're no longer  using  and usually we we don't usually drop  columns right away we usually delay a  release  giving us the ability to roll back one  so we let's say we're no longer using a  column  we'll add the delete a column line  deploy that and then the next release in  the post migration will drop the column  so we can always roll back at least one  release because if you drop the column  right away and you try to roll back then  you have old code which needs a column  and the column's not there  so we generally delay one  okay so one thing i talked about a  little bit but didn't really go into yet  is that we actually run multiple  versions of the code at once  as we're doing the server by server  deploy one at a time for that you know  several minutes that we're doing that we  have the old code running on some app  servers and the new code running on  others  it turns out that that's actually fine  for most features like most things we do  are additive  you know some new feature will show up  maybe and not show up for like a moment  and come back or  we're changing it back in integration  and we'll start sending a new flag and  then but some requests won't have it yet  it turns out it's generally okay for for  places that it's not okay  we use a lot of feature switches so we  have the ability to turn things on for  one merchant or kind of globally  so with a lot of new features we'll  deploy it dark we'll get it all out  there make sure the site is fine  otherwise and then we'll turn on a  feature for just one merchant and we'll  watch it so we'll work with like beta  merchants for different features  and then we can watch the traffic watch  how it's doing we can turn it back off  if there's  a problem if it's going well we turn it  on for more merchants and eventually we  roll it out across the board  for things that aren't really merchant  specific that are more global we just  have global switches too so again we can  roll off features dark and then just  turn them on globally  and then once things have been out for a  long time and we know we're not going to  turn them back off we'll just remove the  switches just to kind of clean up  so we do we do this a lot we feature  switch almost all  new features just as a way to reduce  risk as well like we can put things out  know that they won't affect anything and  then turn them on and watch them  those you know also preventing the  ability you know the need to roll back  because rolling back is pretty  pretty large probably you know pretty  large hammer essentially to hit  something with  so you generally we want to just use  switches to turn these on and turn them  back off  so that's what i described is pretty  much the way we do 95 percent of our  deploys today we do them almost all  server by server  but there are some limitations with that  approach so  a big one is column renames so we can  add columns in a  pre-migration we can now drop them in a  post migration with the deleted stuff  but you can't really rename columns it's  really hard to rename a column while the  site's up because you need  you'd somehow need the code to know  about both the old name and the new name  and then understand when to switch over  it's just it's really difficult so we  just generally don't do it  there's other maintenance tasks like  database failover so that what i've  showed is works really well for code  deploys  but if we need to like take down our  primary database for security upgrades  just like that  you know nothing i've really talked  about handles this case and then just  other infrastructure similar to  databases there's lots of work we want  to do in our data center that requires  us moving like taking a primary load  balancer out or taking a primary  you know database out and nothing really  covers that so what we essentially  really wanted was a way to pause traffic  something that would allow us to do  other types of issues other types of  maintenance  without downtime and so that's that's  what we built  so this is what our architecture looks  like today  heavily simplified obviously so we have  um  you know we have a load balancing layer  coming into multiple apaches  i've drawn two here there's you know  more than two and then it goes to  something called the broxy which i'll go  into this is something we wrote  and then the proxy feeds into a redis  queue so we use an in-memory queue  in redis and then we have the  dispatchers reading out of redis  so the piece to note here is basically  put a redis queue in the middle of our  request processing  so the proxy it stands for braintree  proxy we're not we're not very clever  about naming  so it's a python tornado app so at the  time we wrote this which is it's been a  few years now we kind of looked around  for what to write it in  we're generally pretty polyglot at  braintree and we wanted something that  was very efficient  and it's kind of easy easy to write so  what this app is doing is it's taking  every request it's just shuffling  requests around so we like the idea of  something invented because it's going to  hold tons of open connections it's just  moving data around  it's very lightweight um at the time we  looked tornado  just seemed really nice it was running  you know with friend feed and  uh facebook is running a production it  has some really nice built-in testing  stuff so we decided to kind of go with  it  so like i said it accepts web requests  from apache and then all it does is it  bundles them up and puts them into a  redis queue so it takes  the body the headers pretty much  everything that comes in that request  puts it in a message and puts it in  redis and then on the way back it reads  out of a response redis cue and then it  responds back to the web request  so it's just feeding into redis and then  responding back out  so the dispatchers on the other side so  these are lightweight rack adapters  so for those who don't know rack is like  a ruby web server framework i guess  it's like all pretty much all the ruby  web servers now  adhere to a rack interface so the  dispatcher is a rack interface that  basically  integrates with rails so it takes the  request from redis  and then it processes them through rails  so we still use rails we just do it via  queue instead of a web server  and then it takes the response uh sorry  then it after it gets the response from  rails it puts it back into redis and it  goes back out to the proxy  so the dispatcher part looks like this  essentially  it's it's a ruby script we basically  load uh rail's root config environment  so at this point we have rails loaded we  have all the code available to us  and then we build our own rack app but  we use the action controller dispatcher  so we're building a rack app but we're  really using all of rail's code right we  don't really want to rewrite a web  server essentially so we're going to use  all the rail stuff  so then in a big loop we just pull the  request out of redis  and we build a rack request so rack  request is just a big hash of pretty  much everything rack needs  here i've shown two elements but there's  there's like 10  including the uri body headers pretty  much everything and then the last line  you see there we just do app.calls so  this  process through the whole rails stack we  go through all the middlewares pretty  much everything that rails normally does  for web server we just do  through this rack adapter and then once  we get the response we just turn that  back into a string  and then put it back in redis we put  back the status the body we put the  headers a bunch of other stuff  and we just send it back out so that  looks like this again  so now we want to suspend traffic all we  have to do is stop dispatchers  so we stopped the dispatchers the entire  top half of the half of the stack is  still working requests are coming in  they're in queueing  there's just nothing processing them and  since the dispatchers aren't running  nothing's using the database nothing's  using like our search servers pretty  much  everything in the bottom is unused so we  can do any kind of maintenance we want  we can  push out new code we can rename columns  we can do database failover pretty much  anything we want  and then when we're done we just restart  the dispatchers they clear out the queue  and everyone's happy so the users will  see  long requests but they won't see failed  requests and in general we feel like  that's  a better trade-off you know today people  have gotten pretty conditioned like if  you hit submit on a payment form  like you know sometimes it's going to  take a little while so instead of seeing  a two second request you'll see  a 20 second request but you'll still get  the proper request  or the proper response and that's and  that's pretty important  um and so as long as we can keep our  maintenance to around 20 or 30 seconds  that's kind of our  our window we can just do everything  without getting timeouts  so another you know another nice thing  is we provide client libraries so people  integrate with braintree through our  client libraries  so we know what the timeouts are we can  we can control the timeouts we can make  sure that the amount of time we keep the  dispatchers down for is less than the  timeouts at the top level  we control the proxy timeouts so we  basically know exactly how long we have  at every step  in our stack to do the kind of work we  need to do  and so we can you know we basically can  do a lot of work in 20 to 30 seconds  um you know like i said any kind of  failover we use this  technique to switch data centers at one  point where we actually move traffic  from one data center to another  um with a pause and not without losing  traffic so this works it works pretty  well  so just to summarize this section we  basically do  pre and post migrations we do as much  work as we can while the site's up  reducing risk also you know no downtime  and then we do rolling deploys for  nearly every deploy  we roll out code server by server  restart things you know keep the site up  as much as possible  we use postgres because it's really fast  at doing a lot of database work  we really like postgres in general it's  a great database and then for everything  where we can't do that we use the proxy  and that's  every kind of maintenance where we  actually need to just pause traffic to  get something  something larger done essentially  okay so that's that's plan failure  that's how we do the stuff we know we  need to do  then there's a whole set of unplanned  failure right servers fail  you know networks go down it's pretty  common  it you know essentially the unexpected  happens and all we can really do is  you know do our best to be resilient so  we try to build resilient systems such  that it can handle even  unexpected issues so start with server  failure  pretty typical way to handle silver  failure is load balancing this is in  this case we're no different  we build our own load balancers though  so that is actually pretty different  in general at braintree we just really  we like components that are  simple and easy to understand so we tend  to shy away from  black boxes and so load bouncers are a  giant kind of black  black box appliance um you know they  work well for some people  they also people love to complain about  them i mean if you you hear lots of  horror stories about like f5s and stuff  like that  so we prefer just to kind of build our  own we understand it at every level we  can tune it for availability for  security we can tweak it to our needs  so we just really like to control it so  what we use is we use  lvs or ipvs this is the linux virtual  server project or ipv virtual server  it's basically kernel level routing so  our load balancers are just linux  servers  traffic comes into them and then via  kernel level rules the traffic gets  routed to other backends  so it's pretty simple we manage a  cluster of them with pacemaker so it  handles failover if a load balancer dies  and then we have two components that we  wrote called big brother and limits  paper and i'll go into these in a moment  so this is you know the the diagram of  what it looks like so traffic comes in  either externally or internally we load  bounce a lot of internal services  it goes to a virtual ip living on one  load bouncer um each load balancer has  many ips for all the different services  and then the load balancer forwards the  traffic to back end in this case apaches  and the piece to note is that big  brother runs in the load balancer and  litmus paper runs on the back end  so big brother it's a ruby apple road it  like i said runs in load bouncers its  job is just to check the status of the  back ends  so every second it's just pulling back  end servers getting you know the status  of how they're doing  and then it updates ipvs rules so if it  discovers the back end's down or not  responding it updates the kernel level  rules to change the routing such that  new traffic won't flow  won't flow there and so it's just doing  that constantly it's just in a big loop  and big brother's open source you can  check it out on our github  so on the other side is litmus paper  limits paper is also ruby app  it's the piece that big brother is  querying via http  and the idea is with with limits paper  is it's a consistent interface that big  brother can query  so it runs on all of our back ends and  it returns a health level and  its job is to kind of map between  whatever it needs to do  to that health level so for an apache  server it probably just turns around and  curls apache  and if it patches up then it says i'm up  and then it combines that with  you know system level info so if the  load is high but apache is up maybe the  health isn't 100 it's  80. if it's totally down the health is  zero that kind of stuff so  limits paper just figures out what it  needs to do for that server for that  type and it returns a health level to  big brother  and this is also open source you can  check it out so there's the diagram  again  so like i said big brother is just  querying the back ends litmus papers  responding with the healths  and then based on big brother rules the  the load balancer will forward or not  forward traffic to those back ends  so it's pretty it's pretty  straightforward okay so that works  really well for stateless services  things like apache where you can send  traffic to three different apaches and  then if one you know goes down you just  send it to two apaches instead  we also have a class of state full  servers where you can't just send  all of your traffic to all of them so  load balancers are one of them you know  the virtual ip lives on one load  balancer  postgres is another big one so we have  you know primaries and standbys you  can't send all of your  traffic to all of your postcard servers  you need the rights to go to the  primaries  and just try to send right to the  standbys you'll get errors so for these  we use pacemaker to manage failover  so pacemaker just kind of manages a  cluster of things so it manages a  cluster of our postgres  it keeps track of which one's primary  which one's standby if the primary fails  pacemaker will do the failover for us  and they'll promote the standby  and then we just move virtual ips so the  app  just knows the virtual ip of like the  database the virtual ip of search the  virtual pa pretty much everything  and then when things die either the  unbounce or pacemaker will  move them and then the virtual ip just  moves along with it so we don't need to  reconfigure anything when things die  okay so that's server failure now we  have network failure  so fun site to look at internetpulse.com  it shows you  basically outages between different isps  internet service providers across the  internet  so i took this screenshot last week it  turns out that issues in isps are  actually very common  so you can see like um at the top you  can see the red box is between  centurylink and savis  so if you're running a service on status  and you're trying to connect to it from  your home which is centurylink let's say  you might have trouble connecting you  can see like there's  there's a lot of isp issues one of the  things i learned at braintree is that  it's like network issues are actually  very common it's amazing sometimes if  the internet actually works  because there are so many issues just  with connections across the wire  so pretty much if we see connection  issues we'll pull up this site and you  can kind of  we know which isps we serve out of which  data centers and you can kind of look at  the different connection issues with  other isps  okay so we have two kinds of networking  i want to talk about here so the first  one is inbound this is  a merchant wants to charge a credit card  so they make an api call to us so that's  inbound coming to us so for that we use  bgp  to route traffic through multiple isps  and data centers  so bgp is the border gateway protocol  it's essentially the protocol of the  internet  so it you know use dns to go from a name  to an ip address  so bgp is how you figure out where to go  with that ip address  so our routers participate in bgp they  broadcast  you know the ips that we handle and then  bgp handles like finding the best path  through the internet to get to us so if  an isp goes down  bgp will essentially unbalance it and  then it'll find another route to us  so in general bgp does shortest route  with some caveats  but if the route is down it'll find a  new route that's you know the one that's  up  so by participating in this you know we  have multiple paths coming into us  so depending on where the merchant is  where the customer is  the traffic will route to us via  different isps and different data  centers  and then we use monitoring services we  use pingdom pretty heavily and we use  our own kind of servers that we  scattered throughout the world  and we basically just do that to monitor  it so bgp is great it unbalances it it  works  but it's not always instantaneous we've  seen issues where especially when isp  outages are partial  we've seen issues where we see a lot of  problems coming in via one route  but bgb hasn't figured it out yet or  hasn't fully unbalanced  so since we have our own monitoring we  can kind of detect these cases and then  we just manually yank the bgp routes  and force the traffic over a different  path  so that's kind of how we so bcp  generally does its own thing it works  but we also  can do it manually if we need to based  on our own monitoring  okay so that's trouble coming to us we  also have the problem we  we are not the end point for most of  this traffic we need to go out  across the network to actually tell  whether their credit cards are valid or  whether they have enough money on that  so in general we don't we don't talk  about visa directly we talk to  what are called like merchant fires of  costing networks in general  so for people that know payments we  talked about like chase payment attack  thesis versus data  uh we talked to international talk a lot  of things directly  because we need essentially we need to  get back to whoever whichever issue bank  issues  to know if you have money on my credit  card so  if like if i leave here with a ton of  these coffee numbers but we need to  basically make outbound calls to them  so you may call to us we need to turn  around and make another call to figure  out  how much is available on this card and  so like i said the isp outages are very  are usually partial  it's rare that you have a total outage  it does happen i think last year there  was a construction in chicago and they  just  drilled right to the line like one of  the big issues in chicago and took out  the entire thing  but generally like a router fails  somewhere or there's some packet loss  so they're not usually full outages so  we've gotten into cases where  we have multiple isps but we can't reach  every endpoint we have to hit  on all of our xps so it's not like we  can say like oh we're having problems  with this one let's just take it out  we'll use the other one  maybe they're both having partial  outages and we can only reach some on  one and some on the other  and so we really wanted was a way to  choose an isp  for the end point we're trying to get to  so some are better than others for  certain paths we want to use the best  one for that path  and so we built our processor proxies  that's what we call them so instead of  the dispatcher connecting directly we  connect through a proxy  we run one proxy per endpoint so per  processor like we have one one for chase  let's say  pinned to a specific isp and then we can  load balance over them so if there are  issues we can we  allow our load balancing to take them  out  and this allows us to route around  issues on isps that are  partial essentially so the piece we  wrote to this is called mallory  it's also pilot tornado for the same  reasons it's just shoveling traffic back  and forth we find something very  lightweight  it proxies requests and this is a big  one so we looked around you know we  didn't essentially we didn't  want to write our own proxy but we kind  of looked around what was out there  and you know ssl verification is a big  it's kind of a big deal so ssl does  encryption  but it also does verification which is  you want to know that the end point  you're connected to is actually who you  think it is so most of the processing  networks use ssl  um and a lot of proxies will will do ssl  encryption but they don't have to do  verification so they'll ensure that your  traffic's encrypted  but not that you're connecting to who  you think you're connecting to and so  one of the things we do is  we strongly you know verify the sl  certificate so we can't get man in the  middle  so if somehow we were to get man in the  middle of upstream our request would  fail rather than send credit card data  to the wrong person  um and then we would we would notice  that our requests are failing we would  look into it  so it's really it's really unfortunate  that if you look online and you look at  you kind of google this  a lot of recommendations online are oh  just turn off sl encryption right curl  dash k like just turn it off  but i mean ssl is very powerful and you  should definitely use it  as much as possible even with  verification  so the other cool thing with mallory  another reason we wrote it is it acts  like limits paper  so the same way big brother is querying  litmus paper big brother can directly  query mallory  so mallory is doing the proxing and it's  keeping track of how that proxy is going  and then if the last few requests  haven't gone so well when big brother  queries it you can say like actually  proxy's not going that well i'm gonna  return to low health or zero health  saying that this route is just not good  right now  and mallory is also open source you can  check it out so this is kind of what the  diagram looks like  so the dispatcher is trying to make a  call to the processor on the right  it you know makes a call through a  virtual ip that's load balanced over two  mallories each mallory is pinned to an  isp  in that data center and then the traffic  will eventually route there so if  the isp1 goes down the top mallet will  unbalance and traffic will flow through  the bottom mallory  and this you know this works when we  look at the logs we see mallory's kind  of unbalancing periodically of today  like  little issues will happen but we  generally survive them without without  really noticing  so connection fails we do get connection  failures right  the way we know that a route is bad is  we will get a connection failure trying  to talk  over it so this is something we do have  to deal with our general  our general practice is we just let  things heal so in the case of mallory  we get a connection failure we know that  when big brother goes to query it will  unbalance it so we just let the system  heal  with things like the database we know  that pacemaker will handle the failover  so we just wait like we just wait for it  to handle the issue  and then we retry and we do retrying at  a lot of different levels of our stack  so in the case of processor calls we'll  often do several  two or three if we can't connect knowing  that if there's an issue mallory will  unbalance and then we'll reroute around  it  uh with things like the database if our  database our primary database were to  crash  we would we would lose the request in  flight there's you know  that's not what we can do about that but  before our dispatchers pick up another  request from redis  they do heartbeats and so they won't  pick up a request until they can  actually check that the whole app is  working again  and that means that the database has to  fully fail over the noon has to come up  then the heartbeat to start working and  then the dispatchers will pick up the  requests again  and so this is the way we kind of retry  there so we we won't pick up requests if  we know that things are busted we'll  wait until things have healed and then  start processing again  okay so just to summarize kind of the  unplanned failures load balancing we do  for  server failure and also kind of  components of network failure  we have redundancy across isps inbound  we use bgp  for routing outbound we use processor  proxies to kind of target the right isp  for the right endpoint  and then in general we just let things  heal and then try again and we do like i  said we do retrying at many different  levels of our stack  okay so the last section people make  mistakes  um it's it's inevitable right people can  cause outages you run the wrong command  you do the wrong thing  you cause an outage people can also make  things worse  you know let's say there's already an  outage and you just take a long time  fixing it or you run a command to try to  figure out what's going on and you just  make the outage worse  so you know people people can be a  problem  so here's a couple examples the big ec2  outage of 2011  they say that the traffic shift was  executed incorrectly so you know that  someone there just you know probably ran  the wrong set of commands  github outage also a few years ago  this one due to configuration error they  accidentally dropped their production  database rather than their test database  and had to then go restore their  production database from a backup and i  believe they were down for a good chunk  of that time  so that one you know they just ran the  wrong command in the wrong environment  pagerduty had an outage this this year  uh this one's really interesting they  actually call out due to the engineers  being extremely tired and burned out  after working for the night on the  upgrades  so this is i mean this is very common  right you have an issue you're working  on it all night  you're just more likely to make mistakes  once you're tired and i don't mean to  call these companies i think it's great  that these companies are so open that  they can publish these post-mortems and  then we can all as a community learn  from it  you know my point is just that every  company has people issues and everyone  will make mistakes at some point  so the so the goal is just kind of  reducing these mistakes you can't  entirely prevent them  so we just want to we want to reduce the  factor we know we can't get rid of it  entirely  so one of the big things we do is we  automate everything or as close to  everything as we can  so automation reduces errors right like  you're if you're running an automated  command it's less likely you'll forget  the wrong  command line flag or something dumb you  know you're more likely to run the right  thing at the right time  it also gives confidence that things  still work so you know like i said we're  a fascinating company infrastructure's  changing maybe the way you unbalance the  service  a month ago isn't the same way you  unbalance it today maybe the set of  commands have changed  if you rely on automation then when  things change the automated tasks will  change and then you know that when you  run the unbalanced command it will do  whatever the right set of things are  today to do the task you want  so over time you know that it's going to  do the right thing and you don't have to  worry about  hey what's the way i do this you know  how do i do this today versus how did i  do it a month ago  and then in general just speeds things  up right we have these proxy pauses for  20 30 seconds  you know if we have to do a lot of work  in there like you know complicated  failovers we don't want to  have the person typing commands and  hitting enter like we need to run those  very quickly and automation just takes  care of that  um just in general like the the less  you're in production the less likely you  are to make a mistake  so automation means less time in  production  and our tools are kept strong with  puppet so we use puppet to manage server  configs so we know that  every server is set up the same way or  in a consistent way so so you you know  that  the unbalance on one server is the exact  same as the unbounce on another because  both boxes were set up with puppet and  then we orchestrate everything through  capistrano  so all of our deploys all of our  failovers unbalancing we pretty much  have tasks for pretty much everything we  want to do  in production in in all of our  environments really  okay so besides automation we also add a  lot of safeguards  so one big one is dangerous tasks just  don't run a production so if you want to  drop a database like you would do in  test all the time  you try to run that in production it  just fails it says like you know we use  the environment to know like you can't  run some production doesn't blow up on  you  so we try to prevent you know the github  issue of dropping the wrong database  and so we have lots of dangerous things  like this that just won't run in certain  environments  we also add um the pr we also the  environment name to the prompt  so on your terminal line you're typing  commands at the beginning of your  line it says in red letters production  or if you're in a test environment  you'll say green letters test or  something like that  so as you're typing commands you know  you're looking right where that turn  where  you're typing you see in big red letters  production so you know exactly what  environment you're working in  and this is really helpful when you're  working in multiple environments you  know maybe you're testing something out  in tests but then running it in  production you're switching back and  forth  you know you want to know which ones are  in tests and which ones are in  production and we just put that right in  the prompt  we also have read-only databases and  logs so if you're you know interrogating  somebody trying to figure something out  you don't have to worry about  accidentally running a bad query you  know one year read-only you can't  destroy anything and two you're doing  read-only on a database that's not even  in the main you know database  in the data center so even if you were  to run a query that didn't modify  anything but was super slow and brought  down the database so you don't have to  worry about it  same thing with logs we you know you're  we look at logs on log servers that are  shipped out of our main  center so if you were to run a really  expensive graph and slow down the box  like you don't have to worry about  actually slowing down production  at that so basically just try to shield  you as much as possible from the actual  running software  and then the other thing is monitoring  so we use nagios pretty extensively  so we use so nagios monitors everything  from like the load on a box  uh uptime to we write a lot of custom  checks like did the nightly settlement  job finished successfully  um did we bill all the subscriptions  that we're supposed to build did we miss  any things like that we have a lot of  checks just at all levels we have that  hooked up to pagerduty so it'll call you  so a check fails it calls you so if  you're working in production you  generally have nagios open  and you have page duty set up to you so  if you do something  and something goes wrong you immediately  get a phone call and you know that you  did something and you're right there  ready to fix it  and then we also have this multi-app log  tail so our general way we use tmux we  split vertically  you know generally one side is the  command you're running the other side is  just a log  and we have a script that takes the logs  from multiple apps puts them together  strips them down to just the important  parts and colors them so you'll see like  greens for  you know http successes reds for  failures we also color by response  time and we show the total time and the  app time separately so you'll know if  the total time is really high but the  app time is low there's a queuing issue  and we just have this thing kind of  scrolling and because our apps are  pretty busy  these days we added sampling so maybe  you only want to look at three percent  of the traffic just so it's a reasonable  amount and you see these logs  if you're doing something and all of a  sudden you see red out of the corner of  your eye start to go you know you did  something wrong  you're right there you can fix it very  quickly you don't have to wait for  something else to happen  so like i said you can't always prevent  the error but the idea is catching it  really quickly and trying to fix it  before it becomes a really big issue  and then we use graphite immunity for  graphing we started with munin we're  moving most ever  most of our stuff to graphite now we  don't really alert on this stuff but  it's more like if you're doing some kind  of work let's say you're running a big  database load  you'll pull up the graphs for like the  database i o and the database boxes and  you'll kind of watch them  so if you see crazy spikes you know that  probably something's wrong and you can  act on it  so this is more just like you know  you're doing something and you want to  watch it we also have dashboards in the  offices and stuff like that  but just you want to keep an eye on what  you're doing so that if you do cause a  problem you can find it very quickly  and that's pretty much it so to  summarize that just automation pretty  much automated everything  reduce errors with safeguards just to  try to prevent people from doing the  wrong thing as much as possible and  when you're running commands to know the  environment you're running them in  and then just as much monitoring as we  can you know we have the monitoring that  opens at night so that you get a call if  something fails at night but then also  just keeping an eye on the monitoring  while you're doing work so that you know  if you cause a problem  and that's it thank you
+ 
+
+00:00:06.869 --> 00:00:08.070 align:start position:0%
+ 
+ 
+
+00:00:08.070 --> 00:00:09.350 align:start position:0%
+ 
+ 
+
+00:00:09.350 --> 00:00:10.709 align:start position:0%
+ 
+ 
+
+00:00:10.709 --> 00:00:11.830 align:start position:0%
+ 
+ 
+
+00:00:11.830 --> 00:00:14.789 align:start position:0%
+ 
+ 
+
+00:00:14.789 --> 00:00:15.990 align:start position:0%
+ 
+ 
+
+00:00:15.990 --> 00:00:17.670 align:start position:0%
+ 
+ 
+
+00:00:17.670 --> 00:00:20.230 align:start position:0%
+ 
+ 
+
+00:00:20.230 --> 00:00:20.240 align:start position:0%
+ 
+ 
+
+00:00:20.240 --> 00:00:21.189 align:start position:0%
+ 
+
+
+00:00:21.189 --> 00:00:23.750 align:start position:0%
+ 
+ 
+
+00:00:23.750 --> 00:00:25.589 align:start position:0%
+ 
+ 
+
+00:00:25.589 --> 00:00:26.950 align:start position:0%
+ 
+ 
+
+00:00:26.950 --> 00:00:28.550 align:start position:0%
+ 
+ 
+
+00:00:28.550 --> 00:00:29.429 align:start position:0%
+ 
+ 
+
+00:00:29.429 --> 00:00:30.870 align:start position:0%
+ 
+ 
+
+00:00:30.870 --> 00:00:32.709 align:start position:0%
+ 
+ 
+
+00:00:32.709 --> 00:00:34.389 align:start position:0%
+ 
+ 
+
+00:00:34.389 --> 00:00:35.750 align:start position:0%
+ 
+ 
+
+00:00:35.750 --> 00:00:37.590 align:start position:0%
+ 
+ 
+
+00:00:37.590 --> 00:00:39.670 align:start position:0%
+ 
+ 
+
+00:00:39.670 --> 00:00:41.030 align:start position:0%
+ 
+ 
+
+00:00:41.030 --> 00:00:43.110 align:start position:0%
+ 
+ 
+
+00:00:43.110 --> 00:00:44.470 align:start position:0%
+ 
+ 
+
+00:00:44.470 --> 00:00:46.229 align:start position:0%
+ 
+ 
+
+00:00:46.229 --> 00:00:47.110 align:start position:0%
+ 
+ 
+
+00:00:47.110 --> 00:00:50.389 align:start position:0%
+ 
+ 
+
+00:00:50.389 --> 00:00:51.510 align:start position:0%
+ 
+ 
+
+00:00:51.510 --> 00:00:53.830 align:start position:0%
+ 
+ 
+
+00:00:53.830 --> 00:00:56.630 align:start position:0%
+ 
+ 
+
+00:00:56.630 --> 00:00:58.630 align:start position:0%
+ 
+ 
+
+00:00:58.630 --> 00:00:58.640 align:start position:0%
+ 
+ 
+
+00:00:58.640 --> 00:00:59.670 align:start position:0%
+ 
+
+
+00:00:59.670 --> 00:01:02.229 align:start position:0%
+ 
+ 
+
+00:01:02.229 --> 00:01:03.430 align:start position:0%
+ 
+ 
+
+00:01:03.430 --> 00:01:06.070 align:start position:0%
+ 
+ 
+
+00:01:06.070 --> 00:01:06.080 align:start position:0%
+ 
+ 
+
+00:01:06.080 --> 00:01:06.550 align:start position:0%
+ 
+
+
+00:01:06.550 --> 00:01:08.149 align:start position:0%
+ 
+ 
+
+00:01:08.149 --> 00:01:10.070 align:start position:0%
+ 
+ 
+
+00:01:10.070 --> 00:01:11.429 align:start position:0%
+ 
+ 
+
+00:01:11.429 --> 00:01:12.789 align:start position:0%
+ 
+ 
+
+00:01:12.789 --> 00:01:13.670 align:start position:0%
+ 
+ 
+
+00:01:13.670 --> 00:01:15.429 align:start position:0%
+ 
+ 
+
+00:01:15.429 --> 00:01:16.789 align:start position:0%
+ 
+ 
+
+00:01:16.789 --> 00:01:18.230 align:start position:0%
+ 
+ 
+
+00:01:18.230 --> 00:01:19.350 align:start position:0%
+ 
+ 
+
+00:01:19.350 --> 00:01:21.190 align:start position:0%
+ 
+ 
+
+00:01:21.190 --> 00:01:22.390 align:start position:0%
+ 
+ 
+
+00:01:22.390 --> 00:01:23.670 align:start position:0%
+ 
+ 
+
+00:01:23.670 --> 00:01:25.109 align:start position:0%
+ 
+ 
+
+00:01:25.109 --> 00:01:26.630 align:start position:0%
+ 
+ 
+
+00:01:26.630 --> 00:01:28.630 align:start position:0%
+ 
+ 
+
+00:01:28.630 --> 00:01:30.789 align:start position:0%
+ 
+ 
+
+00:01:30.789 --> 00:01:32.149 align:start position:0%
+ 
+ 
+
+00:01:32.149 --> 00:01:34.310 align:start position:0%
+ 
+ 
+
+00:01:34.310 --> 00:01:36.149 align:start position:0%
+ 
+ 
+
+00:01:36.149 --> 00:01:37.510 align:start position:0%
+ 
+ 
+
+00:01:37.510 --> 00:01:40.630 align:start position:0%
+ 
+ 
+
+00:01:40.630 --> 00:01:42.469 align:start position:0%
+ 
+ 
+
+00:01:42.469 --> 00:01:43.990 align:start position:0%
+ 
+ 
+
+00:01:43.990 --> 00:01:45.350 align:start position:0%
+ 
+ 
+
+00:01:45.350 --> 00:01:47.030 align:start position:0%
+ 
+ 
+
+00:01:47.030 --> 00:01:49.030 align:start position:0%
+ 
+ 
+
+00:01:49.030 --> 00:01:50.230 align:start position:0%
+ 
+ 
+
+00:01:50.230 --> 00:01:52.710 align:start position:0%
+ 
+ 
+
+00:01:52.710 --> 00:01:54.230 align:start position:0%
+ 
+ 
+
+00:01:54.230 --> 00:01:57.190 align:start position:0%
+ 
+ 
+
+00:01:57.190 --> 00:01:58.870 align:start position:0%
+ 
+ 
+
+00:01:58.870 --> 00:02:00.310 align:start position:0%
+ 
+ 
+
+00:02:00.310 --> 00:02:01.270 align:start position:0%
+ 
+ 
+
+00:02:01.270 --> 00:02:02.630 align:start position:0%
+ 
+ 
+
+00:02:02.630 --> 00:02:03.990 align:start position:0%
+ 
+ 
+
+00:02:03.990 --> 00:02:05.270 align:start position:0%
+ 
+ 
+
+00:02:05.270 --> 00:02:07.109 align:start position:0%
+ 
+ 
+
+00:02:07.109 --> 00:02:08.630 align:start position:0%
+ 
+ 
+
+00:02:08.630 --> 00:02:09.749 align:start position:0%
+ 
+ 
+
+00:02:09.749 --> 00:02:11.830 align:start position:0%
+ 
+ 
+
+00:02:11.830 --> 00:02:13.670 align:start position:0%
+ 
+ 
+
+00:02:13.670 --> 00:02:14.949 align:start position:0%
+ 
+ 
+
+00:02:14.949 --> 00:02:17.110 align:start position:0%
+ 
+ 
+
+00:02:17.110 --> 00:02:18.309 align:start position:0%
+ 
+ 
+
+00:02:18.309 --> 00:02:20.150 align:start position:0%
+ 
+ 
+
+00:02:20.150 --> 00:02:22.309 align:start position:0%
+ 
+ 
+
+00:02:22.309 --> 00:02:23.830 align:start position:0%
+ 
+ 
+
+00:02:23.830 --> 00:02:25.910 align:start position:0%
+ 
+ 
+
+00:02:25.910 --> 00:02:27.589 align:start position:0%
+ 
+ 
+
+00:02:27.589 --> 00:02:29.190 align:start position:0%
+ 
+ 
+
+00:02:29.190 --> 00:02:32.470 align:start position:0%
+ 
+ 
+
+00:02:32.470 --> 00:02:34.869 align:start position:0%
+ 
+ 
+
+00:02:34.869 --> 00:02:36.150 align:start position:0%
+ 
+ 
+
+00:02:36.150 --> 00:02:37.990 align:start position:0%
+ 
+ 
+
+00:02:37.990 --> 00:02:39.190 align:start position:0%
+ 
+ 
+
+00:02:39.190 --> 00:02:40.550 align:start position:0%
+ 
+ 
+
+00:02:40.550 --> 00:02:40.560 align:start position:0%
+ 
+ 
+
+00:02:40.560 --> 00:02:41.270 align:start position:0%
+ 
+
+
+00:02:41.270 --> 00:02:43.670 align:start position:0%
+ 
+ 
+
+00:02:43.670 --> 00:02:45.830 align:start position:0%
+ 
+ 
+
+00:02:45.830 --> 00:02:47.830 align:start position:0%
+ 
+ 
+
+00:02:47.830 --> 00:02:49.509 align:start position:0%
+ 
+ 
+
+00:02:49.509 --> 00:02:50.390 align:start position:0%
+ 
+ 
+
+00:02:50.390 --> 00:02:50.400 align:start position:0%
+ 
+ 
+
+00:02:50.400 --> 00:02:50.710 align:start position:0%
+ 
+
+
+00:02:50.710 --> 00:02:54.150 align:start position:0%
+ 
+ 
+
+00:02:54.150 --> 00:02:55.910 align:start position:0%
+ 
+ 
+
+00:02:55.910 --> 00:02:57.670 align:start position:0%
+ 
+ 
+
+00:02:57.670 --> 00:02:59.990 align:start position:0%
+ 
+ 
+
+00:02:59.990 --> 00:03:01.110 align:start position:0%
+ 
+ 
+
+00:03:01.110 --> 00:03:02.229 align:start position:0%
+ 
+ 
+
+00:03:02.229 --> 00:03:03.670 align:start position:0%
+ 
+ 
+
+00:03:03.670 --> 00:03:05.509 align:start position:0%
+ 
+ 
+
+00:03:05.509 --> 00:03:06.949 align:start position:0%
+ 
+ 
+
+00:03:06.949 --> 00:03:08.630 align:start position:0%
+ 
+ 
+
+00:03:08.630 --> 00:03:11.030 align:start position:0%
+ 
+ 
+
+00:03:11.030 --> 00:03:12.550 align:start position:0%
+ 
+ 
+
+00:03:12.550 --> 00:03:14.550 align:start position:0%
+ 
+ 
+
+00:03:14.550 --> 00:03:17.350 align:start position:0%
+ 
+ 
+
+00:03:17.350 --> 00:03:18.869 align:start position:0%
+ 
+ 
+
+00:03:18.869 --> 00:03:20.550 align:start position:0%
+ 
+ 
+
+00:03:20.550 --> 00:03:22.149 align:start position:0%
+ 
+ 
+
+00:03:22.149 --> 00:03:23.190 align:start position:0%
+ 
+ 
+
+00:03:23.190 --> 00:03:24.070 align:start position:0%
+ 
+ 
+
+00:03:24.070 --> 00:03:25.830 align:start position:0%
+ 
+ 
+
+00:03:25.830 --> 00:03:27.589 align:start position:0%
+ 
+ 
+
+00:03:27.589 --> 00:03:28.630 align:start position:0%
+ 
+ 
+
+00:03:28.630 --> 00:03:30.550 align:start position:0%
+ 
+ 
+
+00:03:30.550 --> 00:03:32.229 align:start position:0%
+ 
+ 
+
+00:03:32.229 --> 00:03:34.229 align:start position:0%
+ 
+ 
+
+00:03:34.229 --> 00:03:35.110 align:start position:0%
+ 
+ 
+
+00:03:35.110 --> 00:03:37.190 align:start position:0%
+ 
+ 
+
+00:03:37.190 --> 00:03:39.030 align:start position:0%
+ 
+ 
+
+00:03:39.030 --> 00:03:40.309 align:start position:0%
+ 
+ 
+
+00:03:40.309 --> 00:03:41.670 align:start position:0%
+ 
+ 
+
+00:03:41.670 --> 00:03:41.680 align:start position:0%
+ 
+ 
+
+00:03:41.680 --> 00:03:42.470 align:start position:0%
+ 
+
+
+00:03:42.470 --> 00:03:44.309 align:start position:0%
+ 
+ 
+
+00:03:44.309 --> 00:03:46.550 align:start position:0%
+ 
+ 
+
+00:03:46.550 --> 00:03:48.229 align:start position:0%
+ 
+ 
+
+00:03:48.229 --> 00:03:50.630 align:start position:0%
+ 
+ 
+
+00:03:50.630 --> 00:03:51.670 align:start position:0%
+ 
+ 
+
+00:03:51.670 --> 00:03:53.030 align:start position:0%
+ 
+ 
+
+00:03:53.030 --> 00:03:54.149 align:start position:0%
+ 
+ 
+
+00:03:54.149 --> 00:03:55.589 align:start position:0%
+ 
+ 
+
+00:03:55.589 --> 00:03:56.949 align:start position:0%
+ 
+ 
+
+00:03:56.949 --> 00:03:58.229 align:start position:0%
+ 
+ 
+
+00:03:58.229 --> 00:04:00.390 align:start position:0%
+ 
+ 
+
+00:04:00.390 --> 00:04:03.190 align:start position:0%
+ 
+ 
+
+00:04:03.190 --> 00:04:03.200 align:start position:0%
+ 
+ 
+
+00:04:03.200 --> 00:04:03.589 align:start position:0%
+ 
+
+
+00:04:03.589 --> 00:04:06.149 align:start position:0%
+ 
+ 
+
+00:04:06.149 --> 00:04:09.110 align:start position:0%
+ 
+ 
+
+00:04:09.110 --> 00:04:11.030 align:start position:0%
+ 
+ 
+
+00:04:11.030 --> 00:04:12.630 align:start position:0%
+ 
+ 
+
+00:04:12.630 --> 00:04:14.149 align:start position:0%
+ 
+ 
+
+00:04:14.149 --> 00:04:16.150 align:start position:0%
+ 
+ 
+
+00:04:16.150 --> 00:04:17.830 align:start position:0%
+ 
+ 
+
+00:04:17.830 --> 00:04:18.949 align:start position:0%
+ 
+ 
+
+00:04:18.949 --> 00:04:20.310 align:start position:0%
+ 
+ 
+
+00:04:20.310 --> 00:04:22.550 align:start position:0%
+ 
+ 
+
+00:04:22.550 --> 00:04:24.070 align:start position:0%
+ 
+ 
+
+00:04:24.070 --> 00:04:26.790 align:start position:0%
+ 
+ 
+
+00:04:26.790 --> 00:04:28.550 align:start position:0%
+ 
+ 
+
+00:04:28.550 --> 00:04:29.590 align:start position:0%
+ 
+ 
+
+00:04:29.590 --> 00:04:31.749 align:start position:0%
+ 
+ 
+
+00:04:31.749 --> 00:04:33.670 align:start position:0%
+ 
+ 
+
+00:04:33.670 --> 00:04:35.510 align:start position:0%
+ 
+ 
+
+00:04:35.510 --> 00:04:37.270 align:start position:0%
+ 
+ 
+
+00:04:37.270 --> 00:04:38.469 align:start position:0%
+ 
+ 
+
+00:04:38.469 --> 00:04:41.030 align:start position:0%
+ 
+ 
+
+00:04:41.030 --> 00:04:42.710 align:start position:0%
+ 
+ 
+
+00:04:42.710 --> 00:04:44.150 align:start position:0%
+ 
+ 
+
+00:04:44.150 --> 00:04:44.160 align:start position:0%
+ 
+ 
+
+00:04:44.160 --> 00:04:46.390 align:start position:0%
+ 
+
+
+00:04:46.390 --> 00:04:49.350 align:start position:0%
+ 
+ 
+
+00:04:49.350 --> 00:04:50.550 align:start position:0%
+ 
+ 
+
+00:04:50.550 --> 00:04:52.070 align:start position:0%
+ 
+ 
+
+00:04:52.070 --> 00:04:53.270 align:start position:0%
+ 
+ 
+
+00:04:53.270 --> 00:04:56.230 align:start position:0%
+ 
+ 
+
+00:04:56.230 --> 00:04:57.430 align:start position:0%
+ 
+ 
+
+00:04:57.430 --> 00:04:59.510 align:start position:0%
+ 
+ 
+
+00:04:59.510 --> 00:05:00.710 align:start position:0%
+ 
+ 
+
+00:05:00.710 --> 00:05:02.870 align:start position:0%
+ 
+ 
+
+00:05:02.870 --> 00:05:04.230 align:start position:0%
+ 
+ 
+
+00:05:04.230 --> 00:05:05.670 align:start position:0%
+ 
+ 
+
+00:05:05.670 --> 00:05:07.029 align:start position:0%
+ 
+ 
+
+00:05:07.029 --> 00:05:07.039 align:start position:0%
+ 
+ 
+
+00:05:07.039 --> 00:05:07.830 align:start position:0%
+ 
+
+
+00:05:07.830 --> 00:05:09.909 align:start position:0%
+ 
+ 
+
+00:05:09.909 --> 00:05:11.670 align:start position:0%
+ 
+ 
+
+00:05:11.670 --> 00:05:13.110 align:start position:0%
+ 
+ 
+
+00:05:13.110 --> 00:05:14.710 align:start position:0%
+ 
+ 
+
+00:05:14.710 --> 00:05:15.350 align:start position:0%
+ 
+ 
+
+00:05:15.350 --> 00:05:17.830 align:start position:0%
+ 
+ 
+
+00:05:17.830 --> 00:05:19.110 align:start position:0%
+ 
+ 
+
+00:05:19.110 --> 00:05:21.029 align:start position:0%
+ 
+ 
+
+00:05:21.029 --> 00:05:22.390 align:start position:0%
+ 
+ 
+
+00:05:22.390 --> 00:05:23.670 align:start position:0%
+ 
+ 
+
+00:05:23.670 --> 00:05:25.189 align:start position:0%
+ 
+ 
+
+00:05:25.189 --> 00:05:26.710 align:start position:0%
+ 
+ 
+
+00:05:26.710 --> 00:05:29.670 align:start position:0%
+ 
+ 
+
+00:05:29.670 --> 00:05:30.870 align:start position:0%
+ 
+ 
+
+00:05:30.870 --> 00:05:32.870 align:start position:0%
+ 
+ 
+
+00:05:32.870 --> 00:05:33.749 align:start position:0%
+ 
+ 
+
+00:05:33.749 --> 00:05:34.550 align:start position:0%
+ 
+ 
+
+00:05:34.550 --> 00:05:36.230 align:start position:0%
+ 
+ 
+
+00:05:36.230 --> 00:05:37.990 align:start position:0%
+ 
+ 
+
+00:05:37.990 --> 00:05:39.749 align:start position:0%
+ 
+ 
+
+00:05:39.749 --> 00:05:43.029 align:start position:0%
+ 
+ 
+
+00:05:43.029 --> 00:05:45.670 align:start position:0%
+ 
+ 
+
+00:05:45.670 --> 00:05:46.469 align:start position:0%
+ 
+ 
+
+00:05:46.469 --> 00:05:48.710 align:start position:0%
+ 
+ 
+
+00:05:48.710 --> 00:05:49.830 align:start position:0%
+ 
+ 
+
+00:05:49.830 --> 00:05:51.590 align:start position:0%
+ 
+ 
+
+00:05:51.590 --> 00:05:52.790 align:start position:0%
+ 
+ 
+
+00:05:52.790 --> 00:05:53.990 align:start position:0%
+ 
+ 
+
+00:05:53.990 --> 00:05:55.830 align:start position:0%
+ 
+ 
+
+00:05:55.830 --> 00:05:57.909 align:start position:0%
+ 
+ 
+
+00:05:57.909 --> 00:05:59.350 align:start position:0%
+ 
+ 
+
+00:05:59.350 --> 00:06:01.270 align:start position:0%
+ 
+ 
+
+00:06:01.270 --> 00:06:01.990 align:start position:0%
+ 
+ 
+
+00:06:01.990 --> 00:06:04.150 align:start position:0%
+ 
+ 
+
+00:06:04.150 --> 00:06:06.550 align:start position:0%
+ 
+ 
+
+00:06:06.550 --> 00:06:08.469 align:start position:0%
+ 
+ 
+
+00:06:08.469 --> 00:06:09.909 align:start position:0%
+ 
+ 
+
+00:06:09.909 --> 00:06:11.270 align:start position:0%
+ 
+ 
+
+00:06:11.270 --> 00:06:12.790 align:start position:0%
+ 
+ 
+
+00:06:12.790 --> 00:06:13.909 align:start position:0%
+ 
+ 
+
+00:06:13.909 --> 00:06:16.070 align:start position:0%
+ 
+ 
+
+00:06:16.070 --> 00:06:17.830 align:start position:0%
+ 
+ 
+
+00:06:17.830 --> 00:06:18.950 align:start position:0%
+ 
+ 
+
+00:06:18.950 --> 00:06:20.870 align:start position:0%
+ 
+ 
+
+00:06:20.870 --> 00:06:20.880 align:start position:0%
+ 
+ 
+
+00:06:20.880 --> 00:06:21.830 align:start position:0%
+ 
+
+
+00:06:21.830 --> 00:06:24.950 align:start position:0%
+ 
+ 
+
+00:06:24.950 --> 00:06:26.870 align:start position:0%
+ 
+ 
+
+00:06:26.870 --> 00:06:28.390 align:start position:0%
+ 
+ 
+
+00:06:28.390 --> 00:06:30.309 align:start position:0%
+ 
+ 
+
+00:06:30.309 --> 00:06:31.990 align:start position:0%
+ 
+ 
+
+00:06:31.990 --> 00:06:33.110 align:start position:0%
+ 
+ 
+
+00:06:33.110 --> 00:06:34.710 align:start position:0%
+ 
+ 
+
+00:06:34.710 --> 00:06:36.150 align:start position:0%
+ 
+ 
+
+00:06:36.150 --> 00:06:37.510 align:start position:0%
+ 
+ 
+
+00:06:37.510 --> 00:06:39.670 align:start position:0%
+ 
+ 
+
+00:06:39.670 --> 00:06:40.870 align:start position:0%
+ 
+ 
+
+00:06:40.870 --> 00:06:42.070 align:start position:0%
+ 
+ 
+
+00:06:42.070 --> 00:06:42.080 align:start position:0%
+ 
+ 
+
+00:06:42.080 --> 00:06:43.110 align:start position:0%
+ 
+
+
+00:06:43.110 --> 00:06:46.710 align:start position:0%
+ 
+ 
+
+00:06:46.710 --> 00:06:48.309 align:start position:0%
+ 
+ 
+
+00:06:48.309 --> 00:06:50.150 align:start position:0%
+ 
+ 
+
+00:06:50.150 --> 00:06:52.309 align:start position:0%
+ 
+ 
+
+00:06:52.309 --> 00:06:53.430 align:start position:0%
+ 
+ 
+
+00:06:53.430 --> 00:06:54.950 align:start position:0%
+ 
+ 
+
+00:06:54.950 --> 00:06:57.110 align:start position:0%
+ 
+ 
+
+00:06:57.110 --> 00:06:58.550 align:start position:0%
+ 
+ 
+
+00:06:58.550 --> 00:07:00.070 align:start position:0%
+ 
+ 
+
+00:07:00.070 --> 00:07:02.309 align:start position:0%
+ 
+ 
+
+00:07:02.309 --> 00:07:04.150 align:start position:0%
+ 
+ 
+
+00:07:04.150 --> 00:07:05.749 align:start position:0%
+ 
+ 
+
+00:07:05.749 --> 00:07:06.950 align:start position:0%
+ 
+ 
+
+00:07:06.950 --> 00:07:09.350 align:start position:0%
+ 
+ 
+
+00:07:09.350 --> 00:07:11.110 align:start position:0%
+ 
+ 
+
+00:07:11.110 --> 00:07:13.110 align:start position:0%
+ 
+ 
+
+00:07:13.110 --> 00:07:15.749 align:start position:0%
+ 
+ 
+
+00:07:15.749 --> 00:07:17.990 align:start position:0%
+ 
+ 
+
+00:07:17.990 --> 00:07:19.589 align:start position:0%
+ 
+ 
+
+00:07:19.589 --> 00:07:20.790 align:start position:0%
+ 
+ 
+
+00:07:20.790 --> 00:07:21.990 align:start position:0%
+ 
+ 
+
+00:07:21.990 --> 00:07:23.589 align:start position:0%
+ 
+ 
+
+00:07:23.589 --> 00:07:25.830 align:start position:0%
+ 
+ 
+
+00:07:25.830 --> 00:07:27.029 align:start position:0%
+ 
+ 
+
+00:07:27.029 --> 00:07:27.039 align:start position:0%
+ 
+ 
+
+00:07:27.039 --> 00:07:27.430 align:start position:0%
+ 
+
+
+00:07:27.430 --> 00:07:29.270 align:start position:0%
+ 
+ 
+
+00:07:29.270 --> 00:07:31.270 align:start position:0%
+ 
+ 
+
+00:07:31.270 --> 00:07:33.350 align:start position:0%
+ 
+ 
+
+00:07:33.350 --> 00:07:34.790 align:start position:0%
+ 
+ 
+
+00:07:34.790 --> 00:07:37.510 align:start position:0%
+ 
+ 
+
+00:07:37.510 --> 00:07:39.430 align:start position:0%
+ 
+ 
+
+00:07:39.430 --> 00:07:40.070 align:start position:0%
+ 
+ 
+
+00:07:40.070 --> 00:07:41.350 align:start position:0%
+ 
+ 
+
+00:07:41.350 --> 00:07:42.469 align:start position:0%
+ 
+ 
+
+00:07:42.469 --> 00:07:43.270 align:start position:0%
+ 
+ 
+
+00:07:43.270 --> 00:07:45.110 align:start position:0%
+ 
+ 
+
+00:07:45.110 --> 00:07:46.469 align:start position:0%
+ 
+ 
+
+00:07:46.469 --> 00:07:47.909 align:start position:0%
+ 
+ 
+
+00:07:47.909 --> 00:07:47.919 align:start position:0%
+ 
+ 
+
+00:07:47.919 --> 00:07:49.909 align:start position:0%
+ 
+
+
+00:07:49.909 --> 00:07:51.830 align:start position:0%
+ 
+ 
+
+00:07:51.830 --> 00:07:53.430 align:start position:0%
+ 
+ 
+
+00:07:53.430 --> 00:07:53.440 align:start position:0%
+ 
+ 
+
+00:07:53.440 --> 00:07:54.230 align:start position:0%
+ 
+
+
+00:07:54.230 --> 00:07:55.909 align:start position:0%
+ 
+ 
+
+00:07:55.909 --> 00:07:57.430 align:start position:0%
+ 
+ 
+
+00:07:57.430 --> 00:07:57.440 align:start position:0%
+ 
+ 
+
+00:07:57.440 --> 00:07:57.990 align:start position:0%
+ 
+
+
+00:07:57.990 --> 00:07:59.749 align:start position:0%
+ 
+ 
+
+00:07:59.749 --> 00:08:01.909 align:start position:0%
+ 
+ 
+
+00:08:01.909 --> 00:08:03.749 align:start position:0%
+ 
+ 
+
+00:08:03.749 --> 00:08:05.430 align:start position:0%
+ 
+ 
+
+00:08:05.430 --> 00:08:06.629 align:start position:0%
+ 
+ 
+
+00:08:06.629 --> 00:08:08.309 align:start position:0%
+ 
+ 
+
+00:08:08.309 --> 00:08:09.909 align:start position:0%
+ 
+ 
+
+00:08:09.909 --> 00:08:11.350 align:start position:0%
+ 
+ 
+
+00:08:11.350 --> 00:08:15.110 align:start position:0%
+ 
+ 
+
+00:08:15.110 --> 00:08:16.790 align:start position:0%
+ 
+ 
+
+00:08:16.790 --> 00:08:17.990 align:start position:0%
+ 
+ 
+
+00:08:17.990 --> 00:08:19.110 align:start position:0%
+ 
+ 
+
+00:08:19.110 --> 00:08:20.550 align:start position:0%
+ 
+ 
+
+00:08:20.550 --> 00:08:21.990 align:start position:0%
+ 
+ 
+
+00:08:21.990 --> 00:08:24.150 align:start position:0%
+ 
+ 
+
+00:08:24.150 --> 00:08:25.670 align:start position:0%
+ 
+ 
+
+00:08:25.670 --> 00:08:26.950 align:start position:0%
+ 
+ 
+
+00:08:26.950 --> 00:08:28.150 align:start position:0%
+ 
+ 
+
+00:08:28.150 --> 00:08:28.160 align:start position:0%
+ 
+ 
+
+00:08:28.160 --> 00:08:29.270 align:start position:0%
+ 
+
+
+00:08:29.270 --> 00:08:30.550 align:start position:0%
+ 
+ 
+
+00:08:30.550 --> 00:08:32.149 align:start position:0%
+ 
+ 
+
+00:08:32.149 --> 00:08:33.110 align:start position:0%
+ 
+ 
+
+00:08:33.110 --> 00:08:35.029 align:start position:0%
+ 
+ 
+
+00:08:35.029 --> 00:08:36.790 align:start position:0%
+ 
+ 
+
+00:08:36.790 --> 00:08:38.149 align:start position:0%
+ 
+ 
+
+00:08:38.149 --> 00:08:39.589 align:start position:0%
+ 
+ 
+
+00:08:39.589 --> 00:08:41.029 align:start position:0%
+ 
+ 
+
+00:08:41.029 --> 00:08:43.029 align:start position:0%
+ 
+ 
+
+00:08:43.029 --> 00:08:46.230 align:start position:0%
+ 
+ 
+
+00:08:46.230 --> 00:08:47.430 align:start position:0%
+ 
+ 
+
+00:08:47.430 --> 00:08:49.509 align:start position:0%
+ 
+ 
+
+00:08:49.509 --> 00:08:51.030 align:start position:0%
+ 
+ 
+
+00:08:51.030 --> 00:08:52.790 align:start position:0%
+ 
+ 
+
+00:08:52.790 --> 00:08:54.470 align:start position:0%
+ 
+ 
+
+00:08:54.470 --> 00:08:55.990 align:start position:0%
+ 
+ 
+
+00:08:55.990 --> 00:08:57.829 align:start position:0%
+ 
+ 
+
+00:08:57.829 --> 00:08:59.750 align:start position:0%
+ 
+ 
+
+00:08:59.750 --> 00:09:01.350 align:start position:0%
+ 
+ 
+
+00:09:01.350 --> 00:09:02.870 align:start position:0%
+ 
+ 
+
+00:09:02.870 --> 00:09:04.710 align:start position:0%
+ 
+ 
+
+00:09:04.710 --> 00:09:06.230 align:start position:0%
+ 
+ 
+
+00:09:06.230 --> 00:09:07.670 align:start position:0%
+ 
+ 
+
+00:09:07.670 --> 00:09:07.990 align:start position:0%
+ 
+ 
+
+00:09:07.990 --> 00:09:09.829 align:start position:0%
+ 
+ 
+
+00:09:09.829 --> 00:09:11.190 align:start position:0%
+ 
+ 
+
+00:09:11.190 --> 00:09:13.110 align:start position:0%
+ 
+ 
+
+00:09:13.110 --> 00:09:14.389 align:start position:0%
+ 
+ 
+
+00:09:14.389 --> 00:09:15.670 align:start position:0%
+ 
+ 
+
+00:09:15.670 --> 00:09:17.269 align:start position:0%
+ 
+ 
+
+00:09:17.269 --> 00:09:18.389 align:start position:0%
+ 
+ 
+
+00:09:18.389 --> 00:09:19.910 align:start position:0%
+ 
+ 
+
+00:09:19.910 --> 00:09:21.269 align:start position:0%
+ 
+ 
+
+00:09:21.269 --> 00:09:22.389 align:start position:0%
+ 
+ 
+
+00:09:22.389 --> 00:09:23.590 align:start position:0%
+ 
+ 
+
+00:09:23.590 --> 00:09:25.590 align:start position:0%
+ 
+ 
+
+00:09:25.590 --> 00:09:27.509 align:start position:0%
+ 
+ 
+
+00:09:27.509 --> 00:09:29.030 align:start position:0%
+ 
+ 
+
+00:09:29.030 --> 00:09:31.350 align:start position:0%
+ 
+ 
+
+00:09:31.350 --> 00:09:33.269 align:start position:0%
+ 
+ 
+
+00:09:33.269 --> 00:09:34.870 align:start position:0%
+ 
+ 
+
+00:09:34.870 --> 00:09:36.949 align:start position:0%
+ 
+ 
+
+00:09:36.949 --> 00:09:38.070 align:start position:0%
+ 
+ 
+
+00:09:38.070 --> 00:09:39.509 align:start position:0%
+ 
+ 
+
+00:09:39.509 --> 00:09:41.110 align:start position:0%
+ 
+ 
+
+00:09:41.110 --> 00:09:42.470 align:start position:0%
+ 
+ 
+
+00:09:42.470 --> 00:09:45.190 align:start position:0%
+ 
+ 
+
+00:09:45.190 --> 00:09:46.150 align:start position:0%
+ 
+ 
+
+00:09:46.150 --> 00:09:47.750 align:start position:0%
+ 
+ 
+
+00:09:47.750 --> 00:09:49.030 align:start position:0%
+ 
+ 
+
+00:09:49.030 --> 00:09:51.269 align:start position:0%
+ 
+ 
+
+00:09:51.269 --> 00:09:53.030 align:start position:0%
+ 
+ 
+
+00:09:53.030 --> 00:09:54.949 align:start position:0%
+ 
+ 
+
+00:09:54.949 --> 00:09:56.389 align:start position:0%
+ 
+ 
+
+00:09:56.389 --> 00:09:57.829 align:start position:0%
+ 
+ 
+
+00:09:57.829 --> 00:09:59.829 align:start position:0%
+ 
+ 
+
+00:09:59.829 --> 00:10:00.949 align:start position:0%
+ 
+ 
+
+00:10:00.949 --> 00:10:02.710 align:start position:0%
+ 
+ 
+
+00:10:02.710 --> 00:10:04.069 align:start position:0%
+ 
+ 
+
+00:10:04.069 --> 00:10:05.910 align:start position:0%
+ 
+ 
+
+00:10:05.910 --> 00:10:07.990 align:start position:0%
+ 
+ 
+
+00:10:07.990 --> 00:10:09.990 align:start position:0%
+ 
+ 
+
+00:10:09.990 --> 00:10:11.509 align:start position:0%
+ 
+ 
+
+00:10:11.509 --> 00:10:12.790 align:start position:0%
+ 
+ 
+
+00:10:12.790 --> 00:10:14.069 align:start position:0%
+ 
+ 
+
+00:10:14.069 --> 00:10:16.389 align:start position:0%
+ 
+ 
+
+00:10:16.389 --> 00:10:18.790 align:start position:0%
+ 
+ 
+
+00:10:18.790 --> 00:10:19.910 align:start position:0%
+ 
+ 
+
+00:10:19.910 --> 00:10:22.310 align:start position:0%
+ 
+ 
+
+00:10:22.310 --> 00:10:24.069 align:start position:0%
+ 
+ 
+
+00:10:24.069 --> 00:10:25.269 align:start position:0%
+ 
+ 
+
+00:10:25.269 --> 00:10:26.470 align:start position:0%
+ 
+ 
+
+00:10:26.470 --> 00:10:26.480 align:start position:0%
+ 
+ 
+
+00:10:26.480 --> 00:10:27.350 align:start position:0%
+ 
+
+
+00:10:27.350 --> 00:10:28.710 align:start position:0%
+ 
+ 
+
+00:10:28.710 --> 00:10:30.389 align:start position:0%
+ 
+ 
+
+00:10:30.389 --> 00:10:31.269 align:start position:0%
+ 
+ 
+
+00:10:31.269 --> 00:10:32.310 align:start position:0%
+ 
+ 
+
+00:10:32.310 --> 00:10:34.150 align:start position:0%
+ 
+ 
+
+00:10:34.150 --> 00:10:35.190 align:start position:0%
+ 
+ 
+
+00:10:35.190 --> 00:10:36.470 align:start position:0%
+ 
+ 
+
+00:10:36.470 --> 00:10:38.470 align:start position:0%
+ 
+ 
+
+00:10:38.470 --> 00:10:40.389 align:start position:0%
+ 
+ 
+
+00:10:40.389 --> 00:10:43.269 align:start position:0%
+ 
+ 
+
+00:10:43.269 --> 00:10:44.790 align:start position:0%
+ 
+ 
+
+00:10:44.790 --> 00:10:46.710 align:start position:0%
+ 
+ 
+
+00:10:46.710 --> 00:10:48.630 align:start position:0%
+ 
+ 
+
+00:10:48.630 --> 00:10:50.069 align:start position:0%
+ 
+ 
+
+00:10:50.069 --> 00:10:52.310 align:start position:0%
+ 
+ 
+
+00:10:52.310 --> 00:10:52.320 align:start position:0%
+ 
+ 
+
+00:10:52.320 --> 00:10:53.030 align:start position:0%
+ 
+
+
+00:10:53.030 --> 00:10:55.430 align:start position:0%
+ 
+ 
+
+00:10:55.430 --> 00:10:56.150 align:start position:0%
+ 
+ 
+
+00:10:56.150 --> 00:10:57.910 align:start position:0%
+ 
+ 
+
+00:10:57.910 --> 00:10:59.509 align:start position:0%
+ 
+ 
+
+00:10:59.509 --> 00:11:02.150 align:start position:0%
+ 
+ 
+
+00:11:02.150 --> 00:11:02.160 align:start position:0%
+ 
+ 
+
+00:11:02.160 --> 00:11:02.550 align:start position:0%
+ 
+
+
+00:11:02.550 --> 00:11:03.829 align:start position:0%
+ 
+ 
+
+00:11:03.829 --> 00:11:06.069 align:start position:0%
+ 
+ 
+
+00:11:06.069 --> 00:11:07.430 align:start position:0%
+ 
+ 
+
+00:11:07.430 --> 00:11:09.190 align:start position:0%
+ 
+ 
+
+00:11:09.190 --> 00:11:10.470 align:start position:0%
+ 
+ 
+
+00:11:10.470 --> 00:11:11.990 align:start position:0%
+ 
+ 
+
+00:11:11.990 --> 00:11:13.509 align:start position:0%
+ 
+ 
+
+00:11:13.509 --> 00:11:15.670 align:start position:0%
+ 
+ 
+
+00:11:15.670 --> 00:11:16.870 align:start position:0%
+ 
+ 
+
+00:11:16.870 --> 00:11:18.790 align:start position:0%
+ 
+ 
+
+00:11:18.790 --> 00:11:20.470 align:start position:0%
+ 
+ 
+
+00:11:20.470 --> 00:11:22.069 align:start position:0%
+ 
+ 
+
+00:11:22.069 --> 00:11:24.230 align:start position:0%
+ 
+ 
+
+00:11:24.230 --> 00:11:26.310 align:start position:0%
+ 
+ 
+
+00:11:26.310 --> 00:11:27.829 align:start position:0%
+ 
+ 
+
+00:11:27.829 --> 00:11:31.110 align:start position:0%
+ 
+ 
+
+00:11:31.110 --> 00:11:33.509 align:start position:0%
+ 
+ 
+
+00:11:33.509 --> 00:11:34.870 align:start position:0%
+ 
+ 
+
+00:11:34.870 --> 00:11:36.470 align:start position:0%
+ 
+ 
+
+00:11:36.470 --> 00:11:37.829 align:start position:0%
+ 
+ 
+
+00:11:37.829 --> 00:11:39.269 align:start position:0%
+ 
+ 
+
+00:11:39.269 --> 00:11:40.949 align:start position:0%
+ 
+ 
+
+00:11:40.949 --> 00:11:42.630 align:start position:0%
+ 
+ 
+
+00:11:42.630 --> 00:11:44.870 align:start position:0%
+ 
+ 
+
+00:11:44.870 --> 00:11:46.310 align:start position:0%
+ 
+ 
+
+00:11:46.310 --> 00:11:48.230 align:start position:0%
+ 
+ 
+
+00:11:48.230 --> 00:11:50.550 align:start position:0%
+ 
+ 
+
+00:11:50.550 --> 00:11:51.509 align:start position:0%
+ 
+ 
+
+00:11:51.509 --> 00:11:52.870 align:start position:0%
+ 
+ 
+
+00:11:52.870 --> 00:11:53.990 align:start position:0%
+ 
+ 
+
+00:11:53.990 --> 00:11:56.230 align:start position:0%
+ 
+ 
+
+00:11:56.230 --> 00:11:57.590 align:start position:0%
+ 
+ 
+
+00:11:57.590 --> 00:11:59.430 align:start position:0%
+ 
+ 
+
+00:11:59.430 --> 00:12:00.790 align:start position:0%
+ 
+ 
+
+00:12:00.790 --> 00:12:03.269 align:start position:0%
+ 
+ 
+
+00:12:03.269 --> 00:12:04.550 align:start position:0%
+ 
+ 
+
+00:12:04.550 --> 00:12:05.990 align:start position:0%
+ 
+ 
+
+00:12:05.990 --> 00:12:06.000 align:start position:0%
+ 
+ 
+
+00:12:06.000 --> 00:12:07.030 align:start position:0%
+ 
+
+
+00:12:07.030 --> 00:12:08.629 align:start position:0%
+ 
+ 
+
+00:12:08.629 --> 00:12:10.790 align:start position:0%
+ 
+ 
+
+00:12:10.790 --> 00:12:12.069 align:start position:0%
+ 
+ 
+
+00:12:12.069 --> 00:12:13.190 align:start position:0%
+ 
+ 
+
+00:12:13.190 --> 00:12:14.710 align:start position:0%
+ 
+ 
+
+00:12:14.710 --> 00:12:16.389 align:start position:0%
+ 
+ 
+
+00:12:16.389 --> 00:12:17.670 align:start position:0%
+ 
+ 
+
+00:12:17.670 --> 00:12:21.030 align:start position:0%
+ 
+ 
+
+00:12:21.030 --> 00:12:22.790 align:start position:0%
+ 
+ 
+
+00:12:22.790 --> 00:12:24.389 align:start position:0%
+ 
+ 
+
+00:12:24.389 --> 00:12:25.990 align:start position:0%
+ 
+ 
+
+00:12:25.990 --> 00:12:28.310 align:start position:0%
+ 
+ 
+
+00:12:28.310 --> 00:12:30.310 align:start position:0%
+ 
+ 
+
+00:12:30.310 --> 00:12:32.310 align:start position:0%
+ 
+ 
+
+00:12:32.310 --> 00:12:33.910 align:start position:0%
+ 
+ 
+
+00:12:33.910 --> 00:12:37.829 align:start position:0%
+ 
+ 
+
+00:12:37.829 --> 00:12:39.430 align:start position:0%
+ 
+ 
+
+00:12:39.430 --> 00:12:40.949 align:start position:0%
+ 
+ 
+
+00:12:40.949 --> 00:12:42.949 align:start position:0%
+ 
+ 
+
+00:12:42.949 --> 00:12:45.269 align:start position:0%
+ 
+ 
+
+00:12:45.269 --> 00:12:45.279 align:start position:0%
+ 
+ 
+
+00:12:45.279 --> 00:12:46.310 align:start position:0%
+ 
+
+
+00:12:46.310 --> 00:12:48.710 align:start position:0%
+ 
+ 
+
+00:12:48.710 --> 00:12:50.069 align:start position:0%
+ 
+ 
+
+00:12:50.069 --> 00:12:51.430 align:start position:0%
+ 
+ 
+
+00:12:51.430 --> 00:12:54.069 align:start position:0%
+ 
+ 
+
+00:12:54.069 --> 00:12:56.710 align:start position:0%
+ 
+ 
+
+00:12:56.710 --> 00:12:59.190 align:start position:0%
+ 
+ 
+
+00:12:59.190 --> 00:13:00.550 align:start position:0%
+ 
+ 
+
+00:13:00.550 --> 00:13:02.150 align:start position:0%
+ 
+ 
+
+00:13:02.150 --> 00:13:04.550 align:start position:0%
+ 
+ 
+
+00:13:04.550 --> 00:13:07.030 align:start position:0%
+ 
+ 
+
+00:13:07.030 --> 00:13:07.040 align:start position:0%
+ 
+ 
+
+00:13:07.040 --> 00:13:07.670 align:start position:0%
+ 
+
+
+00:13:07.670 --> 00:13:09.670 align:start position:0%
+ 
+ 
+
+00:13:09.670 --> 00:13:11.990 align:start position:0%
+ 
+ 
+
+00:13:11.990 --> 00:13:13.590 align:start position:0%
+ 
+ 
+
+00:13:13.590 --> 00:13:15.350 align:start position:0%
+ 
+ 
+
+00:13:15.350 --> 00:13:17.110 align:start position:0%
+ 
+ 
+
+00:13:17.110 --> 00:13:19.350 align:start position:0%
+ 
+ 
+
+00:13:19.350 --> 00:13:20.790 align:start position:0%
+ 
+ 
+
+00:13:20.790 --> 00:13:22.389 align:start position:0%
+ 
+ 
+
+00:13:22.389 --> 00:13:23.990 align:start position:0%
+ 
+ 
+
+00:13:23.990 --> 00:13:26.069 align:start position:0%
+ 
+ 
+
+00:13:26.069 --> 00:13:27.350 align:start position:0%
+ 
+ 
+
+00:13:27.350 --> 00:13:29.910 align:start position:0%
+ 
+ 
+
+00:13:29.910 --> 00:13:31.350 align:start position:0%
+ 
+ 
+
+00:13:31.350 --> 00:13:32.949 align:start position:0%
+ 
+ 
+
+00:13:32.949 --> 00:13:34.470 align:start position:0%
+ 
+ 
+
+00:13:34.470 --> 00:13:36.310 align:start position:0%
+ 
+ 
+
+00:13:36.310 --> 00:13:37.910 align:start position:0%
+ 
+ 
+
+00:13:37.910 --> 00:13:39.350 align:start position:0%
+ 
+ 
+
+00:13:39.350 --> 00:13:41.110 align:start position:0%
+ 
+ 
+
+00:13:41.110 --> 00:13:42.790 align:start position:0%
+ 
+ 
+
+00:13:42.790 --> 00:13:44.310 align:start position:0%
+ 
+ 
+
+00:13:44.310 --> 00:13:44.320 align:start position:0%
+ 
+ 
+
+00:13:44.320 --> 00:13:44.949 align:start position:0%
+ 
+
+
+00:13:44.949 --> 00:13:46.870 align:start position:0%
+ 
+ 
+
+00:13:46.870 --> 00:13:47.910 align:start position:0%
+ 
+ 
+
+00:13:47.910 --> 00:13:49.350 align:start position:0%
+ 
+ 
+
+00:13:49.350 --> 00:13:51.110 align:start position:0%
+ 
+ 
+
+00:13:51.110 --> 00:13:53.269 align:start position:0%
+ 
+ 
+
+00:13:53.269 --> 00:13:54.550 align:start position:0%
+ 
+ 
+
+00:13:54.550 --> 00:13:55.990 align:start position:0%
+ 
+ 
+
+00:13:55.990 --> 00:13:57.350 align:start position:0%
+ 
+ 
+
+00:13:57.350 --> 00:13:58.870 align:start position:0%
+ 
+ 
+
+00:13:58.870 --> 00:14:00.230 align:start position:0%
+ 
+ 
+
+00:14:00.230 --> 00:14:03.189 align:start position:0%
+ 
+ 
+
+00:14:03.189 --> 00:14:09.990 align:start position:0%
+ 
+ 
+
+00:14:09.990 --> 00:14:13.829 align:start position:0%
+ 
+ 
+
+00:14:13.829 --> 00:14:15.750 align:start position:0%
+ 
+ 
+
+00:14:15.750 --> 00:14:17.590 align:start position:0%
+ 
+ 
+
+00:14:17.590 --> 00:14:18.949 align:start position:0%
+ 
+ 
+
+00:14:18.949 --> 00:14:20.230 align:start position:0%
+ 
+ 
+
+00:14:20.230 --> 00:14:21.269 align:start position:0%
+ 
+ 
+
+00:14:21.269 --> 00:14:22.870 align:start position:0%
+ 
+ 
+
+00:14:22.870 --> 00:14:24.230 align:start position:0%
+ 
+ 
+
+00:14:24.230 --> 00:14:25.670 align:start position:0%
+ 
+ 
+
+00:14:25.670 --> 00:14:27.030 align:start position:0%
+ 
+ 
+
+00:14:27.030 --> 00:14:27.040 align:start position:0%
+ 
+ 
+
+00:14:27.040 --> 00:14:27.350 align:start position:0%
+ 
+
+
+00:14:27.350 --> 00:14:29.670 align:start position:0%
+ 
+ 
+
+00:14:29.670 --> 00:14:30.949 align:start position:0%
+ 
+ 
+
+00:14:30.949 --> 00:14:32.150 align:start position:0%
+ 
+ 
+
+00:14:32.150 --> 00:14:34.310 align:start position:0%
+ 
+ 
+
+00:14:34.310 --> 00:14:35.910 align:start position:0%
+ 
+ 
+
+00:14:35.910 --> 00:14:37.030 align:start position:0%
+ 
+ 
+
+00:14:37.030 --> 00:14:39.030 align:start position:0%
+ 
+ 
+
+00:14:39.030 --> 00:14:40.629 align:start position:0%
+ 
+ 
+
+00:14:40.629 --> 00:14:43.910 align:start position:0%
+ 
+ 
+
+00:14:43.910 --> 00:14:43.920 align:start position:0%
+ 
+ 
+
+00:14:43.920 --> 00:14:44.230 align:start position:0%
+ 
+
+
+00:14:44.230 --> 00:14:45.910 align:start position:0%
+ 
+ 
+
+00:14:45.910 --> 00:14:47.590 align:start position:0%
+ 
+ 
+
+00:14:47.590 --> 00:14:47.600 align:start position:0%
+ 
+ 
+
+00:14:47.600 --> 00:14:47.990 align:start position:0%
+ 
+
+
+00:14:47.990 --> 00:14:50.389 align:start position:0%
+ 
+ 
+
+00:14:50.389 --> 00:14:51.509 align:start position:0%
+ 
+ 
+
+00:14:51.509 --> 00:14:53.269 align:start position:0%
+ 
+ 
+
+00:14:53.269 --> 00:14:54.310 align:start position:0%
+ 
+ 
+
+00:14:54.310 --> 00:14:55.990 align:start position:0%
+ 
+ 
+
+00:14:55.990 --> 00:14:57.670 align:start position:0%
+ 
+ 
+
+00:14:57.670 --> 00:14:59.829 align:start position:0%
+ 
+ 
+
+00:14:59.829 --> 00:15:00.949 align:start position:0%
+ 
+ 
+
+00:15:00.949 --> 00:15:02.870 align:start position:0%
+ 
+ 
+
+00:15:02.870 --> 00:15:04.470 align:start position:0%
+ 
+ 
+
+00:15:04.470 --> 00:15:05.750 align:start position:0%
+ 
+ 
+
+00:15:05.750 --> 00:15:07.430 align:start position:0%
+ 
+ 
+
+00:15:07.430 --> 00:15:08.150 align:start position:0%
+ 
+ 
+
+00:15:08.150 --> 00:15:10.710 align:start position:0%
+ 
+ 
+
+00:15:10.710 --> 00:15:12.310 align:start position:0%
+ 
+ 
+
+00:15:12.310 --> 00:15:13.750 align:start position:0%
+ 
+ 
+
+00:15:13.750 --> 00:15:15.670 align:start position:0%
+ 
+ 
+
+00:15:15.670 --> 00:15:16.949 align:start position:0%
+ 
+ 
+
+00:15:16.949 --> 00:15:17.910 align:start position:0%
+ 
+ 
+
+00:15:17.910 --> 00:15:19.590 align:start position:0%
+ 
+ 
+
+00:15:19.590 --> 00:15:21.269 align:start position:0%
+ 
+ 
+
+00:15:21.269 --> 00:15:22.629 align:start position:0%
+ 
+ 
+
+00:15:22.629 --> 00:15:24.069 align:start position:0%
+ 
+ 
+
+00:15:24.069 --> 00:15:25.750 align:start position:0%
+ 
+ 
+
+00:15:25.750 --> 00:15:27.350 align:start position:0%
+ 
+ 
+
+00:15:27.350 --> 00:15:29.030 align:start position:0%
+ 
+ 
+
+00:15:29.030 --> 00:15:29.829 align:start position:0%
+ 
+ 
+
+00:15:29.829 --> 00:15:31.590 align:start position:0%
+ 
+ 
+
+00:15:31.590 --> 00:15:33.430 align:start position:0%
+ 
+ 
+
+00:15:33.430 --> 00:15:35.030 align:start position:0%
+ 
+ 
+
+00:15:35.030 --> 00:15:37.509 align:start position:0%
+ 
+ 
+
+00:15:37.509 --> 00:15:38.790 align:start position:0%
+ 
+ 
+
+00:15:38.790 --> 00:15:40.629 align:start position:0%
+ 
+ 
+
+00:15:40.629 --> 00:15:42.550 align:start position:0%
+ 
+ 
+
+00:15:42.550 --> 00:15:43.670 align:start position:0%
+ 
+ 
+
+00:15:43.670 --> 00:15:45.269 align:start position:0%
+ 
+ 
+
+00:15:45.269 --> 00:15:47.030 align:start position:0%
+ 
+ 
+
+00:15:47.030 --> 00:15:49.269 align:start position:0%
+ 
+ 
+
+00:15:49.269 --> 00:15:49.279 align:start position:0%
+ 
+ 
+
+00:15:49.279 --> 00:15:51.350 align:start position:0%
+ 
+
+
+00:15:51.350 --> 00:15:53.110 align:start position:0%
+ 
+ 
+
+00:15:53.110 --> 00:15:54.629 align:start position:0%
+ 
+ 
+
+00:15:54.629 --> 00:15:55.910 align:start position:0%
+ 
+ 
+
+00:15:55.910 --> 00:15:58.230 align:start position:0%
+ 
+ 
+
+00:15:58.230 --> 00:16:00.949 align:start position:0%
+ 
+ 
+
+00:16:00.949 --> 00:16:02.310 align:start position:0%
+ 
+ 
+
+00:16:02.310 --> 00:16:03.430 align:start position:0%
+ 
+ 
+
+00:16:03.430 --> 00:16:05.829 align:start position:0%
+ 
+ 
+
+00:16:05.829 --> 00:16:07.670 align:start position:0%
+ 
+ 
+
+00:16:07.670 --> 00:16:09.110 align:start position:0%
+ 
+ 
+
+00:16:09.110 --> 00:16:10.870 align:start position:0%
+ 
+ 
+
+00:16:10.870 --> 00:16:12.710 align:start position:0%
+ 
+ 
+
+00:16:12.710 --> 00:16:14.069 align:start position:0%
+ 
+ 
+
+00:16:14.069 --> 00:16:16.069 align:start position:0%
+ 
+ 
+
+00:16:16.069 --> 00:16:17.829 align:start position:0%
+ 
+ 
+
+00:16:17.829 --> 00:16:18.550 align:start position:0%
+ 
+ 
+
+00:16:18.550 --> 00:16:19.590 align:start position:0%
+ 
+ 
+
+00:16:19.590 --> 00:16:21.110 align:start position:0%
+ 
+ 
+
+00:16:21.110 --> 00:16:21.990 align:start position:0%
+ 
+ 
+
+00:16:21.990 --> 00:16:25.269 align:start position:0%
+ 
+ 
+
+00:16:25.269 --> 00:16:26.870 align:start position:0%
+ 
+ 
+
+00:16:26.870 --> 00:16:28.150 align:start position:0%
+ 
+ 
+
+00:16:28.150 --> 00:16:28.870 align:start position:0%
+ 
+ 
+
+00:16:28.870 --> 00:16:30.550 align:start position:0%
+ 
+ 
+
+00:16:30.550 --> 00:16:32.550 align:start position:0%
+ 
+ 
+
+00:16:32.550 --> 00:16:34.829 align:start position:0%
+ 
+ 
+
+00:16:34.829 --> 00:16:34.839 align:start position:0%
+ 
+ 
+
+00:16:34.839 --> 00:16:36.310 align:start position:0%
+ 
+
+
+00:16:36.310 --> 00:16:37.990 align:start position:0%
+ 
+ 
+
+00:16:37.990 --> 00:16:40.310 align:start position:0%
+ 
+ 
+
+00:16:40.310 --> 00:16:41.829 align:start position:0%
+ 
+ 
+
+00:16:41.829 --> 00:16:43.509 align:start position:0%
+ 
+ 
+
+00:16:43.509 --> 00:16:44.629 align:start position:0%
+ 
+ 
+
+00:16:44.629 --> 00:16:47.509 align:start position:0%
+ 
+ 
+
+00:16:47.509 --> 00:16:47.519 align:start position:0%
+ 
+ 
+
+00:16:47.519 --> 00:16:48.870 align:start position:0%
+ 
+
+
+00:16:48.870 --> 00:16:50.069 align:start position:0%
+ 
+ 
+
+00:16:50.069 --> 00:16:51.829 align:start position:0%
+ 
+ 
+
+00:16:51.829 --> 00:16:53.749 align:start position:0%
+ 
+ 
+
+00:16:53.749 --> 00:16:55.030 align:start position:0%
+ 
+ 
+
+00:16:55.030 --> 00:16:57.430 align:start position:0%
+ 
+ 
+
+00:16:57.430 --> 00:16:59.189 align:start position:0%
+ 
+ 
+
+00:16:59.189 --> 00:17:00.629 align:start position:0%
+ 
+ 
+
+00:17:00.629 --> 00:17:03.030 align:start position:0%
+ 
+ 
+
+00:17:03.030 --> 00:17:04.150 align:start position:0%
+ 
+ 
+
+00:17:04.150 --> 00:17:06.309 align:start position:0%
+ 
+ 
+
+00:17:06.309 --> 00:17:07.590 align:start position:0%
+ 
+ 
+
+00:17:07.590 --> 00:17:10.390 align:start position:0%
+ 
+ 
+
+00:17:10.390 --> 00:17:11.270 align:start position:0%
+ 
+ 
+
+00:17:11.270 --> 00:17:12.789 align:start position:0%
+ 
+ 
+
+00:17:12.789 --> 00:17:14.150 align:start position:0%
+ 
+ 
+
+00:17:14.150 --> 00:17:15.750 align:start position:0%
+ 
+ 
+
+00:17:15.750 --> 00:17:16.549 align:start position:0%
+ 
+ 
+
+00:17:16.549 --> 00:17:17.829 align:start position:0%
+ 
+ 
+
+00:17:17.829 --> 00:17:19.429 align:start position:0%
+ 
+ 
+
+00:17:19.429 --> 00:17:21.029 align:start position:0%
+ 
+ 
+
+00:17:21.029 --> 00:17:23.350 align:start position:0%
+ 
+ 
+
+00:17:23.350 --> 00:17:25.590 align:start position:0%
+ 
+ 
+
+00:17:25.590 --> 00:17:26.710 align:start position:0%
+ 
+ 
+
+00:17:26.710 --> 00:17:29.190 align:start position:0%
+ 
+ 
+
+00:17:29.190 --> 00:17:31.270 align:start position:0%
+ 
+ 
+
+00:17:31.270 --> 00:17:33.190 align:start position:0%
+ 
+ 
+
+00:17:33.190 --> 00:17:34.470 align:start position:0%
+ 
+ 
+
+00:17:34.470 --> 00:17:34.480 align:start position:0%
+ 
+ 
+
+00:17:34.480 --> 00:17:35.590 align:start position:0%
+ 
+
+
+00:17:35.590 --> 00:17:37.190 align:start position:0%
+ 
+ 
+
+00:17:37.190 --> 00:17:38.789 align:start position:0%
+ 
+ 
+
+00:17:38.789 --> 00:17:39.909 align:start position:0%
+ 
+ 
+
+00:17:39.909 --> 00:17:42.710 align:start position:0%
+ 
+ 
+
+00:17:42.710 --> 00:17:43.990 align:start position:0%
+ 
+ 
+
+00:17:43.990 --> 00:17:46.549 align:start position:0%
+ 
+ 
+
+00:17:46.549 --> 00:17:47.830 align:start position:0%
+ 
+ 
+
+00:17:47.830 --> 00:17:49.110 align:start position:0%
+ 
+ 
+
+00:17:49.110 --> 00:17:51.350 align:start position:0%
+ 
+ 
+
+00:17:51.350 --> 00:17:53.190 align:start position:0%
+ 
+ 
+
+00:17:53.190 --> 00:17:55.029 align:start position:0%
+ 
+ 
+
+00:17:55.029 --> 00:17:56.789 align:start position:0%
+ 
+ 
+
+00:17:56.789 --> 00:17:58.630 align:start position:0%
+ 
+ 
+
+00:17:58.630 --> 00:18:00.470 align:start position:0%
+ 
+ 
+
+00:18:00.470 --> 00:18:02.710 align:start position:0%
+ 
+ 
+
+00:18:02.710 --> 00:18:04.870 align:start position:0%
+ 
+ 
+
+00:18:04.870 --> 00:18:06.150 align:start position:0%
+ 
+ 
+
+00:18:06.150 --> 00:18:08.470 align:start position:0%
+ 
+ 
+
+00:18:08.470 --> 00:18:09.990 align:start position:0%
+ 
+ 
+
+00:18:09.990 --> 00:18:11.669 align:start position:0%
+ 
+ 
+
+00:18:11.669 --> 00:18:14.470 align:start position:0%
+ 
+ 
+
+00:18:14.470 --> 00:18:17.029 align:start position:0%
+ 
+ 
+
+00:18:17.029 --> 00:18:18.710 align:start position:0%
+ 
+ 
+
+00:18:18.710 --> 00:18:20.390 align:start position:0%
+ 
+ 
+
+00:18:20.390 --> 00:18:21.270 align:start position:0%
+ 
+ 
+
+00:18:21.270 --> 00:18:23.029 align:start position:0%
+ 
+ 
+
+00:18:23.029 --> 00:18:24.950 align:start position:0%
+ 
+ 
+
+00:18:24.950 --> 00:18:26.230 align:start position:0%
+ 
+ 
+
+00:18:26.230 --> 00:18:28.549 align:start position:0%
+ 
+ 
+
+00:18:28.549 --> 00:18:29.909 align:start position:0%
+ 
+ 
+
+00:18:29.909 --> 00:18:31.510 align:start position:0%
+ 
+ 
+
+00:18:31.510 --> 00:18:33.270 align:start position:0%
+ 
+ 
+
+00:18:33.270 --> 00:18:34.710 align:start position:0%
+ 
+ 
+
+00:18:34.710 --> 00:18:36.470 align:start position:0%
+ 
+ 
+
+00:18:36.470 --> 00:18:39.190 align:start position:0%
+ 
+ 
+
+00:18:39.190 --> 00:18:40.390 align:start position:0%
+ 
+ 
+
+00:18:40.390 --> 00:18:42.710 align:start position:0%
+ 
+ 
+
+00:18:42.710 --> 00:18:44.549 align:start position:0%
+ 
+ 
+
+00:18:44.549 --> 00:18:47.190 align:start position:0%
+ 
+ 
+
+00:18:47.190 --> 00:18:48.789 align:start position:0%
+ 
+ 
+
+00:18:48.789 --> 00:18:50.870 align:start position:0%
+ 
+ 
+
+00:18:50.870 --> 00:18:52.950 align:start position:0%
+ 
+ 
+
+00:18:52.950 --> 00:18:54.789 align:start position:0%
+ 
+ 
+
+00:18:54.789 --> 00:18:55.990 align:start position:0%
+ 
+ 
+
+00:18:55.990 --> 00:18:57.669 align:start position:0%
+ 
+ 
+
+00:18:57.669 --> 00:18:59.270 align:start position:0%
+ 
+ 
+
+00:18:59.270 --> 00:19:01.029 align:start position:0%
+ 
+ 
+
+00:19:01.029 --> 00:19:02.310 align:start position:0%
+ 
+ 
+
+00:19:02.310 --> 00:19:04.150 align:start position:0%
+ 
+ 
+
+00:19:04.150 --> 00:19:05.270 align:start position:0%
+ 
+ 
+
+00:19:05.270 --> 00:19:06.150 align:start position:0%
+ 
+ 
+
+00:19:06.150 --> 00:19:08.789 align:start position:0%
+ 
+ 
+
+00:19:08.789 --> 00:19:10.230 align:start position:0%
+ 
+ 
+
+00:19:10.230 --> 00:19:11.669 align:start position:0%
+ 
+ 
+
+00:19:11.669 --> 00:19:13.430 align:start position:0%
+ 
+ 
+
+00:19:13.430 --> 00:19:14.950 align:start position:0%
+ 
+ 
+
+00:19:14.950 --> 00:19:17.110 align:start position:0%
+ 
+ 
+
+00:19:17.110 --> 00:19:18.870 align:start position:0%
+ 
+ 
+
+00:19:18.870 --> 00:19:20.230 align:start position:0%
+ 
+ 
+
+00:19:20.230 --> 00:19:21.750 align:start position:0%
+ 
+ 
+
+00:19:21.750 --> 00:19:23.270 align:start position:0%
+ 
+ 
+
+00:19:23.270 --> 00:19:24.710 align:start position:0%
+ 
+ 
+
+00:19:24.710 --> 00:19:25.909 align:start position:0%
+ 
+ 
+
+00:19:25.909 --> 00:19:28.390 align:start position:0%
+ 
+ 
+
+00:19:28.390 --> 00:19:28.400 align:start position:0%
+ 
+ 
+
+00:19:28.400 --> 00:19:29.430 align:start position:0%
+ 
+
+
+00:19:29.430 --> 00:19:30.789 align:start position:0%
+ 
+ 
+
+00:19:30.789 --> 00:19:32.070 align:start position:0%
+ 
+ 
+
+00:19:32.070 --> 00:19:33.350 align:start position:0%
+ 
+ 
+
+00:19:33.350 --> 00:19:35.430 align:start position:0%
+ 
+ 
+
+00:19:35.430 --> 00:19:37.029 align:start position:0%
+ 
+ 
+
+00:19:37.029 --> 00:19:39.510 align:start position:0%
+ 
+ 
+
+00:19:39.510 --> 00:19:40.310 align:start position:0%
+ 
+ 
+
+00:19:40.310 --> 00:19:42.950 align:start position:0%
+ 
+ 
+
+00:19:42.950 --> 00:19:44.390 align:start position:0%
+ 
+ 
+
+00:19:44.390 --> 00:19:45.830 align:start position:0%
+ 
+ 
+
+00:19:45.830 --> 00:19:47.270 align:start position:0%
+ 
+ 
+
+00:19:47.270 --> 00:19:48.710 align:start position:0%
+ 
+ 
+
+00:19:48.710 --> 00:19:50.630 align:start position:0%
+ 
+ 
+
+00:19:50.630 --> 00:19:51.909 align:start position:0%
+ 
+ 
+
+00:19:51.909 --> 00:19:53.750 align:start position:0%
+ 
+ 
+
+00:19:53.750 --> 00:19:55.350 align:start position:0%
+ 
+ 
+
+00:19:55.350 --> 00:19:56.950 align:start position:0%
+ 
+ 
+
+00:19:56.950 --> 00:19:58.150 align:start position:0%
+ 
+ 
+
+00:19:58.150 --> 00:19:58.160 align:start position:0%
+ 
+ 
+
+00:19:58.160 --> 00:19:59.430 align:start position:0%
+ 
+
+
+00:19:59.430 --> 00:20:02.149 align:start position:0%
+ 
+ 
+
+00:20:02.149 --> 00:20:03.990 align:start position:0%
+ 
+ 
+
+00:20:03.990 --> 00:20:05.270 align:start position:0%
+ 
+ 
+
+00:20:05.270 --> 00:20:06.789 align:start position:0%
+ 
+ 
+
+00:20:06.789 --> 00:20:08.310 align:start position:0%
+ 
+ 
+
+00:20:08.310 --> 00:20:08.320 align:start position:0%
+ 
+ 
+
+00:20:08.320 --> 00:20:09.190 align:start position:0%
+ 
+
+
+00:20:09.190 --> 00:20:10.310 align:start position:0%
+ 
+ 
+
+00:20:10.310 --> 00:20:12.310 align:start position:0%
+ 
+ 
+
+00:20:12.310 --> 00:20:14.230 align:start position:0%
+ 
+ 
+
+00:20:14.230 --> 00:20:16.470 align:start position:0%
+ 
+ 
+
+00:20:16.470 --> 00:20:17.990 align:start position:0%
+ 
+ 
+
+00:20:17.990 --> 00:20:19.590 align:start position:0%
+ 
+ 
+
+00:20:19.590 --> 00:20:21.029 align:start position:0%
+ 
+ 
+
+00:20:21.029 --> 00:20:23.590 align:start position:0%
+ 
+ 
+
+00:20:23.590 --> 00:20:25.029 align:start position:0%
+ 
+ 
+
+00:20:25.029 --> 00:20:26.950 align:start position:0%
+ 
+ 
+
+00:20:26.950 --> 00:20:29.669 align:start position:0%
+ 
+ 
+
+00:20:29.669 --> 00:20:29.679 align:start position:0%
+ 
+ 
+
+00:20:29.679 --> 00:20:30.230 align:start position:0%
+ 
+
+
+00:20:30.230 --> 00:20:31.750 align:start position:0%
+ 
+ 
+
+00:20:31.750 --> 00:20:33.430 align:start position:0%
+ 
+ 
+
+00:20:33.430 --> 00:20:35.110 align:start position:0%
+ 
+ 
+
+00:20:35.110 --> 00:20:36.710 align:start position:0%
+ 
+ 
+
+00:20:36.710 --> 00:20:38.230 align:start position:0%
+ 
+ 
+
+00:20:38.230 --> 00:20:39.830 align:start position:0%
+ 
+ 
+
+00:20:39.830 --> 00:20:40.870 align:start position:0%
+ 
+ 
+
+00:20:40.870 --> 00:20:44.310 align:start position:0%
+ 
+ 
+
+00:20:44.310 --> 00:20:46.470 align:start position:0%
+ 
+ 
+
+00:20:46.470 --> 00:20:48.070 align:start position:0%
+ 
+ 
+
+00:20:48.070 --> 00:20:50.789 align:start position:0%
+ 
+ 
+
+00:20:50.789 --> 00:20:51.909 align:start position:0%
+ 
+ 
+
+00:20:51.909 --> 00:20:53.990 align:start position:0%
+ 
+ 
+
+00:20:53.990 --> 00:20:55.430 align:start position:0%
+ 
+ 
+
+00:20:55.430 --> 00:20:55.440 align:start position:0%
+ 
+ 
+
+00:20:55.440 --> 00:20:56.149 align:start position:0%
+ 
+
+
+00:20:56.149 --> 00:20:57.830 align:start position:0%
+ 
+ 
+
+00:20:57.830 --> 00:20:59.830 align:start position:0%
+ 
+ 
+
+00:20:59.830 --> 00:21:01.350 align:start position:0%
+ 
+ 
+
+00:21:01.350 --> 00:21:04.230 align:start position:0%
+ 
+ 
+
+00:21:04.230 --> 00:21:05.750 align:start position:0%
+ 
+ 
+
+00:21:05.750 --> 00:21:07.350 align:start position:0%
+ 
+ 
+
+00:21:07.350 --> 00:21:09.029 align:start position:0%
+ 
+ 
+
+00:21:09.029 --> 00:21:10.149 align:start position:0%
+ 
+ 
+
+00:21:10.149 --> 00:21:11.830 align:start position:0%
+ 
+ 
+
+00:21:11.830 --> 00:21:14.630 align:start position:0%
+ 
+ 
+
+00:21:14.630 --> 00:21:15.669 align:start position:0%
+ 
+ 
+
+00:21:15.669 --> 00:21:17.270 align:start position:0%
+ 
+ 
+
+00:21:17.270 --> 00:21:19.270 align:start position:0%
+ 
+ 
+
+00:21:19.270 --> 00:21:20.789 align:start position:0%
+ 
+ 
+
+00:21:20.789 --> 00:21:22.390 align:start position:0%
+ 
+ 
+
+00:21:22.390 --> 00:21:23.909 align:start position:0%
+ 
+ 
+
+00:21:23.909 --> 00:21:25.510 align:start position:0%
+ 
+ 
+
+00:21:25.510 --> 00:21:27.350 align:start position:0%
+ 
+ 
+
+00:21:27.350 --> 00:21:28.549 align:start position:0%
+ 
+ 
+
+00:21:28.549 --> 00:21:30.230 align:start position:0%
+ 
+ 
+
+00:21:30.230 --> 00:21:30.950 align:start position:0%
+ 
+ 
+
+00:21:30.950 --> 00:21:32.549 align:start position:0%
+ 
+ 
+
+00:21:32.549 --> 00:21:33.909 align:start position:0%
+ 
+ 
+
+00:21:33.909 --> 00:21:35.110 align:start position:0%
+ 
+ 
+
+00:21:35.110 --> 00:21:37.669 align:start position:0%
+ 
+ 
+
+00:21:37.669 --> 00:21:39.830 align:start position:0%
+ 
+ 
+
+00:21:39.830 --> 00:21:40.789 align:start position:0%
+ 
+ 
+
+00:21:40.789 --> 00:21:42.070 align:start position:0%
+ 
+ 
+
+00:21:42.070 --> 00:21:43.590 align:start position:0%
+ 
+ 
+
+00:21:43.590 --> 00:21:45.750 align:start position:0%
+ 
+ 
+
+00:21:45.750 --> 00:21:48.470 align:start position:0%
+ 
+ 
+
+00:21:48.470 --> 00:21:48.480 align:start position:0%
+ 
+ 
+
+00:21:48.480 --> 00:21:49.190 align:start position:0%
+ 
+
+
+00:21:49.190 --> 00:21:51.270 align:start position:0%
+ 
+ 
+
+00:21:51.270 --> 00:21:52.390 align:start position:0%
+ 
+ 
+
+00:21:52.390 --> 00:21:54.630 align:start position:0%
+ 
+ 
+
+00:21:54.630 --> 00:21:56.070 align:start position:0%
+ 
+ 
+
+00:21:56.070 --> 00:21:56.080 align:start position:0%
+ 
+ 
+
+00:21:56.080 --> 00:21:57.029 align:start position:0%
+ 
+
+
+00:21:57.029 --> 00:21:59.190 align:start position:0%
+ 
+ 
+
+00:21:59.190 --> 00:22:00.230 align:start position:0%
+ 
+ 
+
+00:22:00.230 --> 00:22:02.390 align:start position:0%
+ 
+ 
+
+00:22:02.390 --> 00:22:03.750 align:start position:0%
+ 
+ 
+
+00:22:03.750 --> 00:22:06.310 align:start position:0%
+ 
+ 
+
+00:22:06.310 --> 00:22:06.320 align:start position:0%
+ 
+ 
+
+00:22:06.320 --> 00:22:07.110 align:start position:0%
+ 
+
+
+00:22:07.110 --> 00:22:09.909 align:start position:0%
+ 
+ 
+
+00:22:09.909 --> 00:22:12.230 align:start position:0%
+ 
+ 
+
+00:22:12.230 --> 00:22:14.470 align:start position:0%
+ 
+ 
+
+00:22:14.470 --> 00:22:15.510 align:start position:0%
+ 
+ 
+
+00:22:15.510 --> 00:22:17.510 align:start position:0%
+ 
+ 
+
+00:22:17.510 --> 00:22:19.350 align:start position:0%
+ 
+ 
+
+00:22:19.350 --> 00:22:21.669 align:start position:0%
+ 
+ 
+
+00:22:21.669 --> 00:22:23.270 align:start position:0%
+ 
+ 
+
+00:22:23.270 --> 00:22:24.870 align:start position:0%
+ 
+ 
+
+00:22:24.870 --> 00:22:26.470 align:start position:0%
+ 
+ 
+
+00:22:26.470 --> 00:22:26.480 align:start position:0%
+ 
+ 
+
+00:22:26.480 --> 00:22:27.510 align:start position:0%
+ 
+
+
+00:22:27.510 --> 00:22:29.590 align:start position:0%
+ 
+ 
+
+00:22:29.590 --> 00:22:31.190 align:start position:0%
+ 
+ 
+
+00:22:31.190 --> 00:22:32.789 align:start position:0%
+ 
+ 
+
+00:22:32.789 --> 00:22:34.390 align:start position:0%
+ 
+ 
+
+00:22:34.390 --> 00:22:35.830 align:start position:0%
+ 
+ 
+
+00:22:35.830 --> 00:22:37.190 align:start position:0%
+ 
+ 
+
+00:22:37.190 --> 00:22:37.200 align:start position:0%
+ 
+ 
+
+00:22:37.200 --> 00:22:38.310 align:start position:0%
+ 
+
+
+00:22:38.310 --> 00:22:39.990 align:start position:0%
+ 
+ 
+
+00:22:39.990 --> 00:22:41.590 align:start position:0%
+ 
+ 
+
+00:22:41.590 --> 00:22:42.950 align:start position:0%
+ 
+ 
+
+00:22:42.950 --> 00:22:44.710 align:start position:0%
+ 
+ 
+
+00:22:44.710 --> 00:22:46.070 align:start position:0%
+ 
+ 
+
+00:22:46.070 --> 00:22:48.149 align:start position:0%
+ 
+ 
+
+00:22:48.149 --> 00:22:48.159 align:start position:0%
+ 
+ 
+
+00:22:48.159 --> 00:22:48.710 align:start position:0%
+ 
+
+
+00:22:48.710 --> 00:22:50.710 align:start position:0%
+ 
+ 
+
+00:22:50.710 --> 00:22:52.230 align:start position:0%
+ 
+ 
+
+00:22:52.230 --> 00:22:53.430 align:start position:0%
+ 
+ 
+
+00:22:53.430 --> 00:22:55.350 align:start position:0%
+ 
+ 
+
+00:22:55.350 --> 00:22:57.270 align:start position:0%
+ 
+ 
+
+00:22:57.270 --> 00:22:58.870 align:start position:0%
+ 
+ 
+
+00:22:58.870 --> 00:23:00.310 align:start position:0%
+ 
+ 
+
+00:23:00.310 --> 00:23:01.830 align:start position:0%
+ 
+ 
+
+00:23:01.830 --> 00:23:03.350 align:start position:0%
+ 
+ 
+
+00:23:03.350 --> 00:23:05.510 align:start position:0%
+ 
+ 
+
+00:23:05.510 --> 00:23:06.870 align:start position:0%
+ 
+ 
+
+00:23:06.870 --> 00:23:06.880 align:start position:0%
+ 
+ 
+
+00:23:06.880 --> 00:23:08.630 align:start position:0%
+ 
+
+
+00:23:08.630 --> 00:23:11.430 align:start position:0%
+ 
+ 
+
+00:23:11.430 --> 00:23:13.190 align:start position:0%
+ 
+ 
+
+00:23:13.190 --> 00:23:14.070 align:start position:0%
+ 
+ 
+
+00:23:14.070 --> 00:23:16.470 align:start position:0%
+ 
+ 
+
+00:23:16.470 --> 00:23:18.310 align:start position:0%
+ 
+ 
+
+00:23:18.310 --> 00:23:20.149 align:start position:0%
+ 
+ 
+
+00:23:20.149 --> 00:23:21.510 align:start position:0%
+ 
+ 
+
+00:23:21.510 --> 00:23:22.870 align:start position:0%
+ 
+ 
+
+00:23:22.870 --> 00:23:24.549 align:start position:0%
+ 
+ 
+
+00:23:24.549 --> 00:23:25.909 align:start position:0%
+ 
+ 
+
+00:23:25.909 --> 00:23:27.430 align:start position:0%
+ 
+ 
+
+00:23:27.430 --> 00:23:29.430 align:start position:0%
+ 
+ 
+
+00:23:29.430 --> 00:23:31.510 align:start position:0%
+ 
+ 
+
+00:23:31.510 --> 00:23:33.110 align:start position:0%
+ 
+ 
+
+00:23:33.110 --> 00:23:35.029 align:start position:0%
+ 
+ 
+
+00:23:35.029 --> 00:23:36.470 align:start position:0%
+ 
+ 
+
+00:23:36.470 --> 00:23:37.909 align:start position:0%
+ 
+ 
+
+00:23:37.909 --> 00:23:39.190 align:start position:0%
+ 
+ 
+
+00:23:39.190 --> 00:23:40.870 align:start position:0%
+ 
+ 
+
+00:23:40.870 --> 00:23:43.269 align:start position:0%
+ 
+ 
+
+00:23:43.269 --> 00:23:44.470 align:start position:0%
+ 
+ 
+
+00:23:44.470 --> 00:23:45.750 align:start position:0%
+ 
+ 
+
+00:23:45.750 --> 00:23:48.470 align:start position:0%
+ 
+ 
+
+00:23:48.470 --> 00:23:48.480 align:start position:0%
+ 
+ 
+
+00:23:48.480 --> 00:23:52.630 align:start position:0%
+ 
+
+
+00:23:52.630 --> 00:23:53.909 align:start position:0%
+ 
+ 
+
+00:23:53.909 --> 00:23:55.750 align:start position:0%
+ 
+ 
+
+00:23:55.750 --> 00:23:57.029 align:start position:0%
+ 
+ 
+
+00:23:57.029 --> 00:23:58.310 align:start position:0%
+ 
+ 
+
+00:23:58.310 --> 00:24:00.230 align:start position:0%
+ 
+ 
+
+00:24:00.230 --> 00:24:01.669 align:start position:0%
+ 
+ 
+
+00:24:01.669 --> 00:24:02.950 align:start position:0%
+ 
+ 
+
+00:24:02.950 --> 00:24:02.960 align:start position:0%
+ 
+ 
+
+00:24:02.960 --> 00:24:03.269 align:start position:0%
+ 
+
+
+00:24:03.269 --> 00:24:05.830 align:start position:0%
+ 
+ 
+
+00:24:05.830 --> 00:24:07.830 align:start position:0%
+ 
+ 
+
+00:24:07.830 --> 00:24:08.789 align:start position:0%
+ 
+ 
+
+00:24:08.789 --> 00:24:10.630 align:start position:0%
+ 
+ 
+
+00:24:10.630 --> 00:24:12.630 align:start position:0%
+ 
+ 
+
+00:24:12.630 --> 00:24:14.070 align:start position:0%
+ 
+ 
+
+00:24:14.070 --> 00:24:14.080 align:start position:0%
+ 
+ 
+
+00:24:14.080 --> 00:24:14.390 align:start position:0%
+ 
+
+
+00:24:14.390 --> 00:24:15.669 align:start position:0%
+ 
+ 
+
+00:24:15.669 --> 00:24:17.350 align:start position:0%
+ 
+ 
+
+00:24:17.350 --> 00:24:18.710 align:start position:0%
+ 
+ 
+
+00:24:18.710 --> 00:24:20.310 align:start position:0%
+ 
+ 
+
+00:24:20.310 --> 00:24:22.630 align:start position:0%
+ 
+ 
+
+00:24:22.630 --> 00:24:25.350 align:start position:0%
+ 
+ 
+
+00:24:25.350 --> 00:24:26.789 align:start position:0%
+ 
+ 
+
+00:24:26.789 --> 00:24:29.029 align:start position:0%
+ 
+ 
+
+00:24:29.029 --> 00:24:30.549 align:start position:0%
+ 
+ 
+
+00:24:30.549 --> 00:24:32.630 align:start position:0%
+ 
+ 
+
+00:24:32.630 --> 00:24:33.750 align:start position:0%
+ 
+ 
+
+00:24:33.750 --> 00:24:35.029 align:start position:0%
+ 
+ 
+
+00:24:35.029 --> 00:24:36.310 align:start position:0%
+ 
+ 
+
+00:24:36.310 --> 00:24:38.149 align:start position:0%
+ 
+ 
+
+00:24:38.149 --> 00:24:39.590 align:start position:0%
+ 
+ 
+
+00:24:39.590 --> 00:24:41.430 align:start position:0%
+ 
+ 
+
+00:24:41.430 --> 00:24:43.110 align:start position:0%
+ 
+ 
+
+00:24:43.110 --> 00:24:44.710 align:start position:0%
+ 
+ 
+
+00:24:44.710 --> 00:24:45.909 align:start position:0%
+ 
+ 
+
+00:24:45.909 --> 00:24:47.190 align:start position:0%
+ 
+ 
+
+00:24:47.190 --> 00:24:48.950 align:start position:0%
+ 
+ 
+
+00:24:48.950 --> 00:24:51.110 align:start position:0%
+ 
+ 
+
+00:24:51.110 --> 00:24:52.870 align:start position:0%
+ 
+ 
+
+00:24:52.870 --> 00:24:54.630 align:start position:0%
+ 
+ 
+
+00:24:54.630 --> 00:24:56.149 align:start position:0%
+ 
+ 
+
+00:24:56.149 --> 00:24:57.830 align:start position:0%
+ 
+ 
+
+00:24:57.830 --> 00:25:00.950 align:start position:0%
+ 
+ 
+
+00:25:00.950 --> 00:25:02.950 align:start position:0%
+ 
+ 
+
+00:25:02.950 --> 00:25:03.750 align:start position:0%
+ 
+ 
+
+00:25:03.750 --> 00:25:06.630 align:start position:0%
+ 
+ 
+
+00:25:06.630 --> 00:25:07.990 align:start position:0%
+ 
+ 
+
+00:25:07.990 --> 00:25:08.950 align:start position:0%
+ 
+ 
+
+00:25:08.950 --> 00:25:10.630 align:start position:0%
+ 
+ 
+
+00:25:10.630 --> 00:25:10.640 align:start position:0%
+ 
+ 
+
+00:25:10.640 --> 00:25:12.549 align:start position:0%
+ 
+
+
+00:25:12.549 --> 00:25:13.909 align:start position:0%
+ 
+ 
+
+00:25:13.909 --> 00:25:15.750 align:start position:0%
+ 
+ 
+
+00:25:15.750 --> 00:25:18.390 align:start position:0%
+ 
+ 
+
+00:25:18.390 --> 00:25:20.310 align:start position:0%
+ 
+ 
+
+00:25:20.310 --> 00:25:21.750 align:start position:0%
+ 
+ 
+
+00:25:21.750 --> 00:25:23.110 align:start position:0%
+ 
+ 
+
+00:25:23.110 --> 00:25:24.149 align:start position:0%
+ 
+ 
+
+00:25:24.149 --> 00:25:24.159 align:start position:0%
+ 
+ 
+
+00:25:24.159 --> 00:25:25.350 align:start position:0%
+ 
+
+
+00:25:25.350 --> 00:25:27.590 align:start position:0%
+ 
+ 
+
+00:25:27.590 --> 00:25:29.190 align:start position:0%
+ 
+ 
+
+00:25:29.190 --> 00:25:30.710 align:start position:0%
+ 
+ 
+
+00:25:30.710 --> 00:25:32.310 align:start position:0%
+ 
+ 
+
+00:25:32.310 --> 00:25:33.990 align:start position:0%
+ 
+ 
+
+00:25:33.990 --> 00:25:36.789 align:start position:0%
+ 
+ 
+
+00:25:36.789 --> 00:25:38.630 align:start position:0%
+ 
+ 
+
+00:25:38.630 --> 00:25:38.640 align:start position:0%
+ 
+ 
+
+00:25:38.640 --> 00:25:39.510 align:start position:0%
+ 
+
+
+00:25:39.510 --> 00:25:41.269 align:start position:0%
+ 
+ 
+
+00:25:41.269 --> 00:25:42.630 align:start position:0%
+ 
+ 
+
+00:25:42.630 --> 00:25:44.149 align:start position:0%
+ 
+ 
+
+00:25:44.149 --> 00:25:45.750 align:start position:0%
+ 
+ 
+
+00:25:45.750 --> 00:25:47.269 align:start position:0%
+ 
+ 
+
+00:25:47.269 --> 00:25:50.310 align:start position:0%
+ 
+ 
+
+00:25:50.310 --> 00:25:51.350 align:start position:0%
+ 
+ 
+
+00:25:51.350 --> 00:25:52.950 align:start position:0%
+ 
+ 
+
+00:25:52.950 --> 00:25:54.149 align:start position:0%
+ 
+ 
+
+00:25:54.149 --> 00:25:55.269 align:start position:0%
+ 
+ 
+
+00:25:55.269 --> 00:25:57.190 align:start position:0%
+ 
+ 
+
+00:25:57.190 --> 00:25:58.470 align:start position:0%
+ 
+ 
+
+00:25:58.470 --> 00:26:00.470 align:start position:0%
+ 
+ 
+
+00:26:00.470 --> 00:26:01.669 align:start position:0%
+ 
+ 
+
+00:26:01.669 --> 00:26:01.679 align:start position:0%
+ 
+ 
+
+00:26:01.679 --> 00:26:02.630 align:start position:0%
+ 
+
+
+00:26:02.630 --> 00:26:03.909 align:start position:0%
+ 
+ 
+
+00:26:03.909 --> 00:26:05.750 align:start position:0%
+ 
+ 
+
+00:26:05.750 --> 00:26:07.430 align:start position:0%
+ 
+ 
+
+00:26:07.430 --> 00:26:08.710 align:start position:0%
+ 
+ 
+
+00:26:08.710 --> 00:26:10.230 align:start position:0%
+ 
+ 
+
+00:26:10.230 --> 00:26:11.350 align:start position:0%
+ 
+ 
+
+00:26:11.350 --> 00:26:12.230 align:start position:0%
+ 
+ 
+
+00:26:12.230 --> 00:26:13.909 align:start position:0%
+ 
+ 
+
+00:26:13.909 --> 00:26:15.510 align:start position:0%
+ 
+ 
+
+00:26:15.510 --> 00:26:16.870 align:start position:0%
+ 
+ 
+
+00:26:16.870 --> 00:26:18.549 align:start position:0%
+ 
+ 
+
+00:26:18.549 --> 00:26:20.230 align:start position:0%
+ 
+ 
+
+00:26:20.230 --> 00:26:22.470 align:start position:0%
+ 
+ 
+
+00:26:22.470 --> 00:26:24.630 align:start position:0%
+ 
+ 
+
+00:26:24.630 --> 00:26:25.750 align:start position:0%
+ 
+ 
+
+00:26:25.750 --> 00:26:27.029 align:start position:0%
+ 
+ 
+
+00:26:27.029 --> 00:26:27.039 align:start position:0%
+ 
+ 
+
+00:26:27.039 --> 00:26:29.029 align:start position:0%
+ 
+
+
+00:26:29.029 --> 00:26:30.230 align:start position:0%
+ 
+ 
+
+00:26:30.230 --> 00:26:31.590 align:start position:0%
+ 
+ 
+
+00:26:31.590 --> 00:26:32.630 align:start position:0%
+ 
+ 
+
+00:26:32.630 --> 00:26:34.390 align:start position:0%
+ 
+ 
+
+00:26:34.390 --> 00:26:36.390 align:start position:0%
+ 
+ 
+
+00:26:36.390 --> 00:26:37.430 align:start position:0%
+ 
+ 
+
+00:26:37.430 --> 00:26:39.110 align:start position:0%
+ 
+ 
+
+00:26:39.110 --> 00:26:41.430 align:start position:0%
+ 
+ 
+
+00:26:41.430 --> 00:26:42.870 align:start position:0%
+ 
+ 
+
+00:26:42.870 --> 00:26:44.310 align:start position:0%
+ 
+ 
+
+00:26:44.310 --> 00:26:45.669 align:start position:0%
+ 
+ 
+
+00:26:45.669 --> 00:26:46.870 align:start position:0%
+ 
+ 
+
+00:26:46.870 --> 00:26:49.190 align:start position:0%
+ 
+ 
+
+00:26:49.190 --> 00:26:50.950 align:start position:0%
+ 
+ 
+
+00:26:50.950 --> 00:26:52.549 align:start position:0%
+ 
+ 
+
+00:26:52.549 --> 00:26:53.990 align:start position:0%
+ 
+ 
+
+00:26:53.990 --> 00:26:55.590 align:start position:0%
+ 
+ 
+
+00:26:55.590 --> 00:26:56.710 align:start position:0%
+ 
+ 
+
+00:26:56.710 --> 00:26:58.149 align:start position:0%
+ 
+ 
+
+00:26:58.149 --> 00:27:00.070 align:start position:0%
+ 
+ 
+
+00:27:00.070 --> 00:27:01.909 align:start position:0%
+ 
+ 
+
+00:27:01.909 --> 00:27:03.510 align:start position:0%
+ 
+ 
+
+00:27:03.510 --> 00:27:05.510 align:start position:0%
+ 
+ 
+
+00:27:05.510 --> 00:27:05.520 align:start position:0%
+ 
+ 
+
+00:27:05.520 --> 00:27:05.990 align:start position:0%
+ 
+
+
+00:27:05.990 --> 00:27:08.630 align:start position:0%
+ 
+ 
+
+00:27:08.630 --> 00:27:10.070 align:start position:0%
+ 
+ 
+
+00:27:10.070 --> 00:27:12.390 align:start position:0%
+ 
+ 
+
+00:27:12.390 --> 00:27:13.830 align:start position:0%
+ 
+ 
+
+00:27:13.830 --> 00:27:15.029 align:start position:0%
+ 
+ 
+
+00:27:15.029 --> 00:27:16.310 align:start position:0%
+ 
+ 
+
+00:27:16.310 --> 00:27:17.990 align:start position:0%
+ 
+ 
+
+00:27:17.990 --> 00:27:19.510 align:start position:0%
+ 
+ 
+
+00:27:19.510 --> 00:27:19.520 align:start position:0%
+ 
+ 
+
+00:27:19.520 --> 00:27:20.070 align:start position:0%
+ 
+
+
+00:27:20.070 --> 00:27:21.909 align:start position:0%
+ 
+ 
+
+00:27:21.909 --> 00:27:23.430 align:start position:0%
+ 
+ 
+
+00:27:23.430 --> 00:27:26.789 align:start position:0%
+ 
+ 
+
+00:27:26.789 --> 00:27:29.190 align:start position:0%
+ 
+ 
+
+00:27:29.190 --> 00:27:30.630 align:start position:0%
+ 
+ 
+
+00:27:30.630 --> 00:27:32.389 align:start position:0%
+ 
+ 
+
+00:27:32.389 --> 00:27:33.590 align:start position:0%
+ 
+ 
+
+00:27:33.590 --> 00:27:33.990 align:start position:0%
+ 
+ 
+
+00:27:33.990 --> 00:27:35.350 align:start position:0%
+ 
+ 
+
+00:27:35.350 --> 00:27:37.190 align:start position:0%
+ 
+ 
+
+00:27:37.190 --> 00:27:38.630 align:start position:0%
+ 
+ 
+
+00:27:38.630 --> 00:27:40.950 align:start position:0%
+ 
+ 
+
+00:27:40.950 --> 00:27:43.190 align:start position:0%
+ 
+ 
+
+00:27:43.190 --> 00:27:44.630 align:start position:0%
+ 
+ 
+
+00:27:44.630 --> 00:27:46.389 align:start position:0%
+ 
+ 
+
+00:27:46.389 --> 00:27:46.399 align:start position:0%
+ 
+ 
+
+00:27:46.399 --> 00:27:47.029 align:start position:0%
+ 
+
+
+00:27:47.029 --> 00:27:48.549 align:start position:0%
+ 
+ 
+
+00:27:48.549 --> 00:27:50.630 align:start position:0%
+ 
+ 
+
+00:27:50.630 --> 00:27:52.389 align:start position:0%
+ 
+ 
+
+00:27:52.389 --> 00:27:53.669 align:start position:0%
+ 
+ 
+
+00:27:53.669 --> 00:27:56.710 align:start position:0%
+ 
+ 
+
+00:27:56.710 --> 00:27:58.389 align:start position:0%
+ 
+ 
+
+00:27:58.389 --> 00:28:00.310 align:start position:0%
+ 
+ 
+
+00:28:00.310 --> 00:28:01.430 align:start position:0%
+ 
+ 
+
+00:28:01.430 --> 00:28:03.510 align:start position:0%
+ 
+ 
+
+00:28:03.510 --> 00:28:05.269 align:start position:0%
+ 
+ 
+
+00:28:05.269 --> 00:28:06.789 align:start position:0%
+ 
+ 
+
+00:28:06.789 --> 00:28:06.799 align:start position:0%
+ 
+ 
+
+00:28:06.799 --> 00:28:07.430 align:start position:0%
+ 
+
+
+00:28:07.430 --> 00:28:08.870 align:start position:0%
+ 
+ 
+
+00:28:08.870 --> 00:28:10.070 align:start position:0%
+ 
+ 
+
+00:28:10.070 --> 00:28:10.080 align:start position:0%
+ 
+ 
+
+00:28:10.080 --> 00:28:10.549 align:start position:0%
+ 
+
+
+00:28:10.549 --> 00:28:12.549 align:start position:0%
+ 
+ 
+
+00:28:12.549 --> 00:28:13.830 align:start position:0%
+ 
+ 
+
+00:28:13.830 --> 00:28:15.590 align:start position:0%
+ 
+ 
+
+00:28:15.590 --> 00:28:17.269 align:start position:0%
+ 
+ 
+
+00:28:17.269 --> 00:28:18.310 align:start position:0%
+ 
+ 
+
+00:28:18.310 --> 00:28:20.230 align:start position:0%
+ 
+ 
+
+00:28:20.230 --> 00:28:21.430 align:start position:0%
+ 
+ 
+
+00:28:21.430 --> 00:28:22.710 align:start position:0%
+ 
+ 
+
+00:28:22.710 --> 00:28:23.669 align:start position:0%
+ 
+ 
+
+00:28:23.669 --> 00:28:25.190 align:start position:0%
+ 
+ 
+
+00:28:25.190 --> 00:28:26.950 align:start position:0%
+ 
+ 
+
+00:28:26.950 --> 00:28:28.389 align:start position:0%
+ 
+ 
+
+00:28:28.389 --> 00:28:29.669 align:start position:0%
+ 
+ 
+
+00:28:29.669 --> 00:28:30.870 align:start position:0%
+ 
+ 
+
+00:28:30.870 --> 00:28:32.389 align:start position:0%
+ 
+ 
+
+00:28:32.389 --> 00:28:34.630 align:start position:0%
+ 
+ 
+
+00:28:34.630 --> 00:28:35.909 align:start position:0%
+ 
+ 
+
+00:28:35.909 --> 00:28:37.430 align:start position:0%
+ 
+ 
+
+00:28:37.430 --> 00:28:40.710 align:start position:0%
+ 
+ 
+
+00:28:40.710 --> 00:28:42.389 align:start position:0%
+ 
+ 
+
+00:28:42.389 --> 00:28:44.950 align:start position:0%
+ 
+ 
+
+00:28:44.950 --> 00:28:44.960 align:start position:0%
+ 
+ 
+
+00:28:44.960 --> 00:28:45.269 align:start position:0%
+ 
+
+
+00:28:45.269 --> 00:28:46.710 align:start position:0%
+ 
+ 
+
+00:28:46.710 --> 00:28:48.710 align:start position:0%
+ 
+ 
+
+00:28:48.710 --> 00:28:50.870 align:start position:0%
+ 
+ 
+
+00:28:50.870 --> 00:28:51.750 align:start position:0%
+ 
+ 
+
+00:28:51.750 --> 00:28:53.830 align:start position:0%
+ 
+ 
+
+00:28:53.830 --> 00:28:55.669 align:start position:0%
+ 
+ 
+
+00:28:55.669 --> 00:28:57.430 align:start position:0%
+ 
+ 
+
+00:28:57.430 --> 00:28:58.950 align:start position:0%
+ 
+ 
+
+00:28:58.950 --> 00:29:01.110 align:start position:0%
+ 
+ 
+
+00:29:01.110 --> 00:29:02.310 align:start position:0%
+ 
+ 
+
+00:29:02.310 --> 00:29:04.789 align:start position:0%
+ 
+ 
+
+00:29:04.789 --> 00:29:07.430 align:start position:0%
+ 
+ 
+
+00:29:07.430 --> 00:29:07.440 align:start position:0%
+ 
+ 
+
+00:29:07.440 --> 00:29:08.950 align:start position:0%
+ 
+
+
+00:29:08.950 --> 00:29:11.269 align:start position:0%
+ 
+ 
+
+00:29:11.269 --> 00:29:12.789 align:start position:0%
+ 
+ 
+
+00:29:12.789 --> 00:29:13.750 align:start position:0%
+ 
+ 
+
+00:29:13.750 --> 00:29:16.149 align:start position:0%
+ 
+ 
+
+00:29:16.149 --> 00:29:16.950 align:start position:0%
+ 
+ 
+
+00:29:16.950 --> 00:29:17.909 align:start position:0%
+ 
+ 
+
+00:29:17.909 --> 00:29:19.190 align:start position:0%
+ 
+ 
+
+00:29:19.190 --> 00:29:20.950 align:start position:0%
+ 
+ 
+
+00:29:20.950 --> 00:29:22.070 align:start position:0%
+ 
+ 
+
+00:29:22.070 --> 00:29:23.510 align:start position:0%
+ 
+ 
+
+00:29:23.510 --> 00:29:25.430 align:start position:0%
+ 
+ 
+
+00:29:25.430 --> 00:29:25.440 align:start position:0%
+ 
+ 
+
+00:29:25.440 --> 00:29:26.710 align:start position:0%
+ 
+
+
+00:29:26.710 --> 00:29:29.110 align:start position:0%
+ 
+ 
+
+00:29:29.110 --> 00:29:30.950 align:start position:0%
+ 
+ 
+
+00:29:30.950 --> 00:29:32.389 align:start position:0%
+ 
+ 
+
+00:29:32.389 --> 00:29:33.830 align:start position:0%
+ 
+ 
+
+00:29:33.830 --> 00:29:35.350 align:start position:0%
+ 
+ 
+
+00:29:35.350 --> 00:29:37.669 align:start position:0%
+ 
+ 
+
+00:29:37.669 --> 00:29:40.710 align:start position:0%
+ 
+ 
+
+00:29:40.710 --> 00:29:42.950 align:start position:0%
+ 
+ 
+
+00:29:42.950 --> 00:29:44.070 align:start position:0%
+ 
+ 
+
+00:29:44.070 --> 00:29:46.070 align:start position:0%
+ 
+ 
+
+00:29:46.070 --> 00:29:47.590 align:start position:0%
+ 
+ 
+
+00:29:47.590 --> 00:29:48.950 align:start position:0%
+ 
+ 
+
+00:29:48.950 --> 00:29:50.070 align:start position:0%
+ 
+ 
+
+00:29:50.070 --> 00:29:51.350 align:start position:0%
+ 
+ 
+
+00:29:51.350 --> 00:29:52.389 align:start position:0%
+ 
+ 
+
+00:29:52.389 --> 00:29:54.710 align:start position:0%
+ 
+ 
+
+00:29:54.710 --> 00:29:57.350 align:start position:0%
+ 
+ 
+
+00:29:57.350 --> 00:29:58.389 align:start position:0%
+ 
+ 
+
+00:29:58.389 --> 00:29:59.830 align:start position:0%
+ 
+ 
+
+00:29:59.830 --> 00:30:01.510 align:start position:0%
+ 
+ 
+
+00:30:01.510 --> 00:30:02.630 align:start position:0%
+ 
+ 
+
+00:30:02.630 --> 00:30:02.640 align:start position:0%
+ 
+ 
+
+00:30:02.640 --> 00:30:03.830 align:start position:0%
+ 
+
+
+00:30:03.830 --> 00:30:05.029 align:start position:0%
+ 
+ 
+
+00:30:05.029 --> 00:30:06.149 align:start position:0%
+ 
+ 
+
+00:30:06.149 --> 00:30:07.269 align:start position:0%
+ 
+ 
+
+00:30:07.269 --> 00:30:08.710 align:start position:0%
+ 
+ 
+
+00:30:08.710 --> 00:30:10.310 align:start position:0%
+ 
+ 
+
+00:30:10.310 --> 00:30:11.590 align:start position:0%
+ 
+ 
+
+00:30:11.590 --> 00:30:12.950 align:start position:0%
+ 
+ 
+
+00:30:12.950 --> 00:30:14.549 align:start position:0%
+ 
+ 
+
+00:30:14.549 --> 00:30:15.909 align:start position:0%
+ 
+ 
+
+00:30:15.909 --> 00:30:16.789 align:start position:0%
+ 
+ 
+
+00:30:16.789 --> 00:30:18.070 align:start position:0%
+ 
+ 
+
+00:30:18.070 --> 00:30:19.990 align:start position:0%
+ 
+ 
+
+00:30:19.990 --> 00:30:21.750 align:start position:0%
+ 
+ 
+
+00:30:21.750 --> 00:30:23.269 align:start position:0%
+ 
+ 
+
+00:30:23.269 --> 00:30:24.630 align:start position:0%
+ 
+ 
+
+00:30:24.630 --> 00:30:25.909 align:start position:0%
+ 
+ 
+
+00:30:25.909 --> 00:30:27.430 align:start position:0%
+ 
+ 
+
+00:30:27.430 --> 00:30:28.870 align:start position:0%
+ 
+ 
+
+00:30:28.870 --> 00:30:28.880 align:start position:0%
+ 
+ 
+
+00:30:28.880 --> 00:30:30.630 align:start position:0%
+ 
+
+
+00:30:30.630 --> 00:30:32.549 align:start position:0%
+ 
+ 
+
+00:30:32.549 --> 00:30:34.070 align:start position:0%
+ 
+ 
+
+00:30:34.070 --> 00:30:35.590 align:start position:0%
+ 
+ 
+
+00:30:35.590 --> 00:30:37.269 align:start position:0%
+ 
+ 
+
+00:30:37.269 --> 00:30:38.710 align:start position:0%
+ 
+ 
+
+00:30:38.710 --> 00:30:40.310 align:start position:0%
+ 
+ 
+
+00:30:40.310 --> 00:30:40.789 align:start position:0%
+ 
+ 
+
+00:30:40.789 --> 00:30:43.029 align:start position:0%
+ 
+ 
+
+00:30:43.029 --> 00:30:44.310 align:start position:0%
+ 
+ 
+
+00:30:44.310 --> 00:30:46.230 align:start position:0%
+ 
+ 
+
+00:30:46.230 --> 00:30:47.430 align:start position:0%
+ 
+ 
+
+00:30:47.430 --> 00:30:49.350 align:start position:0%
+ 
+ 
+
+00:30:49.350 --> 00:30:50.710 align:start position:0%
+ 
+ 
+
+00:30:50.710 --> 00:30:52.389 align:start position:0%
+ 
+ 
+
+00:30:52.389 --> 00:30:52.399 align:start position:0%
+ 
+ 
+
+00:30:52.399 --> 00:30:53.269 align:start position:0%
+ 
+
+
+00:30:53.269 --> 00:30:54.549 align:start position:0%
+ 
+ 
+
+00:30:54.549 --> 00:30:55.669 align:start position:0%
+ 
+ 
+
+00:30:55.669 --> 00:30:56.870 align:start position:0%
+ 
+ 
+
+00:30:56.870 --> 00:30:59.190 align:start position:0%
+ 
+ 
+
+00:30:59.190 --> 00:31:01.029 align:start position:0%
+ 
+ 
+
+00:31:01.029 --> 00:31:02.389 align:start position:0%
+ 
+ 
+
+00:31:02.389 --> 00:31:04.389 align:start position:0%
+ 
+ 
+
+00:31:04.389 --> 00:31:05.669 align:start position:0%
+ 
+ 
+
+00:31:05.669 --> 00:31:07.750 align:start position:0%
+ 
+ 
+
+00:31:07.750 --> 00:31:09.590 align:start position:0%
+ 
+ 
+
+00:31:09.590 --> 00:31:10.630 align:start position:0%
+ 
+ 
+
+00:31:10.630 --> 00:31:11.190 align:start position:0%
+ 
+ 
+
+00:31:11.190 --> 00:31:12.470 align:start position:0%
+ 
+ 
+
+00:31:12.470 --> 00:31:13.830 align:start position:0%
+ 
+ 
+
+00:31:13.830 --> 00:31:15.909 align:start position:0%
+ 
+ 
+
+00:31:15.909 --> 00:31:17.110 align:start position:0%
+ 
+ 
+
+00:31:17.110 --> 00:31:18.950 align:start position:0%
+ 
+ 
+
+00:31:18.950 --> 00:31:20.310 align:start position:0%
+ 
+ 
+
+00:31:20.310 --> 00:31:21.430 align:start position:0%
+ 
+ 
+
+00:31:21.430 --> 00:31:22.630 align:start position:0%
+ 
+ 
+
+00:31:22.630 --> 00:31:24.789 align:start position:0%
+ 
+ 
+
+00:31:24.789 --> 00:31:26.070 align:start position:0%
+ 
+ 
+
+00:31:26.070 --> 00:31:27.350 align:start position:0%
+ 
+ 
+
+00:31:27.350 --> 00:31:28.789 align:start position:0%
+ 
+ 
+
+00:31:28.789 --> 00:31:30.149 align:start position:0%
+ 
+ 
+
+00:31:30.149 --> 00:31:32.070 align:start position:0%
+ 
+ 
+
+00:31:32.070 --> 00:31:33.430 align:start position:0%
+ 
+ 
+
+00:31:33.430 --> 00:31:34.470 align:start position:0%
+ 
+ 
+
+00:31:34.470 --> 00:31:35.990 align:start position:0%
+ 
+ 
+
+00:31:35.990 --> 00:31:36.000 align:start position:0%
+ 
+ 
+
+00:31:36.000 --> 00:31:37.509 align:start position:0%
+ 
+
+
+00:31:37.509 --> 00:31:38.789 align:start position:0%
+ 
+ 
+
+00:31:38.789 --> 00:31:40.950 align:start position:0%
+ 
+ 
+
+00:31:40.950 --> 00:31:42.389 align:start position:0%
+ 
+ 
+
+00:31:42.389 --> 00:31:43.830 align:start position:0%
+ 
+ 
+
+00:31:43.830 --> 00:31:45.750 align:start position:0%
+ 
+ 
+
+00:31:45.750 --> 00:31:45.760 align:start position:0%
+ 
+ 
+
+00:31:45.760 --> 00:31:45.990 align:start position:0%
+ 
+
+
+00:31:45.990 --> 00:31:47.430 align:start position:0%
+ 
+ 
+
+00:31:47.430 --> 00:31:49.190 align:start position:0%
+ 
+ 
+
+00:31:49.190 --> 00:31:51.029 align:start position:0%
+ 
+ 
+
+00:31:51.029 --> 00:31:52.149 align:start position:0%
+ 
+ 
+
+00:31:52.149 --> 00:31:52.159 align:start position:0%
+ 
+ 
+
+00:31:52.159 --> 00:31:53.269 align:start position:0%
+ 
+
+
+00:31:53.269 --> 00:31:54.870 align:start position:0%
+ 
+ 
+
+00:31:54.870 --> 00:31:56.630 align:start position:0%
+ 
+ 
+
+00:31:56.630 --> 00:31:57.990 align:start position:0%
+ 
+ 
+
+00:31:57.990 --> 00:31:58.630 align:start position:0%
+ 
+ 
+
+00:31:58.630 --> 00:32:00.310 align:start position:0%
+ 
+ 
+
+00:32:00.310 --> 00:32:02.630 align:start position:0%
+ 
+ 
+
+00:32:02.630 --> 00:32:04.710 align:start position:0%
+ 
+ 
+
+00:32:04.710 --> 00:32:05.990 align:start position:0%
+ 
+ 
+
+00:32:05.990 --> 00:32:07.830 align:start position:0%
+ 
+ 
+
+00:32:07.830 --> 00:32:09.669 align:start position:0%
+ 
+ 
+
+00:32:09.669 --> 00:32:10.950 align:start position:0%
+ 
+ 
+
+00:32:10.950 --> 00:32:12.389 align:start position:0%
+ 
+ 
+
+00:32:12.389 --> 00:32:13.590 align:start position:0%
+ 
+ 
+
+00:32:13.590 --> 00:32:15.269 align:start position:0%
+ 
+ 
+
+00:32:15.269 --> 00:32:16.549 align:start position:0%
+ 
+ 
+
+00:32:16.549 --> 00:32:17.830 align:start position:0%
+ 
+ 
+
+00:32:17.830 --> 00:32:17.840 align:start position:0%
+ 
+ 
+
+00:32:17.840 --> 00:32:18.470 align:start position:0%
+ 
+
+
+00:32:18.470 --> 00:32:19.830 align:start position:0%
+ 
+ 
+
+00:32:19.830 --> 00:32:21.590 align:start position:0%
+ 
+ 
+
+00:32:21.590 --> 00:32:22.870 align:start position:0%
+ 
+ 
+
+00:32:22.870 --> 00:32:24.310 align:start position:0%
+ 
+ 
+
+00:32:24.310 --> 00:32:24.320 align:start position:0%
+ 
+ 
+
+00:32:24.320 --> 00:32:26.470 align:start position:0%
+ 
+
+
+00:32:26.470 --> 00:32:28.630 align:start position:0%
+ 
+ 
+
+00:32:28.630 --> 00:32:30.070 align:start position:0%
+ 
+ 
+
+00:32:30.070 --> 00:32:31.669 align:start position:0%
+ 
+ 
+
+00:32:31.669 --> 00:32:33.190 align:start position:0%
+ 
+ 
+
+00:32:33.190 --> 00:32:35.830 align:start position:0%
+ 
+ 
+
+00:32:35.830 --> 00:32:36.870 align:start position:0%
+ 
+ 
+
+00:32:36.870 --> 00:32:38.230 align:start position:0%
+ 
+ 
+
+00:32:38.230 --> 00:32:39.029 align:start position:0%
+ 
+ 
+
+00:32:39.029 --> 00:32:40.470 align:start position:0%
+ 
+ 
+
+00:32:40.470 --> 00:32:41.750 align:start position:0%
+ 
+ 
+
+00:32:41.750 --> 00:32:41.760 align:start position:0%
+ 
+ 
+
+00:32:41.760 --> 00:32:42.070 align:start position:0%
+ 
+
+
+00:32:42.070 --> 00:32:43.830 align:start position:0%
+ 
+ 
+
+00:32:43.830 --> 00:32:45.590 align:start position:0%
+ 
+ 
+
+00:32:45.590 --> 00:32:46.789 align:start position:0%
+ 
+ 
+
+00:32:46.789 --> 00:32:47.830 align:start position:0%
+ 
+ 
+
+00:32:47.830 --> 00:32:48.870 align:start position:0%
+ 
+ 
+
+00:32:48.870 --> 00:32:49.909 align:start position:0%
+ 
+ 
+
+00:32:49.909 --> 00:32:50.870 align:start position:0%
+ 
+ 
+
+00:32:50.870 --> 00:32:51.990 align:start position:0%
+ 
+ 
+
+00:32:51.990 --> 00:32:52.000 align:start position:0%
+ 
+ 
+
+00:32:52.000 --> 00:32:52.630 align:start position:0%
+ 
+
+
+00:32:52.630 --> 00:32:54.070 align:start position:0%
+ 
+ 
+
+00:32:54.070 --> 00:32:54.950 align:start position:0%
+ 
+ 
+
+00:32:54.950 --> 00:32:56.230 align:start position:0%
+ 
+ 
+
+00:32:56.230 --> 00:32:57.750 align:start position:0%
+ 
+ 
+
+00:32:57.750 --> 00:32:59.269 align:start position:0%
+ 
+ 
+
+00:32:59.269 --> 00:33:01.350 align:start position:0%
+ 
+ 
+
+00:33:01.350 --> 00:33:02.630 align:start position:0%
+ 
+ 
+
+00:33:02.630 --> 00:33:03.350 align:start position:0%
+ 
+ 
+
+00:33:03.350 --> 00:33:05.750 align:start position:0%
+ 
+ 
+
+00:33:05.750 --> 00:33:07.350 align:start position:0%
+ 
+ 
+
+00:33:07.350 --> 00:33:09.350 align:start position:0%
+ 
+ 
+
+00:33:09.350 --> 00:33:11.029 align:start position:0%
+ 
+ 
+
+00:33:11.029 --> 00:33:12.389 align:start position:0%
+ 
+ 
+
+00:33:12.389 --> 00:33:14.710 align:start position:0%
+ 
+ 
+
+00:33:14.710 --> 00:33:16.310 align:start position:0%
+ 
+ 
+
+00:33:16.310 --> 00:33:17.509 align:start position:0%
+ 
+ 
+
+00:33:17.509 --> 00:33:18.549 align:start position:0%
+ 
+ 
+
+00:33:18.549 --> 00:33:19.430 align:start position:0%
+ 
+ 
+
+00:33:19.430 --> 00:33:21.110 align:start position:0%
+ 
+ 
+
+00:33:21.110 --> 00:33:22.870 align:start position:0%
+ 
+ 
+
+00:33:22.870 --> 00:33:23.909 align:start position:0%
+ 
+ 
+
+00:33:23.909 --> 00:33:25.509 align:start position:0%
+ 
+ 
+
+00:33:25.509 --> 00:33:26.950 align:start position:0%
+ 
+ 
+
+00:33:26.950 --> 00:33:27.830 align:start position:0%
+ 
+ 
+
+00:33:27.830 --> 00:33:29.110 align:start position:0%
+ 
+ 
+
+00:33:29.110 --> 00:33:30.710 align:start position:0%
+ 
+ 
+
+00:33:30.710 --> 00:33:31.990 align:start position:0%
+ 
+ 
+
+00:33:31.990 --> 00:33:34.470 align:start position:0%
+ 
+ 
+
+00:33:34.470 --> 00:33:35.909 align:start position:0%
+ 
+ 
+
+00:33:35.909 --> 00:33:38.870 align:start position:0%
+ 
+ 
+
+00:33:38.870 --> 00:33:40.950 align:start position:0%
+ 
+ 
+
+00:33:40.950 --> 00:33:42.389 align:start position:0%
+ 
+ 
+
+00:33:42.389 --> 00:33:45.110 align:start position:0%
+ 
+ 
+
+00:33:45.110 --> 00:33:46.470 align:start position:0%
+ 
+ 
+
+00:33:46.470 --> 00:33:48.389 align:start position:0%
+ 
+ 
+
+00:33:48.389 --> 00:33:50.549 align:start position:0%
+ 
+ 
+
+00:33:50.549 --> 00:33:51.830 align:start position:0%
+ 
+ 
+
+00:33:51.830 --> 00:33:53.509 align:start position:0%
+ 
+ 
+
+00:33:53.509 --> 00:33:56.389 align:start position:0%
+ 
+ 
+
+00:33:56.389 --> 00:33:58.230 align:start position:0%
+ 
+ 
+
+00:33:58.230 --> 00:34:00.149 align:start position:0%
+ 
+ 
+
+00:34:00.149 --> 00:34:01.110 align:start position:0%
+ 
+ 
+
+00:34:01.110 --> 00:34:02.710 align:start position:0%
+ 
+ 
+
+00:34:02.710 --> 00:34:04.710 align:start position:0%
+ 
+ 
+
+00:34:04.710 --> 00:34:05.750 align:start position:0%
+ 
+ 
+
+00:34:05.750 --> 00:34:07.190 align:start position:0%
+ 
+ 
+
+00:34:07.190 --> 00:34:08.790 align:start position:0%
+ 
+ 
+
+00:34:08.790 --> 00:34:09.990 align:start position:0%
+ 
+ 
+
+00:34:09.990 --> 00:34:11.669 align:start position:0%
+ 
+ 
+
+00:34:11.669 --> 00:34:13.589 align:start position:0%
+ 
+ 
+
+00:34:13.589 --> 00:34:16.389 align:start position:0%
+ 
+ 
+
+00:34:16.389 --> 00:34:17.669 align:start position:0%
+ 
+ 
+
+00:34:17.669 --> 00:34:19.270 align:start position:0%
+ 
+ 
+
+00:34:19.270 --> 00:34:20.550 align:start position:0%
+ 
+ 
+
+00:34:20.550 --> 00:34:21.589 align:start position:0%
+ 
+ 
+
+00:34:21.589 --> 00:34:23.909 align:start position:0%
+ 
+ 
+
+00:34:23.909 --> 00:34:25.909 align:start position:0%
+ 
+ 
+
+00:34:25.909 --> 00:34:27.030 align:start position:0%
+ 
+ 
+
+00:34:27.030 --> 00:34:29.270 align:start position:0%
+ 
+ 
+
+00:34:29.270 --> 00:34:29.990 align:start position:0%
+ 
+ 
+
+00:34:29.990 --> 00:34:31.750 align:start position:0%
+ 
+ 
+
+00:34:31.750 --> 00:34:33.990 align:start position:0%
+ 
+ 
+
+00:34:33.990 --> 00:34:37.109 align:start position:0%
+ 
+ 
+
+00:34:37.109 --> 00:34:38.869 align:start position:0%
+ 
+ 
+
+00:34:38.869 --> 00:34:40.069 align:start position:0%
+ 
+ 
+
+00:34:40.069 --> 00:34:42.389 align:start position:0%
+ 
+ 
+
+00:34:42.389 --> 00:34:43.349 align:start position:0%
+ 
+ 
+
+00:34:43.349 --> 00:34:45.270 align:start position:0%
+ 
+ 
+
+00:34:45.270 --> 00:34:45.829 align:start position:0%
+ 
+ 
+
+00:34:45.829 --> 00:34:48.310 align:start position:0%
+ 
+ 
+
+00:34:48.310 --> 00:34:49.589 align:start position:0%
+ 
+ 
+
+00:34:49.589 --> 00:34:51.030 align:start position:0%
+ 
+ 
+
+00:34:51.030 --> 00:34:52.629 align:start position:0%
+ 
+ 
+
+00:34:52.629 --> 00:34:53.589 align:start position:0%
+ 
+ 
+
+00:34:53.589 --> 00:34:54.710 align:start position:0%
+ 
+ 
+
+00:34:54.710 --> 00:34:55.990 align:start position:0%
+ 
+ 
+
+00:34:55.990 --> 00:34:56.710 align:start position:0%
+ 
+ 
+
+00:34:56.710 --> 00:34:57.990 align:start position:0%
+ 
+ 
+
+00:34:57.990 --> 00:34:59.349 align:start position:0%
+ 
+ 
+
+00:34:59.349 --> 00:35:00.470 align:start position:0%
+ 
+ 
+
+00:35:00.470 --> 00:35:02.390 align:start position:0%
+ 
+ 
+
+00:35:02.390 --> 00:35:03.829 align:start position:0%
+ 
+ 
+
+00:35:03.829 --> 00:35:05.349 align:start position:0%
+ 
+ 
+
+00:35:05.349 --> 00:35:08.550 align:start position:0%
+ 
+ 
+
+00:35:08.550 --> 00:35:09.910 align:start position:0%
+ 
+ 
+
+00:35:09.910 --> 00:35:11.349 align:start position:0%
+ 
+ 
+
+00:35:11.349 --> 00:35:12.150 align:start position:0%
+ 
+ 
+
+00:35:12.150 --> 00:35:14.390 align:start position:0%
+ 
+ 
+
+00:35:14.390 --> 00:35:16.230 align:start position:0%
+ 
+ 
+
+00:35:16.230 --> 00:35:17.430 align:start position:0%
+ 
+ 
+
+00:35:17.430 --> 00:35:18.710 align:start position:0%
+ 
+ 
+
+00:35:18.710 --> 00:35:19.670 align:start position:0%
+ 
+ 
+
+00:35:19.670 --> 00:35:21.109 align:start position:0%
+ 
+ 
+
+00:35:21.109 --> 00:35:23.430 align:start position:0%
+ 
+ 
+
+00:35:23.430 --> 00:35:24.390 align:start position:0%
+ 
+ 
+
+00:35:24.390 --> 00:35:26.150 align:start position:0%
+ 
+ 
+
+00:35:26.150 --> 00:35:27.190 align:start position:0%
+ 
+ 
+
+00:35:27.190 --> 00:35:28.230 align:start position:0%
+ 
+ 
+
+00:35:28.230 --> 00:35:29.990 align:start position:0%
+ 
+ 
+
+00:35:29.990 --> 00:35:31.109 align:start position:0%
+ 
+ 
+
+00:35:31.109 --> 00:35:32.790 align:start position:0%
+ 
+ 
+
+00:35:32.790 --> 00:35:34.550 align:start position:0%
+ 
+ 
+
+00:35:34.550 --> 00:35:35.990 align:start position:0%
+ 
+ 
+
+00:35:35.990 --> 00:35:37.349 align:start position:0%
+ 
+ 
+
+00:35:37.349 --> 00:35:40.230 align:start position:0%
+ 
+ 
+
+00:35:40.230 --> 00:35:41.190 align:start position:0%
+ 
+ 
+
+00:35:41.190 --> 00:35:43.430 align:start position:0%
+ 
+ 
+
+00:35:43.430 --> 00:35:44.550 align:start position:0%
+ 
+ 
+
+00:35:44.550 --> 00:35:47.270 align:start position:0%
+ 
+ 
+
+00:35:47.270 --> 00:35:48.310 align:start position:0%
+ 
+ 
+
+00:35:48.310 --> 00:35:50.150 align:start position:0%
+ 
+ 
+
+00:35:50.150 --> 00:35:51.829 align:start position:0%
+ 
+ 
+
+00:35:51.829 --> 00:35:53.510 align:start position:0%
+ 
+ 
+
+00:35:53.510 --> 00:35:54.870 align:start position:0%
+ 
+ 
+
+00:35:54.870 --> 00:35:56.630 align:start position:0%
+ 
+ 
+
+00:35:56.630 --> 00:35:58.069 align:start position:0%
+ 
+ 
+
+00:35:58.069 --> 00:35:59.349 align:start position:0%
+ 
+ 
+
+00:35:59.349 --> 00:36:00.470 align:start position:0%
+ 
+ 
+
+00:36:00.470 --> 00:36:01.910 align:start position:0%
+ 
+ 
+
+00:36:01.910 --> 00:36:04.150 align:start position:0%
+ 
+ 
+
+00:36:04.150 --> 00:36:11.760 align:start position:0%
+ 
+ 
+

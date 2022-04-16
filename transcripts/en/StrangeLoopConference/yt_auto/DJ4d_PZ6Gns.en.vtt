@@ -1,0 +1,3672 @@
+WEBVTT
+Kind: captions
+Language: en
+
+00:00:04.960 --> 00:00:07.289 align:start position:0%
+ 
+my name is Tyler treat and I'm  recovering go hater now I just have  Stockholm Syndrome but no I've written a  lot about go I've spent quite a bit of  time at the language now or the last  several years I don't consider myself a  gofer but you know I just think of  myself as a programmer but go is  probably what I use the most these days  and I'm guessing most of you came to  this talk to learn about this one weird  trick I'm gonna show you to make a code  faster that's not what this talk is and  the better title for this talk really is  so you want to subvert go and that's  because we're gonna look at some things  that in many ways try to subvert the  language and the reality is goal really  is not a systems language I know that  word is subjective depending on who you  ask  but if you ask me it's not a systems  language and that being said doesn't  mean we can't build internet scale  systems with it  right and we've seen this with all of  the new projects that have popped up  many of them written and go and and it's  kind of become the lingua franca of  infrastructure if you will for better or  worse and so to get back to my  alternative title you want to subvert go  the reason it's better title is really  is to talk about how to write terrible  awful go code and it's really not talk  meant for a general audience of bill  programmers but more to talk about some  things that I think are interesting  things that I've learned and to also  kind of tell a story of how the language  has evolved over time and so I have no  doubt the go team will wholeheartedly  reject this talk that's that's okay  that's their prerogative but it's my  talk not theirs and so I want to talk  about writing performance optimized go  from my perspective and my own  experience and also to talk about  trade-offs because when we optimize for  performance we're usually trading  something off and return for that so as  I mentioned my name is Tyler I work at  apps era where I work on the open source  messaging system Nats  I have an interest in distributed  systems I have a blog brave new geek  calm where I write about some of these  things  and as I said I work on Nats which is an  open-source high-performance messaging  system hesitate to call it a message  queue because it's really not but there  are some similarities there but it has  sort of two guiding principles which is  simplicity and performance and  throughout this talk we'll touch on some  of the ideas and the principles that we  applied while working on that and some  of the things that we learned as well as  they relate to performance so why does  this talk matter well the compiler isn't  magic it doesn't just take in your  shitty go code and plop out this  pristine machine code it's very good at  what it does it does do a lot of  optimizations but it's not perfect it  can't read your mind and so we have to  be mindful of performance when it  matters and to be fair it doesn't always  matter but when it does we have to be  thinking about that and so the question  is what are we really talking about when  we we say performance what does that  mean how do we quantify it and you know  if you saw the the keynote this morning  about optimizing tail latency that's  really I think what we're interested in  is like how do we observe the behaviors  of our system and the problem is we're  usually looking in the wrong places most  of the time and we're missing a lot of  the problems that are happening and so  that's really what we're interested in I  think is like how do we optimize for  tail latency and that can be really hard  to do but when we reach a certain scale  it's often when things fall over so in a  previous job I worked for a company  called Rick Eva which builds software  as-a-service  kind of geared towards financial  reporting and one of the products that  we built was a spreadsheets application  and early on I was kind of involved with  building out the communication layer for  that and one of the larger open source  initiatives that came out of that work  was a library called go data structures  which as you can guess it's a library  written and go with a bunch of data  structures but with sort of an eye  towards performance and so we were  looking at like how do we minimize  garbage collection minimize heap  allocations minimize lock contention  etc and so Dustin Hyatt wrote majority  of that as he was building the  calculation engine for that Spreadsheets  products but again we'll talk about some  of the things that we learned while  working on that and some of the  techniques that we applied as well so  we're going to touch briefly on  measuring performance and go and then  we'll just dive into the stuff talk  about a few language features talk about  memory management and then wrap up and  talk about concurrency and some  multi-core techniques so I can't  emphasize it enough but don't just  blindly apply the optimizations that  we're going to talk about as with  anything it depends and there are  trade-offs involved and it depends when  those trade-offs makes sense and when  they don't and and so I tend to think of  optimization as kind of this two-step  process where you like measure and then  you optimize and you repeat that as  needed until you've met your acceptance  criteria and you know everybody so it  says premature optimization is the root  of all evil so it's it's good to have  data and go actually ships with a lot of  really nice tooling to help with that  measure step right the the profiling  tools how we can look at memory usage  CPU usage of our applications the  tracing we can look at the garbage  collector how that interacts with their  system as well as the runtime scheduler  like how that schedules go routines and  then kind of the other half - that is  benchmarking and as you know go ships  with facilities for that as well to do  kind of your code level micro benchmarks  and that's really nice a test for like  performance regressions but it's also  easy to get caught up in trying to just  shave every nano second off that you can  and so I think it's also important to  kind of balance that out with more of  the end and holistic approach and for  that I really like HDR histogram which  it's kind of a generic library but  basically it allows you to capture from  a very large range of values to cap  very fine-grain measurements like  latency for example and so I've built a  number of tools around that to help with  my own benchmarking and testing and for  example that's how I generate like these  latency distributions is with HDR  histogram so I've done a lot of  benchmarking and to start I was really  bad at it and I think the only way  really get good at anything has to be  really [ __ ] bad at it for a long time  and by no means am i good at it now but  I think I certainly improved at least in  terms of my methodology and my  understanding of these things and  benchmarking can be really tricky  business because often it is just that  right and people have a tendency to just  look at the data and ignore all of the  context and I think the problem is it  sounds kind of counterintuitive but you  can't just ignore that context and you  have to be careful about how you  interpret that data and and be aware of  like the bench marketing and things like  that and so it can be legitimately  useful though for for like quantifying  performance and measuring that and  looking for performance bottlenecks so  enough with that let's let's dive into  this stuff and I want to start by  talking about a few language features  that I think are sort of major selling  points of go or at least kind of major  features of go and when you used in  certain cases can lead to some  surprising performance results I think  so channels obviously are a big part of  go as well as go routines and  concurrency story and in channels in  particular early on at least we're kind  of pushed as like the way to do data  synchronization of like shared state and  you know this idea of share memory by  communicating and to like pass ownership  of data over channels as opposed to  using locks to mediate that at access I  think the problem with that is it misses  out on a lot of the nuance of like when  to use certain things when not to and I  think since then it's been a bit more  kind of pull back on that but you know  when you look at the data it's not real  surprising that just using a mutex is  quite a bit faster than like using a  channel to do state synchronization but  even just ignoring the data people we  understand locks we've been using those  for a long time and so you know it's  when you start to restructure your code  in a way that allows you to use channels  to do that you typically end up with  more complicated code in the end than  you otherwise would have so yeah  channels are great they have their place  I think they're great for like  coordinating go routines and synchronize  or uh orchestrating things but for  synchronization you know just using  mutex and similarly we can look at just  the the performance of channels for like  work assignment or work throughput and  at the end of the day the channel is  just a ring buffer with a lock and so  yeah there's some some tricks they do as  far as the handoff semantics and they'll  like copy between go routines stacks to  optimize for that but they're still lock  involved at the end of the day so you  can typically go faster just with like  the lock free version of that and to be  fair this isn't really that meaningful  of a benchmark I mean you're probably  not spending that much time in inside a  channel but there was Dmitriev ukhov had  an implementation of lock free channels  it never made it in and I think the go  team was looking for further  justification for the added complexity  that brings and I think that shows kind  of that fundamental trade-off between  like performance and complexity and when  does that trade-off make sense and when  does it not make sense and in this case  they decided that it didn't defer was  the target of a lot of criticism early  on I think because of the performance  overhead that it had and this I think  this was kind of a known issue or it  became pretty well known issue and the  question now is is it still slow a lot  of people deliberately avoid the use of  it and for the most part no it's really  not I mean it's to start off with the I  was there's a lot of overhead but then  in like go one two and one three it  really improved  dramatically and it kind of crept back  up a little bit but today it's kind of  back at where it was and go on three  which in this case this is like with a  mutex lock unlock it's like 40  nanoseconds of overhead so I still avoid  it and really tight loops but outside of  that context it's not really anything to  be thinking about interfaces are  interesting and go and obviously they're  a major part of the language and  especially empty interfaces which are  used I think is a workaround to the lack  of generics and go and it can lead to  some surprising performance implications  so I think in the format package there  is an interface called stringer and  let's take a tight binary which is the U  n 64 well I'll say we're on a 32-bit  machine so that takes up two words and  binary implements the stringer interface  so the way interfaces work and go is  they're actually two pointers there's a  pointer to an eye table which contains  the type that implements the interface  and then a list of the function the  function table and those are the  functions that on that type that  implement the interface and then the  second pointer points to a copy of the  data and so that's used as like the  first argument to each of those  functions and so there's some  indirection that has to happen right  when we call an interface method we have  to resolve that function and then we  have to resolve the data that's used in  that function and we can measure that  overhead and in this case it's like two  nanoseconds so you're probably wondering  so what but when we start to look at  some more realistic ish scenarios the  ramifications become a bit more clear so  let's look at an example we have an  interface sort of a lie face we have a  struct sortable that implements that  interface and then we have these two  slice types sort of life fates by number  and sortable by number which is a slice  of so this is a slice of the interface  a slice of destruct and then he's both  to implement the logic needed to sort  them so the Len the swap the less and  then we soared a hundred million of  these things and the results are kind of  surprising especially with earlier  versions of go the difference is pretty  staggering but even with newer versions  like 1/8 you know that's about 25  seconds to sort 100,000,000 structs and  100 seconds to sort 100 million  interfaces and it's sorting the same  thing it's just one is using the  interface and one is that and so we can  look at the profile for this and it's  kind of hard to read but this is the the  interfaces that we're sorting and we  spend about 69 seconds inside of sorts  sort and we spend about 12 seconds  inside of less and 37 seconds inside of  a number and that's what we would expect  right we're just sorting a bunch of  things so you would expect to spend most  of our time inside like the insertion  sort logic and so we look at the profile  for the struct version we spend about 18  seconds inside of sort and there's  something missing here that was in the  previous profile which is that call to  to number it's not happening here and  what's happening is in lining and so the  compiler is just taking that call and  putting it directly into the call site  they can't do that with the interface  version because of that dynamic dispatch  so we can verify that with the dash M  compiler flag of the GC flags and sure  enough is two calls to sortable that  number that are being in lined on line  84 and that's inside of less there's two  calls to number so the compilers is  taking those two calls and then moving  them directly into that less function so  we can disable inlining with the dash l  flag and kind of level the playing field  a bit so to speak and look at the  resulting profiles on the left is the  struct version on the right is the  interface version they look kind of the  same basically which is what we expect  there  calling through the number now and with  the interface or with a structure we  spend about 2.3 seconds inside of number  and with the interfaces we're still  spending over 42 seconds inside of a  number so there's still a lot of  overhead involved with that interface  call and we can look at the performance  of method indications and again plot  that across different releases of go and  obviously just calling a map calling a  method on a struck directly is the  fastest and it's basically constant and  then the interface adds a little bit of  overhead but it's also kind of constant  and then what's changed a lot is the  performance of like type conversions so  going from like using a type assert or a  type switch to convert from the  interface to the concrete type and then  calling a method on that and in go one  five that was when this conversion to  the concrete type pointer was inlined  directly into the runtime and in one  seven that was in the static single  assignment back-end the remaining type  conversions were in line so now just  doing the type conversion using one of  those two methods and then calling the  method on that is basically on par with  just calling a method directly on a  struct which i think is pretty  impressive and it's one more case I want  to look at with interfaces which is the  empty interface as I mentioned empty  interfaces are commonly used as a  workaround to lack of generics and go so  we have these two benchmarks benchmark  art I face benchmark art string and  functionally they're the same the only  difference is the interface version  calls this function that takes an empty  interface argument and the the string  version takes a string argument but  you'll notice that these print boolean's  are always false and so these print  lines never actually happen in either  case we run the benchmark and the  interface version is quite a bit slower  and we can look the profiles and see  what's going on and on the left is the  struck version and there's not much  going on right which is what we expect  benchmark artistry  is just calling our are extreme function  and that's pretty much it and then on  the right is the interface version  there's a whole bunch of stuff going on  and pretty much all of that stuff is  garbage collection it's all more or less  related to garbage collection and if you  look closely that's where the actual  call to our guy face happens so if we  zoom in on this what has to happen is  the runtime has to convert our string to  the empty interface and to do that it  has to allocate that empty interface and  so it does that by calling this runtime  conf T to e to convert from the concrete  type to the empty interface type that  calls runtime new object that calls  runtime malloc GC which does the actual  allocation that obviously causes all of  the garbage collection to happen so we  can just kind of verify that and look at  the assembly using the - s compiler flag  and sure enough there's that call to  runtime con 50 to e that happens before  our guy face gets called and then on the  right that's the assembly that go  assembly for string version and  obviously it's a lot more concise but  it's also missing that conversion call  and so this was an insight we gained  while working on go data structures  which is if performance really matters a  lot you're you're really better off  writing or generating type specific code  and so in our case we were trying to  write generic data structures or generic  algorithms and using empty interface to  do that and we noticed that we paid a  pretty big performance penalty and doing  that let's talk about memory management  for a bit so byte to string conversion  something you have to be kind of careful  with and go  especially since go I think tends to be  well suited to building like network  servers and so this tends to be a pretty  common operation so recently there are a  while ago I guess there was a  contribution made to Nats which was like  a small two line change  and ended up increasing the throughput  of the server by like two million  messages a second and all it did was  remove an unnecessary string allocation  and if we look at the actual change set  so what this code is doing is it's it's  reading some bytes off of a socket  converting that to a string and then  using that string to to do a lookup on  the map and what this change does is it  just in lines that string conversion  directly into the map lookup so  functionally it's like the same the only  difference is it's like getting rid of  this intermediate variable and yet  somehow that increased throughput by two  million messages a second so the  question is what's going on here and  what happened was there was an  optimization made for this specific case  because it's such a common operation and  doing that that lookup from like a byte  slice and doing a lookup in a map with  that key and we can make the observation  that when that that conversion is in  line in the lookup it doesn't escape  that lookup operation and so rather than  allocating that string what they do  instead is just allocate like a fake  string header and then use the  underlying bytes directly and so in  avoiding that string allocation we  reduce a lot of pressure on the garbage  collector that makes a really big  difference especially in the case of NAT  since that was on like a really critical  path for the server so I think that does  a pretty good job of showing how what  seems like a small change an  insignificant change can have a really  profound impact on performance if you're  not you know looking for that  specifically it also leads us into our  next topic which is memory allocation  and early on and go you could get some  really big wins by being a bit careful  about how you manage your memory and  basically just trying to subvert the  garbage collector and try and like reuse  memory and things like that using things  like slab allocation arena allocation  etc and I think and go one for maybe  sink top pool was introduced which  basically just retain  a pool of objects that it reuses between  garbage collections and what's  interesting is at least in my experience  sink that pool tends to outperform a lot  of these other low-level techniques like  the slab allocation the arena allocation  these are doing some low-level kind of  unsafe things and they're like retaining  large chunks of memory between garbage  collections in sync that pool those  objects still get garbage collected and  yet it still tends to outperform and so  it's kind of an interesting bit of  trivia but how is it that sink that pool  is so fast and the answer is the kind of  cheat a little bit and they use some  some runtime calls that aren't available  outside of the runtime to do this kind  of per CPU storage and so the way sink  top pool works is when you try to get an  object from that pool they just they pin  the current go routine to the processor  they disable preemption and then each  processor has its own local pool of  objects that they pull from and if that  local pool is empty they'll try to steal  from another processors pool before  allocating it as a last resort and in  doing that we avoid a lot of the  contention issues that we otherwise run  into and so last I checked there was an  open issue for providing some kind of  API that would allow you to kind of  write your own data structures using a  similar mechanism as sink pool and I  think the go team is trying to find the  right balance between you know an API  that's high level enough that it's not  like easy to shoot yourself in the foot  but it's low level enough that it's  actually useful so again one of those  kind of trade-offs or balancing acts  that you have to make and I'd be remiss  not to talk about concurrency since  obviously that's a big part of go so  we'll wrap up by talking about that and  some multi-core programming techniques  so I think the use of sink atomic  overall is kind of discouraged and go  and you know they say we generally don't  want sink atomic to be used at all  experience has shown us again and again  very very few people are capable of  writing correct code that uses atomic  operations  well hold my beer and writing lock free  code is hard right don't get me wrong  but really it's just a matter of like  replacing some mutexes with some  compare-and-swap operations right look  how hard can it really be so this is a  problem I explore it a little bit within  the problem of topic matching which is a  kind of a common problem in messaging  middleware which is we have a set of  subscribers we have a stream of messages  and we want to match those things up  efficiently there's a lot of ways we can  do this right we can use like an  inverted bitmap which is a you know  simple but pretty effective way of doing  that we could use a tree there's a  pretty good compromise between like  performance and space efficiency you  could put a lock around that and make it  concurrent but I wanted to solve this in  a way that would scale to a high level  of concurrency and a large number of  processors right hardware is shipping  with more and more CPUs these days and  go positions itself as a highly  concurrent language and so I figured  this would be a good fit for it so I  turn of the existing literature and sort  of a similar space which is concurrent  trees and it turns out we could take the  same idea and kind of put a twist on it  to solve this problem and so the way  this works is we just introduce these  like indirection nodes into our tree we  do our compare and swaps on those I  nodes to avoid putting it into an  inconsistent state and it scales quite a  bit better than the locker version and  this is just on like my quad core  MacBooks there's only four physical  cores but at least up to the four  physical cores of skills pretty well  after that there's like hyper threading  involved but it's also quite a bit  faster than the lock version and one of  the added benefits of this is we get  constant time snapshots of our tree  so with the lock version if you want to  take a snapshot of that tree we have to  acquire the lock copy the entire tree  and then release the lock whereas with  this concurrent version if you want to  take a snapshot of that tree we just  copy the root node of the tree to a new  generation since it's a persistent data  structure and so the way this works is  we assign a generation to each I knowed  we use the empty struct and go to denote  a generation we could use an integer but  then we'd have to deal with like integer  overflows and so we can just push that  problem off onto the heap instead and  then to make it change this tree we just  add a new node we copy the the parent I  node with the updated branch and then  the new generation and then we just do a  compare and swap on that parent but we  have to do two things atomically here we  have to compare that parent I know to  detect if the tree changed underneath us  so if somebody else came along and made  a change but we also have to compare the  generation of the root of the tree to  detect if a snapshot happened underneath  us and so we have to do these two things  atomically and kind of this this  generational compare and swap which it's  similar to like a double with compare  and swap which is doing a calves and the  two contiguous addresses but it's  different in that we're actually doing a  calves in the two non contiguous  addresses which isn't an operation  supported on any modern architecture  that that I know of at least but it  turns out we can solve this with just  your run-of-the-mill compare and swap  and kind of this two phase commit  fashion and so we do that but we still  run into data races or race conditions  and the go race detector it doesn't  protect you from doing dumb stuff so it  guards against data races but it doesn't  guard against logical races and so if  you're using things like sync atomic and  unsafe all bets are off and so what  happened was this this generational  compare and swap was always succeeding  despite the fact that snapshots were  happening on the tree the generations of  the nodes  changing but our generational this  compare-and-swap was always succeeding  and what happened was like I took an  assumption from Java which I had more  experience with at the time which is in  Java when you do new object equals new  object those things are always different  from each other because they're  different  keep allocated things I have different  pointers different addresses but if you  recall we're using the empty struct and  and go the empty structure needs zero  size value always occupies the same  address and literally the last sentence  of the go language spec reads that two  distinct zero size variables may have  the same address in memory I didn't read  the go language spec at least I didn't  scroll all the way down to the bottom to  see that and so the fix you know once we  know that it's pretty trivial right we  just add this unused field to our struct  and our stuff just magically starts  working and so that the side note here  is unsafe as the box suggests is in fact  unsafe but also if you read the go on  compatibility agreement  it states that packages that import  unsafe may depend on internal properties  of the go implantation we reserve the  right to make changes to the  implementation that may break such  programs so not only is unsafe unsafe  but if you're using it there's no  guarantee that your code will continue  to work if you upgrade to a newer  version of go and so it really is kind  of the olo package of go and you have to  be you have to be careful with it and  the other the key insight here is that  struct struct layout can make a really  big difference not just in terms of  performance but in terms of just the  functioning of your code and it's also  worth pointing out that the goal  language spec doesn't make any reference  to the word stack or heap and so yeah we  can get some big wins by being careful  about when we stack allocate versus heap  allocate but as far as language is  concerned there's no real guarantees  around that  but it's this idea of mechanical  sympathy which is having an  understanding of kind of the low-level  mechanics of how things actually work  can really help us and kind of the  classical example I think of mechanical  sympathy is false sharing and as Dustin  was working on NGO data structures this  is this is a ring buffer taken from Coe  data structures he noticed that this is  the performance of this ring buffer was  quite a bit worse without these padding  fields in between and the way this works  is we have this cue field in this DQ  field and they're being accessed  concurrently by different go routines  and so as one go routine accesses the  cue field the processor pulls that into  its it's cache and that gets evicted  from all of the other processor caches  and then vice versa so as the other girl  can access the DQ field you know it does  the same thing so they end up thrashing  that cache line and so by adding these  unused fields we basically push those  into their own cache lines and avoid  that contention and that has a material  effect on performance and then similarly  you know we can look at the scale  scalability of like the channel from go  and how that compares to the lock free  version of that and this is looking at  for like one or two cores all up to 16  cores and it scales quite a bit more  poorly than the lock free version and  the readwrite mutex from a sync package  also scales pretty poorly with CPU count  and this is kind of a known issue I  think and the reason for that is readers  all contend on this reader count field  when they try to acquire a read lock and  so what happens is you have these  readers as they go about access or  acquiring that read lock you know they  pull that into their cache that gets  evicted from the other caches and they  kind of go back and forth playing this  game of ping pong with that cache line  and so the way we fix that is you know  we can fix it the same way we solve any  horizontally scalable problem which is  we can partition and we can assign a  mutex to each processor  and that way as these readers go about  acquiring that read lock they don't have  that contention amongst amongst  themselves and then as a writer if I  want to acquire a write lock I have to  go through each of these acquire that  before I can proceed  so for writers is really expensive but  the whole point of this is for really  read heavy workloads across a large  number of cores so the question is how  do we actually build something like this  and go it's it's similar to sink top  pool and that has kind of that per CPU  mechanism but if you remember sink top  pool is using those those internal  runtime calls and we can't use those and  so the question is how do we create that  mapping from CPU to readwrite mutex we  can kind of hack it and we can drop down  into the assembly and and call at least  on AMD 64 architectures we can call the  CPUID instruction and so that gives us  the api cid of the processor that we're  running on which is basically a unique  ID of the processor that we're on and  then on linux at least we can read from  proxy PU info that gives us a list of  all of the processors that are available  to us and then from there we can create  that mapping from processor to mutex so  this is called a big reader lock by the  way this kind of distributed readwrite  mutex and as you can see it scales a lot  better in comparison to the readwrite  mutex from the sync package a crop so  looking at for like one all the way to  64 cores for for really read heavy  workloads it scales a lot better and so  this looks like in memory is we have  this contiguous array of mutexes one per  processor and we know each of these is  24 bytes wide and on a modern processor  the cache line size is 64 bytes wide and  so we still run into that false sharing  issue we saw before because two of these  fit in a single cache line and so we  fixed that the same way we we fixed it  before which as we add that padding the  cache line padding to  prevent that fall sharing problem that  basically pushes them into their own  cash lines we avoid that cash contention  and again that has a pretty material  impact on how this thing scales in  comparison to without that padding so I  haven't had a chance to play around much  with the new concurrent map that came  and go 1-9 recently but I didn't notice  through using empty interface throughout  the API so that's still happening I  guess generics so it's kind of an  unrelated side note you know it's I find  an interesting go-go positions itself is  a highly concurrent language but at  least in my opinion it really doesn't  bring a lot to the table as far as  actually making it easy to build highly  concurrent systems so I think there's  still a lot of work to be done as far as  providing better primitives better  abstractions for actually building these  things conclusions the standard library  provides general solutions and they're  generally what you should use seemingly  small idiomatic decisions can have  really profound impacts on performance  and the go tool chain has a lot of tools  for analyzing your code it's well worth  your time to learn those and to use  those and the go compiler and runtime  continue to improve and the corollary to  this is the performance profile of your  your code can change dramatically  between releases and so you should  always go back and verify optimizations  that you've made to make sure they're  still valid relying on assumptions can  be fatal read the go language spec read  the go on compatibility agreement and  really code is marginal I think in terms  of performance and what I mean by that  is really the big wins come from  architecture and so it's important to  get your architecture right first and  then you can start to look at more of  the code level micro optimizations  because I think that's where your return  on investment tends to be a lot smaller  but at the same time peeking behind the  curtains can pay dividends and it's this  idea of mechanical sympathy and I think  every engineer owes it to themselves to  at least have a working understanding of  like how the abstractions they use  actually work and above all optimize for  the right trade-off optimizing for  performance usually means trading  something else often return for that  like code maintainability for example  and there is no one right answer as far  as when that trade-off makes sense it  all depends and that's it thank you  [Applause]
+
+00:00:07.289 --> 00:00:10.799 align:start position:0%
+my name is Tyler treat and I'm  recovering go hater now I just have  Stockholm Syndrome but no I've written a  lot about go I've spent quite a bit of  time at the language now or the last  several years I don't consider myself a  gofer but you know I just think of  myself as a programmer but go is  probably what I use the most these days  and I'm guessing most of you came to  this talk to learn about this one weird  trick I'm gonna show you to make a code  faster that's not what this talk is and  the better title for this talk really is  so you want to subvert go and that's  because we're gonna look at some things  that in many ways try to subvert the  language and the reality is goal really  is not a systems language I know that  word is subjective depending on who you  ask  but if you ask me it's not a systems  language and that being said doesn't  mean we can't build internet scale  systems with it  right and we've seen this with all of  the new projects that have popped up  many of them written and go and and it's  kind of become the lingua franca of  infrastructure if you will for better or  worse and so to get back to my  alternative title you want to subvert go  the reason it's better title is really  is to talk about how to write terrible  awful go code and it's really not talk  meant for a general audience of bill  programmers but more to talk about some  things that I think are interesting  things that I've learned and to also  kind of tell a story of how the language  has evolved over time and so I have no  doubt the go team will wholeheartedly  reject this talk that's that's okay  that's their prerogative but it's my  talk not theirs and so I want to talk  about writing performance optimized go  from my perspective and my own  experience and also to talk about  trade-offs because when we optimize for  performance we're usually trading  something off and return for that so as  I mentioned my name is Tyler I work at  apps era where I work on the open source  messaging system Nats  I have an interest in distributed  systems I have a blog brave new geek  calm where I write about some of these  things  and as I said I work on Nats which is an  open-source high-performance messaging  system hesitate to call it a message  queue because it's really not but there  are some similarities there but it has  sort of two guiding principles which is  simplicity and performance and  throughout this talk we'll touch on some  of the ideas and the principles that we  applied while working on that and some  of the things that we learned as well as  they relate to performance so why does  this talk matter well the compiler isn't  magic it doesn't just take in your  shitty go code and plop out this  pristine machine code it's very good at  what it does it does do a lot of  optimizations but it's not perfect it  can't read your mind and so we have to  be mindful of performance when it  matters and to be fair it doesn't always  matter but when it does we have to be  thinking about that and so the question  is what are we really talking about when  we we say performance what does that  mean how do we quantify it and you know  if you saw the the keynote this morning  about optimizing tail latency that's  really I think what we're interested in  is like how do we observe the behaviors  of our system and the problem is we're  usually looking in the wrong places most  of the time and we're missing a lot of  the problems that are happening and so  that's really what we're interested in I  think is like how do we optimize for  tail latency and that can be really hard  to do but when we reach a certain scale  it's often when things fall over so in a  previous job I worked for a company  called Rick Eva which builds software  as-a-service  kind of geared towards financial  reporting and one of the products that  we built was a spreadsheets application  and early on I was kind of involved with  building out the communication layer for  that and one of the larger open source  initiatives that came out of that work  was a library called go data structures  which as you can guess it's a library  written and go with a bunch of data  structures but with sort of an eye  towards performance and so we were  looking at like how do we minimize  garbage collection minimize heap  allocations minimize lock contention  etc and so Dustin Hyatt wrote majority  of that as he was building the  calculation engine for that Spreadsheets  products but again we'll talk about some  of the things that we learned while  working on that and some of the  techniques that we applied as well so  we're going to touch briefly on  measuring performance and go and then  we'll just dive into the stuff talk  about a few language features talk about  memory management and then wrap up and  talk about concurrency and some  multi-core techniques so I can't  emphasize it enough but don't just  blindly apply the optimizations that  we're going to talk about as with  anything it depends and there are  trade-offs involved and it depends when  those trade-offs makes sense and when  they don't and and so I tend to think of  optimization as kind of this two-step  process where you like measure and then  you optimize and you repeat that as  needed until you've met your acceptance  criteria and you know everybody so it  says premature optimization is the root  of all evil so it's it's good to have  data and go actually ships with a lot of  really nice tooling to help with that  measure step right the the profiling  tools how we can look at memory usage  CPU usage of our applications the  tracing we can look at the garbage  collector how that interacts with their  system as well as the runtime scheduler  like how that schedules go routines and  then kind of the other half - that is  benchmarking and as you know go ships  with facilities for that as well to do  kind of your code level micro benchmarks  and that's really nice a test for like  performance regressions but it's also  easy to get caught up in trying to just  shave every nano second off that you can  and so I think it's also important to  kind of balance that out with more of  the end and holistic approach and for  that I really like HDR histogram which  it's kind of a generic library but  basically it allows you to capture from  a very large range of values to cap  very fine-grain measurements like  latency for example and so I've built a  number of tools around that to help with  my own benchmarking and testing and for  example that's how I generate like these  latency distributions is with HDR  histogram so I've done a lot of  benchmarking and to start I was really  bad at it and I think the only way  really get good at anything has to be  really [ __ ] bad at it for a long time  and by no means am i good at it now but  I think I certainly improved at least in  terms of my methodology and my  understanding of these things and  benchmarking can be really tricky  business because often it is just that  right and people have a tendency to just  look at the data and ignore all of the  context and I think the problem is it  sounds kind of counterintuitive but you  can't just ignore that context and you  have to be careful about how you  interpret that data and and be aware of  like the bench marketing and things like  that and so it can be legitimately  useful though for for like quantifying  performance and measuring that and  looking for performance bottlenecks so  enough with that let's let's dive into  this stuff and I want to start by  talking about a few language features  that I think are sort of major selling  points of go or at least kind of major  features of go and when you used in  certain cases can lead to some  surprising performance results I think  so channels obviously are a big part of  go as well as go routines and  concurrency story and in channels in  particular early on at least we're kind  of pushed as like the way to do data  synchronization of like shared state and  you know this idea of share memory by  communicating and to like pass ownership  of data over channels as opposed to  using locks to mediate that at access I  think the problem with that is it misses  out on a lot of the nuance of like when  to use certain things when not to and I  think since then it's been a bit more  kind of pull back on that but you know  when you look at the data it's not real  surprising that just using a mutex is  quite a bit faster than like using a  channel to do state synchronization but  even just ignoring the data people we  understand locks we've been using those  for a long time and so you know it's  when you start to restructure your code  in a way that allows you to use channels  to do that you typically end up with  more complicated code in the end than  you otherwise would have so yeah  channels are great they have their place  I think they're great for like  coordinating go routines and synchronize  or uh orchestrating things but for  synchronization you know just using  mutex and similarly we can look at just  the the performance of channels for like  work assignment or work throughput and  at the end of the day the channel is  just a ring buffer with a lock and so  yeah there's some some tricks they do as  far as the handoff semantics and they'll  like copy between go routines stacks to  optimize for that but they're still lock  involved at the end of the day so you  can typically go faster just with like  the lock free version of that and to be  fair this isn't really that meaningful  of a benchmark I mean you're probably  not spending that much time in inside a  channel but there was Dmitriev ukhov had  an implementation of lock free channels  it never made it in and I think the go  team was looking for further  justification for the added complexity  that brings and I think that shows kind  of that fundamental trade-off between  like performance and complexity and when  does that trade-off make sense and when  does it not make sense and in this case  they decided that it didn't defer was  the target of a lot of criticism early  on I think because of the performance  overhead that it had and this I think  this was kind of a known issue or it  became pretty well known issue and the  question now is is it still slow a lot  of people deliberately avoid the use of  it and for the most part no it's really  not I mean it's to start off with the I  was there's a lot of overhead but then  in like go one two and one three it  really improved  dramatically and it kind of crept back  up a little bit but today it's kind of  back at where it was and go on three  which in this case this is like with a  mutex lock unlock it's like 40  nanoseconds of overhead so I still avoid  it and really tight loops but outside of  that context it's not really anything to  be thinking about interfaces are  interesting and go and obviously they're  a major part of the language and  especially empty interfaces which are  used I think is a workaround to the lack  of generics and go and it can lead to  some surprising performance implications  so I think in the format package there  is an interface called stringer and  let's take a tight binary which is the U  n 64 well I'll say we're on a 32-bit  machine so that takes up two words and  binary implements the stringer interface  so the way interfaces work and go is  they're actually two pointers there's a  pointer to an eye table which contains  the type that implements the interface  and then a list of the function the  function table and those are the  functions that on that type that  implement the interface and then the  second pointer points to a copy of the  data and so that's used as like the  first argument to each of those  functions and so there's some  indirection that has to happen right  when we call an interface method we have  to resolve that function and then we  have to resolve the data that's used in  that function and we can measure that  overhead and in this case it's like two  nanoseconds so you're probably wondering  so what but when we start to look at  some more realistic ish scenarios the  ramifications become a bit more clear so  let's look at an example we have an  interface sort of a lie face we have a  struct sortable that implements that  interface and then we have these two  slice types sort of life fates by number  and sortable by number which is a slice  of so this is a slice of the interface  a slice of destruct and then he's both  to implement the logic needed to sort  them so the Len the swap the less and  then we soared a hundred million of  these things and the results are kind of  surprising especially with earlier  versions of go the difference is pretty  staggering but even with newer versions  like 1/8 you know that's about 25  seconds to sort 100,000,000 structs and  100 seconds to sort 100 million  interfaces and it's sorting the same  thing it's just one is using the  interface and one is that and so we can  look at the profile for this and it's  kind of hard to read but this is the the  interfaces that we're sorting and we  spend about 69 seconds inside of sorts  sort and we spend about 12 seconds  inside of less and 37 seconds inside of  a number and that's what we would expect  right we're just sorting a bunch of  things so you would expect to spend most  of our time inside like the insertion  sort logic and so we look at the profile  for the struct version we spend about 18  seconds inside of sort and there's  something missing here that was in the  previous profile which is that call to  to number it's not happening here and  what's happening is in lining and so the  compiler is just taking that call and  putting it directly into the call site  they can't do that with the interface  version because of that dynamic dispatch  so we can verify that with the dash M  compiler flag of the GC flags and sure  enough is two calls to sortable that  number that are being in lined on line  84 and that's inside of less there's two  calls to number so the compilers is  taking those two calls and then moving  them directly into that less function so  we can disable inlining with the dash l  flag and kind of level the playing field  a bit so to speak and look at the  resulting profiles on the left is the  struct version on the right is the  interface version they look kind of the  same basically which is what we expect  there  calling through the number now and with  the interface or with a structure we  spend about 2.3 seconds inside of number  and with the interfaces we're still  spending over 42 seconds inside of a  number so there's still a lot of  overhead involved with that interface  call and we can look at the performance  of method indications and again plot  that across different releases of go and  obviously just calling a map calling a  method on a struck directly is the  fastest and it's basically constant and  then the interface adds a little bit of  overhead but it's also kind of constant  and then what's changed a lot is the  performance of like type conversions so  going from like using a type assert or a  type switch to convert from the  interface to the concrete type and then  calling a method on that and in go one  five that was when this conversion to  the concrete type pointer was inlined  directly into the runtime and in one  seven that was in the static single  assignment back-end the remaining type  conversions were in line so now just  doing the type conversion using one of  those two methods and then calling the  method on that is basically on par with  just calling a method directly on a  struct which i think is pretty  impressive and it's one more case I want  to look at with interfaces which is the  empty interface as I mentioned empty  interfaces are commonly used as a  workaround to lack of generics and go so  we have these two benchmarks benchmark  art I face benchmark art string and  functionally they're the same the only  difference is the interface version  calls this function that takes an empty  interface argument and the the string  version takes a string argument but  you'll notice that these print boolean's  are always false and so these print  lines never actually happen in either  case we run the benchmark and the  interface version is quite a bit slower  and we can look the profiles and see  what's going on and on the left is the  struck version and there's not much  going on right which is what we expect  benchmark artistry  is just calling our are extreme function  and that's pretty much it and then on  the right is the interface version  there's a whole bunch of stuff going on  and pretty much all of that stuff is  garbage collection it's all more or less  related to garbage collection and if you  look closely that's where the actual  call to our guy face happens so if we  zoom in on this what has to happen is  the runtime has to convert our string to  the empty interface and to do that it  has to allocate that empty interface and  so it does that by calling this runtime  conf T to e to convert from the concrete  type to the empty interface type that  calls runtime new object that calls  runtime malloc GC which does the actual  allocation that obviously causes all of  the garbage collection to happen so we  can just kind of verify that and look at  the assembly using the - s compiler flag  and sure enough there's that call to  runtime con 50 to e that happens before  our guy face gets called and then on the  right that's the assembly that go  assembly for string version and  obviously it's a lot more concise but  it's also missing that conversion call  and so this was an insight we gained  while working on go data structures  which is if performance really matters a  lot you're you're really better off  writing or generating type specific code  and so in our case we were trying to  write generic data structures or generic  algorithms and using empty interface to  do that and we noticed that we paid a  pretty big performance penalty and doing  that let's talk about memory management  for a bit so byte to string conversion  something you have to be kind of careful  with and go  especially since go I think tends to be  well suited to building like network  servers and so this tends to be a pretty  common operation so recently there are a  while ago I guess there was a  contribution made to Nats which was like  a small two line change  and ended up increasing the throughput  of the server by like two million  messages a second and all it did was  remove an unnecessary string allocation  and if we look at the actual change set  so what this code is doing is it's it's  reading some bytes off of a socket  converting that to a string and then  using that string to to do a lookup on  the map and what this change does is it  just in lines that string conversion  directly into the map lookup so  functionally it's like the same the only  difference is it's like getting rid of  this intermediate variable and yet  somehow that increased throughput by two  million messages a second so the  question is what's going on here and  what happened was there was an  optimization made for this specific case  because it's such a common operation and  doing that that lookup from like a byte  slice and doing a lookup in a map with  that key and we can make the observation  that when that that conversion is in  line in the lookup it doesn't escape  that lookup operation and so rather than  allocating that string what they do  instead is just allocate like a fake  string header and then use the  underlying bytes directly and so in  avoiding that string allocation we  reduce a lot of pressure on the garbage  collector that makes a really big  difference especially in the case of NAT  since that was on like a really critical  path for the server so I think that does  a pretty good job of showing how what  seems like a small change an  insignificant change can have a really  profound impact on performance if you're  not you know looking for that  specifically it also leads us into our  next topic which is memory allocation  and early on and go you could get some  really big wins by being a bit careful  about how you manage your memory and  basically just trying to subvert the  garbage collector and try and like reuse  memory and things like that using things  like slab allocation arena allocation  etc and I think and go one for maybe  sink top pool was introduced which  basically just retain  a pool of objects that it reuses between  garbage collections and what's  interesting is at least in my experience  sink that pool tends to outperform a lot  of these other low-level techniques like  the slab allocation the arena allocation  these are doing some low-level kind of  unsafe things and they're like retaining  large chunks of memory between garbage  collections in sync that pool those  objects still get garbage collected and  yet it still tends to outperform and so  it's kind of an interesting bit of  trivia but how is it that sink that pool  is so fast and the answer is the kind of  cheat a little bit and they use some  some runtime calls that aren't available  outside of the runtime to do this kind  of per CPU storage and so the way sink  top pool works is when you try to get an  object from that pool they just they pin  the current go routine to the processor  they disable preemption and then each  processor has its own local pool of  objects that they pull from and if that  local pool is empty they'll try to steal  from another processors pool before  allocating it as a last resort and in  doing that we avoid a lot of the  contention issues that we otherwise run  into and so last I checked there was an  open issue for providing some kind of  API that would allow you to kind of  write your own data structures using a  similar mechanism as sink pool and I  think the go team is trying to find the  right balance between you know an API  that's high level enough that it's not  like easy to shoot yourself in the foot  but it's low level enough that it's  actually useful so again one of those  kind of trade-offs or balancing acts  that you have to make and I'd be remiss  not to talk about concurrency since  obviously that's a big part of go so  we'll wrap up by talking about that and  some multi-core programming techniques  so I think the use of sink atomic  overall is kind of discouraged and go  and you know they say we generally don't  want sink atomic to be used at all  experience has shown us again and again  very very few people are capable of  writing correct code that uses atomic  operations  well hold my beer and writing lock free  code is hard right don't get me wrong  but really it's just a matter of like  replacing some mutexes with some  compare-and-swap operations right look  how hard can it really be so this is a  problem I explore it a little bit within  the problem of topic matching which is a  kind of a common problem in messaging  middleware which is we have a set of  subscribers we have a stream of messages  and we want to match those things up  efficiently there's a lot of ways we can  do this right we can use like an  inverted bitmap which is a you know  simple but pretty effective way of doing  that we could use a tree there's a  pretty good compromise between like  performance and space efficiency you  could put a lock around that and make it  concurrent but I wanted to solve this in  a way that would scale to a high level  of concurrency and a large number of  processors right hardware is shipping  with more and more CPUs these days and  go positions itself as a highly  concurrent language and so I figured  this would be a good fit for it so I  turn of the existing literature and sort  of a similar space which is concurrent  trees and it turns out we could take the  same idea and kind of put a twist on it  to solve this problem and so the way  this works is we just introduce these  like indirection nodes into our tree we  do our compare and swaps on those I  nodes to avoid putting it into an  inconsistent state and it scales quite a  bit better than the locker version and  this is just on like my quad core  MacBooks there's only four physical  cores but at least up to the four  physical cores of skills pretty well  after that there's like hyper threading  involved but it's also quite a bit  faster than the lock version and one of  the added benefits of this is we get  constant time snapshots of our tree  so with the lock version if you want to  take a snapshot of that tree we have to  acquire the lock copy the entire tree  and then release the lock whereas with  this concurrent version if you want to  take a snapshot of that tree we just  copy the root node of the tree to a new  generation since it's a persistent data  structure and so the way this works is  we assign a generation to each I knowed  we use the empty struct and go to denote  a generation we could use an integer but  then we'd have to deal with like integer  overflows and so we can just push that  problem off onto the heap instead and  then to make it change this tree we just  add a new node we copy the the parent I  node with the updated branch and then  the new generation and then we just do a  compare and swap on that parent but we  have to do two things atomically here we  have to compare that parent I know to  detect if the tree changed underneath us  so if somebody else came along and made  a change but we also have to compare the  generation of the root of the tree to  detect if a snapshot happened underneath  us and so we have to do these two things  atomically and kind of this this  generational compare and swap which it's  similar to like a double with compare  and swap which is doing a calves and the  two contiguous addresses but it's  different in that we're actually doing a  calves in the two non contiguous  addresses which isn't an operation  supported on any modern architecture  that that I know of at least but it  turns out we can solve this with just  your run-of-the-mill compare and swap  and kind of this two phase commit  fashion and so we do that but we still  run into data races or race conditions  and the go race detector it doesn't  protect you from doing dumb stuff so it  guards against data races but it doesn't  guard against logical races and so if  you're using things like sync atomic and  unsafe all bets are off and so what  happened was this this generational  compare and swap was always succeeding  despite the fact that snapshots were  happening on the tree the generations of  the nodes  changing but our generational this  compare-and-swap was always succeeding  and what happened was like I took an  assumption from Java which I had more  experience with at the time which is in  Java when you do new object equals new  object those things are always different  from each other because they're  different  keep allocated things I have different  pointers different addresses but if you  recall we're using the empty struct and  and go the empty structure needs zero  size value always occupies the same  address and literally the last sentence  of the go language spec reads that two  distinct zero size variables may have  the same address in memory I didn't read  the go language spec at least I didn't  scroll all the way down to the bottom to  see that and so the fix you know once we  know that it's pretty trivial right we  just add this unused field to our struct  and our stuff just magically starts  working and so that the side note here  is unsafe as the box suggests is in fact  unsafe but also if you read the go on  compatibility agreement  it states that packages that import  unsafe may depend on internal properties  of the go implantation we reserve the  right to make changes to the  implementation that may break such  programs so not only is unsafe unsafe  but if you're using it there's no  guarantee that your code will continue  to work if you upgrade to a newer  version of go and so it really is kind  of the olo package of go and you have to  be you have to be careful with it and  the other the key insight here is that  struct struct layout can make a really  big difference not just in terms of  performance but in terms of just the  functioning of your code and it's also  worth pointing out that the goal  language spec doesn't make any reference  to the word stack or heap and so yeah we  can get some big wins by being careful  about when we stack allocate versus heap  allocate but as far as language is  concerned there's no real guarantees  around that  but it's this idea of mechanical  sympathy which is having an  understanding of kind of the low-level  mechanics of how things actually work  can really help us and kind of the  classical example I think of mechanical  sympathy is false sharing and as Dustin  was working on NGO data structures this  is this is a ring buffer taken from Coe  data structures he noticed that this is  the performance of this ring buffer was  quite a bit worse without these padding  fields in between and the way this works  is we have this cue field in this DQ  field and they're being accessed  concurrently by different go routines  and so as one go routine accesses the  cue field the processor pulls that into  its it's cache and that gets evicted  from all of the other processor caches  and then vice versa so as the other girl  can access the DQ field you know it does  the same thing so they end up thrashing  that cache line and so by adding these  unused fields we basically push those  into their own cache lines and avoid  that contention and that has a material  effect on performance and then similarly  you know we can look at the scale  scalability of like the channel from go  and how that compares to the lock free  version of that and this is looking at  for like one or two cores all up to 16  cores and it scales quite a bit more  poorly than the lock free version and  the readwrite mutex from a sync package  also scales pretty poorly with CPU count  and this is kind of a known issue I  think and the reason for that is readers  all contend on this reader count field  when they try to acquire a read lock and  so what happens is you have these  readers as they go about access or  acquiring that read lock you know they  pull that into their cache that gets  evicted from the other caches and they  kind of go back and forth playing this  game of ping pong with that cache line  and so the way we fix that is you know  we can fix it the same way we solve any  horizontally scalable problem which is  we can partition and we can assign a  mutex to each processor  and that way as these readers go about  acquiring that read lock they don't have  that contention amongst amongst  themselves and then as a writer if I  want to acquire a write lock I have to  go through each of these acquire that  before I can proceed  so for writers is really expensive but  the whole point of this is for really  read heavy workloads across a large  number of cores so the question is how  do we actually build something like this  and go it's it's similar to sink top  pool and that has kind of that per CPU  mechanism but if you remember sink top  pool is using those those internal  runtime calls and we can't use those and  so the question is how do we create that  mapping from CPU to readwrite mutex we  can kind of hack it and we can drop down  into the assembly and and call at least  on AMD 64 architectures we can call the  CPUID instruction and so that gives us  the api cid of the processor that we're  running on which is basically a unique  ID of the processor that we're on and  then on linux at least we can read from  proxy PU info that gives us a list of  all of the processors that are available  to us and then from there we can create  that mapping from processor to mutex so  this is called a big reader lock by the  way this kind of distributed readwrite  mutex and as you can see it scales a lot  better in comparison to the readwrite  mutex from the sync package a crop so  looking at for like one all the way to  64 cores for for really read heavy  workloads it scales a lot better and so  this looks like in memory is we have  this contiguous array of mutexes one per  processor and we know each of these is  24 bytes wide and on a modern processor  the cache line size is 64 bytes wide and  so we still run into that false sharing  issue we saw before because two of these  fit in a single cache line and so we  fixed that the same way we we fixed it  before which as we add that padding the  cache line padding to  prevent that fall sharing problem that  basically pushes them into their own  cash lines we avoid that cash contention  and again that has a pretty material  impact on how this thing scales in  comparison to without that padding so I  haven't had a chance to play around much  with the new concurrent map that came  and go 1-9 recently but I didn't notice  through using empty interface throughout  the API so that's still happening I  guess generics so it's kind of an  unrelated side note you know it's I find  an interesting go-go positions itself is  a highly concurrent language but at  least in my opinion it really doesn't  bring a lot to the table as far as  actually making it easy to build highly  concurrent systems so I think there's  still a lot of work to be done as far as  providing better primitives better  abstractions for actually building these  things conclusions the standard library  provides general solutions and they're  generally what you should use seemingly  small idiomatic decisions can have  really profound impacts on performance  and the go tool chain has a lot of tools  for analyzing your code it's well worth  your time to learn those and to use  those and the go compiler and runtime  continue to improve and the corollary to  this is the performance profile of your  your code can change dramatically  between releases and so you should  always go back and verify optimizations  that you've made to make sure they're  still valid relying on assumptions can  be fatal read the go language spec read  the go on compatibility agreement and  really code is marginal I think in terms  of performance and what I mean by that  is really the big wins come from  architecture and so it's important to  get your architecture right first and  then you can start to look at more of  the code level micro optimizations  because I think that's where your return  on investment tends to be a lot smaller  but at the same time peeking behind the  curtains can pay dividends and it's this  idea of mechanical sympathy and I think  every engineer owes it to themselves to  at least have a working understanding of  like how the abstractions they use  actually work and above all optimize for  the right trade-off optimizing for  performance usually means trading  something else often return for that  like code maintainability for example  and there is no one right answer as far  as when that trade-off makes sense it  all depends and that's it thank you  [Applause]
+ 
+
+00:00:10.799 --> 00:00:14.310 align:start position:0%
+ 
+ 
+
+00:00:14.310 --> 00:00:16.440 align:start position:0%
+ 
+ 
+
+00:00:16.440 --> 00:00:18.179 align:start position:0%
+ 
+ 
+
+00:00:18.179 --> 00:00:21.269 align:start position:0%
+ 
+ 
+
+00:00:21.269 --> 00:00:23.670 align:start position:0%
+ 
+ 
+
+00:00:23.670 --> 00:00:25.139 align:start position:0%
+ 
+ 
+
+00:00:25.139 --> 00:00:27.179 align:start position:0%
+ 
+ 
+
+00:00:27.179 --> 00:00:30.210 align:start position:0%
+ 
+ 
+
+00:00:30.210 --> 00:00:31.859 align:start position:0%
+ 
+ 
+
+00:00:31.859 --> 00:00:33.630 align:start position:0%
+ 
+ 
+
+00:00:33.630 --> 00:00:37.860 align:start position:0%
+ 
+ 
+
+00:00:37.860 --> 00:00:39.720 align:start position:0%
+ 
+ 
+
+00:00:39.720 --> 00:00:41.819 align:start position:0%
+ 
+ 
+
+00:00:41.819 --> 00:00:43.110 align:start position:0%
+ 
+ 
+
+00:00:43.110 --> 00:00:45.989 align:start position:0%
+ 
+ 
+
+00:00:45.989 --> 00:00:48.720 align:start position:0%
+ 
+ 
+
+00:00:48.720 --> 00:00:50.729 align:start position:0%
+ 
+ 
+
+00:00:50.729 --> 00:00:53.369 align:start position:0%
+ 
+ 
+
+00:00:53.369 --> 00:00:53.379 align:start position:0%
+ 
+ 
+
+00:00:53.379 --> 00:00:53.849 align:start position:0%
+ 
+
+
+00:00:53.849 --> 00:00:55.950 align:start position:0%
+ 
+ 
+
+00:00:55.950 --> 00:00:58.919 align:start position:0%
+ 
+ 
+
+00:00:58.919 --> 00:01:00.569 align:start position:0%
+ 
+ 
+
+00:01:00.569 --> 00:01:01.529 align:start position:0%
+ 
+ 
+
+00:01:01.529 --> 00:01:03.059 align:start position:0%
+ 
+ 
+
+00:01:03.059 --> 00:01:04.790 align:start position:0%
+ 
+ 
+
+00:01:04.790 --> 00:01:08.070 align:start position:0%
+ 
+ 
+
+00:01:08.070 --> 00:01:09.860 align:start position:0%
+ 
+ 
+
+00:01:09.860 --> 00:01:12.870 align:start position:0%
+ 
+ 
+
+00:01:12.870 --> 00:01:16.530 align:start position:0%
+ 
+ 
+
+00:01:16.530 --> 00:01:18.360 align:start position:0%
+ 
+ 
+
+00:01:18.360 --> 00:01:20.850 align:start position:0%
+ 
+ 
+
+00:01:20.850 --> 00:01:22.710 align:start position:0%
+ 
+ 
+
+00:01:22.710 --> 00:01:27.510 align:start position:0%
+ 
+ 
+
+00:01:27.510 --> 00:01:29.340 align:start position:0%
+ 
+ 
+
+00:01:29.340 --> 00:01:31.110 align:start position:0%
+ 
+ 
+
+00:01:31.110 --> 00:01:33.120 align:start position:0%
+ 
+ 
+
+00:01:33.120 --> 00:01:35.610 align:start position:0%
+ 
+ 
+
+00:01:35.610 --> 00:01:37.530 align:start position:0%
+ 
+ 
+
+00:01:37.530 --> 00:01:41.160 align:start position:0%
+ 
+ 
+
+00:01:41.160 --> 00:01:42.960 align:start position:0%
+ 
+ 
+
+00:01:42.960 --> 00:01:44.820 align:start position:0%
+ 
+ 
+
+00:01:44.820 --> 00:01:47.280 align:start position:0%
+ 
+ 
+
+00:01:47.280 --> 00:01:49.920 align:start position:0%
+ 
+ 
+
+00:01:49.920 --> 00:01:51.900 align:start position:0%
+ 
+ 
+
+00:01:51.900 --> 00:01:53.880 align:start position:0%
+ 
+ 
+
+00:01:53.880 --> 00:01:57.180 align:start position:0%
+ 
+ 
+
+00:01:57.180 --> 00:01:59.100 align:start position:0%
+ 
+ 
+
+00:01:59.100 --> 00:02:01.170 align:start position:0%
+ 
+ 
+
+00:02:01.170 --> 00:02:04.110 align:start position:0%
+ 
+ 
+
+00:02:04.110 --> 00:02:05.910 align:start position:0%
+ 
+ 
+
+00:02:05.910 --> 00:02:07.920 align:start position:0%
+ 
+ 
+
+00:02:07.920 --> 00:02:09.389 align:start position:0%
+ 
+ 
+
+00:02:09.389 --> 00:02:12.000 align:start position:0%
+ 
+ 
+
+00:02:12.000 --> 00:02:14.309 align:start position:0%
+ 
+ 
+
+00:02:14.309 --> 00:02:16.380 align:start position:0%
+ 
+ 
+
+00:02:16.380 --> 00:02:16.390 align:start position:0%
+ 
+ 
+
+00:02:16.390 --> 00:02:17.839 align:start position:0%
+ 
+
+
+00:02:17.839 --> 00:02:20.239 align:start position:0%
+ 
+ 
+
+00:02:20.239 --> 00:02:22.250 align:start position:0%
+ 
+ 
+
+00:02:22.250 --> 00:02:24.949 align:start position:0%
+ 
+ 
+
+00:02:24.949 --> 00:02:27.080 align:start position:0%
+ 
+ 
+
+00:02:27.080 --> 00:02:29.089 align:start position:0%
+ 
+ 
+
+00:02:29.089 --> 00:02:31.270 align:start position:0%
+ 
+ 
+
+00:02:31.270 --> 00:02:34.179 align:start position:0%
+ 
+ 
+
+00:02:34.179 --> 00:02:36.830 align:start position:0%
+ 
+ 
+
+00:02:36.830 --> 00:02:38.660 align:start position:0%
+ 
+ 
+
+00:02:38.660 --> 00:02:40.670 align:start position:0%
+ 
+ 
+
+00:02:40.670 --> 00:02:42.259 align:start position:0%
+ 
+ 
+
+00:02:42.259 --> 00:02:45.860 align:start position:0%
+ 
+ 
+
+00:02:45.860 --> 00:02:48.140 align:start position:0%
+ 
+ 
+
+00:02:48.140 --> 00:02:49.940 align:start position:0%
+ 
+ 
+
+00:02:49.940 --> 00:02:51.740 align:start position:0%
+ 
+ 
+
+00:02:51.740 --> 00:02:54.319 align:start position:0%
+ 
+ 
+
+00:02:54.319 --> 00:02:55.759 align:start position:0%
+ 
+ 
+
+00:02:55.759 --> 00:02:58.250 align:start position:0%
+ 
+ 
+
+00:02:58.250 --> 00:03:00.259 align:start position:0%
+ 
+ 
+
+00:03:00.259 --> 00:03:02.240 align:start position:0%
+ 
+ 
+
+00:03:02.240 --> 00:03:05.030 align:start position:0%
+ 
+ 
+
+00:03:05.030 --> 00:03:07.640 align:start position:0%
+ 
+ 
+
+00:03:07.640 --> 00:03:09.080 align:start position:0%
+ 
+ 
+
+00:03:09.080 --> 00:03:12.589 align:start position:0%
+ 
+ 
+
+00:03:12.589 --> 00:03:14.929 align:start position:0%
+ 
+ 
+
+00:03:14.929 --> 00:03:18.170 align:start position:0%
+ 
+ 
+
+00:03:18.170 --> 00:03:19.490 align:start position:0%
+ 
+ 
+
+00:03:19.490 --> 00:03:22.879 align:start position:0%
+ 
+ 
+
+00:03:22.879 --> 00:03:24.170 align:start position:0%
+ 
+ 
+
+00:03:24.170 --> 00:03:27.770 align:start position:0%
+ 
+ 
+
+00:03:27.770 --> 00:03:29.479 align:start position:0%
+ 
+ 
+
+00:03:29.479 --> 00:03:32.479 align:start position:0%
+ 
+ 
+
+00:03:32.479 --> 00:03:34.399 align:start position:0%
+ 
+ 
+
+00:03:34.399 --> 00:03:37.490 align:start position:0%
+ 
+ 
+
+00:03:37.490 --> 00:03:38.780 align:start position:0%
+ 
+ 
+
+00:03:38.780 --> 00:03:40.490 align:start position:0%
+ 
+ 
+
+00:03:40.490 --> 00:03:43.099 align:start position:0%
+ 
+ 
+
+00:03:43.099 --> 00:03:44.899 align:start position:0%
+ 
+ 
+
+00:03:44.899 --> 00:03:49.729 align:start position:0%
+ 
+ 
+
+00:03:49.729 --> 00:03:51.020 align:start position:0%
+ 
+ 
+
+00:03:51.020 --> 00:03:53.569 align:start position:0%
+ 
+ 
+
+00:03:53.569 --> 00:03:53.579 align:start position:0%
+ 
+ 
+
+00:03:53.579 --> 00:03:54.469 align:start position:0%
+ 
+
+
+00:03:54.469 --> 00:03:56.839 align:start position:0%
+ 
+ 
+
+00:03:56.839 --> 00:04:00.199 align:start position:0%
+ 
+ 
+
+00:04:00.199 --> 00:04:02.959 align:start position:0%
+ 
+ 
+
+00:04:02.959 --> 00:04:04.640 align:start position:0%
+ 
+ 
+
+00:04:04.640 --> 00:04:07.280 align:start position:0%
+ 
+ 
+
+00:04:07.280 --> 00:04:10.039 align:start position:0%
+ 
+ 
+
+00:04:10.039 --> 00:04:12.530 align:start position:0%
+ 
+ 
+
+00:04:12.530 --> 00:04:14.509 align:start position:0%
+ 
+ 
+
+00:04:14.509 --> 00:04:16.580 align:start position:0%
+ 
+ 
+
+00:04:16.580 --> 00:04:18.860 align:start position:0%
+ 
+ 
+
+00:04:18.860 --> 00:04:21.289 align:start position:0%
+ 
+ 
+
+00:04:21.289 --> 00:04:23.060 align:start position:0%
+ 
+ 
+
+00:04:23.060 --> 00:04:24.920 align:start position:0%
+ 
+ 
+
+00:04:24.920 --> 00:04:27.290 align:start position:0%
+ 
+ 
+
+00:04:27.290 --> 00:04:29.690 align:start position:0%
+ 
+ 
+
+00:04:29.690 --> 00:04:33.680 align:start position:0%
+ 
+ 
+
+00:04:33.680 --> 00:04:34.850 align:start position:0%
+ 
+ 
+
+00:04:34.850 --> 00:04:37.430 align:start position:0%
+ 
+ 
+
+00:04:37.430 --> 00:04:40.190 align:start position:0%
+ 
+ 
+
+00:04:40.190 --> 00:04:41.810 align:start position:0%
+ 
+ 
+
+00:04:41.810 --> 00:04:43.250 align:start position:0%
+ 
+ 
+
+00:04:43.250 --> 00:04:46.310 align:start position:0%
+ 
+ 
+
+00:04:46.310 --> 00:04:47.330 align:start position:0%
+ 
+ 
+
+00:04:47.330 --> 00:04:49.730 align:start position:0%
+ 
+ 
+
+00:04:49.730 --> 00:04:51.110 align:start position:0%
+ 
+ 
+
+00:04:51.110 --> 00:04:54.440 align:start position:0%
+ 
+ 
+
+00:04:54.440 --> 00:04:56.660 align:start position:0%
+ 
+ 
+
+00:04:56.660 --> 00:04:58.400 align:start position:0%
+ 
+ 
+
+00:04:58.400 --> 00:05:03.440 align:start position:0%
+ 
+ 
+
+00:05:03.440 --> 00:05:05.420 align:start position:0%
+ 
+ 
+
+00:05:05.420 --> 00:05:08.210 align:start position:0%
+ 
+ 
+
+00:05:08.210 --> 00:05:09.740 align:start position:0%
+ 
+ 
+
+00:05:09.740 --> 00:05:12.110 align:start position:0%
+ 
+ 
+
+00:05:12.110 --> 00:05:14.330 align:start position:0%
+ 
+ 
+
+00:05:14.330 --> 00:05:15.770 align:start position:0%
+ 
+ 
+
+00:05:15.770 --> 00:05:20.800 align:start position:0%
+ 
+ 
+
+00:05:20.800 --> 00:05:23.210 align:start position:0%
+ 
+ 
+
+00:05:23.210 --> 00:05:25.640 align:start position:0%
+ 
+ 
+
+00:05:25.640 --> 00:05:27.790 align:start position:0%
+ 
+ 
+
+00:05:27.790 --> 00:05:30.380 align:start position:0%
+ 
+ 
+
+00:05:30.380 --> 00:05:33.050 align:start position:0%
+ 
+ 
+
+00:05:33.050 --> 00:05:36.950 align:start position:0%
+ 
+ 
+
+00:05:36.950 --> 00:05:38.780 align:start position:0%
+ 
+ 
+
+00:05:38.780 --> 00:05:42.320 align:start position:0%
+ 
+ 
+
+00:05:42.320 --> 00:05:45.230 align:start position:0%
+ 
+ 
+
+00:05:45.230 --> 00:05:48.110 align:start position:0%
+ 
+ 
+
+00:05:48.110 --> 00:05:51.050 align:start position:0%
+ 
+ 
+
+00:05:51.050 --> 00:05:53.720 align:start position:0%
+ 
+ 
+
+00:05:53.720 --> 00:05:55.460 align:start position:0%
+ 
+ 
+
+00:05:55.460 --> 00:05:56.990 align:start position:0%
+ 
+ 
+
+00:05:56.990 --> 00:06:00.290 align:start position:0%
+ 
+ 
+
+00:06:00.290 --> 00:06:02.810 align:start position:0%
+ 
+ 
+
+00:06:02.810 --> 00:06:04.870 align:start position:0%
+ 
+ 
+
+00:06:04.870 --> 00:06:07.250 align:start position:0%
+ 
+ 
+
+00:06:07.250 --> 00:06:09.530 align:start position:0%
+ 
+ 
+
+00:06:09.530 --> 00:06:12.230 align:start position:0%
+ 
+ 
+
+00:06:12.230 --> 00:06:14.270 align:start position:0%
+ 
+ 
+
+00:06:14.270 --> 00:06:16.430 align:start position:0%
+ 
+ 
+
+00:06:16.430 --> 00:06:18.860 align:start position:0%
+ 
+ 
+
+00:06:18.860 --> 00:06:21.290 align:start position:0%
+ 
+ 
+
+00:06:21.290 --> 00:06:23.830 align:start position:0%
+ 
+ 
+
+00:06:23.830 --> 00:06:26.510 align:start position:0%
+ 
+ 
+
+00:06:26.510 --> 00:06:30.830 align:start position:0%
+ 
+ 
+
+00:06:30.830 --> 00:06:34.280 align:start position:0%
+ 
+ 
+
+00:06:34.280 --> 00:06:37.240 align:start position:0%
+ 
+ 
+
+00:06:37.240 --> 00:06:40.250 align:start position:0%
+ 
+ 
+
+00:06:40.250 --> 00:06:43.220 align:start position:0%
+ 
+ 
+
+00:06:43.220 --> 00:06:45.020 align:start position:0%
+ 
+ 
+
+00:06:45.020 --> 00:06:47.030 align:start position:0%
+ 
+ 
+
+00:06:47.030 --> 00:06:50.570 align:start position:0%
+ 
+ 
+
+00:06:50.570 --> 00:06:54.320 align:start position:0%
+ 
+ 
+
+00:06:54.320 --> 00:06:55.790 align:start position:0%
+ 
+ 
+
+00:06:55.790 --> 00:06:58.220 align:start position:0%
+ 
+ 
+
+00:06:58.220 --> 00:07:00.470 align:start position:0%
+ 
+ 
+
+00:07:00.470 --> 00:07:02.510 align:start position:0%
+ 
+ 
+
+00:07:02.510 --> 00:07:04.220 align:start position:0%
+ 
+ 
+
+00:07:04.220 --> 00:07:06.530 align:start position:0%
+ 
+ 
+
+00:07:06.530 --> 00:07:08.360 align:start position:0%
+ 
+ 
+
+00:07:08.360 --> 00:07:11.660 align:start position:0%
+ 
+ 
+
+00:07:11.660 --> 00:07:14.270 align:start position:0%
+ 
+ 
+
+00:07:14.270 --> 00:07:15.860 align:start position:0%
+ 
+ 
+
+00:07:15.860 --> 00:07:18.430 align:start position:0%
+ 
+ 
+
+00:07:18.430 --> 00:07:20.120 align:start position:0%
+ 
+ 
+
+00:07:20.120 --> 00:07:23.060 align:start position:0%
+ 
+ 
+
+00:07:23.060 --> 00:07:26.450 align:start position:0%
+ 
+ 
+
+00:07:26.450 --> 00:07:28.970 align:start position:0%
+ 
+ 
+
+00:07:28.970 --> 00:07:31.460 align:start position:0%
+ 
+ 
+
+00:07:31.460 --> 00:07:33.170 align:start position:0%
+ 
+ 
+
+00:07:33.170 --> 00:07:35.540 align:start position:0%
+ 
+ 
+
+00:07:35.540 --> 00:07:36.770 align:start position:0%
+ 
+ 
+
+00:07:36.770 --> 00:07:40.970 align:start position:0%
+ 
+ 
+
+00:07:40.970 --> 00:07:42.620 align:start position:0%
+ 
+ 
+
+00:07:42.620 --> 00:07:45.110 align:start position:0%
+ 
+ 
+
+00:07:45.110 --> 00:07:48.350 align:start position:0%
+ 
+ 
+
+00:07:48.350 --> 00:07:49.930 align:start position:0%
+ 
+ 
+
+00:07:49.930 --> 00:07:53.090 align:start position:0%
+ 
+ 
+
+00:07:53.090 --> 00:07:54.980 align:start position:0%
+ 
+ 
+
+00:07:54.980 --> 00:07:56.930 align:start position:0%
+ 
+ 
+
+00:07:56.930 --> 00:07:59.090 align:start position:0%
+ 
+ 
+
+00:07:59.090 --> 00:08:02.210 align:start position:0%
+ 
+ 
+
+00:08:02.210 --> 00:08:05.120 align:start position:0%
+ 
+ 
+
+00:08:05.120 --> 00:08:07.220 align:start position:0%
+ 
+ 
+
+00:08:07.220 --> 00:08:09.890 align:start position:0%
+ 
+ 
+
+00:08:09.890 --> 00:08:12.910 align:start position:0%
+ 
+ 
+
+00:08:12.910 --> 00:08:16.250 align:start position:0%
+ 
+ 
+
+00:08:16.250 --> 00:08:17.870 align:start position:0%
+ 
+ 
+
+00:08:17.870 --> 00:08:22.610 align:start position:0%
+ 
+ 
+
+00:08:22.610 --> 00:08:24.470 align:start position:0%
+ 
+ 
+
+00:08:24.470 --> 00:08:26.950 align:start position:0%
+ 
+ 
+
+00:08:26.950 --> 00:08:30.350 align:start position:0%
+ 
+ 
+
+00:08:30.350 --> 00:08:32.450 align:start position:0%
+ 
+ 
+
+00:08:32.450 --> 00:08:35.210 align:start position:0%
+ 
+ 
+
+00:08:35.210 --> 00:08:37.250 align:start position:0%
+ 
+ 
+
+00:08:37.250 --> 00:08:42.380 align:start position:0%
+ 
+ 
+
+00:08:42.380 --> 00:08:45.080 align:start position:0%
+ 
+ 
+
+00:08:45.080 --> 00:08:47.840 align:start position:0%
+ 
+ 
+
+00:08:47.840 --> 00:08:50.900 align:start position:0%
+ 
+ 
+
+00:08:50.900 --> 00:08:52.250 align:start position:0%
+ 
+ 
+
+00:08:52.250 --> 00:08:55.550 align:start position:0%
+ 
+ 
+
+00:08:55.550 --> 00:08:56.990 align:start position:0%
+ 
+ 
+
+00:08:56.990 --> 00:08:59.930 align:start position:0%
+ 
+ 
+
+00:08:59.930 --> 00:09:02.150 align:start position:0%
+ 
+ 
+
+00:09:02.150 --> 00:09:06.590 align:start position:0%
+ 
+ 
+
+00:09:06.590 --> 00:09:10.700 align:start position:0%
+ 
+ 
+
+00:09:10.700 --> 00:09:12.170 align:start position:0%
+ 
+ 
+
+00:09:12.170 --> 00:09:14.900 align:start position:0%
+ 
+ 
+
+00:09:14.900 --> 00:09:16.430 align:start position:0%
+ 
+ 
+
+00:09:16.430 --> 00:09:18.320 align:start position:0%
+ 
+ 
+
+00:09:18.320 --> 00:09:20.510 align:start position:0%
+ 
+ 
+
+00:09:20.510 --> 00:09:22.940 align:start position:0%
+ 
+ 
+
+00:09:22.940 --> 00:09:25.310 align:start position:0%
+ 
+ 
+
+00:09:25.310 --> 00:09:27.020 align:start position:0%
+ 
+ 
+
+00:09:27.020 --> 00:09:28.970 align:start position:0%
+ 
+ 
+
+00:09:28.970 --> 00:09:30.920 align:start position:0%
+ 
+ 
+
+00:09:30.920 --> 00:09:33.680 align:start position:0%
+ 
+ 
+
+00:09:33.680 --> 00:09:35.450 align:start position:0%
+ 
+ 
+
+00:09:35.450 --> 00:09:38.450 align:start position:0%
+ 
+ 
+
+00:09:38.450 --> 00:09:41.060 align:start position:0%
+ 
+ 
+
+00:09:41.060 --> 00:09:43.730 align:start position:0%
+ 
+ 
+
+00:09:43.730 --> 00:09:45.380 align:start position:0%
+ 
+ 
+
+00:09:45.380 --> 00:09:48.170 align:start position:0%
+ 
+ 
+
+00:09:48.170 --> 00:09:50.480 align:start position:0%
+ 
+ 
+
+00:09:50.480 --> 00:09:52.160 align:start position:0%
+ 
+ 
+
+00:09:52.160 --> 00:09:54.470 align:start position:0%
+ 
+ 
+
+00:09:54.470 --> 00:09:56.930 align:start position:0%
+ 
+ 
+
+00:09:56.930 --> 00:09:58.430 align:start position:0%
+ 
+ 
+
+00:09:58.430 --> 00:10:01.520 align:start position:0%
+ 
+ 
+
+00:10:01.520 --> 00:10:03.530 align:start position:0%
+ 
+ 
+
+00:10:03.530 --> 00:10:05.090 align:start position:0%
+ 
+ 
+
+00:10:05.090 --> 00:10:06.410 align:start position:0%
+ 
+ 
+
+00:10:06.410 --> 00:10:09.050 align:start position:0%
+ 
+ 
+
+00:10:09.050 --> 00:10:13.730 align:start position:0%
+ 
+ 
+
+00:10:13.730 --> 00:10:16.220 align:start position:0%
+ 
+ 
+
+00:10:16.220 --> 00:10:18.950 align:start position:0%
+ 
+ 
+
+00:10:18.950 --> 00:10:21.410 align:start position:0%
+ 
+ 
+
+00:10:21.410 --> 00:10:23.630 align:start position:0%
+ 
+ 
+
+00:10:23.630 --> 00:10:26.450 align:start position:0%
+ 
+ 
+
+00:10:26.450 --> 00:10:28.370 align:start position:0%
+ 
+ 
+
+00:10:28.370 --> 00:10:31.940 align:start position:0%
+ 
+ 
+
+00:10:31.940 --> 00:10:34.250 align:start position:0%
+ 
+ 
+
+00:10:34.250 --> 00:10:36.770 align:start position:0%
+ 
+ 
+
+00:10:36.770 --> 00:10:40.760 align:start position:0%
+ 
+ 
+
+00:10:40.760 --> 00:10:43.190 align:start position:0%
+ 
+ 
+
+00:10:43.190 --> 00:10:45.140 align:start position:0%
+ 
+ 
+
+00:10:45.140 --> 00:10:48.590 align:start position:0%
+ 
+ 
+
+00:10:48.590 --> 00:10:49.910 align:start position:0%
+ 
+ 
+
+00:10:49.910 --> 00:10:53.000 align:start position:0%
+ 
+ 
+
+00:10:53.000 --> 00:10:56.360 align:start position:0%
+ 
+ 
+
+00:10:56.360 --> 00:10:59.480 align:start position:0%
+ 
+ 
+
+00:10:59.480 --> 00:11:02.300 align:start position:0%
+ 
+ 
+
+00:11:02.300 --> 00:11:05.180 align:start position:0%
+ 
+ 
+
+00:11:05.180 --> 00:11:07.970 align:start position:0%
+ 
+ 
+
+00:11:07.970 --> 00:11:09.949 align:start position:0%
+ 
+ 
+
+00:11:09.949 --> 00:11:10.910 align:start position:0%
+ 
+ 
+
+00:11:10.910 --> 00:11:12.980 align:start position:0%
+ 
+ 
+
+00:11:12.980 --> 00:11:15.440 align:start position:0%
+ 
+ 
+
+00:11:15.440 --> 00:11:17.090 align:start position:0%
+ 
+ 
+
+00:11:17.090 --> 00:11:19.370 align:start position:0%
+ 
+ 
+
+00:11:19.370 --> 00:11:22.430 align:start position:0%
+ 
+ 
+
+00:11:22.430 --> 00:11:25.310 align:start position:0%
+ 
+ 
+
+00:11:25.310 --> 00:11:28.280 align:start position:0%
+ 
+ 
+
+00:11:28.280 --> 00:11:30.050 align:start position:0%
+ 
+ 
+
+00:11:30.050 --> 00:11:34.819 align:start position:0%
+ 
+ 
+
+00:11:34.819 --> 00:11:37.670 align:start position:0%
+ 
+ 
+
+00:11:37.670 --> 00:11:39.259 align:start position:0%
+ 
+ 
+
+00:11:39.259 --> 00:11:41.180 align:start position:0%
+ 
+ 
+
+00:11:41.180 --> 00:11:44.030 align:start position:0%
+ 
+ 
+
+00:11:44.030 --> 00:11:47.120 align:start position:0%
+ 
+ 
+
+00:11:47.120 --> 00:11:52.389 align:start position:0%
+ 
+ 
+
+00:11:52.389 --> 00:11:55.040 align:start position:0%
+ 
+ 
+
+00:11:55.040 --> 00:11:59.439 align:start position:0%
+ 
+ 
+
+00:11:59.439 --> 00:12:02.180 align:start position:0%
+ 
+ 
+
+00:12:02.180 --> 00:12:05.990 align:start position:0%
+ 
+ 
+
+00:12:05.990 --> 00:12:08.800 align:start position:0%
+ 
+ 
+
+00:12:08.800 --> 00:12:12.250 align:start position:0%
+ 
+ 
+
+00:12:12.250 --> 00:12:15.050 align:start position:0%
+ 
+ 
+
+00:12:15.050 --> 00:12:17.000 align:start position:0%
+ 
+ 
+
+00:12:17.000 --> 00:12:20.600 align:start position:0%
+ 
+ 
+
+00:12:20.600 --> 00:12:23.090 align:start position:0%
+ 
+ 
+
+00:12:23.090 --> 00:12:25.759 align:start position:0%
+ 
+ 
+
+00:12:25.759 --> 00:12:26.810 align:start position:0%
+ 
+ 
+
+00:12:26.810 --> 00:12:28.730 align:start position:0%
+ 
+ 
+
+00:12:28.730 --> 00:12:31.460 align:start position:0%
+ 
+ 
+
+00:12:31.460 --> 00:12:33.769 align:start position:0%
+ 
+ 
+
+00:12:33.769 --> 00:12:36.199 align:start position:0%
+ 
+ 
+
+00:12:36.199 --> 00:12:37.430 align:start position:0%
+ 
+ 
+
+00:12:37.430 --> 00:12:39.620 align:start position:0%
+ 
+ 
+
+00:12:39.620 --> 00:12:41.240 align:start position:0%
+ 
+ 
+
+00:12:41.240 --> 00:12:43.610 align:start position:0%
+ 
+ 
+
+00:12:43.610 --> 00:12:46.220 align:start position:0%
+ 
+ 
+
+00:12:46.220 --> 00:12:48.230 align:start position:0%
+ 
+ 
+
+00:12:48.230 --> 00:12:50.540 align:start position:0%
+ 
+ 
+
+00:12:50.540 --> 00:12:53.689 align:start position:0%
+ 
+ 
+
+00:12:53.689 --> 00:12:55.790 align:start position:0%
+ 
+ 
+
+00:12:55.790 --> 00:12:58.519 align:start position:0%
+ 
+ 
+
+00:12:58.519 --> 00:13:02.240 align:start position:0%
+ 
+ 
+
+00:13:02.240 --> 00:13:05.230 align:start position:0%
+ 
+ 
+
+00:13:05.230 --> 00:13:08.509 align:start position:0%
+ 
+ 
+
+00:13:08.509 --> 00:13:11.420 align:start position:0%
+ 
+ 
+
+00:13:11.420 --> 00:13:13.939 align:start position:0%
+ 
+ 
+
+00:13:13.939 --> 00:13:16.100 align:start position:0%
+ 
+ 
+
+00:13:16.100 --> 00:13:19.009 align:start position:0%
+ 
+ 
+
+00:13:19.009 --> 00:13:21.680 align:start position:0%
+ 
+ 
+
+00:13:21.680 --> 00:13:24.260 align:start position:0%
+ 
+ 
+
+00:13:24.260 --> 00:13:26.870 align:start position:0%
+ 
+ 
+
+00:13:26.870 --> 00:13:29.420 align:start position:0%
+ 
+ 
+
+00:13:29.420 --> 00:13:32.750 align:start position:0%
+ 
+ 
+
+00:13:32.750 --> 00:13:33.860 align:start position:0%
+ 
+ 
+
+00:13:33.860 --> 00:13:36.380 align:start position:0%
+ 
+ 
+
+00:13:36.380 --> 00:13:38.390 align:start position:0%
+ 
+ 
+
+00:13:38.390 --> 00:13:40.670 align:start position:0%
+ 
+ 
+
+00:13:40.670 --> 00:13:43.760 align:start position:0%
+ 
+ 
+
+00:13:43.760 --> 00:13:48.050 align:start position:0%
+ 
+ 
+
+00:13:48.050 --> 00:13:51.560 align:start position:0%
+ 
+ 
+
+00:13:51.560 --> 00:13:54.560 align:start position:0%
+ 
+ 
+
+00:13:54.560 --> 00:13:57.380 align:start position:0%
+ 
+ 
+
+00:13:57.380 --> 00:13:58.820 align:start position:0%
+ 
+ 
+
+00:13:58.820 --> 00:14:01.640 align:start position:0%
+ 
+ 
+
+00:14:01.640 --> 00:14:03.770 align:start position:0%
+ 
+ 
+
+00:14:03.770 --> 00:14:06.080 align:start position:0%
+ 
+ 
+
+00:14:06.080 --> 00:14:08.270 align:start position:0%
+ 
+ 
+
+00:14:08.270 --> 00:14:11.210 align:start position:0%
+ 
+ 
+
+00:14:11.210 --> 00:14:14.780 align:start position:0%
+ 
+ 
+
+00:14:14.780 --> 00:14:19.490 align:start position:0%
+ 
+ 
+
+00:14:19.490 --> 00:14:21.800 align:start position:0%
+ 
+ 
+
+00:14:21.800 --> 00:14:23.450 align:start position:0%
+ 
+ 
+
+00:14:23.450 --> 00:14:25.670 align:start position:0%
+ 
+ 
+
+00:14:25.670 --> 00:14:27.260 align:start position:0%
+ 
+ 
+
+00:14:27.260 --> 00:14:31.640 align:start position:0%
+ 
+ 
+
+00:14:31.640 --> 00:14:34.580 align:start position:0%
+ 
+ 
+
+00:14:34.580 --> 00:14:37.280 align:start position:0%
+ 
+ 
+
+00:14:37.280 --> 00:14:38.750 align:start position:0%
+ 
+ 
+
+00:14:38.750 --> 00:14:40.990 align:start position:0%
+ 
+ 
+
+00:14:40.990 --> 00:14:44.000 align:start position:0%
+ 
+ 
+
+00:14:44.000 --> 00:14:46.520 align:start position:0%
+ 
+ 
+
+00:14:46.520 --> 00:14:48.950 align:start position:0%
+ 
+ 
+
+00:14:48.950 --> 00:14:50.590 align:start position:0%
+ 
+ 
+
+00:14:50.590 --> 00:14:52.850 align:start position:0%
+ 
+ 
+
+00:14:52.850 --> 00:14:55.630 align:start position:0%
+ 
+ 
+
+00:14:55.630 --> 00:14:58.220 align:start position:0%
+ 
+ 
+
+00:14:58.220 --> 00:15:02.090 align:start position:0%
+ 
+ 
+
+00:15:02.090 --> 00:15:03.800 align:start position:0%
+ 
+ 
+
+00:15:03.800 --> 00:15:05.780 align:start position:0%
+ 
+ 
+
+00:15:05.780 --> 00:15:10.400 align:start position:0%
+ 
+ 
+
+00:15:10.400 --> 00:15:12.530 align:start position:0%
+ 
+ 
+
+00:15:12.530 --> 00:15:14.210 align:start position:0%
+ 
+ 
+
+00:15:14.210 --> 00:15:19.850 align:start position:0%
+ 
+ 
+
+00:15:19.850 --> 00:15:21.860 align:start position:0%
+ 
+ 
+
+00:15:21.860 --> 00:15:24.320 align:start position:0%
+ 
+ 
+
+00:15:24.320 --> 00:15:26.990 align:start position:0%
+ 
+ 
+
+00:15:26.990 --> 00:15:29.480 align:start position:0%
+ 
+ 
+
+00:15:29.480 --> 00:15:31.430 align:start position:0%
+ 
+ 
+
+00:15:31.430 --> 00:15:34.400 align:start position:0%
+ 
+ 
+
+00:15:34.400 --> 00:15:36.620 align:start position:0%
+ 
+ 
+
+00:15:36.620 --> 00:15:36.630 align:start position:0%
+ 
+ 
+
+00:15:36.630 --> 00:15:37.410 align:start position:0%
+ 
+
+
+00:15:37.410 --> 00:15:39.930 align:start position:0%
+ 
+ 
+
+00:15:39.930 --> 00:15:41.760 align:start position:0%
+ 
+ 
+
+00:15:41.760 --> 00:15:44.580 align:start position:0%
+ 
+ 
+
+00:15:44.580 --> 00:15:46.980 align:start position:0%
+ 
+ 
+
+00:15:46.980 --> 00:15:49.410 align:start position:0%
+ 
+ 
+
+00:15:49.410 --> 00:15:50.670 align:start position:0%
+ 
+ 
+
+00:15:50.670 --> 00:15:52.860 align:start position:0%
+ 
+ 
+
+00:15:52.860 --> 00:15:55.740 align:start position:0%
+ 
+ 
+
+00:15:55.740 --> 00:15:58.830 align:start position:0%
+ 
+ 
+
+00:15:58.830 --> 00:16:02.180 align:start position:0%
+ 
+ 
+
+00:16:02.180 --> 00:16:05.520 align:start position:0%
+ 
+ 
+
+00:16:05.520 --> 00:16:07.860 align:start position:0%
+ 
+ 
+
+00:16:07.860 --> 00:16:10.470 align:start position:0%
+ 
+ 
+
+00:16:10.470 --> 00:16:12.840 align:start position:0%
+ 
+ 
+
+00:16:12.840 --> 00:16:15.240 align:start position:0%
+ 
+ 
+
+00:16:15.240 --> 00:16:17.430 align:start position:0%
+ 
+ 
+
+00:16:17.430 --> 00:16:20.040 align:start position:0%
+ 
+ 
+
+00:16:20.040 --> 00:16:23.670 align:start position:0%
+ 
+ 
+
+00:16:23.670 --> 00:16:25.470 align:start position:0%
+ 
+ 
+
+00:16:25.470 --> 00:16:27.810 align:start position:0%
+ 
+ 
+
+00:16:27.810 --> 00:16:30.810 align:start position:0%
+ 
+ 
+
+00:16:30.810 --> 00:16:32.880 align:start position:0%
+ 
+ 
+
+00:16:32.880 --> 00:16:34.760 align:start position:0%
+ 
+ 
+
+00:16:34.760 --> 00:16:37.980 align:start position:0%
+ 
+ 
+
+00:16:37.980 --> 00:16:40.350 align:start position:0%
+ 
+ 
+
+00:16:40.350 --> 00:16:42.090 align:start position:0%
+ 
+ 
+
+00:16:42.090 --> 00:16:43.940 align:start position:0%
+ 
+ 
+
+00:16:43.940 --> 00:16:46.260 align:start position:0%
+ 
+ 
+
+00:16:46.260 --> 00:16:48.210 align:start position:0%
+ 
+ 
+
+00:16:48.210 --> 00:16:50.760 align:start position:0%
+ 
+ 
+
+00:16:50.760 --> 00:16:53.460 align:start position:0%
+ 
+ 
+
+00:16:53.460 --> 00:16:54.870 align:start position:0%
+ 
+ 
+
+00:16:54.870 --> 00:16:58.800 align:start position:0%
+ 
+ 
+
+00:16:58.800 --> 00:17:01.050 align:start position:0%
+ 
+ 
+
+00:17:01.050 --> 00:17:03.240 align:start position:0%
+ 
+ 
+
+00:17:03.240 --> 00:17:05.760 align:start position:0%
+ 
+ 
+
+00:17:05.760 --> 00:17:09.780 align:start position:0%
+ 
+ 
+
+00:17:09.780 --> 00:17:11.610 align:start position:0%
+ 
+ 
+
+00:17:11.610 --> 00:17:15.350 align:start position:0%
+ 
+ 
+
+00:17:15.350 --> 00:17:17.370 align:start position:0%
+ 
+ 
+
+00:17:17.370 --> 00:17:19.380 align:start position:0%
+ 
+ 
+
+00:17:19.380 --> 00:17:21.570 align:start position:0%
+ 
+ 
+
+00:17:21.570 --> 00:17:24.810 align:start position:0%
+ 
+ 
+
+00:17:24.810 --> 00:17:27.990 align:start position:0%
+ 
+ 
+
+00:17:27.990 --> 00:17:29.550 align:start position:0%
+ 
+ 
+
+00:17:29.550 --> 00:17:32.250 align:start position:0%
+ 
+ 
+
+00:17:32.250 --> 00:17:34.080 align:start position:0%
+ 
+ 
+
+00:17:34.080 --> 00:17:37.500 align:start position:0%
+ 
+ 
+
+00:17:37.500 --> 00:17:39.300 align:start position:0%
+ 
+ 
+
+00:17:39.300 --> 00:17:42.780 align:start position:0%
+ 
+ 
+
+00:17:42.780 --> 00:17:44.370 align:start position:0%
+ 
+ 
+
+00:17:44.370 --> 00:17:47.580 align:start position:0%
+ 
+ 
+
+00:17:47.580 --> 00:17:49.620 align:start position:0%
+ 
+ 
+
+00:17:49.620 --> 00:17:50.880 align:start position:0%
+ 
+ 
+
+00:17:50.880 --> 00:17:53.250 align:start position:0%
+ 
+ 
+
+00:17:53.250 --> 00:17:55.650 align:start position:0%
+ 
+ 
+
+00:17:55.650 --> 00:17:57.030 align:start position:0%
+ 
+ 
+
+00:17:57.030 --> 00:17:58.500 align:start position:0%
+ 
+ 
+
+00:17:58.500 --> 00:18:00.600 align:start position:0%
+ 
+ 
+
+00:18:00.600 --> 00:18:03.150 align:start position:0%
+ 
+ 
+
+00:18:03.150 --> 00:18:05.700 align:start position:0%
+ 
+ 
+
+00:18:05.700 --> 00:18:06.930 align:start position:0%
+ 
+ 
+
+00:18:06.930 --> 00:18:10.170 align:start position:0%
+ 
+ 
+
+00:18:10.170 --> 00:18:13.440 align:start position:0%
+ 
+ 
+
+00:18:13.440 --> 00:18:17.310 align:start position:0%
+ 
+ 
+
+00:18:17.310 --> 00:18:19.770 align:start position:0%
+ 
+ 
+
+00:18:19.770 --> 00:18:22.260 align:start position:0%
+ 
+ 
+
+00:18:22.260 --> 00:18:25.050 align:start position:0%
+ 
+ 
+
+00:18:25.050 --> 00:18:28.410 align:start position:0%
+ 
+ 
+
+00:18:28.410 --> 00:18:31.380 align:start position:0%
+ 
+ 
+
+00:18:31.380 --> 00:18:33.780 align:start position:0%
+ 
+ 
+
+00:18:33.780 --> 00:18:35.910 align:start position:0%
+ 
+ 
+
+00:18:35.910 --> 00:18:38.760 align:start position:0%
+ 
+ 
+
+00:18:38.760 --> 00:18:41.970 align:start position:0%
+ 
+ 
+
+00:18:41.970 --> 00:18:44.220 align:start position:0%
+ 
+ 
+
+00:18:44.220 --> 00:18:47.160 align:start position:0%
+ 
+ 
+
+00:18:47.160 --> 00:18:50.670 align:start position:0%
+ 
+ 
+
+00:18:50.670 --> 00:18:53.400 align:start position:0%
+ 
+ 
+
+00:18:53.400 --> 00:18:56.550 align:start position:0%
+ 
+ 
+
+00:18:56.550 --> 00:18:58.410 align:start position:0%
+ 
+ 
+
+00:18:58.410 --> 00:19:00.720 align:start position:0%
+ 
+ 
+
+00:19:00.720 --> 00:19:02.730 align:start position:0%
+ 
+ 
+
+00:19:02.730 --> 00:19:05.570 align:start position:0%
+ 
+ 
+
+00:19:05.570 --> 00:19:07.770 align:start position:0%
+ 
+ 
+
+00:19:07.770 --> 00:19:10.050 align:start position:0%
+ 
+ 
+
+00:19:10.050 --> 00:19:12.120 align:start position:0%
+ 
+ 
+
+00:19:12.120 --> 00:19:14.420 align:start position:0%
+ 
+ 
+
+00:19:14.420 --> 00:19:18.380 align:start position:0%
+ 
+ 
+
+00:19:18.380 --> 00:19:20.940 align:start position:0%
+ 
+ 
+
+00:19:20.940 --> 00:19:23.430 align:start position:0%
+ 
+ 
+
+00:19:23.430 --> 00:19:26.250 align:start position:0%
+ 
+ 
+
+00:19:26.250 --> 00:19:29.190 align:start position:0%
+ 
+ 
+
+00:19:29.190 --> 00:19:31.470 align:start position:0%
+ 
+ 
+
+00:19:31.470 --> 00:19:35.550 align:start position:0%
+ 
+ 
+
+00:19:35.550 --> 00:19:41.540 align:start position:0%
+ 
+ 
+
+00:19:41.540 --> 00:19:43.230 align:start position:0%
+ 
+ 
+
+00:19:43.230 --> 00:19:44.570 align:start position:0%
+ 
+ 
+
+00:19:44.570 --> 00:19:47.180 align:start position:0%
+ 
+ 
+
+00:19:47.180 --> 00:19:49.860 align:start position:0%
+ 
+ 
+
+00:19:49.860 --> 00:19:51.630 align:start position:0%
+ 
+ 
+
+00:19:51.630 --> 00:19:56.610 align:start position:0%
+ 
+ 
+
+00:19:56.610 --> 00:19:57.660 align:start position:0%
+ 
+ 
+
+00:19:57.660 --> 00:20:00.600 align:start position:0%
+ 
+ 
+
+00:20:00.600 --> 00:20:02.440 align:start position:0%
+ 
+ 
+
+00:20:02.440 --> 00:20:04.389 align:start position:0%
+ 
+ 
+
+00:20:04.389 --> 00:20:06.009 align:start position:0%
+ 
+ 
+
+00:20:06.009 --> 00:20:09.549 align:start position:0%
+ 
+ 
+
+00:20:09.549 --> 00:20:12.279 align:start position:0%
+ 
+ 
+
+00:20:12.279 --> 00:20:14.039 align:start position:0%
+ 
+ 
+
+00:20:14.039 --> 00:20:16.930 align:start position:0%
+ 
+ 
+
+00:20:16.930 --> 00:20:18.840 align:start position:0%
+ 
+ 
+
+00:20:18.840 --> 00:20:23.220 align:start position:0%
+ 
+ 
+
+00:20:23.220 --> 00:20:25.989 align:start position:0%
+ 
+ 
+
+00:20:25.989 --> 00:20:29.049 align:start position:0%
+ 
+ 
+
+00:20:29.049 --> 00:20:31.419 align:start position:0%
+ 
+ 
+
+00:20:31.419 --> 00:20:34.389 align:start position:0%
+ 
+ 
+
+00:20:34.389 --> 00:20:37.119 align:start position:0%
+ 
+ 
+
+00:20:37.119 --> 00:20:38.590 align:start position:0%
+ 
+ 
+
+00:20:38.590 --> 00:20:41.109 align:start position:0%
+ 
+ 
+
+00:20:41.109 --> 00:20:43.539 align:start position:0%
+ 
+ 
+
+00:20:43.539 --> 00:20:45.759 align:start position:0%
+ 
+ 
+
+00:20:45.759 --> 00:20:48.249 align:start position:0%
+ 
+ 
+
+00:20:48.249 --> 00:20:49.989 align:start position:0%
+ 
+ 
+
+00:20:49.989 --> 00:20:52.720 align:start position:0%
+ 
+ 
+
+00:20:52.720 --> 00:20:55.779 align:start position:0%
+ 
+ 
+
+00:20:55.779 --> 00:20:57.849 align:start position:0%
+ 
+ 
+
+00:20:57.849 --> 00:21:00.129 align:start position:0%
+ 
+ 
+
+00:21:00.129 --> 00:21:04.330 align:start position:0%
+ 
+ 
+
+00:21:04.330 --> 00:21:06.519 align:start position:0%
+ 
+ 
+
+00:21:06.519 --> 00:21:08.499 align:start position:0%
+ 
+ 
+
+00:21:08.499 --> 00:21:10.629 align:start position:0%
+ 
+ 
+
+00:21:10.629 --> 00:21:13.149 align:start position:0%
+ 
+ 
+
+00:21:13.149 --> 00:21:15.310 align:start position:0%
+ 
+ 
+
+00:21:15.310 --> 00:21:17.080 align:start position:0%
+ 
+ 
+
+00:21:17.080 --> 00:21:19.690 align:start position:0%
+ 
+ 
+
+00:21:19.690 --> 00:21:21.399 align:start position:0%
+ 
+ 
+
+00:21:21.399 --> 00:21:23.049 align:start position:0%
+ 
+ 
+
+00:21:23.049 --> 00:21:24.430 align:start position:0%
+ 
+ 
+
+00:21:24.430 --> 00:21:26.379 align:start position:0%
+ 
+ 
+
+00:21:26.379 --> 00:21:28.629 align:start position:0%
+ 
+ 
+
+00:21:28.629 --> 00:21:31.899 align:start position:0%
+ 
+ 
+
+00:21:31.899 --> 00:21:33.909 align:start position:0%
+ 
+ 
+
+00:21:33.909 --> 00:21:36.340 align:start position:0%
+ 
+ 
+
+00:21:36.340 --> 00:21:37.960 align:start position:0%
+ 
+ 
+
+00:21:37.960 --> 00:21:40.810 align:start position:0%
+ 
+ 
+
+00:21:40.810 --> 00:21:42.099 align:start position:0%
+ 
+ 
+
+00:21:42.099 --> 00:21:45.070 align:start position:0%
+ 
+ 
+
+00:21:45.070 --> 00:21:47.499 align:start position:0%
+ 
+ 
+
+00:21:47.499 --> 00:21:50.830 align:start position:0%
+ 
+ 
+
+00:21:50.830 --> 00:21:53.909 align:start position:0%
+ 
+ 
+
+00:21:53.909 --> 00:21:56.909 align:start position:0%
+ 
+ 
+
+00:21:56.909 --> 00:21:59.200 align:start position:0%
+ 
+ 
+
+00:21:59.200 --> 00:22:01.840 align:start position:0%
+ 
+ 
+
+00:22:01.840 --> 00:22:04.180 align:start position:0%
+ 
+ 
+
+00:22:04.180 --> 00:22:06.789 align:start position:0%
+ 
+ 
+
+00:22:06.789 --> 00:22:11.639 align:start position:0%
+ 
+ 
+
+00:22:11.639 --> 00:22:14.460 align:start position:0%
+ 
+ 
+
+00:22:14.460 --> 00:22:16.270 align:start position:0%
+ 
+ 
+
+00:22:16.270 --> 00:22:19.720 align:start position:0%
+ 
+ 
+
+00:22:19.720 --> 00:22:21.850 align:start position:0%
+ 
+ 
+
+00:22:21.850 --> 00:22:23.909 align:start position:0%
+ 
+ 
+
+00:22:23.909 --> 00:22:27.399 align:start position:0%
+ 
+ 
+
+00:22:27.399 --> 00:22:30.250 align:start position:0%
+ 
+ 
+
+00:22:30.250 --> 00:22:32.380 align:start position:0%
+ 
+ 
+
+00:22:32.380 --> 00:22:34.720 align:start position:0%
+ 
+ 
+
+00:22:34.720 --> 00:22:36.580 align:start position:0%
+ 
+ 
+
+00:22:36.580 --> 00:22:40.180 align:start position:0%
+ 
+ 
+
+00:22:40.180 --> 00:22:42.520 align:start position:0%
+ 
+ 
+
+00:22:42.520 --> 00:22:45.490 align:start position:0%
+ 
+ 
+
+00:22:45.490 --> 00:22:47.610 align:start position:0%
+ 
+ 
+
+00:22:47.610 --> 00:22:49.510 align:start position:0%
+ 
+ 
+
+00:22:49.510 --> 00:22:52.450 align:start position:0%
+ 
+ 
+
+00:22:52.450 --> 00:22:55.720 align:start position:0%
+ 
+ 
+
+00:22:55.720 --> 00:22:58.210 align:start position:0%
+ 
+ 
+
+00:22:58.210 --> 00:22:59.940 align:start position:0%
+ 
+ 
+
+00:22:59.940 --> 00:23:02.350 align:start position:0%
+ 
+ 
+
+00:23:02.350 --> 00:23:08.770 align:start position:0%
+ 
+ 
+
+00:23:08.770 --> 00:23:10.390 align:start position:0%
+ 
+ 
+
+00:23:10.390 --> 00:23:13.720 align:start position:0%
+ 
+ 
+
+00:23:13.720 --> 00:23:16.899 align:start position:0%
+ 
+ 
+
+00:23:16.899 --> 00:23:19.720 align:start position:0%
+ 
+ 
+
+00:23:19.720 --> 00:23:21.820 align:start position:0%
+ 
+ 
+
+00:23:21.820 --> 00:23:23.919 align:start position:0%
+ 
+ 
+
+00:23:23.919 --> 00:23:25.779 align:start position:0%
+ 
+ 
+
+00:23:25.779 --> 00:23:28.000 align:start position:0%
+ 
+ 
+
+00:23:28.000 --> 00:23:31.539 align:start position:0%
+ 
+ 
+
+00:23:31.539 --> 00:23:33.130 align:start position:0%
+ 
+ 
+
+00:23:33.130 --> 00:23:35.710 align:start position:0%
+ 
+ 
+
+00:23:35.710 --> 00:23:39.700 align:start position:0%
+ 
+ 
+
+00:23:39.700 --> 00:23:42.700 align:start position:0%
+ 
+ 
+
+00:23:42.700 --> 00:23:46.510 align:start position:0%
+ 
+ 
+
+00:23:46.510 --> 00:23:49.299 align:start position:0%
+ 
+ 
+
+00:23:49.299 --> 00:23:53.320 align:start position:0%
+ 
+ 
+
+00:23:53.320 --> 00:23:55.810 align:start position:0%
+ 
+ 
+
+00:23:55.810 --> 00:23:57.640 align:start position:0%
+ 
+ 
+
+00:23:57.640 --> 00:24:00.460 align:start position:0%
+ 
+ 
+
+00:24:00.460 --> 00:24:02.200 align:start position:0%
+ 
+ 
+
+00:24:02.200 --> 00:24:03.820 align:start position:0%
+ 
+ 
+
+00:24:03.820 --> 00:24:06.399 align:start position:0%
+ 
+ 
+
+00:24:06.399 --> 00:24:08.710 align:start position:0%
+ 
+ 
+
+00:24:08.710 --> 00:24:13.149 align:start position:0%
+ 
+ 
+
+00:24:13.149 --> 00:24:15.820 align:start position:0%
+ 
+ 
+
+00:24:15.820 --> 00:24:18.549 align:start position:0%
+ 
+ 
+
+00:24:18.549 --> 00:24:20.350 align:start position:0%
+ 
+ 
+
+00:24:20.350 --> 00:24:24.410 align:start position:0%
+ 
+ 
+
+00:24:24.410 --> 00:24:26.810 align:start position:0%
+ 
+ 
+
+00:24:26.810 --> 00:24:29.180 align:start position:0%
+ 
+ 
+
+00:24:29.180 --> 00:24:31.070 align:start position:0%
+ 
+ 
+
+00:24:31.070 --> 00:24:33.530 align:start position:0%
+ 
+ 
+
+00:24:33.530 --> 00:24:35.390 align:start position:0%
+ 
+ 
+
+00:24:35.390 --> 00:24:38.390 align:start position:0%
+ 
+ 
+
+00:24:38.390 --> 00:24:40.460 align:start position:0%
+ 
+ 
+
+00:24:40.460 --> 00:24:40.470 align:start position:0%
+ 
+ 
+
+00:24:40.470 --> 00:24:41.830 align:start position:0%
+ 
+
+
+00:24:41.830 --> 00:24:47.720 align:start position:0%
+ 
+ 
+
+00:24:47.720 --> 00:24:49.250 align:start position:0%
+ 
+ 
+
+00:24:49.250 --> 00:24:52.040 align:start position:0%
+ 
+ 
+
+00:24:52.040 --> 00:24:54.740 align:start position:0%
+ 
+ 
+
+00:24:54.740 --> 00:24:56.450 align:start position:0%
+ 
+ 
+
+00:24:56.450 --> 00:24:59.120 align:start position:0%
+ 
+ 
+
+00:24:59.120 --> 00:25:01.340 align:start position:0%
+ 
+ 
+
+00:25:01.340 --> 00:25:03.250 align:start position:0%
+ 
+ 
+
+00:25:03.250 --> 00:25:06.500 align:start position:0%
+ 
+ 
+
+00:25:06.500 --> 00:25:08.210 align:start position:0%
+ 
+ 
+
+00:25:08.210 --> 00:25:10.480 align:start position:0%
+ 
+ 
+
+00:25:10.480 --> 00:25:12.710 align:start position:0%
+ 
+ 
+
+00:25:12.710 --> 00:25:15.350 align:start position:0%
+ 
+ 
+
+00:25:15.350 --> 00:25:17.090 align:start position:0%
+ 
+ 
+
+00:25:17.090 --> 00:25:19.580 align:start position:0%
+ 
+ 
+
+00:25:19.580 --> 00:25:21.560 align:start position:0%
+ 
+ 
+
+00:25:21.560 --> 00:25:23.660 align:start position:0%
+ 
+ 
+
+00:25:23.660 --> 00:25:25.370 align:start position:0%
+ 
+ 
+
+00:25:25.370 --> 00:25:28.400 align:start position:0%
+ 
+ 
+
+00:25:28.400 --> 00:25:30.200 align:start position:0%
+ 
+ 
+
+00:25:30.200 --> 00:25:32.900 align:start position:0%
+ 
+ 
+
+00:25:32.900 --> 00:25:36.110 align:start position:0%
+ 
+ 
+
+00:25:36.110 --> 00:25:38.950 align:start position:0%
+ 
+ 
+
+00:25:38.950 --> 00:25:41.540 align:start position:0%
+ 
+ 
+
+00:25:41.540 --> 00:25:44.150 align:start position:0%
+ 
+ 
+
+00:25:44.150 --> 00:25:46.820 align:start position:0%
+ 
+ 
+
+00:25:46.820 --> 00:25:48.320 align:start position:0%
+ 
+ 
+
+00:25:48.320 --> 00:25:52.250 align:start position:0%
+ 
+ 
+
+00:25:52.250 --> 00:25:54.140 align:start position:0%
+ 
+ 
+
+00:25:54.140 --> 00:25:56.330 align:start position:0%
+ 
+ 
+
+00:25:56.330 --> 00:25:58.190 align:start position:0%
+ 
+ 
+
+00:25:58.190 --> 00:26:01.040 align:start position:0%
+ 
+ 
+
+00:26:01.040 --> 00:26:04.250 align:start position:0%
+ 
+ 
+
+00:26:04.250 --> 00:26:05.870 align:start position:0%
+ 
+ 
+
+00:26:05.870 --> 00:26:08.630 align:start position:0%
+ 
+ 
+
+00:26:08.630 --> 00:26:11.090 align:start position:0%
+ 
+ 
+
+00:26:11.090 --> 00:26:13.640 align:start position:0%
+ 
+ 
+
+00:26:13.640 --> 00:26:17.780 align:start position:0%
+ 
+ 
+
+00:26:17.780 --> 00:26:19.100 align:start position:0%
+ 
+ 
+
+00:26:19.100 --> 00:26:20.870 align:start position:0%
+ 
+ 
+
+00:26:20.870 --> 00:26:22.820 align:start position:0%
+ 
+ 
+
+00:26:22.820 --> 00:26:24.710 align:start position:0%
+ 
+ 
+
+00:26:24.710 --> 00:26:26.270 align:start position:0%
+ 
+ 
+
+00:26:26.270 --> 00:26:28.040 align:start position:0%
+ 
+ 
+
+00:26:28.040 --> 00:26:30.260 align:start position:0%
+ 
+ 
+
+00:26:30.260 --> 00:26:33.230 align:start position:0%
+ 
+ 
+
+00:26:33.230 --> 00:26:34.820 align:start position:0%
+ 
+ 
+
+00:26:34.820 --> 00:26:37.670 align:start position:0%
+ 
+ 
+
+00:26:37.670 --> 00:26:39.620 align:start position:0%
+ 
+ 
+
+00:26:39.620 --> 00:26:41.690 align:start position:0%
+ 
+ 
+
+00:26:41.690 --> 00:26:44.450 align:start position:0%
+ 
+ 
+
+00:26:44.450 --> 00:26:47.270 align:start position:0%
+ 
+ 
+
+00:26:47.270 --> 00:26:49.190 align:start position:0%
+ 
+ 
+
+00:26:49.190 --> 00:26:50.870 align:start position:0%
+ 
+ 
+
+00:26:50.870 --> 00:26:54.140 align:start position:0%
+ 
+ 
+
+00:26:54.140 --> 00:26:56.240 align:start position:0%
+ 
+ 
+
+00:26:56.240 --> 00:26:59.060 align:start position:0%
+ 
+ 
+
+00:26:59.060 --> 00:27:02.380 align:start position:0%
+ 
+ 
+
+00:27:02.380 --> 00:27:05.480 align:start position:0%
+ 
+ 
+
+00:27:05.480 --> 00:27:08.210 align:start position:0%
+ 
+ 
+
+00:27:08.210 --> 00:27:09.620 align:start position:0%
+ 
+ 
+
+00:27:09.620 --> 00:27:11.330 align:start position:0%
+ 
+ 
+
+00:27:11.330 --> 00:27:15.110 align:start position:0%
+ 
+ 
+
+00:27:15.110 --> 00:27:16.580 align:start position:0%
+ 
+ 
+
+00:27:16.580 --> 00:27:19.640 align:start position:0%
+ 
+ 
+
+00:27:19.640 --> 00:27:22.100 align:start position:0%
+ 
+ 
+
+00:27:22.100 --> 00:27:24.560 align:start position:0%
+ 
+ 
+
+00:27:24.560 --> 00:27:27.080 align:start position:0%
+ 
+ 
+
+00:27:27.080 --> 00:27:29.510 align:start position:0%
+ 
+ 
+
+00:27:29.510 --> 00:27:32.510 align:start position:0%
+ 
+ 
+
+00:27:32.510 --> 00:27:34.940 align:start position:0%
+ 
+ 
+
+00:27:34.940 --> 00:27:36.980 align:start position:0%
+ 
+ 
+
+00:27:36.980 --> 00:27:39.860 align:start position:0%
+ 
+ 
+
+00:27:39.860 --> 00:27:42.230 align:start position:0%
+ 
+ 
+
+00:27:42.230 --> 00:27:44.540 align:start position:0%
+ 
+ 
+
+00:27:44.540 --> 00:27:46.480 align:start position:0%
+ 
+ 
+
+00:27:46.480 --> 00:27:49.070 align:start position:0%
+ 
+ 
+
+00:27:49.070 --> 00:27:53.150 align:start position:0%
+ 
+ 
+
+00:27:53.150 --> 00:27:55.340 align:start position:0%
+ 
+ 
+
+00:27:55.340 --> 00:27:56.960 align:start position:0%
+ 
+ 
+
+00:27:56.960 --> 00:27:59.780 align:start position:0%
+ 
+ 
+
+00:27:59.780 --> 00:28:00.980 align:start position:0%
+ 
+ 
+
+00:28:00.980 --> 00:28:02.330 align:start position:0%
+ 
+ 
+
+00:28:02.330 --> 00:28:05.120 align:start position:0%
+ 
+ 
+
+00:28:05.120 --> 00:28:07.430 align:start position:0%
+ 
+ 
+
+00:28:07.430 --> 00:28:11.060 align:start position:0%
+ 
+ 
+
+00:28:11.060 --> 00:28:12.680 align:start position:0%
+ 
+ 
+
+00:28:12.680 --> 00:28:14.120 align:start position:0%
+ 
+ 
+
+00:28:14.120 --> 00:28:15.950 align:start position:0%
+ 
+ 
+
+00:28:15.950 --> 00:28:20.000 align:start position:0%
+ 
+ 
+
+00:28:20.000 --> 00:28:23.470 align:start position:0%
+ 
+ 
+
+00:28:23.470 --> 00:28:27.620 align:start position:0%
+ 
+ 
+
+00:28:27.620 --> 00:28:29.540 align:start position:0%
+ 
+ 
+
+00:28:29.540 --> 00:28:32.690 align:start position:0%
+ 
+ 
+
+00:28:32.690 --> 00:28:34.730 align:start position:0%
+ 
+ 
+
+00:28:34.730 --> 00:28:37.700 align:start position:0%
+ 
+ 
+
+00:28:37.700 --> 00:28:43.130 align:start position:0%
+ 
+ 
+
+00:28:43.130 --> 00:28:44.660 align:start position:0%
+ 
+ 
+
+00:28:44.660 --> 00:28:46.520 align:start position:0%
+ 
+ 
+
+00:28:46.520 --> 00:28:48.770 align:start position:0%
+ 
+ 
+
+00:28:48.770 --> 00:28:50.780 align:start position:0%
+ 
+ 
+
+00:28:50.780 --> 00:28:51.260 align:start position:0%
+ 
+ 
+
+00:28:51.260 --> 00:28:53.450 align:start position:0%
+ 
+ 
+
+00:28:53.450 --> 00:28:56.150 align:start position:0%
+ 
+ 
+
+00:28:56.150 --> 00:28:57.770 align:start position:0%
+ 
+ 
+
+00:28:57.770 --> 00:29:00.110 align:start position:0%
+ 
+ 
+
+00:29:00.110 --> 00:29:02.090 align:start position:0%
+ 
+ 
+
+00:29:02.090 --> 00:29:05.180 align:start position:0%
+ 
+ 
+
+00:29:05.180 --> 00:29:07.010 align:start position:0%
+ 
+ 
+
+00:29:07.010 --> 00:29:07.940 align:start position:0%
+ 
+ 
+
+00:29:07.940 --> 00:29:07.950 align:start position:0%
+ 
+ 
+
+00:29:07.950 --> 00:29:08.540 align:start position:0%
+ 
+
+
+00:29:08.540 --> 00:29:10.490 align:start position:0%
+ 
+ 
+
+00:29:10.490 --> 00:29:13.670 align:start position:0%
+ 
+ 
+
+00:29:13.670 --> 00:29:15.670 align:start position:0%
+ 
+ 
+
+00:29:15.670 --> 00:29:19.370 align:start position:0%
+ 
+ 
+
+00:29:19.370 --> 00:29:22.940 align:start position:0%
+ 
+ 
+
+00:29:22.940 --> 00:29:26.660 align:start position:0%
+ 
+ 
+
+00:29:26.660 --> 00:29:28.760 align:start position:0%
+ 
+ 
+
+00:29:28.760 --> 00:29:30.620 align:start position:0%
+ 
+ 
+
+00:29:30.620 --> 00:29:33.560 align:start position:0%
+ 
+ 
+
+00:29:33.560 --> 00:29:36.380 align:start position:0%
+ 
+ 
+
+00:29:36.380 --> 00:29:37.670 align:start position:0%
+ 
+ 
+
+00:29:37.670 --> 00:29:41.570 align:start position:0%
+ 
+ 
+
+00:29:41.570 --> 00:29:43.580 align:start position:0%
+ 
+ 
+
+00:29:43.580 --> 00:29:46.220 align:start position:0%
+ 
+ 
+
+00:29:46.220 --> 00:29:48.260 align:start position:0%
+ 
+ 
+
+00:29:48.260 --> 00:29:52.610 align:start position:0%
+ 
+ 
+
+00:29:52.610 --> 00:29:57.020 align:start position:0%
+ 
+ 
+
+00:29:57.020 --> 00:30:01.010 align:start position:0%
+ 
+ 
+
+00:30:01.010 --> 00:30:02.420 align:start position:0%
+ 
+ 
+
+00:30:02.420 --> 00:30:05.000 align:start position:0%
+ 
+ 
+
+00:30:05.000 --> 00:30:08.450 align:start position:0%
+ 
+ 
+
+00:30:08.450 --> 00:30:09.980 align:start position:0%
+ 
+ 
+
+00:30:09.980 --> 00:30:11.540 align:start position:0%
+ 
+ 
+
+00:30:11.540 --> 00:30:13.670 align:start position:0%
+ 
+ 
+
+00:30:13.670 --> 00:30:17.180 align:start position:0%
+ 
+ 
+
+00:30:17.180 --> 00:30:19.760 align:start position:0%
+ 
+ 
+
+00:30:19.760 --> 00:30:21.470 align:start position:0%
+ 
+ 
+
+00:30:21.470 --> 00:30:23.300 align:start position:0%
+ 
+ 
+
+00:30:23.300 --> 00:30:26.420 align:start position:0%
+ 
+ 
+
+00:30:26.420 --> 00:30:29.090 align:start position:0%
+ 
+ 
+
+00:30:29.090 --> 00:30:33.310 align:start position:0%
+ 
+ 
+
+00:30:33.310 --> 00:30:35.510 align:start position:0%
+ 
+ 
+
+00:30:35.510 --> 00:30:37.670 align:start position:0%
+ 
+ 
+
+00:30:37.670 --> 00:30:39.620 align:start position:0%
+ 
+ 
+
+00:30:39.620 --> 00:30:41.510 align:start position:0%
+ 
+ 
+
+00:30:41.510 --> 00:30:44.570 align:start position:0%
+ 
+ 
+
+00:30:44.570 --> 00:30:46.040 align:start position:0%
+ 
+ 
+
+00:30:46.040 --> 00:30:48.230 align:start position:0%
+ 
+ 
+
+00:30:48.230 --> 00:30:51.710 align:start position:0%
+ 
+ 
+
+00:30:51.710 --> 00:30:53.750 align:start position:0%
+ 
+ 
+
+00:30:53.750 --> 00:30:56.540 align:start position:0%
+ 
+ 
+
+00:30:56.540 --> 00:30:58.700 align:start position:0%
+ 
+ 
+
+00:30:58.700 --> 00:31:00.500 align:start position:0%
+ 
+ 
+
+00:31:00.500 --> 00:31:02.520 align:start position:0%
+ 
+ 
+
+00:31:02.520 --> 00:31:04.660 align:start position:0%
+ 
+ 
+
+00:31:04.660 --> 00:31:06.610 align:start position:0%
+ 
+ 
+
+00:31:06.610 --> 00:31:08.350 align:start position:0%
+ 
+ 
+
+00:31:08.350 --> 00:31:10.390 align:start position:0%
+ 
+ 
+
+00:31:10.390 --> 00:31:13.180 align:start position:0%
+ 
+ 
+
+00:31:13.180 --> 00:31:15.490 align:start position:0%
+ 
+ 
+
+00:31:15.490 --> 00:31:18.940 align:start position:0%
+ 
+ 
+
+00:31:18.940 --> 00:31:21.640 align:start position:0%
+ 
+ 
+
+00:31:21.640 --> 00:31:23.260 align:start position:0%
+ 
+ 
+
+00:31:23.260 --> 00:31:25.480 align:start position:0%
+ 
+ 
+
+00:31:25.480 --> 00:31:26.860 align:start position:0%
+ 
+ 
+
+00:31:26.860 --> 00:31:29.710 align:start position:0%
+ 
+ 
+
+00:31:29.710 --> 00:31:33.100 align:start position:0%
+ 
+ 
+
+00:31:33.100 --> 00:31:34.960 align:start position:0%
+ 
+ 
+
+00:31:34.960 --> 00:31:36.490 align:start position:0%
+ 
+ 
+
+00:31:36.490 --> 00:31:38.680 align:start position:0%
+ 
+ 
+
+00:31:38.680 --> 00:31:40.480 align:start position:0%
+ 
+ 
+
+00:31:40.480 --> 00:31:43.540 align:start position:0%
+ 
+ 
+
+00:31:43.540 --> 00:31:45.940 align:start position:0%
+ 
+ 
+
+00:31:45.940 --> 00:31:47.620 align:start position:0%
+ 
+ 
+
+00:31:47.620 --> 00:31:49.780 align:start position:0%
+ 
+ 
+
+00:31:49.780 --> 00:31:52.120 align:start position:0%
+ 
+ 
+
+00:31:52.120 --> 00:31:53.800 align:start position:0%
+ 
+ 
+
+00:31:53.800 --> 00:31:57.660 align:start position:0%
+ 
+ 
+
+00:31:57.660 --> 00:32:00.580 align:start position:0%
+ 
+ 
+
+00:32:00.580 --> 00:32:02.140 align:start position:0%
+ 
+ 
+
+00:32:02.140 --> 00:32:05.170 align:start position:0%
+ 
+ 
+
+00:32:05.170 --> 00:32:08.470 align:start position:0%
+ 
+ 
+
+00:32:08.470 --> 00:32:09.700 align:start position:0%
+ 
+ 
+
+00:32:09.700 --> 00:32:12.520 align:start position:0%
+ 
+ 
+
+00:32:12.520 --> 00:32:14.740 align:start position:0%
+ 
+ 
+
+00:32:14.740 --> 00:32:17.410 align:start position:0%
+ 
+ 
+
+00:32:17.410 --> 00:32:19.870 align:start position:0%
+ 
+ 
+
+00:32:19.870 --> 00:32:22.840 align:start position:0%
+ 
+ 
+
+00:32:22.840 --> 00:32:26.640 align:start position:0%
+ 
+ 
+
+00:32:26.640 --> 00:32:29.560 align:start position:0%
+ 
+ 
+
+00:32:29.560 --> 00:32:33.570 align:start position:0%
+ 
+ 
+
+00:32:33.570 --> 00:32:35.860 align:start position:0%
+ 
+ 
+
+00:32:35.860 --> 00:32:39.130 align:start position:0%
+ 
+ 
+
+00:32:39.130 --> 00:32:41.160 align:start position:0%
+ 
+ 
+
+00:32:41.160 --> 00:32:45.130 align:start position:0%
+ 
+ 
+
+00:32:45.130 --> 00:32:46.540 align:start position:0%
+ 
+ 
+
+00:32:46.540 --> 00:32:49.540 align:start position:0%
+ 
+ 
+
+00:32:49.540 --> 00:32:51.760 align:start position:0%
+ 
+ 
+
+00:32:51.760 --> 00:32:53.260 align:start position:0%
+ 
+ 
+
+00:32:53.260 --> 00:32:55.630 align:start position:0%
+ 
+ 
+
+00:32:55.630 --> 00:32:57.370 align:start position:0%
+ 
+ 
+
+00:32:57.370 --> 00:33:00.040 align:start position:0%
+ 
+ 
+
+00:33:00.040 --> 00:33:04.930 align:start position:0%
+ 
+ 
+
+00:33:04.930 --> 00:33:06.460 align:start position:0%
+ 
+ 
+
+00:33:06.460 --> 00:33:08.680 align:start position:0%
+ 
+ 
+
+00:33:08.680 --> 00:33:10.750 align:start position:0%
+ 
+ 
+
+00:33:10.750 --> 00:33:13.330 align:start position:0%
+ 
+ 
+
+00:33:13.330 --> 00:33:16.149 align:start position:0%
+ 
+ 
+
+00:33:16.149 --> 00:33:20.230 align:start position:0%
+ 
+ 
+
+00:33:20.230 --> 00:33:22.269 align:start position:0%
+ 
+ 
+
+00:33:22.269 --> 00:33:24.340 align:start position:0%
+ 
+ 
+
+00:33:24.340 --> 00:33:26.529 align:start position:0%
+ 
+ 
+
+00:33:26.529 --> 00:33:28.629 align:start position:0%
+ 
+ 
+
+00:33:28.629 --> 00:33:29.680 align:start position:0%
+ 
+ 
+
+00:33:29.680 --> 00:33:32.470 align:start position:0%
+ 
+ 
+
+00:33:32.470 --> 00:33:33.909 align:start position:0%
+ 
+ 
+
+00:33:33.909 --> 00:33:36.129 align:start position:0%
+ 
+ 
+
+00:33:36.129 --> 00:33:39.730 align:start position:0%
+ 
+ 
+
+00:33:39.730 --> 00:33:41.200 align:start position:0%
+ 
+ 
+
+00:33:41.200 --> 00:33:44.590 align:start position:0%
+ 
+ 
+
+00:33:44.590 --> 00:33:47.350 align:start position:0%
+ 
+ 
+
+00:33:47.350 --> 00:33:50.560 align:start position:0%
+ 
+ 
+
+00:33:50.560 --> 00:33:52.600 align:start position:0%
+ 
+ 
+
+00:33:52.600 --> 00:33:54.759 align:start position:0%
+ 
+ 
+
+00:33:54.759 --> 00:33:56.830 align:start position:0%
+ 
+ 
+
+00:33:56.830 --> 00:34:01.629 align:start position:0%
+ 
+ 
+
+00:34:01.629 --> 00:34:04.090 align:start position:0%
+ 
+ 
+
+00:34:04.090 --> 00:34:07.119 align:start position:0%
+ 
+ 
+
+00:34:07.119 --> 00:34:10.210 align:start position:0%
+ 
+ 
+
+00:34:10.210 --> 00:34:12.879 align:start position:0%
+ 
+ 
+
+00:34:12.879 --> 00:34:15.849 align:start position:0%
+ 
+ 
+
+00:34:15.849 --> 00:34:17.589 align:start position:0%
+ 
+ 
+
+00:34:17.589 --> 00:34:20.200 align:start position:0%
+ 
+ 
+
+00:34:20.200 --> 00:34:23.290 align:start position:0%
+ 
+ 
+
+00:34:23.290 --> 00:34:26.230 align:start position:0%
+ 
+ 
+
+00:34:26.230 --> 00:34:27.609 align:start position:0%
+ 
+ 
+
+00:34:27.609 --> 00:34:29.530 align:start position:0%
+ 
+ 
+
+00:34:29.530 --> 00:34:34.750 align:start position:0%
+ 
+ 
+
+00:34:34.750 --> 00:34:36.790 align:start position:0%
+ 
+ 
+
+00:34:36.790 --> 00:34:39.700 align:start position:0%
+ 
+ 
+
+00:34:39.700 --> 00:34:42.399 align:start position:0%
+ 
+ 
+
+00:34:42.399 --> 00:34:46.930 align:start position:0%
+ 
+ 
+
+00:34:46.930 --> 00:34:49.960 align:start position:0%
+ 
+ 
+
+00:34:49.960 --> 00:34:51.550 align:start position:0%
+ 
+ 
+
+00:34:51.550 --> 00:34:54.940 align:start position:0%
+ 
+ 
+
+00:34:54.940 --> 00:34:59.079 align:start position:0%
+ 
+ 
+
+00:34:59.079 --> 00:35:00.670 align:start position:0%
+ 
+ 
+
+00:35:00.670 --> 00:35:03.490 align:start position:0%
+ 
+ 
+
+00:35:03.490 --> 00:35:06.160 align:start position:0%
+ 
+ 
+
+00:35:06.160 --> 00:35:09.309 align:start position:0%
+ 
+ 
+
+00:35:09.309 --> 00:35:12.280 align:start position:0%
+ 
+ 
+
+00:35:12.280 --> 00:35:14.710 align:start position:0%
+ 
+ 
+
+00:35:14.710 --> 00:35:16.690 align:start position:0%
+ 
+ 
+
+00:35:16.690 --> 00:35:20.050 align:start position:0%
+ 
+ 
+
+00:35:20.050 --> 00:35:22.120 align:start position:0%
+ 
+ 
+
+00:35:22.120 --> 00:35:25.569 align:start position:0%
+ 
+ 
+
+00:35:25.569 --> 00:35:27.069 align:start position:0%
+ 
+ 
+
+00:35:27.069 --> 00:35:29.529 align:start position:0%
+ 
+ 
+
+00:35:29.529 --> 00:35:30.729 align:start position:0%
+ 
+ 
+
+00:35:30.729 --> 00:35:34.529 align:start position:0%
+ 
+ 
+
+00:35:34.529 --> 00:35:37.749 align:start position:0%
+ 
+ 
+
+00:35:37.749 --> 00:35:40.479 align:start position:0%
+ 
+ 
+
+00:35:40.479 --> 00:35:46.029 align:start position:0%
+ 
+ 
+
+00:35:46.029 --> 00:35:48.219 align:start position:0%
+ 
+ 
+
+00:35:48.219 --> 00:35:50.380 align:start position:0%
+ 
+ 
+
+00:35:50.380 --> 00:35:54.759 align:start position:0%
+ 
+ 
+
+00:35:54.759 --> 00:35:56.199 align:start position:0%
+ 
+ 
+
+00:35:56.199 --> 00:36:00.099 align:start position:0%
+ 
+ 
+
+00:36:00.099 --> 00:36:05.289 align:start position:0%
+ 
+ 
+
+00:36:05.289 --> 00:36:07.539 align:start position:0%
+ 
+ 
+
+00:36:07.539 --> 00:36:10.120 align:start position:0%
+ 
+ 
+
+00:36:10.120 --> 00:36:12.309 align:start position:0%
+ 
+ 
+
+00:36:12.309 --> 00:36:13.719 align:start position:0%
+ 
+ 
+
+00:36:13.719 --> 00:36:17.160 align:start position:0%
+ 
+ 
+
+00:36:17.160 --> 00:36:19.900 align:start position:0%
+ 
+ 
+
+00:36:19.900 --> 00:36:22.870 align:start position:0%
+ 
+ 
+
+00:36:22.870 --> 00:36:25.239 align:start position:0%
+ 
+ 
+
+00:36:25.239 --> 00:36:26.859 align:start position:0%
+ 
+ 
+
+00:36:26.859 --> 00:36:28.690 align:start position:0%
+ 
+ 
+
+00:36:28.690 --> 00:36:33.789 align:start position:0%
+ 
+ 
+
+00:36:33.789 --> 00:36:36.099 align:start position:0%
+ 
+ 
+
+00:36:36.099 --> 00:36:38.799 align:start position:0%
+ 
+ 
+
+00:36:38.799 --> 00:36:40.719 align:start position:0%
+ 
+ 
+
+00:36:40.719 --> 00:36:43.410 align:start position:0%
+ 
+ 
+
+00:36:43.410 --> 00:36:46.239 align:start position:0%
+ 
+ 
+
+00:36:46.239 --> 00:36:48.729 align:start position:0%
+ 
+ 
+
+00:36:48.729 --> 00:36:50.709 align:start position:0%
+ 
+ 
+
+00:36:50.709 --> 00:36:54.339 align:start position:0%
+ 
+ 
+
+00:36:54.339 --> 00:36:57.130 align:start position:0%
+ 
+ 
+
+00:36:57.130 --> 00:37:00.459 align:start position:0%
+ 
+ 
+
+00:37:00.459 --> 00:37:02.459 align:start position:0%
+ 
+ 
+
+00:37:02.459 --> 00:37:04.449 align:start position:0%
+ 
+ 
+
+00:37:04.449 --> 00:37:07.059 align:start position:0%
+ 
+ 
+
+00:37:07.059 --> 00:37:08.439 align:start position:0%
+ 
+ 
+
+00:37:08.439 --> 00:37:11.739 align:start position:0%
+ 
+ 
+
+00:37:11.739 --> 00:37:14.709 align:start position:0%
+ 
+ 
+
+00:37:14.709 --> 00:37:18.069 align:start position:0%
+ 
+ 
+
+00:37:18.069 --> 00:37:21.039 align:start position:0%
+ 
+ 
+
+00:37:21.039 --> 00:37:23.079 align:start position:0%
+ 
+ 
+
+00:37:23.079 --> 00:37:25.829 align:start position:0%
+ 
+ 
+
+00:37:25.829 --> 00:37:27.910 align:start position:0%
+ 
+ 
+
+00:37:27.910 --> 00:37:30.069 align:start position:0%
+ 
+ 
+
+00:37:30.069 --> 00:37:32.349 align:start position:0%
+ 
+ 
+
+00:37:32.349 --> 00:37:33.999 align:start position:0%
+ 
+ 
+
+00:37:33.999 --> 00:37:35.890 align:start position:0%
+ 
+ 
+
+00:37:35.890 --> 00:37:38.870 align:start position:0%
+ 
+ 
+
+00:37:38.870 --> 00:37:41.430 align:start position:0%
+ 
+ 
+
+00:37:41.430 --> 00:37:43.230 align:start position:0%
+ 
+ 
+
+00:37:43.230 --> 00:37:46.140 align:start position:0%
+ 
+ 
+
+00:37:46.140 --> 00:37:48.150 align:start position:0%
+ 
+ 
+
+00:37:48.150 --> 00:37:51.210 align:start position:0%
+ 
+ 
+
+00:37:51.210 --> 00:37:53.130 align:start position:0%
+ 
+ 
+
+00:37:53.130 --> 00:37:57.509 align:start position:0%
+ 
+ 
+
+00:37:57.509 --> 00:37:59.759 align:start position:0%
+ 
+ 
+
+00:37:59.759 --> 00:38:01.529 align:start position:0%
+ 
+ 
+
+00:38:01.529 --> 00:38:03.420 align:start position:0%
+ 
+ 
+
+00:38:03.420 --> 00:38:06.140 align:start position:0%
+ 
+ 
+
+00:38:06.140 --> 00:38:08.970 align:start position:0%
+ 
+ 
+
+00:38:08.970 --> 00:38:10.470 align:start position:0%
+ 
+ 
+
+00:38:10.470 --> 00:38:16.340 align:start position:0%
+ 
+ 
+
+00:38:16.340 --> 00:38:16.350 align:start position:0%
+ 
+ 
+
+00:38:16.350 --> 00:38:19.770 align:start position:0%
+ 
+
+

@@ -1,0 +1,3884 @@
+WEBVTT
+Kind: captions
+Language: en
+
+00:00:04.950 --> 00:00:08.780 align:start position:0%
+ 
+good morning my name is Lisa white and  I'm a software engineer at Twitter and I  work on our real-time streaming products  at Twitter we process hundreds of  millions of tweets per day if you do the  math out that's thousands of tweets per  second and we process those in real-time  without ever missing a single tweet so  we built an architecture called power  track and power tracks processes this  massive amount of data both quickly and  reliably power track allows our  customers to create a customizable set  of tweets so that they can get the  tweets that are relevant to them and the  reason that we do this is that for for  most of our customers handling the  entire entire firehose of tweets is a  lot to handle there are a lot of people  tweeting publicly at any given moment  and handling all of that in real time  would be a lot so we allow our customers  the ability to filter based on the  tweets that are important to them so  that they can get the percentage of  tweets that they care about so we do all  the heavy lifting so that they can get  there maybe 1% of the firehose of tweets  that are important to them so there are  a couple of different core use cases  that that you might have heard about one  would be some resource institutions  might be looking for data around public  health so that they can respond  accordingly there might be different  customers that are building different  customer service tools and there we also  have customers that are looking for  signals around natural disasters so that  they can respond accordingly so  oftentimes our customers will connect to  our api's and then bill deliver their  data to their software so that they can  do further analysis on the raw data that  we deliver so as a software engineer on  the product I'm excited to share with  you the architecture of what we built ok  so at a high level the power track  architecture  has a couple of different things that we  took into consideration with the design  the first is how we filter data at scale  so as I mentioned we're processing  thousands of tweets at it per second and  in real-time and so we have to figure  out how to make this scale and how to be  able to filter in real-time how we  ensure data fidelity so many of our  customers our enterprise customers and  dropping tweets on the ground is not  okay so we have to make sure to give  them all of the tweets we have system  redundancies because as you know in  production it's pretty common or not  pretty common but it happens that things  go wrong and you can't plan on things  being perfect all the time so we have  redundancy in order to ensure that in  the case that things go wrong we have a  back-up plan because we're processing in  real-time we have to figure out how to  apply customer stream configuration  changes and then lastly we manage we  have multiple data centers so we have to  figure out how to manage the state of  our customer applications across these  data centers so at a high level the  input into the product power track that  I work on is the public firehose so  basically all public tweets that are  happening in real time and ultimately we  deliver data to our customers and the we  have a couple layers of our application  the first of which is a filtering layer  so this layer allows customers to have  customizable rule sets so that they can  filter only on the tweets that are  important to them and then that passes  the data along to the streaming layer  which then does some additional  processing and also renders the data out  to the customer and so it gets written  via HTTP streaming to the to the  customer and so there they have a  persistent connection to us so they'll  connect one time and then they'll stay  connected for you know maybe days or  maybe even a week until our next deploy  so they'll reconnect when we do a deploy  but or if there's some kind of network  click but for the most part they're  staying connected all the time getting  the tweets as they happen in real time  and so the customer can manage their  their rule set that dictates which  tweets they get through a REST API and  so this is our rules API and it allows  them to be able to create rules and  delete rules and then this thing gets  applied to the filtering layer in real  time so the customer doesn't have to  reconnect in order to get the updated  rule set which is helpful for them  because then they don't have to worry  about missing data during the time that  they're disconnected but it does it does  provide a little bit of a challenge for  us to figure out how to apply those  configuration changes in real time so  the first piece that I'd like to dive  into is the filtering layer and so as I  mentioned we're processing thousands of  tweets per second and that's just our  base volume we also have to be able to  handle large events like a big sporting  event like the Super Bowl where a lot of  people are tweeting more than just our  base volume and so we have to figure out  how to make this scale for some  customers like those who are in the  financial industry milliseconds matter  and so we can't deliver the data  extremely late so I'm going to be  talking about filtering and how we make  that scale to all of our customers and  keep up with the real-time volume okay  so you might be wondering what I mean by  a customizable rule set so this is a  really simple example of a customer rule  so we have a filtering language that our  customers use and certain operators that  they're allowed to use so this rule  would filter tweets that are from lm/w  which is my twitter handle and it either  has mentions or is a retweet so it  either mentions another user or the  tweet itself is a retweet of another  tweet and then there's an implicit and  between the from lm/w and the next part  and so essentially this tweet would get  applied to the customers rules in  real-time and then as tweets come  through the firehose tweets that match  this rule would result in the data that  they get so this is a quick example of  two tweets that would match this rule so  the one on the left you can see that is  from me it's a tweet that I tweeted  it also has a mentioned it mentions  another user whose chewkey so this would  match that rule the one on the right  would also match so when we retweet the  tweet that creates a new tweet so I  retweeted this tweet from Twitter  Boulder that's on the right and because  it's both from me and is a retweet that  retweet of the original tweet would go  through the fire hose would go through  my would go through any stream with this  rule as well so we do this  programmatically in real time and this  is an example of the ast the abstract  syntax tree of how we programmatically  would walk through the rule so this one  is pretty simple so we'd start with the  and and then we can check whether a  tweet is from lm/w  then we can move on to the or and then  traverse through each of the children of  the or and check whether it has mentions  there is a retweet and you might notice  that there are some optimizations that  can be made here for example if the  tweet is not from Ellen W then then the  whole rule is going to be false we don't  have to continue over to the or and keep  traversing through the tree similarly in  the or if we determine that has mentions  is true we can just call the whole or  true and we don't have to keep  traversing through the tree so this is  called boolean shirt's short-circuiting  and this is helpful but it's not that  helpful so as I mentioned we're  processing thousands of tweets per  second and we also have customers that  have hundreds of South but can't have  hundreds of thousands of rules in each  of those rules is most likely a lot more  complex than this it probably it can  have up to 2048 characters and we don't  have a limit to the number of clauses  that can be in there so these rules can  get pretty complex in traversing through  the entire tree of every single one of  our customer rules for every tweet that  comes through would be pretty CPU  intensive so we have a mechanism to be  able to speed this up and this is where  predicate indexing comes in so the idea  behind predicate indexing is that we are  trying to quickly disqualify rules from  being matches  and this limits the number of full  evaluations which are the tree walks we  just looked at that we have to do so the  way that we do this is every customer  rule is indexed based on the match type  of the clauses it contains so as an  example if someone we're looking for the  term Strange Loop then we would index  strange and then we could we could also  index loop and so then those two terms  would get added into the index and then  any tweet that matches those would then  move on to be considered for full  evaluation and I'll go into more detail  in a couple slides about how we actually  go about choosing what gets in the index  but at its core what predicate indexing  is trying to do is it's trying to weed  out rules that wouldn't match anyway so  essentially we're trying to narrow down  our rule set so that we don't have to do  a full evaluation on every single rule  okay so to put this in other words the  rule evaluation is broken down into a  two-step process so when a tweet comes  through the firehose the first step is  to check the index and check whether the  rule matches anything that's that's  whether the tweet matches any of the  indices and then if it does then that  narrows it down to a smaller set of  rules for which we put through full  evaluations so as an example let's say  that a customer has a hundred thousand  rules then we add each of these rules to  the index and this might be this is most  likely more than a hundred thousand  because we have to have every rule in  the index but most rule is going to have  more than one thing indexed because we  have to make sure that logically if the  rule is going to evaluate to true the  index also evaluates to true so we'll  have more terms in the index and then  when a tweet comes through we'll  evaluate the tweet against the index and  then that will give us a smaller set of  rules for which we have to do a full  evaluation so you might be thinking well  this seems to be over complicating it  and you're adding in another step but  actually because the indexing is so much  checking the index is so  much faster than doing the full  evaluation this actually saves a ton of  time and saves a lot of CPU usage and  speeds things up and we definitely see  that in code when we pick a app or index  and we end up doing a lot more full  evaluations and we would see system  issues so the index is is way faster  than the rule evaluation as I mentioned  so then we can cut down on the time  where we're swimming in CPU okay so now  you may be wondering what we actually  index and how we choose what we index  well essentially we're trying to pick  whatever is least likely to occur and  the reason that we're trying to choose  whatever is least likely to occur is  because we're trying to narrow down the  number of full evaluations that we have  to do so if we so if we were to pick  something that's highly likely then we  wouldn't be narrowing anything down and  we would end up doing a lot more full  evaluations so in this case we have a  couple of options for what we could  index on so we could index for an and  you only have to index one side and that  is because either one of those being  false results in the and being false so  you only need one of them to guarantee  that the index being true results in it  being a potential match for the full  evaluation so in this case we have a  choice of indexing on from lm/w or  indexing on the or clause but for an or  clause you have to index every term in  there and that's because any one of  those being true results in the entire  or being true so for it to actually  follow logically that if the index is  true the or if the rule is true the  index is also true then you need to  index everything that's in the or so in  this case we can we could index has  mentioned and is retweet the the problem  with indexing those two terms is that  then when we evaluate a tweet any tweet  that either has a mentions or is a  retweet would matter  the index which is a lot of tweets that  either have mentions or are retweets so  we would end up doing a lot of full  evaluations alternatively we can index  from lm/w and although I tweet a decent  amount  I don't tweet nearly as much as has  mentioned and is retweet so by indexing  on from lm/w only we'd be able to cut  down the amount of full of eight full  evaluations we have to do by a huge  amount because we'd only have to do full  evaluations for the tweets that match  from lm/w so in essence doing this  predicate indexing allows us to cut down  on the number of full evaluations that  we have to do which are the full tree  walks and that allows us to save a lot  of time so this shows you if you're  following along but in this case we'd  index from lm/w so this helps a lot and  it saves a lot of CPU however it's not  quite enough we are still trying to  handle all of the rules for all of our  customers and keep up with all of this  data in real time so we had to think  about other ways to scale our filtering  as well so the next piece that I'm going  to talk about is more related to the  architecture so at a high level again  this is our architecture the input is  the public firehose of tweets that is  then moved into a filtering layer where  the filtering layer filters for our  customers and then the streaming layer  renders out and outputs that via is she  be streaming to the customer okay so  each of the filter apps or each of the  filter the filtering layer is broken out  into different stacks where each stack  filters for a set of different customers  so in this example you can see that  stack one is filtering for customers one  two and three stack two is filtering for  four and five etc so this allows us to  break our customers out into different  stacks so that as our customer base  grows we can simply scale the stacks  with our customer base and we've used  this in the past when we've just  grown in our number of customers and had  to add more stacks we were able to do  that pretty easily so in addition to  that each of these stacks is processing  a full firehose because they're  filtering for a different customer set  and each one wants their full set of  tweets that matches but within each  stack we have a set of apps as well so  in step one in this example let's say we  have three apps so each of those nodes  would be reading in one third of the  firehose of tweets and then each of  those would all be filtering for all of  the customers one two and three and then  writing the data down to the streaming  player so by sharing the load where  we're allowing ourselves to be able to  handle big spikes and tweets and things  like that by sharing it across three  nodes and the way that we handled this  technically is by using a messaging cue  so in Twitter we use a messaging cue  called event bus and this is a Kafka  like messaging cue so just a quick show  of hands does anyone use Kafka before  okay cool so it's a decent amount of  people here so so essentially each of  these stacks would have the same  subscriber ID as as you'd call it in  Kafka and by using the same identifier  each of the nodes within each stack  would be able to share the full copy of  the firehose and so stacks 1 2 and 3  would independently keep track of where  they're at in the queue so that each one  gets its own copy whereas the nodes  within stack 1 I'll share the same  identifier so that they can keep keep  their place together and all share the  same firehose effectively and so one  thing that this allows us to do is as  tweet volume changes we can scale our  stacks up and down similarly as we  improve filtering in different ways and  see different kinds of improvements with  our filtering algorithm then we might  need less nodes per per stack so we can  have that ability to be able to adjust  sit and so we have a dashboard that we  use to be able to do the stack  management and to be able to control the  number of nodes per stack and also how  many stacks we have and which customers  are assigned etc so in addition to  filtering being very important data  fidelity is also really important to our  customers so as I mentioned earlier many  of our customers our enterprise  customers and data fidelity is extremely  important to them so making sure that we  deliver all of the data that matches  their rule set so the way that we do  this again is along the same lines of  using a messaging queue and in Twitter  that's eventbus so as I mentioned  between the fire hose and the filtering  layer we have a messaging queue and in  addition to that allowing us to be able  to partition the firehose the other  advantage is is that it allows data to  backup so if there's a big load spike  let's say because of a big event that's  happening then the data would back up  into the messaging Q and the filtering  layer would be able to keep processing  and then it would catch up as the load  starts to level out and so it is  possible that we might get a little bit  behind in the filtering layer but it's  more important that we deliver all of  the data then then it being like  immediate all the time  although we do do consistent load tasks  to ensure that we're able to keep up  with certain levels of volume but in the  case of extreme events sometimes it is  possible that we might get a little bit  behind so we also have the messaging  queue between the filtering layer and  the streaming layer and you'll notice  here that for each of the three  customers you see in the diagram  connected each one of those has their  own messaging queue and so what this  allows us to do is the filtering layer  can publish down to the messaging queue  for each of the customers but the  different customers won't affect each  other so if customer if the customer in  the middle was backing up it  wouldn't affect customer 3 being able to  get their data on time and it all the  other thing that this allows is if there  were to be some sort of network flip or  we do a deploy where the customer gets  guests it gets disconnected they can  request backfill and so what this means  is that we take the pointer from where  the customer's reading to and instead of  reading from current we'll go back a  minute or five minutes or whatever it is  that they specify and just change the  pointer in the queue so that they can  catch up and read the data that they  missed while they were disconnected so  by using this technology and having a  queue per customer we're able to get  them kind of out-of-the-box  functionality that for us was pretty  easy to implement but provides the  customer a lot of a lot of safeguards  around making sure that they have data  fidelity hey so we also use system  redundancy to deal with failures so  obviously be great if things always went  perfect in production but sometimes  things go wrong so we have redundancy in  order to deal with those failures ok so  I'm going to talk a little bit about the  filtering layer so as we talked about  the filtering layer is broken up into  three different stacks which allows us  to separate out the customers from each  other and also to be able to scale as  our customer scale each of those stacks  has multiple applications which allows  us to be able to increase a number of  tweets or change things based on tweet  volume and then on top of that we have  all of this basically replicated so we  have side a and side B where you can see  that for customers 1 through 8 every  single one of those customers is both  inside a and side B so we're filtering  every single customer twice and for us  we chose this approach of having two  different sides because operationally it  makes it really easy to reason about so  we know that we can  a single note on side a and none of the  customers will be impacted because side  B is completely up and healthy we could  actually lose all of side a and  customers would not be impacted and this  is really helpful for things like  deploys because we can deploy side a as  long as side B is healthy because it  does take a bit of time for applications  to come back up once they go down and  the reason for that is because we have  to do all of the loading of the rules  into the index and do all that  pre-processing in order to optimize the  rule evaluation so for us filtering  every customer only once could be  problematic if a node we're to go down  because then they could get delayed data  but by having two sides we make sure  that the customer is being filtered for  in real-time at least once and then if  one node were to have a problem then the  customer would not be impacted so our  goal here is to limit any kind of  customer impact and then in addition to  that if we do have any kind of  operational issues let's say on side a  and it's 2:00 a.m. in the middle of the  night we don't have to worry about  putting in a change really really  quickly and in messing with things and  making a bigger problem in production  because we know that we can kind of take  a deep breath and just kind of move on  with like a thought-out way of  approaching it because the customer  impact is not there they're not being  impacted because side B is healthy so it  also just helps with peace of mind and  being able to make sure that we're  taking the right approach okay so  configuration application this is how we  apply customer configuration in real  time so as we talked about earlier there  in addition to the flow of filtering  customer data they also have a REST API  where they're able to update their rules  in real time and this is essentially a  different product but it's used for  power track in order to be able to  update their rules and the way that we  handle this on the backend is we  have two different mice equal tables one  for rules and one for rule updates and  just to walk through a simple example of  how this would work let's say they added  a rule that was from lm/w  and then they decided my tweets were  actually pretty boring so they deleted  that so you can see that the updates  table is kind of just keeping a log of  what's being updated while the rules  table is actually kind of the this it's  the system of record where we have what  the state of their rules is at that time  then they might decide that they're  interested in learning about hiking and  then that they want to get tweets from  Jack so the advantage of us having the  data stored and these two different  tables is that each filtering  application can then subscribe to the  updates table so that once it has the  rule set loaded it only has to get  updates and this is helpful because if a  customer has 250,000 rules then if they  make a change we don't want to have to  reload all of the rules from the rule  table all we want to do is see what  changed so by the customer subscribing  to the updates table they're able to get  changes in real-time and then they can  simply just add that rule or remove it  without having to reload all the rules  and as I mentioned previously reloading  the rules is a pretty big task because  we have to do all that re-indexing of  the rules and the optimizations so  reloading the entire rule set is not a  super simple task and it's much easier  to simply just apply the updates but we  still keep the rules table completely up  to date because that way when a  filtering application is restarted it  can simply just reload all of the rules  from the existing state also for the  customers to be able to manage their  rules and be able to get all their rules  to see what they are so that they can  make changes to them make sure they  align with what they have in their  system and things like that so the rules  table is the system of record and then  the updates table allows the filtering  applications to be able to apply those  configuration updates in real time  and then the customer can use this REST  API where they're creating and deleting  rules where the customer doesn't even  have to disconnect and so they're able  to continue getting data while all this  is happening in the background so the  way that we handle this behind the  scenes is that the filtering  applications pull for these updates on a  certain interval so we've explored ways  of having the the rule updates to be  pushed to the filter apps but in the  past this hasn't been quite as reliable  and we've ended up implementing polling  anyway so we kind of start with polling  just so that it can make sure that the  data matches what it's supposed to match  but we've talked about in the future  talking having the updates get pushed to  the filtering application so that it can  get applied a little more quickly okay  so in addition to applying rule update  configurations in real time we also can  apply stream configurations in real time  so we have a dashboard where we can  basically see the configuration of the  various sides and stacks and it also  allows us to look at monitoring  statistics like what the lag looks like  when looking at the subscribing to event  bus whether it's behind for a certain  stack whether how long things are taking  to process so how much time it's bending  on the rule evaluation per stack to see  if there's a certain problematic  customer and then based on what we see  in that dashboard and you know based on  certain observability or alerts that  trigger or things that are warnings that  we see or things like that we can use  this dashboard to diagnose and then  mitigate any kind of customer problems  so one thing that you might have noticed  looking at this diagram earlier is that  customers one through eight are both in  side a and side B but the configuration  of customers one through eight is  completely different so stack one on  side AI is completely different than  stack one on side B and this is  intentional and this is to basically  reduce our cost  being able to impact each other so each  of these customers were filtering on  rules that they uploaded and so we try  to put all the mechanisms we can in  place in order to make them not affect  each other but sometimes there might be  things that we miss so if customer one  were able to upload a set of rules that  ended up to be problematic or let's say  some tweet started coming through the  firehose that all of a sudden matched a  ton of their rules just because of some  special event that was going on then it  is possible that stack one could get a  little bit behind and trying to process  that data so on side a that would impact  customers two and three but on side B  customers two and three are not on the  same stack as as customer one so  customers two and three would still  continue to get their data in real time  and not be behind because they're  getting data from side B and so then we  would be able to go into our dashboard  once we realize that stack that customer  one is is problematic and decide to take  any kind of mitigation so if we we have  the option of moving a customer to their  own stack and this is essentially called  quarantine them we have quarantine  stacks where they end up on their own  infrastructure so if they have complex  rules based on a certain event that's  happening having their own  infrastructure gives them the chance to  catch up while we might work with  support and figure out how to reach out  to this customer if their rules need to  be changed if it's a certain problem  with their rule or if we need to make a  code change to be able to optimize for  their for this case that was that was  missed so and then it also would make  the other customers on stack one on side  a which would be two and three no longer  be impacted and so essentially these  stacks would pick up in real-time which  streams are assigned to them and then we  can make those changes in the dashboard  accordingly and this is so this is this  is helpful for us so the filter apps  in the same way that they look for rural  updates they also pull an outside  application that's kind of managing the  state of where each of the of what each  of these workers should be working on  and then they get back the list of  customers that they should be  responsible for so it is possible that  we might move things around we might  decide to add additional nodes to  stack's if the tweet volume starts  increasing and that's all something that  gets applied in real time and it's kind  of unknown to the filter apps they're  simply just working so for example  inside a stack one you can see we have  three filtering applications there and  if we were to decide to add another one  let's say tweet volume increase and we  needed more capacity to be able to  handle all of the volume then we could  add another one there so then that one  would have four filtering applications  and so then instead of each one getting  a third of the fire hose each one would  get a fourth of the fire hose and that's  something that we would just get kind of  out of the box just because we're using  the the messaging queue so each one of  those is using the same identifier for  stack one and so just by adding another  another node that would just all of a  sudden start getting its portion of the  data in the same way if a node were to  go down then well then the ones  remaining would kind of pick up the  slack and it would not be affecting of  the customers getting their data on time  so state management refers to how we  manage the state of our customers across  our different data centers so back to  the system redundancy we talked about  how we have two different sides and how  that allows redundancy so if something  were to go down on one side it's not  affected on the other well you can  basically take that entire diagram and  then duplicate it again because we also  have multiple data centers and this is  really helpful for us in failure  scenarios but it also is a little bit  tricky in terms of me  the state across those data centers so  one particular example of where this  becomes a little tricky is customer  connections so when a customer connects  to us they connect with a certain  identifier for their stream and they  what they will have purchased a certain  amount of connections so let's say that  a customer purchased three connections  that means that they get three redundant  connections and that could be because  they are bringing the data into their  development environment or it could be  because they want redundancy into their  system just for extra backup to make  sure that no tweets are missed if they  were to get disconnected or things like  that and the customer has no knowledge  of which data center they're connected  to so that's all done by routers on on  our side so the customer connects and  then they could be connected to two  different data centers so we have to be  able to communicate across those two  data centers in order to basically make  sure that we're not cutting them off of  connections they should be having but  that were not without that we're also  not giving them a crazy amount of  connections that would hurt our system  so the way that we chose to do this is  using zookeeper and the reason that we  chose zookeeper is because when a  customer connects that then requests  Elise from zookeeper for that stream ID  and then zookeeper just returns back  whether Elise is available or not and so  this took a lot of the overhead of  writing the code away from us and one of  the advantages of this was that the  leases are ephemeral so unlike if we  were to put a record into my sequel or  something like that if a node were to  just go down then the lease would  disappear from zookeeper and we'd no  longer be charging that customer for  that connection whereas if we were to  insert a row into a database then we  would have to figure out some kind of  cleanup process to make sure that the  customer is actually still connected and  that it's not the case that it just  didn't get cleaned up if a node were to  go down or something like that  so using zookeeper and just because by  its nature the leases  ephemeral that kind of takes a lot of  that extra work of figuring out how to  make the notes heartbeat and things like  that away and just kind of gets rid of a  lot of error and we're able to use that  out-of-the-box technology so in addition  the we're using a cluster that's shared  across datacenters so that provides the  the advantage of it working across  datacenter okay so for the powertrack  architecture what we talked about today  was how we filter at scale so how we  basically use predicate indexing and how  we have multiple applications per stack  to be able to filter data at scale how  we're filtering thousands of tweets per  second for our customers hundreds of  thousands of rules how we ensure data  fidelity so basically how we use event  bus or our messaging queue to be able to  back data up into the messaging queue  and ensure that data does not get lost  along the way to our customers how we  have heard onion C of the two different  sides to ensure that we're okay in case  of any kind of failures how we apply  configuration updates in real time such  as rural updates or where a stream is  being filtering from and then lastly how  we manage the state of our customers  across different data centers so that's  the end of my talk and so thanks for  listening and I'm happy to answering any  questions if people have them oh so I  think I heard your question was it's the  two different sides right to the same  stream or different streams is that  correct  so the two sides right to the same  stream and what that allows is the  streaming layer essentially can then  just read directly from that stream so  you might be wondering well doesn't that  end up with duplicate data for the  customer one thing that I didn't mention  so thanks for pointing this out is that  the one  things that the streaming layer does is  d dupes so it kind of keeps a rolling  window of tweets that it looked at in  the last period of time and then does  deduplication based off of the tweet ID  so that we make sure that they don't get  duplicates but it makes it easier from  an operational perspective that it's  only reading from or from one stream  rather than have to coordinate multiple  sure so the question was do we have any  guarantees around fidelity or order and  so around fidelity we in the case that  we were to miss any tweets that would be  considered like a system outage that we  would work with support to post and  communicate to customers so I'm not sure  about like formal SLA s but we do  consider it a production issue if there  were to be a case where data were to be  missing and that's why we have so many  things in place like the the redundancy  and multiple data centers and we have  the messages in the queue in order to  ensure fidelity another piece related to  that is the filtering application  doesn't actually acknowledge that it  read and processed the event until it  processes out to the rendering layer so  it makes sure that the data has actually  been written out and same thing with the  rendering layer it doesn't acknowledge  that it actually read the data until it  writes that out to the customer stream  so this makes sure that it that we don't  lose data if a node were to go down even  because then another node would pick it  up because it's never actually been  acknowledged and then the next part of  your question can you remind me what  that was oh yeah yeah so the order is is  not guaranteed so it's basically  producing the tweets in real-time as  quickly as we can get them out yeah okay  so the question was how do we deal with  production issues it seems like because  the system is pretty complicated that it  would be difficult to kind of nail down  where they she was and I think because  we have it broken down into multiple  different applications it's pretty easy  for us to see where we've seen issues so  you know we'll have error counters and  have that in our monitoring dashboard so  we'll know if we ever weren't able to  publish and event and so I mean for the  most part we get notified of issues in  our system before a customer would even  notice or a lot of the time a customer  doesn't even ever get affected because  it only happens on one side and not the  other side and so it's not actually even  customer impacting so for the most part  based on what the issue is we're able to  kind of narrow it down just because we  have things broken down into discrete  applications that we monitor separately  and I'll have different jobs that  they're responsible for we also have a  QE team that is constantly streaming  data and they're making sure that we're  not missing data from the firehose so  this is really helpful for us so that we  can make sure that this is running in  our staging environment happily before  we ever push that to production so that  definitely helps with just kind of peace  of mind and making sure that things are  fine and we're not pushing those kinds  of bugs to production that would result  in data loss so I think that that we're  out of time but I'm happy to stick  around and I'll be around for the rest  of the conference so if anyone has any  additional questions I'm happy to talk  about it so thank you  [Applause]
+
+00:00:08.780 --> 00:00:11.810 align:start position:0%
+good morning my name is Lisa white and  I'm a software engineer at Twitter and I  work on our real-time streaming products  at Twitter we process hundreds of  millions of tweets per day if you do the  math out that's thousands of tweets per  second and we process those in real-time  without ever missing a single tweet so  we built an architecture called power  track and power tracks processes this  massive amount of data both quickly and  reliably power track allows our  customers to create a customizable set  of tweets so that they can get the  tweets that are relevant to them and the  reason that we do this is that for for  most of our customers handling the  entire entire firehose of tweets is a  lot to handle there are a lot of people  tweeting publicly at any given moment  and handling all of that in real time  would be a lot so we allow our customers  the ability to filter based on the  tweets that are important to them so  that they can get the percentage of  tweets that they care about so we do all  the heavy lifting so that they can get  there maybe 1% of the firehose of tweets  that are important to them so there are  a couple of different core use cases  that that you might have heard about one  would be some resource institutions  might be looking for data around public  health so that they can respond  accordingly there might be different  customers that are building different  customer service tools and there we also  have customers that are looking for  signals around natural disasters so that  they can respond accordingly so  oftentimes our customers will connect to  our api's and then bill deliver their  data to their software so that they can  do further analysis on the raw data that  we deliver so as a software engineer on  the product I'm excited to share with  you the architecture of what we built ok  so at a high level the power track  architecture  has a couple of different things that we  took into consideration with the design  the first is how we filter data at scale  so as I mentioned we're processing  thousands of tweets at it per second and  in real-time and so we have to figure  out how to make this scale and how to be  able to filter in real-time how we  ensure data fidelity so many of our  customers our enterprise customers and  dropping tweets on the ground is not  okay so we have to make sure to give  them all of the tweets we have system  redundancies because as you know in  production it's pretty common or not  pretty common but it happens that things  go wrong and you can't plan on things  being perfect all the time so we have  redundancy in order to ensure that in  the case that things go wrong we have a  back-up plan because we're processing in  real-time we have to figure out how to  apply customer stream configuration  changes and then lastly we manage we  have multiple data centers so we have to  figure out how to manage the state of  our customer applications across these  data centers so at a high level the  input into the product power track that  I work on is the public firehose so  basically all public tweets that are  happening in real time and ultimately we  deliver data to our customers and the we  have a couple layers of our application  the first of which is a filtering layer  so this layer allows customers to have  customizable rule sets so that they can  filter only on the tweets that are  important to them and then that passes  the data along to the streaming layer  which then does some additional  processing and also renders the data out  to the customer and so it gets written  via HTTP streaming to the to the  customer and so there they have a  persistent connection to us so they'll  connect one time and then they'll stay  connected for you know maybe days or  maybe even a week until our next deploy  so they'll reconnect when we do a deploy  but or if there's some kind of network  click but for the most part they're  staying connected all the time getting  the tweets as they happen in real time  and so the customer can manage their  their rule set that dictates which  tweets they get through a REST API and  so this is our rules API and it allows  them to be able to create rules and  delete rules and then this thing gets  applied to the filtering layer in real  time so the customer doesn't have to  reconnect in order to get the updated  rule set which is helpful for them  because then they don't have to worry  about missing data during the time that  they're disconnected but it does it does  provide a little bit of a challenge for  us to figure out how to apply those  configuration changes in real time so  the first piece that I'd like to dive  into is the filtering layer and so as I  mentioned we're processing thousands of  tweets per second and that's just our  base volume we also have to be able to  handle large events like a big sporting  event like the Super Bowl where a lot of  people are tweeting more than just our  base volume and so we have to figure out  how to make this scale for some  customers like those who are in the  financial industry milliseconds matter  and so we can't deliver the data  extremely late so I'm going to be  talking about filtering and how we make  that scale to all of our customers and  keep up with the real-time volume okay  so you might be wondering what I mean by  a customizable rule set so this is a  really simple example of a customer rule  so we have a filtering language that our  customers use and certain operators that  they're allowed to use so this rule  would filter tweets that are from lm/w  which is my twitter handle and it either  has mentions or is a retweet so it  either mentions another user or the  tweet itself is a retweet of another  tweet and then there's an implicit and  between the from lm/w and the next part  and so essentially this tweet would get  applied to the customers rules in  real-time and then as tweets come  through the firehose tweets that match  this rule would result in the data that  they get so this is a quick example of  two tweets that would match this rule so  the one on the left you can see that is  from me it's a tweet that I tweeted  it also has a mentioned it mentions  another user whose chewkey so this would  match that rule the one on the right  would also match so when we retweet the  tweet that creates a new tweet so I  retweeted this tweet from Twitter  Boulder that's on the right and because  it's both from me and is a retweet that  retweet of the original tweet would go  through the fire hose would go through  my would go through any stream with this  rule as well so we do this  programmatically in real time and this  is an example of the ast the abstract  syntax tree of how we programmatically  would walk through the rule so this one  is pretty simple so we'd start with the  and and then we can check whether a  tweet is from lm/w  then we can move on to the or and then  traverse through each of the children of  the or and check whether it has mentions  there is a retweet and you might notice  that there are some optimizations that  can be made here for example if the  tweet is not from Ellen W then then the  whole rule is going to be false we don't  have to continue over to the or and keep  traversing through the tree similarly in  the or if we determine that has mentions  is true we can just call the whole or  true and we don't have to keep  traversing through the tree so this is  called boolean shirt's short-circuiting  and this is helpful but it's not that  helpful so as I mentioned we're  processing thousands of tweets per  second and we also have customers that  have hundreds of South but can't have  hundreds of thousands of rules in each  of those rules is most likely a lot more  complex than this it probably it can  have up to 2048 characters and we don't  have a limit to the number of clauses  that can be in there so these rules can  get pretty complex in traversing through  the entire tree of every single one of  our customer rules for every tweet that  comes through would be pretty CPU  intensive so we have a mechanism to be  able to speed this up and this is where  predicate indexing comes in so the idea  behind predicate indexing is that we are  trying to quickly disqualify rules from  being matches  and this limits the number of full  evaluations which are the tree walks we  just looked at that we have to do so the  way that we do this is every customer  rule is indexed based on the match type  of the clauses it contains so as an  example if someone we're looking for the  term Strange Loop then we would index  strange and then we could we could also  index loop and so then those two terms  would get added into the index and then  any tweet that matches those would then  move on to be considered for full  evaluation and I'll go into more detail  in a couple slides about how we actually  go about choosing what gets in the index  but at its core what predicate indexing  is trying to do is it's trying to weed  out rules that wouldn't match anyway so  essentially we're trying to narrow down  our rule set so that we don't have to do  a full evaluation on every single rule  okay so to put this in other words the  rule evaluation is broken down into a  two-step process so when a tweet comes  through the firehose the first step is  to check the index and check whether the  rule matches anything that's that's  whether the tweet matches any of the  indices and then if it does then that  narrows it down to a smaller set of  rules for which we put through full  evaluations so as an example let's say  that a customer has a hundred thousand  rules then we add each of these rules to  the index and this might be this is most  likely more than a hundred thousand  because we have to have every rule in  the index but most rule is going to have  more than one thing indexed because we  have to make sure that logically if the  rule is going to evaluate to true the  index also evaluates to true so we'll  have more terms in the index and then  when a tweet comes through we'll  evaluate the tweet against the index and  then that will give us a smaller set of  rules for which we have to do a full  evaluation so you might be thinking well  this seems to be over complicating it  and you're adding in another step but  actually because the indexing is so much  checking the index is so  much faster than doing the full  evaluation this actually saves a ton of  time and saves a lot of CPU usage and  speeds things up and we definitely see  that in code when we pick a app or index  and we end up doing a lot more full  evaluations and we would see system  issues so the index is is way faster  than the rule evaluation as I mentioned  so then we can cut down on the time  where we're swimming in CPU okay so now  you may be wondering what we actually  index and how we choose what we index  well essentially we're trying to pick  whatever is least likely to occur and  the reason that we're trying to choose  whatever is least likely to occur is  because we're trying to narrow down the  number of full evaluations that we have  to do so if we so if we were to pick  something that's highly likely then we  wouldn't be narrowing anything down and  we would end up doing a lot more full  evaluations so in this case we have a  couple of options for what we could  index on so we could index for an and  you only have to index one side and that  is because either one of those being  false results in the and being false so  you only need one of them to guarantee  that the index being true results in it  being a potential match for the full  evaluation so in this case we have a  choice of indexing on from lm/w or  indexing on the or clause but for an or  clause you have to index every term in  there and that's because any one of  those being true results in the entire  or being true so for it to actually  follow logically that if the index is  true the or if the rule is true the  index is also true then you need to  index everything that's in the or so in  this case we can we could index has  mentioned and is retweet the the problem  with indexing those two terms is that  then when we evaluate a tweet any tweet  that either has a mentions or is a  retweet would matter  the index which is a lot of tweets that  either have mentions or are retweets so  we would end up doing a lot of full  evaluations alternatively we can index  from lm/w and although I tweet a decent  amount  I don't tweet nearly as much as has  mentioned and is retweet so by indexing  on from lm/w only we'd be able to cut  down the amount of full of eight full  evaluations we have to do by a huge  amount because we'd only have to do full  evaluations for the tweets that match  from lm/w so in essence doing this  predicate indexing allows us to cut down  on the number of full evaluations that  we have to do which are the full tree  walks and that allows us to save a lot  of time so this shows you if you're  following along but in this case we'd  index from lm/w so this helps a lot and  it saves a lot of CPU however it's not  quite enough we are still trying to  handle all of the rules for all of our  customers and keep up with all of this  data in real time so we had to think  about other ways to scale our filtering  as well so the next piece that I'm going  to talk about is more related to the  architecture so at a high level again  this is our architecture the input is  the public firehose of tweets that is  then moved into a filtering layer where  the filtering layer filters for our  customers and then the streaming layer  renders out and outputs that via is she  be streaming to the customer okay so  each of the filter apps or each of the  filter the filtering layer is broken out  into different stacks where each stack  filters for a set of different customers  so in this example you can see that  stack one is filtering for customers one  two and three stack two is filtering for  four and five etc so this allows us to  break our customers out into different  stacks so that as our customer base  grows we can simply scale the stacks  with our customer base and we've used  this in the past when we've just  grown in our number of customers and had  to add more stacks we were able to do  that pretty easily so in addition to  that each of these stacks is processing  a full firehose because they're  filtering for a different customer set  and each one wants their full set of  tweets that matches but within each  stack we have a set of apps as well so  in step one in this example let's say we  have three apps so each of those nodes  would be reading in one third of the  firehose of tweets and then each of  those would all be filtering for all of  the customers one two and three and then  writing the data down to the streaming  player so by sharing the load where  we're allowing ourselves to be able to  handle big spikes and tweets and things  like that by sharing it across three  nodes and the way that we handled this  technically is by using a messaging cue  so in Twitter we use a messaging cue  called event bus and this is a Kafka  like messaging cue so just a quick show  of hands does anyone use Kafka before  okay cool so it's a decent amount of  people here so so essentially each of  these stacks would have the same  subscriber ID as as you'd call it in  Kafka and by using the same identifier  each of the nodes within each stack  would be able to share the full copy of  the firehose and so stacks 1 2 and 3  would independently keep track of where  they're at in the queue so that each one  gets its own copy whereas the nodes  within stack 1 I'll share the same  identifier so that they can keep keep  their place together and all share the  same firehose effectively and so one  thing that this allows us to do is as  tweet volume changes we can scale our  stacks up and down similarly as we  improve filtering in different ways and  see different kinds of improvements with  our filtering algorithm then we might  need less nodes per per stack so we can  have that ability to be able to adjust  sit and so we have a dashboard that we  use to be able to do the stack  management and to be able to control the  number of nodes per stack and also how  many stacks we have and which customers  are assigned etc so in addition to  filtering being very important data  fidelity is also really important to our  customers so as I mentioned earlier many  of our customers our enterprise  customers and data fidelity is extremely  important to them so making sure that we  deliver all of the data that matches  their rule set so the way that we do  this again is along the same lines of  using a messaging queue and in Twitter  that's eventbus so as I mentioned  between the fire hose and the filtering  layer we have a messaging queue and in  addition to that allowing us to be able  to partition the firehose the other  advantage is is that it allows data to  backup so if there's a big load spike  let's say because of a big event that's  happening then the data would back up  into the messaging Q and the filtering  layer would be able to keep processing  and then it would catch up as the load  starts to level out and so it is  possible that we might get a little bit  behind in the filtering layer but it's  more important that we deliver all of  the data then then it being like  immediate all the time  although we do do consistent load tasks  to ensure that we're able to keep up  with certain levels of volume but in the  case of extreme events sometimes it is  possible that we might get a little bit  behind so we also have the messaging  queue between the filtering layer and  the streaming layer and you'll notice  here that for each of the three  customers you see in the diagram  connected each one of those has their  own messaging queue and so what this  allows us to do is the filtering layer  can publish down to the messaging queue  for each of the customers but the  different customers won't affect each  other so if customer if the customer in  the middle was backing up it  wouldn't affect customer 3 being able to  get their data on time and it all the  other thing that this allows is if there  were to be some sort of network flip or  we do a deploy where the customer gets  guests it gets disconnected they can  request backfill and so what this means  is that we take the pointer from where  the customer's reading to and instead of  reading from current we'll go back a  minute or five minutes or whatever it is  that they specify and just change the  pointer in the queue so that they can  catch up and read the data that they  missed while they were disconnected so  by using this technology and having a  queue per customer we're able to get  them kind of out-of-the-box  functionality that for us was pretty  easy to implement but provides the  customer a lot of a lot of safeguards  around making sure that they have data  fidelity hey so we also use system  redundancy to deal with failures so  obviously be great if things always went  perfect in production but sometimes  things go wrong so we have redundancy in  order to deal with those failures ok so  I'm going to talk a little bit about the  filtering layer so as we talked about  the filtering layer is broken up into  three different stacks which allows us  to separate out the customers from each  other and also to be able to scale as  our customer scale each of those stacks  has multiple applications which allows  us to be able to increase a number of  tweets or change things based on tweet  volume and then on top of that we have  all of this basically replicated so we  have side a and side B where you can see  that for customers 1 through 8 every  single one of those customers is both  inside a and side B so we're filtering  every single customer twice and for us  we chose this approach of having two  different sides because operationally it  makes it really easy to reason about so  we know that we can  a single note on side a and none of the  customers will be impacted because side  B is completely up and healthy we could  actually lose all of side a and  customers would not be impacted and this  is really helpful for things like  deploys because we can deploy side a as  long as side B is healthy because it  does take a bit of time for applications  to come back up once they go down and  the reason for that is because we have  to do all of the loading of the rules  into the index and do all that  pre-processing in order to optimize the  rule evaluation so for us filtering  every customer only once could be  problematic if a node we're to go down  because then they could get delayed data  but by having two sides we make sure  that the customer is being filtered for  in real-time at least once and then if  one node were to have a problem then the  customer would not be impacted so our  goal here is to limit any kind of  customer impact and then in addition to  that if we do have any kind of  operational issues let's say on side a  and it's 2:00 a.m. in the middle of the  night we don't have to worry about  putting in a change really really  quickly and in messing with things and  making a bigger problem in production  because we know that we can kind of take  a deep breath and just kind of move on  with like a thought-out way of  approaching it because the customer  impact is not there they're not being  impacted because side B is healthy so it  also just helps with peace of mind and  being able to make sure that we're  taking the right approach okay so  configuration application this is how we  apply customer configuration in real  time so as we talked about earlier there  in addition to the flow of filtering  customer data they also have a REST API  where they're able to update their rules  in real time and this is essentially a  different product but it's used for  power track in order to be able to  update their rules and the way that we  handle this on the backend is we  have two different mice equal tables one  for rules and one for rule updates and  just to walk through a simple example of  how this would work let's say they added  a rule that was from lm/w  and then they decided my tweets were  actually pretty boring so they deleted  that so you can see that the updates  table is kind of just keeping a log of  what's being updated while the rules  table is actually kind of the this it's  the system of record where we have what  the state of their rules is at that time  then they might decide that they're  interested in learning about hiking and  then that they want to get tweets from  Jack so the advantage of us having the  data stored and these two different  tables is that each filtering  application can then subscribe to the  updates table so that once it has the  rule set loaded it only has to get  updates and this is helpful because if a  customer has 250,000 rules then if they  make a change we don't want to have to  reload all of the rules from the rule  table all we want to do is see what  changed so by the customer subscribing  to the updates table they're able to get  changes in real-time and then they can  simply just add that rule or remove it  without having to reload all the rules  and as I mentioned previously reloading  the rules is a pretty big task because  we have to do all that re-indexing of  the rules and the optimizations so  reloading the entire rule set is not a  super simple task and it's much easier  to simply just apply the updates but we  still keep the rules table completely up  to date because that way when a  filtering application is restarted it  can simply just reload all of the rules  from the existing state also for the  customers to be able to manage their  rules and be able to get all their rules  to see what they are so that they can  make changes to them make sure they  align with what they have in their  system and things like that so the rules  table is the system of record and then  the updates table allows the filtering  applications to be able to apply those  configuration updates in real time  and then the customer can use this REST  API where they're creating and deleting  rules where the customer doesn't even  have to disconnect and so they're able  to continue getting data while all this  is happening in the background so the  way that we handle this behind the  scenes is that the filtering  applications pull for these updates on a  certain interval so we've explored ways  of having the the rule updates to be  pushed to the filter apps but in the  past this hasn't been quite as reliable  and we've ended up implementing polling  anyway so we kind of start with polling  just so that it can make sure that the  data matches what it's supposed to match  but we've talked about in the future  talking having the updates get pushed to  the filtering application so that it can  get applied a little more quickly okay  so in addition to applying rule update  configurations in real time we also can  apply stream configurations in real time  so we have a dashboard where we can  basically see the configuration of the  various sides and stacks and it also  allows us to look at monitoring  statistics like what the lag looks like  when looking at the subscribing to event  bus whether it's behind for a certain  stack whether how long things are taking  to process so how much time it's bending  on the rule evaluation per stack to see  if there's a certain problematic  customer and then based on what we see  in that dashboard and you know based on  certain observability or alerts that  trigger or things that are warnings that  we see or things like that we can use  this dashboard to diagnose and then  mitigate any kind of customer problems  so one thing that you might have noticed  looking at this diagram earlier is that  customers one through eight are both in  side a and side B but the configuration  of customers one through eight is  completely different so stack one on  side AI is completely different than  stack one on side B and this is  intentional and this is to basically  reduce our cost  being able to impact each other so each  of these customers were filtering on  rules that they uploaded and so we try  to put all the mechanisms we can in  place in order to make them not affect  each other but sometimes there might be  things that we miss so if customer one  were able to upload a set of rules that  ended up to be problematic or let's say  some tweet started coming through the  firehose that all of a sudden matched a  ton of their rules just because of some  special event that was going on then it  is possible that stack one could get a  little bit behind and trying to process  that data so on side a that would impact  customers two and three but on side B  customers two and three are not on the  same stack as as customer one so  customers two and three would still  continue to get their data in real time  and not be behind because they're  getting data from side B and so then we  would be able to go into our dashboard  once we realize that stack that customer  one is is problematic and decide to take  any kind of mitigation so if we we have  the option of moving a customer to their  own stack and this is essentially called  quarantine them we have quarantine  stacks where they end up on their own  infrastructure so if they have complex  rules based on a certain event that's  happening having their own  infrastructure gives them the chance to  catch up while we might work with  support and figure out how to reach out  to this customer if their rules need to  be changed if it's a certain problem  with their rule or if we need to make a  code change to be able to optimize for  their for this case that was that was  missed so and then it also would make  the other customers on stack one on side  a which would be two and three no longer  be impacted and so essentially these  stacks would pick up in real-time which  streams are assigned to them and then we  can make those changes in the dashboard  accordingly and this is so this is this  is helpful for us so the filter apps  in the same way that they look for rural  updates they also pull an outside  application that's kind of managing the  state of where each of the of what each  of these workers should be working on  and then they get back the list of  customers that they should be  responsible for so it is possible that  we might move things around we might  decide to add additional nodes to  stack's if the tweet volume starts  increasing and that's all something that  gets applied in real time and it's kind  of unknown to the filter apps they're  simply just working so for example  inside a stack one you can see we have  three filtering applications there and  if we were to decide to add another one  let's say tweet volume increase and we  needed more capacity to be able to  handle all of the volume then we could  add another one there so then that one  would have four filtering applications  and so then instead of each one getting  a third of the fire hose each one would  get a fourth of the fire hose and that's  something that we would just get kind of  out of the box just because we're using  the the messaging queue so each one of  those is using the same identifier for  stack one and so just by adding another  another node that would just all of a  sudden start getting its portion of the  data in the same way if a node were to  go down then well then the ones  remaining would kind of pick up the  slack and it would not be affecting of  the customers getting their data on time  so state management refers to how we  manage the state of our customers across  our different data centers so back to  the system redundancy we talked about  how we have two different sides and how  that allows redundancy so if something  were to go down on one side it's not  affected on the other well you can  basically take that entire diagram and  then duplicate it again because we also  have multiple data centers and this is  really helpful for us in failure  scenarios but it also is a little bit  tricky in terms of me  the state across those data centers so  one particular example of where this  becomes a little tricky is customer  connections so when a customer connects  to us they connect with a certain  identifier for their stream and they  what they will have purchased a certain  amount of connections so let's say that  a customer purchased three connections  that means that they get three redundant  connections and that could be because  they are bringing the data into their  development environment or it could be  because they want redundancy into their  system just for extra backup to make  sure that no tweets are missed if they  were to get disconnected or things like  that and the customer has no knowledge  of which data center they're connected  to so that's all done by routers on on  our side so the customer connects and  then they could be connected to two  different data centers so we have to be  able to communicate across those two  data centers in order to basically make  sure that we're not cutting them off of  connections they should be having but  that were not without that we're also  not giving them a crazy amount of  connections that would hurt our system  so the way that we chose to do this is  using zookeeper and the reason that we  chose zookeeper is because when a  customer connects that then requests  Elise from zookeeper for that stream ID  and then zookeeper just returns back  whether Elise is available or not and so  this took a lot of the overhead of  writing the code away from us and one of  the advantages of this was that the  leases are ephemeral so unlike if we  were to put a record into my sequel or  something like that if a node were to  just go down then the lease would  disappear from zookeeper and we'd no  longer be charging that customer for  that connection whereas if we were to  insert a row into a database then we  would have to figure out some kind of  cleanup process to make sure that the  customer is actually still connected and  that it's not the case that it just  didn't get cleaned up if a node were to  go down or something like that  so using zookeeper and just because by  its nature the leases  ephemeral that kind of takes a lot of  that extra work of figuring out how to  make the notes heartbeat and things like  that away and just kind of gets rid of a  lot of error and we're able to use that  out-of-the-box technology so in addition  the we're using a cluster that's shared  across datacenters so that provides the  the advantage of it working across  datacenter okay so for the powertrack  architecture what we talked about today  was how we filter at scale so how we  basically use predicate indexing and how  we have multiple applications per stack  to be able to filter data at scale how  we're filtering thousands of tweets per  second for our customers hundreds of  thousands of rules how we ensure data  fidelity so basically how we use event  bus or our messaging queue to be able to  back data up into the messaging queue  and ensure that data does not get lost  along the way to our customers how we  have heard onion C of the two different  sides to ensure that we're okay in case  of any kind of failures how we apply  configuration updates in real time such  as rural updates or where a stream is  being filtering from and then lastly how  we manage the state of our customers  across different data centers so that's  the end of my talk and so thanks for  listening and I'm happy to answering any  questions if people have them oh so I  think I heard your question was it's the  two different sides right to the same  stream or different streams is that  correct  so the two sides right to the same  stream and what that allows is the  streaming layer essentially can then  just read directly from that stream so  you might be wondering well doesn't that  end up with duplicate data for the  customer one thing that I didn't mention  so thanks for pointing this out is that  the one  things that the streaming layer does is  d dupes so it kind of keeps a rolling  window of tweets that it looked at in  the last period of time and then does  deduplication based off of the tweet ID  so that we make sure that they don't get  duplicates but it makes it easier from  an operational perspective that it's  only reading from or from one stream  rather than have to coordinate multiple  sure so the question was do we have any  guarantees around fidelity or order and  so around fidelity we in the case that  we were to miss any tweets that would be  considered like a system outage that we  would work with support to post and  communicate to customers so I'm not sure  about like formal SLA s but we do  consider it a production issue if there  were to be a case where data were to be  missing and that's why we have so many  things in place like the the redundancy  and multiple data centers and we have  the messages in the queue in order to  ensure fidelity another piece related to  that is the filtering application  doesn't actually acknowledge that it  read and processed the event until it  processes out to the rendering layer so  it makes sure that the data has actually  been written out and same thing with the  rendering layer it doesn't acknowledge  that it actually read the data until it  writes that out to the customer stream  so this makes sure that it that we don't  lose data if a node were to go down even  because then another node would pick it  up because it's never actually been  acknowledged and then the next part of  your question can you remind me what  that was oh yeah yeah so the order is is  not guaranteed so it's basically  producing the tweets in real-time as  quickly as we can get them out yeah okay  so the question was how do we deal with  production issues it seems like because  the system is pretty complicated that it  would be difficult to kind of nail down  where they she was and I think because  we have it broken down into multiple  different applications it's pretty easy  for us to see where we've seen issues so  you know we'll have error counters and  have that in our monitoring dashboard so  we'll know if we ever weren't able to  publish and event and so I mean for the  most part we get notified of issues in  our system before a customer would even  notice or a lot of the time a customer  doesn't even ever get affected because  it only happens on one side and not the  other side and so it's not actually even  customer impacting so for the most part  based on what the issue is we're able to  kind of narrow it down just because we  have things broken down into discrete  applications that we monitor separately  and I'll have different jobs that  they're responsible for we also have a  QE team that is constantly streaming  data and they're making sure that we're  not missing data from the firehose so  this is really helpful for us so that we  can make sure that this is running in  our staging environment happily before  we ever push that to production so that  definitely helps with just kind of peace  of mind and making sure that things are  fine and we're not pushing those kinds  of bugs to production that would result  in data loss so I think that that we're  out of time but I'm happy to stick  around and I'll be around for the rest  of the conference so if anyone has any  additional questions I'm happy to talk  about it so thank you  [Applause]
+ 
+
+00:00:11.810 --> 00:00:14.920 align:start position:0%
+ 
+ 
+
+00:00:14.920 --> 00:00:17.810 align:start position:0%
+ 
+ 
+
+00:00:17.810 --> 00:00:20.300 align:start position:0%
+ 
+ 
+
+00:00:20.300 --> 00:00:22.730 align:start position:0%
+ 
+ 
+
+00:00:22.730 --> 00:00:24.859 align:start position:0%
+ 
+ 
+
+00:00:24.859 --> 00:00:30.080 align:start position:0%
+ 
+ 
+
+00:00:30.080 --> 00:00:32.240 align:start position:0%
+ 
+ 
+
+00:00:32.240 --> 00:00:35.810 align:start position:0%
+ 
+ 
+
+00:00:35.810 --> 00:00:38.060 align:start position:0%
+ 
+ 
+
+00:00:38.060 --> 00:00:40.759 align:start position:0%
+ 
+ 
+
+00:00:40.759 --> 00:00:43.369 align:start position:0%
+ 
+ 
+
+00:00:43.369 --> 00:00:46.070 align:start position:0%
+ 
+ 
+
+00:00:46.070 --> 00:00:49.189 align:start position:0%
+ 
+ 
+
+00:00:49.189 --> 00:00:51.649 align:start position:0%
+ 
+ 
+
+00:00:51.649 --> 00:00:53.750 align:start position:0%
+ 
+ 
+
+00:00:53.750 --> 00:00:56.270 align:start position:0%
+ 
+ 
+
+00:00:56.270 --> 00:00:58.399 align:start position:0%
+ 
+ 
+
+00:00:58.399 --> 00:01:00.170 align:start position:0%
+ 
+ 
+
+00:01:00.170 --> 00:01:02.390 align:start position:0%
+ 
+ 
+
+00:01:02.390 --> 00:01:04.490 align:start position:0%
+ 
+ 
+
+00:01:04.490 --> 00:01:06.710 align:start position:0%
+ 
+ 
+
+00:01:06.710 --> 00:01:09.349 align:start position:0%
+ 
+ 
+
+00:01:09.349 --> 00:01:10.670 align:start position:0%
+ 
+ 
+
+00:01:10.670 --> 00:01:12.499 align:start position:0%
+ 
+ 
+
+00:01:12.499 --> 00:01:13.940 align:start position:0%
+ 
+ 
+
+00:01:13.940 --> 00:01:16.219 align:start position:0%
+ 
+ 
+
+00:01:16.219 --> 00:01:21.919 align:start position:0%
+ 
+ 
+
+00:01:21.919 --> 00:01:24.080 align:start position:0%
+ 
+ 
+
+00:01:24.080 --> 00:01:27.260 align:start position:0%
+ 
+ 
+
+00:01:27.260 --> 00:01:29.539 align:start position:0%
+ 
+ 
+
+00:01:29.539 --> 00:01:32.810 align:start position:0%
+ 
+ 
+
+00:01:32.810 --> 00:01:34.310 align:start position:0%
+ 
+ 
+
+00:01:34.310 --> 00:01:36.919 align:start position:0%
+ 
+ 
+
+00:01:36.919 --> 00:01:38.539 align:start position:0%
+ 
+ 
+
+00:01:38.539 --> 00:01:43.520 align:start position:0%
+ 
+ 
+
+00:01:43.520 --> 00:01:45.169 align:start position:0%
+ 
+ 
+
+00:01:45.169 --> 00:01:47.090 align:start position:0%
+ 
+ 
+
+00:01:47.090 --> 00:01:50.300 align:start position:0%
+ 
+ 
+
+00:01:50.300 --> 00:01:52.399 align:start position:0%
+ 
+ 
+
+00:01:52.399 --> 00:01:54.830 align:start position:0%
+ 
+ 
+
+00:01:54.830 --> 00:01:58.609 align:start position:0%
+ 
+ 
+
+00:01:58.609 --> 00:02:00.529 align:start position:0%
+ 
+ 
+
+00:02:00.529 --> 00:02:03.679 align:start position:0%
+ 
+ 
+
+00:02:03.679 --> 00:02:05.450 align:start position:0%
+ 
+ 
+
+00:02:05.450 --> 00:02:10.700 align:start position:0%
+ 
+ 
+
+00:02:10.700 --> 00:02:12.770 align:start position:0%
+ 
+ 
+
+00:02:12.770 --> 00:02:12.780 align:start position:0%
+ 
+ 
+
+00:02:12.780 --> 00:02:14.420 align:start position:0%
+ 
+
+
+00:02:14.420 --> 00:02:16.190 align:start position:0%
+ 
+ 
+
+00:02:16.190 --> 00:02:18.099 align:start position:0%
+ 
+ 
+
+00:02:18.099 --> 00:02:21.589 align:start position:0%
+ 
+ 
+
+00:02:21.589 --> 00:02:24.009 align:start position:0%
+ 
+ 
+
+00:02:24.009 --> 00:02:27.589 align:start position:0%
+ 
+ 
+
+00:02:27.589 --> 00:02:29.420 align:start position:0%
+ 
+ 
+
+00:02:29.420 --> 00:02:30.979 align:start position:0%
+ 
+ 
+
+00:02:30.979 --> 00:02:34.280 align:start position:0%
+ 
+ 
+
+00:02:34.280 --> 00:02:36.289 align:start position:0%
+ 
+ 
+
+00:02:36.289 --> 00:02:38.119 align:start position:0%
+ 
+ 
+
+00:02:38.119 --> 00:02:40.160 align:start position:0%
+ 
+ 
+
+00:02:40.160 --> 00:02:41.839 align:start position:0%
+ 
+ 
+
+00:02:41.839 --> 00:02:45.740 align:start position:0%
+ 
+ 
+
+00:02:45.740 --> 00:02:48.050 align:start position:0%
+ 
+ 
+
+00:02:48.050 --> 00:02:50.659 align:start position:0%
+ 
+ 
+
+00:02:50.659 --> 00:02:52.490 align:start position:0%
+ 
+ 
+
+00:02:52.490 --> 00:02:54.289 align:start position:0%
+ 
+ 
+
+00:02:54.289 --> 00:02:56.210 align:start position:0%
+ 
+ 
+
+00:02:56.210 --> 00:02:59.750 align:start position:0%
+ 
+ 
+
+00:02:59.750 --> 00:03:02.449 align:start position:0%
+ 
+ 
+
+00:03:02.449 --> 00:03:06.860 align:start position:0%
+ 
+ 
+
+00:03:06.860 --> 00:03:08.330 align:start position:0%
+ 
+ 
+
+00:03:08.330 --> 00:03:10.429 align:start position:0%
+ 
+ 
+
+00:03:10.429 --> 00:03:14.089 align:start position:0%
+ 
+ 
+
+00:03:14.089 --> 00:03:15.709 align:start position:0%
+ 
+ 
+
+00:03:15.709 --> 00:03:17.449 align:start position:0%
+ 
+ 
+
+00:03:17.449 --> 00:03:19.789 align:start position:0%
+ 
+ 
+
+00:03:19.789 --> 00:03:23.750 align:start position:0%
+ 
+ 
+
+00:03:23.750 --> 00:03:25.849 align:start position:0%
+ 
+ 
+
+00:03:25.849 --> 00:03:29.390 align:start position:0%
+ 
+ 
+
+00:03:29.390 --> 00:03:31.039 align:start position:0%
+ 
+ 
+
+00:03:31.039 --> 00:03:34.399 align:start position:0%
+ 
+ 
+
+00:03:34.399 --> 00:03:38.719 align:start position:0%
+ 
+ 
+
+00:03:38.719 --> 00:03:40.580 align:start position:0%
+ 
+ 
+
+00:03:40.580 --> 00:03:43.039 align:start position:0%
+ 
+ 
+
+00:03:43.039 --> 00:03:46.789 align:start position:0%
+ 
+ 
+
+00:03:46.789 --> 00:03:49.159 align:start position:0%
+ 
+ 
+
+00:03:49.159 --> 00:03:50.449 align:start position:0%
+ 
+ 
+
+00:03:50.449 --> 00:03:52.759 align:start position:0%
+ 
+ 
+
+00:03:52.759 --> 00:03:54.349 align:start position:0%
+ 
+ 
+
+00:03:54.349 --> 00:03:56.719 align:start position:0%
+ 
+ 
+
+00:03:56.719 --> 00:03:58.819 align:start position:0%
+ 
+ 
+
+00:03:58.819 --> 00:04:01.009 align:start position:0%
+ 
+ 
+
+00:04:01.009 --> 00:04:03.589 align:start position:0%
+ 
+ 
+
+00:04:03.589 --> 00:04:06.559 align:start position:0%
+ 
+ 
+
+00:04:06.559 --> 00:04:08.509 align:start position:0%
+ 
+ 
+
+00:04:08.509 --> 00:04:11.059 align:start position:0%
+ 
+ 
+
+00:04:11.059 --> 00:04:13.460 align:start position:0%
+ 
+ 
+
+00:04:13.460 --> 00:04:16.249 align:start position:0%
+ 
+ 
+
+00:04:16.249 --> 00:04:19.159 align:start position:0%
+ 
+ 
+
+00:04:19.159 --> 00:04:21.050 align:start position:0%
+ 
+ 
+
+00:04:21.050 --> 00:04:22.640 align:start position:0%
+ 
+ 
+
+00:04:22.640 --> 00:04:24.050 align:start position:0%
+ 
+ 
+
+00:04:24.050 --> 00:04:27.950 align:start position:0%
+ 
+ 
+
+00:04:27.950 --> 00:04:31.219 align:start position:0%
+ 
+ 
+
+00:04:31.219 --> 00:04:33.680 align:start position:0%
+ 
+ 
+
+00:04:33.680 --> 00:04:35.749 align:start position:0%
+ 
+ 
+
+00:04:35.749 --> 00:04:39.409 align:start position:0%
+ 
+ 
+
+00:04:39.409 --> 00:04:41.360 align:start position:0%
+ 
+ 
+
+00:04:41.360 --> 00:04:44.029 align:start position:0%
+ 
+ 
+
+00:04:44.029 --> 00:04:45.710 align:start position:0%
+ 
+ 
+
+00:04:45.710 --> 00:04:48.100 align:start position:0%
+ 
+ 
+
+00:04:48.100 --> 00:04:50.480 align:start position:0%
+ 
+ 
+
+00:04:50.480 --> 00:04:53.120 align:start position:0%
+ 
+ 
+
+00:04:53.120 --> 00:04:54.409 align:start position:0%
+ 
+ 
+
+00:04:54.409 --> 00:04:55.790 align:start position:0%
+ 
+ 
+
+00:04:55.790 --> 00:04:59.120 align:start position:0%
+ 
+ 
+
+00:04:59.120 --> 00:05:00.650 align:start position:0%
+ 
+ 
+
+00:05:00.650 --> 00:05:02.120 align:start position:0%
+ 
+ 
+
+00:05:02.120 --> 00:05:05.120 align:start position:0%
+ 
+ 
+
+00:05:05.120 --> 00:05:07.100 align:start position:0%
+ 
+ 
+
+00:05:07.100 --> 00:05:12.200 align:start position:0%
+ 
+ 
+
+00:05:12.200 --> 00:05:13.939 align:start position:0%
+ 
+ 
+
+00:05:13.939 --> 00:05:16.189 align:start position:0%
+ 
+ 
+
+00:05:16.189 --> 00:05:18.379 align:start position:0%
+ 
+ 
+
+00:05:18.379 --> 00:05:21.080 align:start position:0%
+ 
+ 
+
+00:05:21.080 --> 00:05:22.760 align:start position:0%
+ 
+ 
+
+00:05:22.760 --> 00:05:24.710 align:start position:0%
+ 
+ 
+
+00:05:24.710 --> 00:05:27.200 align:start position:0%
+ 
+ 
+
+00:05:27.200 --> 00:05:29.570 align:start position:0%
+ 
+ 
+
+00:05:29.570 --> 00:05:31.100 align:start position:0%
+ 
+ 
+
+00:05:31.100 --> 00:05:32.960 align:start position:0%
+ 
+ 
+
+00:05:32.960 --> 00:05:35.420 align:start position:0%
+ 
+ 
+
+00:05:35.420 --> 00:05:38.659 align:start position:0%
+ 
+ 
+
+00:05:38.659 --> 00:05:40.399 align:start position:0%
+ 
+ 
+
+00:05:40.399 --> 00:05:42.439 align:start position:0%
+ 
+ 
+
+00:05:42.439 --> 00:05:46.219 align:start position:0%
+ 
+ 
+
+00:05:46.219 --> 00:05:48.500 align:start position:0%
+ 
+ 
+
+00:05:48.500 --> 00:05:50.240 align:start position:0%
+ 
+ 
+
+00:05:50.240 --> 00:05:52.990 align:start position:0%
+ 
+ 
+
+00:05:52.990 --> 00:05:56.450 align:start position:0%
+ 
+ 
+
+00:05:56.450 --> 00:05:58.760 align:start position:0%
+ 
+ 
+
+00:05:58.760 --> 00:06:00.800 align:start position:0%
+ 
+ 
+
+00:06:00.800 --> 00:06:02.629 align:start position:0%
+ 
+ 
+
+00:06:02.629 --> 00:06:05.779 align:start position:0%
+ 
+ 
+
+00:06:05.779 --> 00:06:08.089 align:start position:0%
+ 
+ 
+
+00:06:08.089 --> 00:06:09.890 align:start position:0%
+ 
+ 
+
+00:06:09.890 --> 00:06:12.200 align:start position:0%
+ 
+ 
+
+00:06:12.200 --> 00:06:14.210 align:start position:0%
+ 
+ 
+
+00:06:14.210 --> 00:06:16.730 align:start position:0%
+ 
+ 
+
+00:06:16.730 --> 00:06:21.020 align:start position:0%
+ 
+ 
+
+00:06:21.020 --> 00:06:23.659 align:start position:0%
+ 
+ 
+
+00:06:23.659 --> 00:06:25.249 align:start position:0%
+ 
+ 
+
+00:06:25.249 --> 00:06:26.839 align:start position:0%
+ 
+ 
+
+00:06:26.839 --> 00:06:29.240 align:start position:0%
+ 
+ 
+
+00:06:29.240 --> 00:06:32.990 align:start position:0%
+ 
+ 
+
+00:06:32.990 --> 00:06:35.210 align:start position:0%
+ 
+ 
+
+00:06:35.210 --> 00:06:38.480 align:start position:0%
+ 
+ 
+
+00:06:38.480 --> 00:06:40.839 align:start position:0%
+ 
+ 
+
+00:06:40.839 --> 00:06:42.609 align:start position:0%
+ 
+ 
+
+00:06:42.609 --> 00:06:45.279 align:start position:0%
+ 
+ 
+
+00:06:45.279 --> 00:06:47.109 align:start position:0%
+ 
+ 
+
+00:06:47.109 --> 00:06:49.749 align:start position:0%
+ 
+ 
+
+00:06:49.749 --> 00:06:51.519 align:start position:0%
+ 
+ 
+
+00:06:51.519 --> 00:06:53.260 align:start position:0%
+ 
+ 
+
+00:06:53.260 --> 00:06:56.049 align:start position:0%
+ 
+ 
+
+00:06:56.049 --> 00:06:59.320 align:start position:0%
+ 
+ 
+
+00:06:59.320 --> 00:07:02.109 align:start position:0%
+ 
+ 
+
+00:07:02.109 --> 00:07:03.730 align:start position:0%
+ 
+ 
+
+00:07:03.730 --> 00:07:05.649 align:start position:0%
+ 
+ 
+
+00:07:05.649 --> 00:07:10.029 align:start position:0%
+ 
+ 
+
+00:07:10.029 --> 00:07:12.909 align:start position:0%
+ 
+ 
+
+00:07:12.909 --> 00:07:15.429 align:start position:0%
+ 
+ 
+
+00:07:15.429 --> 00:07:17.409 align:start position:0%
+ 
+ 
+
+00:07:17.409 --> 00:07:20.799 align:start position:0%
+ 
+ 
+
+00:07:20.799 --> 00:07:22.869 align:start position:0%
+ 
+ 
+
+00:07:22.869 --> 00:07:24.850 align:start position:0%
+ 
+ 
+
+00:07:24.850 --> 00:07:26.469 align:start position:0%
+ 
+ 
+
+00:07:26.469 --> 00:07:30.519 align:start position:0%
+ 
+ 
+
+00:07:30.519 --> 00:07:32.199 align:start position:0%
+ 
+ 
+
+00:07:32.199 --> 00:07:33.909 align:start position:0%
+ 
+ 
+
+00:07:33.909 --> 00:07:36.969 align:start position:0%
+ 
+ 
+
+00:07:36.969 --> 00:07:38.709 align:start position:0%
+ 
+ 
+
+00:07:38.709 --> 00:07:40.749 align:start position:0%
+ 
+ 
+
+00:07:40.749 --> 00:07:43.929 align:start position:0%
+ 
+ 
+
+00:07:43.929 --> 00:07:45.790 align:start position:0%
+ 
+ 
+
+00:07:45.790 --> 00:07:47.829 align:start position:0%
+ 
+ 
+
+00:07:47.829 --> 00:07:50.949 align:start position:0%
+ 
+ 
+
+00:07:50.949 --> 00:07:54.459 align:start position:0%
+ 
+ 
+
+00:07:54.459 --> 00:07:57.369 align:start position:0%
+ 
+ 
+
+00:07:57.369 --> 00:07:58.629 align:start position:0%
+ 
+ 
+
+00:07:58.629 --> 00:08:00.459 align:start position:0%
+ 
+ 
+
+00:08:00.459 --> 00:08:02.199 align:start position:0%
+ 
+ 
+
+00:08:02.199 --> 00:08:05.319 align:start position:0%
+ 
+ 
+
+00:08:05.319 --> 00:08:07.119 align:start position:0%
+ 
+ 
+
+00:08:07.119 --> 00:08:08.799 align:start position:0%
+ 
+ 
+
+00:08:08.799 --> 00:08:11.829 align:start position:0%
+ 
+ 
+
+00:08:11.829 --> 00:08:13.839 align:start position:0%
+ 
+ 
+
+00:08:13.839 --> 00:08:15.609 align:start position:0%
+ 
+ 
+
+00:08:15.609 --> 00:08:18.519 align:start position:0%
+ 
+ 
+
+00:08:18.519 --> 00:08:20.529 align:start position:0%
+ 
+ 
+
+00:08:20.529 --> 00:08:24.009 align:start position:0%
+ 
+ 
+
+00:08:24.009 --> 00:08:25.359 align:start position:0%
+ 
+ 
+
+00:08:25.359 --> 00:08:27.249 align:start position:0%
+ 
+ 
+
+00:08:27.249 --> 00:08:29.169 align:start position:0%
+ 
+ 
+
+00:08:29.169 --> 00:08:31.899 align:start position:0%
+ 
+ 
+
+00:08:31.899 --> 00:08:33.490 align:start position:0%
+ 
+ 
+
+00:08:33.490 --> 00:08:36.100 align:start position:0%
+ 
+ 
+
+00:08:36.100 --> 00:08:39.279 align:start position:0%
+ 
+ 
+
+00:08:39.279 --> 00:08:42.490 align:start position:0%
+ 
+ 
+
+00:08:42.490 --> 00:08:46.420 align:start position:0%
+ 
+ 
+
+00:08:46.420 --> 00:08:49.090 align:start position:0%
+ 
+ 
+
+00:08:49.090 --> 00:08:52.360 align:start position:0%
+ 
+ 
+
+00:08:52.360 --> 00:08:53.400 align:start position:0%
+ 
+ 
+
+00:08:53.400 --> 00:08:56.640 align:start position:0%
+ 
+ 
+
+00:08:56.640 --> 00:08:58.560 align:start position:0%
+ 
+ 
+
+00:08:58.560 --> 00:09:01.830 align:start position:0%
+ 
+ 
+
+00:09:01.830 --> 00:09:04.650 align:start position:0%
+ 
+ 
+
+00:09:04.650 --> 00:09:07.320 align:start position:0%
+ 
+ 
+
+00:09:07.320 --> 00:09:09.960 align:start position:0%
+ 
+ 
+
+00:09:09.960 --> 00:09:13.440 align:start position:0%
+ 
+ 
+
+00:09:13.440 --> 00:09:16.800 align:start position:0%
+ 
+ 
+
+00:09:16.800 --> 00:09:18.990 align:start position:0%
+ 
+ 
+
+00:09:18.990 --> 00:09:22.140 align:start position:0%
+ 
+ 
+
+00:09:22.140 --> 00:09:24.180 align:start position:0%
+ 
+ 
+
+00:09:24.180 --> 00:09:26.250 align:start position:0%
+ 
+ 
+
+00:09:26.250 --> 00:09:28.260 align:start position:0%
+ 
+ 
+
+00:09:28.260 --> 00:09:30.840 align:start position:0%
+ 
+ 
+
+00:09:30.840 --> 00:09:32.250 align:start position:0%
+ 
+ 
+
+00:09:32.250 --> 00:09:34.200 align:start position:0%
+ 
+ 
+
+00:09:34.200 --> 00:09:37.770 align:start position:0%
+ 
+ 
+
+00:09:37.770 --> 00:09:40.230 align:start position:0%
+ 
+ 
+
+00:09:40.230 --> 00:09:43.290 align:start position:0%
+ 
+ 
+
+00:09:43.290 --> 00:09:44.940 align:start position:0%
+ 
+ 
+
+00:09:44.940 --> 00:09:46.710 align:start position:0%
+ 
+ 
+
+00:09:46.710 --> 00:09:50.420 align:start position:0%
+ 
+ 
+
+00:09:50.420 --> 00:09:54.570 align:start position:0%
+ 
+ 
+
+00:09:54.570 --> 00:09:56.520 align:start position:0%
+ 
+ 
+
+00:09:56.520 --> 00:09:59.040 align:start position:0%
+ 
+ 
+
+00:09:59.040 --> 00:10:01.320 align:start position:0%
+ 
+ 
+
+00:10:01.320 --> 00:10:04.710 align:start position:0%
+ 
+ 
+
+00:10:04.710 --> 00:10:06.780 align:start position:0%
+ 
+ 
+
+00:10:06.780 --> 00:10:09.030 align:start position:0%
+ 
+ 
+
+00:10:09.030 --> 00:10:11.700 align:start position:0%
+ 
+ 
+
+00:10:11.700 --> 00:10:13.770 align:start position:0%
+ 
+ 
+
+00:10:13.770 --> 00:10:15.930 align:start position:0%
+ 
+ 
+
+00:10:15.930 --> 00:10:19.500 align:start position:0%
+ 
+ 
+
+00:10:19.500 --> 00:10:21.420 align:start position:0%
+ 
+ 
+
+00:10:21.420 --> 00:10:25.170 align:start position:0%
+ 
+ 
+
+00:10:25.170 --> 00:10:28.710 align:start position:0%
+ 
+ 
+
+00:10:28.710 --> 00:10:30.210 align:start position:0%
+ 
+ 
+
+00:10:30.210 --> 00:10:32.340 align:start position:0%
+ 
+ 
+
+00:10:32.340 --> 00:10:34.530 align:start position:0%
+ 
+ 
+
+00:10:34.530 --> 00:10:36.360 align:start position:0%
+ 
+ 
+
+00:10:36.360 --> 00:10:39.030 align:start position:0%
+ 
+ 
+
+00:10:39.030 --> 00:10:40.650 align:start position:0%
+ 
+ 
+
+00:10:40.650 --> 00:10:43.950 align:start position:0%
+ 
+ 
+
+00:10:43.950 --> 00:10:45.570 align:start position:0%
+ 
+ 
+
+00:10:45.570 --> 00:10:47.340 align:start position:0%
+ 
+ 
+
+00:10:47.340 --> 00:10:51.060 align:start position:0%
+ 
+ 
+
+00:10:51.060 --> 00:10:53.300 align:start position:0%
+ 
+ 
+
+00:10:53.300 --> 00:10:55.410 align:start position:0%
+ 
+ 
+
+00:10:55.410 --> 00:10:58.350 align:start position:0%
+ 
+ 
+
+00:10:58.350 --> 00:11:00.030 align:start position:0%
+ 
+ 
+
+00:11:00.030 --> 00:11:02.130 align:start position:0%
+ 
+ 
+
+00:11:02.130 --> 00:11:04.800 align:start position:0%
+ 
+ 
+
+00:11:04.800 --> 00:11:06.000 align:start position:0%
+ 
+ 
+
+00:11:06.000 --> 00:11:07.380 align:start position:0%
+ 
+ 
+
+00:11:07.380 --> 00:11:09.690 align:start position:0%
+ 
+ 
+
+00:11:09.690 --> 00:11:13.980 align:start position:0%
+ 
+ 
+
+00:11:13.980 --> 00:11:16.560 align:start position:0%
+ 
+ 
+
+00:11:16.560 --> 00:11:19.310 align:start position:0%
+ 
+ 
+
+00:11:19.310 --> 00:11:21.420 align:start position:0%
+ 
+ 
+
+00:11:21.420 --> 00:11:23.910 align:start position:0%
+ 
+ 
+
+00:11:23.910 --> 00:11:31.170 align:start position:0%
+ 
+ 
+
+00:11:31.170 --> 00:11:33.060 align:start position:0%
+ 
+ 
+
+00:11:33.060 --> 00:11:35.220 align:start position:0%
+ 
+ 
+
+00:11:35.220 --> 00:11:40.980 align:start position:0%
+ 
+ 
+
+00:11:40.980 --> 00:11:42.630 align:start position:0%
+ 
+ 
+
+00:11:42.630 --> 00:11:44.430 align:start position:0%
+ 
+ 
+
+00:11:44.430 --> 00:11:46.740 align:start position:0%
+ 
+ 
+
+00:11:46.740 --> 00:11:48.980 align:start position:0%
+ 
+ 
+
+00:11:48.980 --> 00:11:51.570 align:start position:0%
+ 
+ 
+
+00:11:51.570 --> 00:11:53.730 align:start position:0%
+ 
+ 
+
+00:11:53.730 --> 00:11:55.500 align:start position:0%
+ 
+ 
+
+00:11:55.500 --> 00:11:57.240 align:start position:0%
+ 
+ 
+
+00:11:57.240 --> 00:12:01.620 align:start position:0%
+ 
+ 
+
+00:12:01.620 --> 00:12:03.090 align:start position:0%
+ 
+ 
+
+00:12:03.090 --> 00:12:05.190 align:start position:0%
+ 
+ 
+
+00:12:05.190 --> 00:12:06.390 align:start position:0%
+ 
+ 
+
+00:12:06.390 --> 00:12:09.180 align:start position:0%
+ 
+ 
+
+00:12:09.180 --> 00:12:10.680 align:start position:0%
+ 
+ 
+
+00:12:10.680 --> 00:12:14.310 align:start position:0%
+ 
+ 
+
+00:12:14.310 --> 00:12:17.520 align:start position:0%
+ 
+ 
+
+00:12:17.520 --> 00:12:21.030 align:start position:0%
+ 
+ 
+
+00:12:21.030 --> 00:12:23.520 align:start position:0%
+ 
+ 
+
+00:12:23.520 --> 00:12:25.590 align:start position:0%
+ 
+ 
+
+00:12:25.590 --> 00:12:28.800 align:start position:0%
+ 
+ 
+
+00:12:28.800 --> 00:12:30.150 align:start position:0%
+ 
+ 
+
+00:12:30.150 --> 00:12:32.310 align:start position:0%
+ 
+ 
+
+00:12:32.310 --> 00:12:35.370 align:start position:0%
+ 
+ 
+
+00:12:35.370 --> 00:12:38.580 align:start position:0%
+ 
+ 
+
+00:12:38.580 --> 00:12:41.070 align:start position:0%
+ 
+ 
+
+00:12:41.070 --> 00:12:43.950 align:start position:0%
+ 
+ 
+
+00:12:43.950 --> 00:12:45.930 align:start position:0%
+ 
+ 
+
+00:12:45.930 --> 00:12:48.210 align:start position:0%
+ 
+ 
+
+00:12:48.210 --> 00:12:50.760 align:start position:0%
+ 
+ 
+
+00:12:50.760 --> 00:12:52.980 align:start position:0%
+ 
+ 
+
+00:12:52.980 --> 00:12:54.660 align:start position:0%
+ 
+ 
+
+00:12:54.660 --> 00:12:59.070 align:start position:0%
+ 
+ 
+
+00:12:59.070 --> 00:13:03.480 align:start position:0%
+ 
+ 
+
+00:13:03.480 --> 00:13:07.590 align:start position:0%
+ 
+ 
+
+00:13:07.590 --> 00:13:10.170 align:start position:0%
+ 
+ 
+
+00:13:10.170 --> 00:13:13.620 align:start position:0%
+ 
+ 
+
+00:13:13.620 --> 00:13:15.570 align:start position:0%
+ 
+ 
+
+00:13:15.570 --> 00:13:16.860 align:start position:0%
+ 
+ 
+
+00:13:16.860 --> 00:13:19.560 align:start position:0%
+ 
+ 
+
+00:13:19.560 --> 00:13:22.110 align:start position:0%
+ 
+ 
+
+00:13:22.110 --> 00:13:23.579 align:start position:0%
+ 
+ 
+
+00:13:23.579 --> 00:13:27.420 align:start position:0%
+ 
+ 
+
+00:13:27.420 --> 00:13:30.480 align:start position:0%
+ 
+ 
+
+00:13:30.480 --> 00:13:30.490 align:start position:0%
+ 
+ 
+
+00:13:30.490 --> 00:13:30.870 align:start position:0%
+ 
+
+
+00:13:30.870 --> 00:13:33.240 align:start position:0%
+ 
+ 
+
+00:13:33.240 --> 00:13:37.530 align:start position:0%
+ 
+ 
+
+00:13:37.530 --> 00:13:40.380 align:start position:0%
+ 
+ 
+
+00:13:40.380 --> 00:13:41.910 align:start position:0%
+ 
+ 
+
+00:13:41.910 --> 00:13:43.860 align:start position:0%
+ 
+ 
+
+00:13:43.860 --> 00:13:46.050 align:start position:0%
+ 
+ 
+
+00:13:46.050 --> 00:13:47.790 align:start position:0%
+ 
+ 
+
+00:13:47.790 --> 00:13:52.470 align:start position:0%
+ 
+ 
+
+00:13:52.470 --> 00:13:56.250 align:start position:0%
+ 
+ 
+
+00:13:56.250 --> 00:13:57.990 align:start position:0%
+ 
+ 
+
+00:13:57.990 --> 00:14:00.420 align:start position:0%
+ 
+ 
+
+00:14:00.420 --> 00:14:03.300 align:start position:0%
+ 
+ 
+
+00:14:03.300 --> 00:14:06.210 align:start position:0%
+ 
+ 
+
+00:14:06.210 --> 00:14:07.769 align:start position:0%
+ 
+ 
+
+00:14:07.769 --> 00:14:11.850 align:start position:0%
+ 
+ 
+
+00:14:11.850 --> 00:14:16.740 align:start position:0%
+ 
+ 
+
+00:14:16.740 --> 00:14:18.960 align:start position:0%
+ 
+ 
+
+00:14:18.960 --> 00:14:21.600 align:start position:0%
+ 
+ 
+
+00:14:21.600 --> 00:14:23.579 align:start position:0%
+ 
+ 
+
+00:14:23.579 --> 00:14:25.560 align:start position:0%
+ 
+ 
+
+00:14:25.560 --> 00:14:27.540 align:start position:0%
+ 
+ 
+
+00:14:27.540 --> 00:14:32.070 align:start position:0%
+ 
+ 
+
+00:14:32.070 --> 00:14:33.630 align:start position:0%
+ 
+ 
+
+00:14:33.630 --> 00:14:36.449 align:start position:0%
+ 
+ 
+
+00:14:36.449 --> 00:14:38.760 align:start position:0%
+ 
+ 
+
+00:14:38.760 --> 00:14:42.269 align:start position:0%
+ 
+ 
+
+00:14:42.269 --> 00:14:44.670 align:start position:0%
+ 
+ 
+
+00:14:44.670 --> 00:14:46.380 align:start position:0%
+ 
+ 
+
+00:14:46.380 --> 00:14:48.240 align:start position:0%
+ 
+ 
+
+00:14:48.240 --> 00:14:50.280 align:start position:0%
+ 
+ 
+
+00:14:50.280 --> 00:14:54.960 align:start position:0%
+ 
+ 
+
+00:14:54.960 --> 00:14:57.740 align:start position:0%
+ 
+ 
+
+00:14:57.740 --> 00:15:00.150 align:start position:0%
+ 
+ 
+
+00:15:00.150 --> 00:15:02.760 align:start position:0%
+ 
+ 
+
+00:15:02.760 --> 00:15:05.490 align:start position:0%
+ 
+ 
+
+00:15:05.490 --> 00:15:07.710 align:start position:0%
+ 
+ 
+
+00:15:07.710 --> 00:15:10.110 align:start position:0%
+ 
+ 
+
+00:15:10.110 --> 00:15:12.630 align:start position:0%
+ 
+ 
+
+00:15:12.630 --> 00:15:15.090 align:start position:0%
+ 
+ 
+
+00:15:15.090 --> 00:15:16.910 align:start position:0%
+ 
+ 
+
+00:15:16.910 --> 00:15:19.170 align:start position:0%
+ 
+ 
+
+00:15:19.170 --> 00:15:21.210 align:start position:0%
+ 
+ 
+
+00:15:21.210 --> 00:15:26.730 align:start position:0%
+ 
+ 
+
+00:15:26.730 --> 00:15:28.809 align:start position:0%
+ 
+ 
+
+00:15:28.809 --> 00:15:30.639 align:start position:0%
+ 
+ 
+
+00:15:30.639 --> 00:15:32.769 align:start position:0%
+ 
+ 
+
+00:15:32.769 --> 00:15:36.789 align:start position:0%
+ 
+ 
+
+00:15:36.789 --> 00:15:38.949 align:start position:0%
+ 
+ 
+
+00:15:38.949 --> 00:15:40.659 align:start position:0%
+ 
+ 
+
+00:15:40.659 --> 00:15:42.159 align:start position:0%
+ 
+ 
+
+00:15:42.159 --> 00:15:44.319 align:start position:0%
+ 
+ 
+
+00:15:44.319 --> 00:15:46.479 align:start position:0%
+ 
+ 
+
+00:15:46.479 --> 00:15:50.139 align:start position:0%
+ 
+ 
+
+00:15:50.139 --> 00:15:52.569 align:start position:0%
+ 
+ 
+
+00:15:52.569 --> 00:15:55.179 align:start position:0%
+ 
+ 
+
+00:15:55.179 --> 00:15:58.090 align:start position:0%
+ 
+ 
+
+00:15:58.090 --> 00:16:00.309 align:start position:0%
+ 
+ 
+
+00:16:00.309 --> 00:16:02.349 align:start position:0%
+ 
+ 
+
+00:16:02.349 --> 00:16:04.329 align:start position:0%
+ 
+ 
+
+00:16:04.329 --> 00:16:05.919 align:start position:0%
+ 
+ 
+
+00:16:05.919 --> 00:16:10.239 align:start position:0%
+ 
+ 
+
+00:16:10.239 --> 00:16:13.239 align:start position:0%
+ 
+ 
+
+00:16:13.239 --> 00:16:16.989 align:start position:0%
+ 
+ 
+
+00:16:16.989 --> 00:16:19.119 align:start position:0%
+ 
+ 
+
+00:16:19.119 --> 00:16:22.509 align:start position:0%
+ 
+ 
+
+00:16:22.509 --> 00:16:24.669 align:start position:0%
+ 
+ 
+
+00:16:24.669 --> 00:16:27.669 align:start position:0%
+ 
+ 
+
+00:16:27.669 --> 00:16:30.460 align:start position:0%
+ 
+ 
+
+00:16:30.460 --> 00:16:32.529 align:start position:0%
+ 
+ 
+
+00:16:32.529 --> 00:16:34.499 align:start position:0%
+ 
+ 
+
+00:16:34.499 --> 00:16:37.090 align:start position:0%
+ 
+ 
+
+00:16:37.090 --> 00:16:41.139 align:start position:0%
+ 
+ 
+
+00:16:41.139 --> 00:16:43.419 align:start position:0%
+ 
+ 
+
+00:16:43.419 --> 00:16:45.849 align:start position:0%
+ 
+ 
+
+00:16:45.849 --> 00:16:49.499 align:start position:0%
+ 
+ 
+
+00:16:49.499 --> 00:16:52.479 align:start position:0%
+ 
+ 
+
+00:16:52.479 --> 00:16:54.699 align:start position:0%
+ 
+ 
+
+00:16:54.699 --> 00:16:59.139 align:start position:0%
+ 
+ 
+
+00:16:59.139 --> 00:17:01.449 align:start position:0%
+ 
+ 
+
+00:17:01.449 --> 00:17:04.299 align:start position:0%
+ 
+ 
+
+00:17:04.299 --> 00:17:07.179 align:start position:0%
+ 
+ 
+
+00:17:07.179 --> 00:17:09.309 align:start position:0%
+ 
+ 
+
+00:17:09.309 --> 00:17:13.299 align:start position:0%
+ 
+ 
+
+00:17:13.299 --> 00:17:15.490 align:start position:0%
+ 
+ 
+
+00:17:15.490 --> 00:17:21.999 align:start position:0%
+ 
+ 
+
+00:17:21.999 --> 00:17:23.649 align:start position:0%
+ 
+ 
+
+00:17:23.649 --> 00:17:26.379 align:start position:0%
+ 
+ 
+
+00:17:26.379 --> 00:17:29.830 align:start position:0%
+ 
+ 
+
+00:17:29.830 --> 00:17:33.100 align:start position:0%
+ 
+ 
+
+00:17:33.100 --> 00:17:34.810 align:start position:0%
+ 
+ 
+
+00:17:34.810 --> 00:17:36.700 align:start position:0%
+ 
+ 
+
+00:17:36.700 --> 00:17:39.369 align:start position:0%
+ 
+ 
+
+00:17:39.369 --> 00:17:42.430 align:start position:0%
+ 
+ 
+
+00:17:42.430 --> 00:17:45.850 align:start position:0%
+ 
+ 
+
+00:17:45.850 --> 00:17:47.379 align:start position:0%
+ 
+ 
+
+00:17:47.379 --> 00:17:50.139 align:start position:0%
+ 
+ 
+
+00:17:50.139 --> 00:17:52.090 align:start position:0%
+ 
+ 
+
+00:17:52.090 --> 00:17:53.980 align:start position:0%
+ 
+ 
+
+00:17:53.980 --> 00:17:58.860 align:start position:0%
+ 
+ 
+
+00:17:58.860 --> 00:18:03.190 align:start position:0%
+ 
+ 
+
+00:18:03.190 --> 00:18:05.049 align:start position:0%
+ 
+ 
+
+00:18:05.049 --> 00:18:07.570 align:start position:0%
+ 
+ 
+
+00:18:07.570 --> 00:18:08.830 align:start position:0%
+ 
+ 
+
+00:18:08.830 --> 00:18:12.549 align:start position:0%
+ 
+ 
+
+00:18:12.549 --> 00:18:15.539 align:start position:0%
+ 
+ 
+
+00:18:15.539 --> 00:18:18.580 align:start position:0%
+ 
+ 
+
+00:18:18.580 --> 00:18:23.409 align:start position:0%
+ 
+ 
+
+00:18:23.409 --> 00:18:25.299 align:start position:0%
+ 
+ 
+
+00:18:25.299 --> 00:18:27.700 align:start position:0%
+ 
+ 
+
+00:18:27.700 --> 00:18:30.519 align:start position:0%
+ 
+ 
+
+00:18:30.519 --> 00:18:32.110 align:start position:0%
+ 
+ 
+
+00:18:32.110 --> 00:18:34.840 align:start position:0%
+ 
+ 
+
+00:18:34.840 --> 00:18:37.419 align:start position:0%
+ 
+ 
+
+00:18:37.419 --> 00:18:39.549 align:start position:0%
+ 
+ 
+
+00:18:39.549 --> 00:18:41.769 align:start position:0%
+ 
+ 
+
+00:18:41.769 --> 00:18:44.700 align:start position:0%
+ 
+ 
+
+00:18:44.700 --> 00:18:47.320 align:start position:0%
+ 
+ 
+
+00:18:47.320 --> 00:18:49.869 align:start position:0%
+ 
+ 
+
+00:18:49.869 --> 00:18:51.820 align:start position:0%
+ 
+ 
+
+00:18:51.820 --> 00:18:54.909 align:start position:0%
+ 
+ 
+
+00:18:54.909 --> 00:18:56.919 align:start position:0%
+ 
+ 
+
+00:18:56.919 --> 00:18:59.499 align:start position:0%
+ 
+ 
+
+00:18:59.499 --> 00:19:01.180 align:start position:0%
+ 
+ 
+
+00:19:01.180 --> 00:19:03.369 align:start position:0%
+ 
+ 
+
+00:19:03.369 --> 00:19:04.899 align:start position:0%
+ 
+ 
+
+00:19:04.899 --> 00:19:09.279 align:start position:0%
+ 
+ 
+
+00:19:09.279 --> 00:19:11.320 align:start position:0%
+ 
+ 
+
+00:19:11.320 --> 00:19:15.340 align:start position:0%
+ 
+ 
+
+00:19:15.340 --> 00:19:16.600 align:start position:0%
+ 
+ 
+
+00:19:16.600 --> 00:19:21.129 align:start position:0%
+ 
+ 
+
+00:19:21.129 --> 00:19:24.310 align:start position:0%
+ 
+ 
+
+00:19:24.310 --> 00:19:25.720 align:start position:0%
+ 
+ 
+
+00:19:25.720 --> 00:19:29.049 align:start position:0%
+ 
+ 
+
+00:19:29.049 --> 00:19:31.330 align:start position:0%
+ 
+ 
+
+00:19:31.330 --> 00:19:32.919 align:start position:0%
+ 
+ 
+
+00:19:32.919 --> 00:19:34.509 align:start position:0%
+ 
+ 
+
+00:19:34.509 --> 00:19:35.649 align:start position:0%
+ 
+ 
+
+00:19:35.649 --> 00:19:37.899 align:start position:0%
+ 
+ 
+
+00:19:37.899 --> 00:19:40.749 align:start position:0%
+ 
+ 
+
+00:19:40.749 --> 00:19:42.850 align:start position:0%
+ 
+ 
+
+00:19:42.850 --> 00:19:44.799 align:start position:0%
+ 
+ 
+
+00:19:44.799 --> 00:19:47.019 align:start position:0%
+ 
+ 
+
+00:19:47.019 --> 00:19:48.519 align:start position:0%
+ 
+ 
+
+00:19:48.519 --> 00:19:52.359 align:start position:0%
+ 
+ 
+
+00:19:52.359 --> 00:19:54.400 align:start position:0%
+ 
+ 
+
+00:19:54.400 --> 00:19:56.320 align:start position:0%
+ 
+ 
+
+00:19:56.320 --> 00:20:01.330 align:start position:0%
+ 
+ 
+
+00:20:01.330 --> 00:20:03.130 align:start position:0%
+ 
+ 
+
+00:20:03.130 --> 00:20:04.810 align:start position:0%
+ 
+ 
+
+00:20:04.810 --> 00:20:06.490 align:start position:0%
+ 
+ 
+
+00:20:06.490 --> 00:20:09.580 align:start position:0%
+ 
+ 
+
+00:20:09.580 --> 00:20:11.710 align:start position:0%
+ 
+ 
+
+00:20:11.710 --> 00:20:13.750 align:start position:0%
+ 
+ 
+
+00:20:13.750 --> 00:20:15.880 align:start position:0%
+ 
+ 
+
+00:20:15.880 --> 00:20:18.160 align:start position:0%
+ 
+ 
+
+00:20:18.160 --> 00:20:20.230 align:start position:0%
+ 
+ 
+
+00:20:20.230 --> 00:20:22.780 align:start position:0%
+ 
+ 
+
+00:20:22.780 --> 00:20:24.460 align:start position:0%
+ 
+ 
+
+00:20:24.460 --> 00:20:26.170 align:start position:0%
+ 
+ 
+
+00:20:26.170 --> 00:20:28.060 align:start position:0%
+ 
+ 
+
+00:20:28.060 --> 00:20:30.550 align:start position:0%
+ 
+ 
+
+00:20:30.550 --> 00:20:32.110 align:start position:0%
+ 
+ 
+
+00:20:32.110 --> 00:20:34.290 align:start position:0%
+ 
+ 
+
+00:20:34.290 --> 00:20:36.040 align:start position:0%
+ 
+ 
+
+00:20:36.040 --> 00:20:38.650 align:start position:0%
+ 
+ 
+
+00:20:38.650 --> 00:20:42.670 align:start position:0%
+ 
+ 
+
+00:20:42.670 --> 00:20:44.410 align:start position:0%
+ 
+ 
+
+00:20:44.410 --> 00:20:49.450 align:start position:0%
+ 
+ 
+
+00:20:49.450 --> 00:20:52.470 align:start position:0%
+ 
+ 
+
+00:20:52.470 --> 00:20:56.050 align:start position:0%
+ 
+ 
+
+00:20:56.050 --> 00:20:57.610 align:start position:0%
+ 
+ 
+
+00:20:57.610 --> 00:21:01.390 align:start position:0%
+ 
+ 
+
+00:21:01.390 --> 00:21:05.560 align:start position:0%
+ 
+ 
+
+00:21:05.560 --> 00:21:07.660 align:start position:0%
+ 
+ 
+
+00:21:07.660 --> 00:21:12.330 align:start position:0%
+ 
+ 
+
+00:21:12.330 --> 00:21:15.040 align:start position:0%
+ 
+ 
+
+00:21:15.040 --> 00:21:17.650 align:start position:0%
+ 
+ 
+
+00:21:17.650 --> 00:21:20.380 align:start position:0%
+ 
+ 
+
+00:21:20.380 --> 00:21:22.780 align:start position:0%
+ 
+ 
+
+00:21:22.780 --> 00:21:25.330 align:start position:0%
+ 
+ 
+
+00:21:25.330 --> 00:21:27.880 align:start position:0%
+ 
+ 
+
+00:21:27.880 --> 00:21:32.590 align:start position:0%
+ 
+ 
+
+00:21:32.590 --> 00:21:34.660 align:start position:0%
+ 
+ 
+
+00:21:34.660 --> 00:21:39.640 align:start position:0%
+ 
+ 
+
+00:21:39.640 --> 00:21:42.730 align:start position:0%
+ 
+ 
+
+00:21:42.730 --> 00:21:46.810 align:start position:0%
+ 
+ 
+
+00:21:46.810 --> 00:21:49.240 align:start position:0%
+ 
+ 
+
+00:21:49.240 --> 00:21:52.060 align:start position:0%
+ 
+ 
+
+00:21:52.060 --> 00:21:54.160 align:start position:0%
+ 
+ 
+
+00:21:54.160 --> 00:21:58.480 align:start position:0%
+ 
+ 
+
+00:21:58.480 --> 00:22:00.730 align:start position:0%
+ 
+ 
+
+00:22:00.730 --> 00:22:03.100 align:start position:0%
+ 
+ 
+
+00:22:03.100 --> 00:22:06.010 align:start position:0%
+ 
+ 
+
+00:22:06.010 --> 00:22:07.370 align:start position:0%
+ 
+ 
+
+00:22:07.370 --> 00:22:10.580 align:start position:0%
+ 
+ 
+
+00:22:10.580 --> 00:22:13.310 align:start position:0%
+ 
+ 
+
+00:22:13.310 --> 00:22:15.770 align:start position:0%
+ 
+ 
+
+00:22:15.770 --> 00:22:18.340 align:start position:0%
+ 
+ 
+
+00:22:18.340 --> 00:22:21.740 align:start position:0%
+ 
+ 
+
+00:22:21.740 --> 00:22:23.390 align:start position:0%
+ 
+ 
+
+00:22:23.390 --> 00:22:26.090 align:start position:0%
+ 
+ 
+
+00:22:26.090 --> 00:22:29.060 align:start position:0%
+ 
+ 
+
+00:22:29.060 --> 00:22:31.190 align:start position:0%
+ 
+ 
+
+00:22:31.190 --> 00:22:32.960 align:start position:0%
+ 
+ 
+
+00:22:32.960 --> 00:22:34.520 align:start position:0%
+ 
+ 
+
+00:22:34.520 --> 00:22:36.920 align:start position:0%
+ 
+ 
+
+00:22:36.920 --> 00:22:38.150 align:start position:0%
+ 
+ 
+
+00:22:38.150 --> 00:22:40.880 align:start position:0%
+ 
+ 
+
+00:22:40.880 --> 00:22:44.630 align:start position:0%
+ 
+ 
+
+00:22:44.630 --> 00:22:46.940 align:start position:0%
+ 
+ 
+
+00:22:46.940 --> 00:22:48.470 align:start position:0%
+ 
+ 
+
+00:22:48.470 --> 00:22:50.920 align:start position:0%
+ 
+ 
+
+00:22:50.920 --> 00:22:53.570 align:start position:0%
+ 
+ 
+
+00:22:53.570 --> 00:22:56.660 align:start position:0%
+ 
+ 
+
+00:22:56.660 --> 00:22:59.000 align:start position:0%
+ 
+ 
+
+00:22:59.000 --> 00:23:01.160 align:start position:0%
+ 
+ 
+
+00:23:01.160 --> 00:23:03.440 align:start position:0%
+ 
+ 
+
+00:23:03.440 --> 00:23:05.750 align:start position:0%
+ 
+ 
+
+00:23:05.750 --> 00:23:09.710 align:start position:0%
+ 
+ 
+
+00:23:09.710 --> 00:23:11.210 align:start position:0%
+ 
+ 
+
+00:23:11.210 --> 00:23:13.540 align:start position:0%
+ 
+ 
+
+00:23:13.540 --> 00:23:17.150 align:start position:0%
+ 
+ 
+
+00:23:17.150 --> 00:23:19.430 align:start position:0%
+ 
+ 
+
+00:23:19.430 --> 00:23:21.890 align:start position:0%
+ 
+ 
+
+00:23:21.890 --> 00:23:23.900 align:start position:0%
+ 
+ 
+
+00:23:23.900 --> 00:23:25.550 align:start position:0%
+ 
+ 
+
+00:23:25.550 --> 00:23:27.530 align:start position:0%
+ 
+ 
+
+00:23:27.530 --> 00:23:31.250 align:start position:0%
+ 
+ 
+
+00:23:31.250 --> 00:23:33.890 align:start position:0%
+ 
+ 
+
+00:23:33.890 --> 00:23:35.360 align:start position:0%
+ 
+ 
+
+00:23:35.360 --> 00:23:37.160 align:start position:0%
+ 
+ 
+
+00:23:37.160 --> 00:23:39.380 align:start position:0%
+ 
+ 
+
+00:23:39.380 --> 00:23:40.940 align:start position:0%
+ 
+ 
+
+00:23:40.940 --> 00:23:42.080 align:start position:0%
+ 
+ 
+
+00:23:42.080 --> 00:23:46.520 align:start position:0%
+ 
+ 
+
+00:23:46.520 --> 00:23:49.940 align:start position:0%
+ 
+ 
+
+00:23:49.940 --> 00:23:53.000 align:start position:0%
+ 
+ 
+
+00:23:53.000 --> 00:23:57.350 align:start position:0%
+ 
+ 
+
+00:23:57.350 --> 00:23:59.720 align:start position:0%
+ 
+ 
+
+00:23:59.720 --> 00:24:02.300 align:start position:0%
+ 
+ 
+
+00:24:02.300 --> 00:24:04.670 align:start position:0%
+ 
+ 
+
+00:24:04.670 --> 00:24:09.650 align:start position:0%
+ 
+ 
+
+00:24:09.650 --> 00:24:11.480 align:start position:0%
+ 
+ 
+
+00:24:11.480 --> 00:24:13.730 align:start position:0%
+ 
+ 
+
+00:24:13.730 --> 00:24:17.570 align:start position:0%
+ 
+ 
+
+00:24:17.570 --> 00:24:19.200 align:start position:0%
+ 
+ 
+
+00:24:19.200 --> 00:24:21.539 align:start position:0%
+ 
+ 
+
+00:24:21.539 --> 00:24:24.889 align:start position:0%
+ 
+ 
+
+00:24:24.889 --> 00:24:27.120 align:start position:0%
+ 
+ 
+
+00:24:27.120 --> 00:24:29.549 align:start position:0%
+ 
+ 
+
+00:24:29.549 --> 00:24:31.560 align:start position:0%
+ 
+ 
+
+00:24:31.560 --> 00:24:33.510 align:start position:0%
+ 
+ 
+
+00:24:33.510 --> 00:24:35.610 align:start position:0%
+ 
+ 
+
+00:24:35.610 --> 00:24:38.070 align:start position:0%
+ 
+ 
+
+00:24:38.070 --> 00:24:39.930 align:start position:0%
+ 
+ 
+
+00:24:39.930 --> 00:24:41.490 align:start position:0%
+ 
+ 
+
+00:24:41.490 --> 00:24:45.330 align:start position:0%
+ 
+ 
+
+00:24:45.330 --> 00:24:47.789 align:start position:0%
+ 
+ 
+
+00:24:47.789 --> 00:24:50.419 align:start position:0%
+ 
+ 
+
+00:24:50.419 --> 00:24:52.409 align:start position:0%
+ 
+ 
+
+00:24:52.409 --> 00:24:54.529 align:start position:0%
+ 
+ 
+
+00:24:54.529 --> 00:24:57.149 align:start position:0%
+ 
+ 
+
+00:24:57.149 --> 00:25:00.990 align:start position:0%
+ 
+ 
+
+00:25:00.990 --> 00:25:02.519 align:start position:0%
+ 
+ 
+
+00:25:02.519 --> 00:25:04.980 align:start position:0%
+ 
+ 
+
+00:25:04.980 --> 00:25:07.529 align:start position:0%
+ 
+ 
+
+00:25:07.529 --> 00:25:09.690 align:start position:0%
+ 
+ 
+
+00:25:09.690 --> 00:25:11.639 align:start position:0%
+ 
+ 
+
+00:25:11.639 --> 00:25:15.210 align:start position:0%
+ 
+ 
+
+00:25:15.210 --> 00:25:18.750 align:start position:0%
+ 
+ 
+
+00:25:18.750 --> 00:25:20.310 align:start position:0%
+ 
+ 
+
+00:25:20.310 --> 00:25:22.080 align:start position:0%
+ 
+ 
+
+00:25:22.080 --> 00:25:24.180 align:start position:0%
+ 
+ 
+
+00:25:24.180 --> 00:25:27.240 align:start position:0%
+ 
+ 
+
+00:25:27.240 --> 00:25:29.190 align:start position:0%
+ 
+ 
+
+00:25:29.190 --> 00:25:32.370 align:start position:0%
+ 
+ 
+
+00:25:32.370 --> 00:25:35.820 align:start position:0%
+ 
+ 
+
+00:25:35.820 --> 00:25:37.260 align:start position:0%
+ 
+ 
+
+00:25:37.260 --> 00:25:40.590 align:start position:0%
+ 
+ 
+
+00:25:40.590 --> 00:25:43.019 align:start position:0%
+ 
+ 
+
+00:25:43.019 --> 00:25:45.240 align:start position:0%
+ 
+ 
+
+00:25:45.240 --> 00:25:49.310 align:start position:0%
+ 
+ 
+
+00:25:49.310 --> 00:25:51.720 align:start position:0%
+ 
+ 
+
+00:25:51.720 --> 00:25:53.519 align:start position:0%
+ 
+ 
+
+00:25:53.519 --> 00:25:57.480 align:start position:0%
+ 
+ 
+
+00:25:57.480 --> 00:25:59.970 align:start position:0%
+ 
+ 
+
+00:25:59.970 --> 00:26:01.380 align:start position:0%
+ 
+ 
+
+00:26:01.380 --> 00:26:04.529 align:start position:0%
+ 
+ 
+
+00:26:04.529 --> 00:26:06.750 align:start position:0%
+ 
+ 
+
+00:26:06.750 --> 00:26:08.909 align:start position:0%
+ 
+ 
+
+00:26:08.909 --> 00:26:11.549 align:start position:0%
+ 
+ 
+
+00:26:11.549 --> 00:26:13.139 align:start position:0%
+ 
+ 
+
+00:26:13.139 --> 00:26:14.850 align:start position:0%
+ 
+ 
+
+00:26:14.850 --> 00:26:17.100 align:start position:0%
+ 
+ 
+
+00:26:17.100 --> 00:26:18.090 align:start position:0%
+ 
+ 
+
+00:26:18.090 --> 00:26:20.700 align:start position:0%
+ 
+ 
+
+00:26:20.700 --> 00:26:23.159 align:start position:0%
+ 
+ 
+
+00:26:23.159 --> 00:26:25.019 align:start position:0%
+ 
+ 
+
+00:26:25.019 --> 00:26:27.120 align:start position:0%
+ 
+ 
+
+00:26:27.120 --> 00:26:30.100 align:start position:0%
+ 
+ 
+
+00:26:30.100 --> 00:26:32.800 align:start position:0%
+ 
+ 
+
+00:26:32.800 --> 00:26:34.480 align:start position:0%
+ 
+ 
+
+00:26:34.480 --> 00:26:36.460 align:start position:0%
+ 
+ 
+
+00:26:36.460 --> 00:26:38.410 align:start position:0%
+ 
+ 
+
+00:26:38.410 --> 00:26:40.270 align:start position:0%
+ 
+ 
+
+00:26:40.270 --> 00:26:44.440 align:start position:0%
+ 
+ 
+
+00:26:44.440 --> 00:26:46.330 align:start position:0%
+ 
+ 
+
+00:26:46.330 --> 00:26:47.890 align:start position:0%
+ 
+ 
+
+00:26:47.890 --> 00:26:51.580 align:start position:0%
+ 
+ 
+
+00:26:51.580 --> 00:26:55.060 align:start position:0%
+ 
+ 
+
+00:26:55.060 --> 00:26:59.110 align:start position:0%
+ 
+ 
+
+00:26:59.110 --> 00:27:01.120 align:start position:0%
+ 
+ 
+
+00:27:01.120 --> 00:27:03.190 align:start position:0%
+ 
+ 
+
+00:27:03.190 --> 00:27:05.770 align:start position:0%
+ 
+ 
+
+00:27:05.770 --> 00:27:08.380 align:start position:0%
+ 
+ 
+
+00:27:08.380 --> 00:27:10.390 align:start position:0%
+ 
+ 
+
+00:27:10.390 --> 00:27:12.270 align:start position:0%
+ 
+ 
+
+00:27:12.270 --> 00:27:14.290 align:start position:0%
+ 
+ 
+
+00:27:14.290 --> 00:27:17.320 align:start position:0%
+ 
+ 
+
+00:27:17.320 --> 00:27:19.030 align:start position:0%
+ 
+ 
+
+00:27:19.030 --> 00:27:23.170 align:start position:0%
+ 
+ 
+
+00:27:23.170 --> 00:27:26.760 align:start position:0%
+ 
+ 
+
+00:27:26.760 --> 00:27:31.660 align:start position:0%
+ 
+ 
+
+00:27:31.660 --> 00:27:33.730 align:start position:0%
+ 
+ 
+
+00:27:33.730 --> 00:27:37.270 align:start position:0%
+ 
+ 
+
+00:27:37.270 --> 00:27:39.970 align:start position:0%
+ 
+ 
+
+00:27:39.970 --> 00:27:42.670 align:start position:0%
+ 
+ 
+
+00:27:42.670 --> 00:27:45.310 align:start position:0%
+ 
+ 
+
+00:27:45.310 --> 00:27:47.680 align:start position:0%
+ 
+ 
+
+00:27:47.680 --> 00:27:51.670 align:start position:0%
+ 
+ 
+
+00:27:51.670 --> 00:27:53.920 align:start position:0%
+ 
+ 
+
+00:27:53.920 --> 00:27:56.860 align:start position:0%
+ 
+ 
+
+00:27:56.860 --> 00:27:58.600 align:start position:0%
+ 
+ 
+
+00:27:58.600 --> 00:28:01.330 align:start position:0%
+ 
+ 
+
+00:28:01.330 --> 00:28:02.710 align:start position:0%
+ 
+ 
+
+00:28:02.710 --> 00:28:05.350 align:start position:0%
+ 
+ 
+
+00:28:05.350 --> 00:28:07.630 align:start position:0%
+ 
+ 
+
+00:28:07.630 --> 00:28:10.120 align:start position:0%
+ 
+ 
+
+00:28:10.120 --> 00:28:11.890 align:start position:0%
+ 
+ 
+
+00:28:11.890 --> 00:28:13.900 align:start position:0%
+ 
+ 
+
+00:28:13.900 --> 00:28:15.550 align:start position:0%
+ 
+ 
+
+00:28:15.550 --> 00:28:17.850 align:start position:0%
+ 
+ 
+
+00:28:17.850 --> 00:28:20.980 align:start position:0%
+ 
+ 
+
+00:28:20.980 --> 00:28:24.190 align:start position:0%
+ 
+ 
+
+00:28:24.190 --> 00:28:27.220 align:start position:0%
+ 
+ 
+
+00:28:27.220 --> 00:28:30.220 align:start position:0%
+ 
+ 
+
+00:28:30.220 --> 00:28:32.230 align:start position:0%
+ 
+ 
+
+00:28:32.230 --> 00:28:35.650 align:start position:0%
+ 
+ 
+
+00:28:35.650 --> 00:28:37.180 align:start position:0%
+ 
+ 
+
+00:28:37.180 --> 00:28:39.370 align:start position:0%
+ 
+ 
+
+00:28:39.370 --> 00:28:41.290 align:start position:0%
+ 
+ 
+
+00:28:41.290 --> 00:28:43.060 align:start position:0%
+ 
+ 
+
+00:28:43.060 --> 00:28:46.870 align:start position:0%
+ 
+ 
+
+00:28:46.870 --> 00:28:49.419 align:start position:0%
+ 
+ 
+
+00:28:49.419 --> 00:28:51.759 align:start position:0%
+ 
+ 
+
+00:28:51.759 --> 00:28:53.740 align:start position:0%
+ 
+ 
+
+00:28:53.740 --> 00:28:55.899 align:start position:0%
+ 
+ 
+
+00:28:55.899 --> 00:28:57.970 align:start position:0%
+ 
+ 
+
+00:28:57.970 --> 00:29:00.610 align:start position:0%
+ 
+ 
+
+00:29:00.610 --> 00:29:04.480 align:start position:0%
+ 
+ 
+
+00:29:04.480 --> 00:29:06.940 align:start position:0%
+ 
+ 
+
+00:29:06.940 --> 00:29:08.830 align:start position:0%
+ 
+ 
+
+00:29:08.830 --> 00:29:10.870 align:start position:0%
+ 
+ 
+
+00:29:10.870 --> 00:29:13.419 align:start position:0%
+ 
+ 
+
+00:29:13.419 --> 00:29:15.879 align:start position:0%
+ 
+ 
+
+00:29:15.879 --> 00:29:17.560 align:start position:0%
+ 
+ 
+
+00:29:17.560 --> 00:29:19.029 align:start position:0%
+ 
+ 
+
+00:29:19.029 --> 00:29:22.690 align:start position:0%
+ 
+ 
+
+00:29:22.690 --> 00:29:26.019 align:start position:0%
+ 
+ 
+
+00:29:26.019 --> 00:29:27.999 align:start position:0%
+ 
+ 
+
+00:29:27.999 --> 00:29:31.769 align:start position:0%
+ 
+ 
+
+00:29:31.769 --> 00:29:33.759 align:start position:0%
+ 
+ 
+
+00:29:33.759 --> 00:29:36.190 align:start position:0%
+ 
+ 
+
+00:29:36.190 --> 00:29:39.070 align:start position:0%
+ 
+ 
+
+00:29:39.070 --> 00:29:44.200 align:start position:0%
+ 
+ 
+
+00:29:44.200 --> 00:29:45.789 align:start position:0%
+ 
+ 
+
+00:29:45.789 --> 00:29:49.539 align:start position:0%
+ 
+ 
+
+00:29:49.539 --> 00:29:51.879 align:start position:0%
+ 
+ 
+
+00:29:51.879 --> 00:29:55.269 align:start position:0%
+ 
+ 
+
+00:29:55.269 --> 00:29:57.310 align:start position:0%
+ 
+ 
+
+00:29:57.310 --> 00:29:59.950 align:start position:0%
+ 
+ 
+
+00:29:59.950 --> 00:30:01.840 align:start position:0%
+ 
+ 
+
+00:30:01.840 --> 00:30:03.610 align:start position:0%
+ 
+ 
+
+00:30:03.610 --> 00:30:06.190 align:start position:0%
+ 
+ 
+
+00:30:06.190 --> 00:30:07.690 align:start position:0%
+ 
+ 
+
+00:30:07.690 --> 00:30:09.190 align:start position:0%
+ 
+ 
+
+00:30:09.190 --> 00:30:10.899 align:start position:0%
+ 
+ 
+
+00:30:10.899 --> 00:30:13.450 align:start position:0%
+ 
+ 
+
+00:30:13.450 --> 00:30:15.879 align:start position:0%
+ 
+ 
+
+00:30:15.879 --> 00:30:17.919 align:start position:0%
+ 
+ 
+
+00:30:17.919 --> 00:30:19.419 align:start position:0%
+ 
+ 
+
+00:30:19.419 --> 00:30:21.490 align:start position:0%
+ 
+ 
+
+00:30:21.490 --> 00:30:23.440 align:start position:0%
+ 
+ 
+
+00:30:23.440 --> 00:30:25.990 align:start position:0%
+ 
+ 
+
+00:30:25.990 --> 00:30:30.220 align:start position:0%
+ 
+ 
+
+00:30:30.220 --> 00:30:32.649 align:start position:0%
+ 
+ 
+
+00:30:32.649 --> 00:30:35.379 align:start position:0%
+ 
+ 
+
+00:30:35.379 --> 00:30:39.399 align:start position:0%
+ 
+ 
+
+00:30:39.399 --> 00:30:41.889 align:start position:0%
+ 
+ 
+
+00:30:41.889 --> 00:30:43.659 align:start position:0%
+ 
+ 
+
+00:30:43.659 --> 00:30:45.669 align:start position:0%
+ 
+ 
+
+00:30:45.669 --> 00:30:50.529 align:start position:0%
+ 
+ 
+
+00:30:50.529 --> 00:30:54.730 align:start position:0%
+ 
+ 
+
+00:30:54.730 --> 00:30:57.140 align:start position:0%
+ 
+ 
+
+00:30:57.140 --> 00:30:58.850 align:start position:0%
+ 
+ 
+
+00:30:58.850 --> 00:31:01.310 align:start position:0%
+ 
+ 
+
+00:31:01.310 --> 00:31:03.440 align:start position:0%
+ 
+ 
+
+00:31:03.440 --> 00:31:04.880 align:start position:0%
+ 
+ 
+
+00:31:04.880 --> 00:31:07.490 align:start position:0%
+ 
+ 
+
+00:31:07.490 --> 00:31:08.750 align:start position:0%
+ 
+ 
+
+00:31:08.750 --> 00:31:11.420 align:start position:0%
+ 
+ 
+
+00:31:11.420 --> 00:31:13.460 align:start position:0%
+ 
+ 
+
+00:31:13.460 --> 00:31:16.250 align:start position:0%
+ 
+ 
+
+00:31:16.250 --> 00:31:18.110 align:start position:0%
+ 
+ 
+
+00:31:18.110 --> 00:31:21.050 align:start position:0%
+ 
+ 
+
+00:31:21.050 --> 00:31:22.790 align:start position:0%
+ 
+ 
+
+00:31:22.790 --> 00:31:25.130 align:start position:0%
+ 
+ 
+
+00:31:25.130 --> 00:31:28.190 align:start position:0%
+ 
+ 
+
+00:31:28.190 --> 00:31:31.640 align:start position:0%
+ 
+ 
+
+00:31:31.640 --> 00:31:34.460 align:start position:0%
+ 
+ 
+
+00:31:34.460 --> 00:31:37.400 align:start position:0%
+ 
+ 
+
+00:31:37.400 --> 00:31:39.530 align:start position:0%
+ 
+ 
+
+00:31:39.530 --> 00:31:41.420 align:start position:0%
+ 
+ 
+
+00:31:41.420 --> 00:31:43.970 align:start position:0%
+ 
+ 
+
+00:31:43.970 --> 00:31:45.920 align:start position:0%
+ 
+ 
+
+00:31:45.920 --> 00:31:48.170 align:start position:0%
+ 
+ 
+
+00:31:48.170 --> 00:31:50.450 align:start position:0%
+ 
+ 
+
+00:31:50.450 --> 00:31:52.250 align:start position:0%
+ 
+ 
+
+00:31:52.250 --> 00:31:54.260 align:start position:0%
+ 
+ 
+
+00:31:54.260 --> 00:31:55.970 align:start position:0%
+ 
+ 
+
+00:31:55.970 --> 00:31:57.950 align:start position:0%
+ 
+ 
+
+00:31:57.950 --> 00:32:00.290 align:start position:0%
+ 
+ 
+
+00:32:00.290 --> 00:32:02.300 align:start position:0%
+ 
+ 
+
+00:32:02.300 --> 00:32:05.260 align:start position:0%
+ 
+ 
+
+00:32:05.260 --> 00:32:07.790 align:start position:0%
+ 
+ 
+
+00:32:07.790 --> 00:32:10.880 align:start position:0%
+ 
+ 
+
+00:32:10.880 --> 00:32:14.990 align:start position:0%
+ 
+ 
+
+00:32:14.990 --> 00:32:19.100 align:start position:0%
+ 
+ 
+
+00:32:19.100 --> 00:32:20.570 align:start position:0%
+ 
+ 
+
+00:32:20.570 --> 00:32:25.400 align:start position:0%
+ 
+ 
+
+00:32:25.400 --> 00:32:31.150 align:start position:0%
+ 
+ 
+
+00:32:31.150 --> 00:32:34.790 align:start position:0%
+ 
+ 
+
+00:32:34.790 --> 00:32:39.560 align:start position:0%
+ 
+ 
+
+00:32:39.560 --> 00:32:42.530 align:start position:0%
+ 
+ 
+
+00:32:42.530 --> 00:32:45.500 align:start position:0%
+ 
+ 
+
+00:32:45.500 --> 00:32:47.810 align:start position:0%
+ 
+ 
+
+00:32:47.810 --> 00:32:49.820 align:start position:0%
+ 
+ 
+
+00:32:49.820 --> 00:32:51.350 align:start position:0%
+ 
+ 
+
+00:32:51.350 --> 00:32:53.240 align:start position:0%
+ 
+ 
+
+00:32:53.240 --> 00:32:55.340 align:start position:0%
+ 
+ 
+
+00:32:55.340 --> 00:32:57.260 align:start position:0%
+ 
+ 
+
+00:32:57.260 --> 00:33:00.440 align:start position:0%
+ 
+ 
+
+00:33:00.440 --> 00:33:02.000 align:start position:0%
+ 
+ 
+
+00:33:02.000 --> 00:33:04.280 align:start position:0%
+ 
+ 
+
+00:33:04.280 --> 00:33:05.500 align:start position:0%
+ 
+ 
+
+00:33:05.500 --> 00:33:09.690 align:start position:0%
+ 
+ 
+
+00:33:09.690 --> 00:33:11.830 align:start position:0%
+ 
+ 
+
+00:33:11.830 --> 00:33:13.870 align:start position:0%
+ 
+ 
+
+00:33:13.870 --> 00:33:16.750 align:start position:0%
+ 
+ 
+
+00:33:16.750 --> 00:33:18.550 align:start position:0%
+ 
+ 
+
+00:33:18.550 --> 00:33:21.340 align:start position:0%
+ 
+ 
+
+00:33:21.340 --> 00:33:23.680 align:start position:0%
+ 
+ 
+
+00:33:23.680 --> 00:33:26.080 align:start position:0%
+ 
+ 
+
+00:33:26.080 --> 00:33:27.520 align:start position:0%
+ 
+ 
+
+00:33:27.520 --> 00:33:29.920 align:start position:0%
+ 
+ 
+
+00:33:29.920 --> 00:33:31.990 align:start position:0%
+ 
+ 
+
+00:33:31.990 --> 00:33:35.560 align:start position:0%
+ 
+ 
+
+00:33:35.560 --> 00:33:37.690 align:start position:0%
+ 
+ 
+
+00:33:37.690 --> 00:33:39.670 align:start position:0%
+ 
+ 
+
+00:33:39.670 --> 00:33:41.530 align:start position:0%
+ 
+ 
+
+00:33:41.530 --> 00:33:43.840 align:start position:0%
+ 
+ 
+
+00:33:43.840 --> 00:33:45.280 align:start position:0%
+ 
+ 
+
+00:33:45.280 --> 00:33:48.730 align:start position:0%
+ 
+ 
+
+00:33:48.730 --> 00:33:50.620 align:start position:0%
+ 
+ 
+
+00:33:50.620 --> 00:33:53.440 align:start position:0%
+ 
+ 
+
+00:33:53.440 --> 00:33:55.930 align:start position:0%
+ 
+ 
+
+00:33:55.930 --> 00:33:57.580 align:start position:0%
+ 
+ 
+
+00:33:57.580 --> 00:33:59.620 align:start position:0%
+ 
+ 
+
+00:33:59.620 --> 00:34:02.050 align:start position:0%
+ 
+ 
+
+00:34:02.050 --> 00:34:05.230 align:start position:0%
+ 
+ 
+
+00:34:05.230 --> 00:34:07.450 align:start position:0%
+ 
+ 
+
+00:34:07.450 --> 00:34:08.950 align:start position:0%
+ 
+ 
+
+00:34:08.950 --> 00:34:11.169 align:start position:0%
+ 
+ 
+
+00:34:11.169 --> 00:34:12.550 align:start position:0%
+ 
+ 
+
+00:34:12.550 --> 00:34:13.990 align:start position:0%
+ 
+ 
+
+00:34:13.990 --> 00:34:17.710 align:start position:0%
+ 
+ 
+
+00:34:17.710 --> 00:34:21.310 align:start position:0%
+ 
+ 
+
+00:34:21.310 --> 00:34:23.649 align:start position:0%
+ 
+ 
+
+00:34:23.649 --> 00:34:26.080 align:start position:0%
+ 
+ 
+
+00:34:26.080 --> 00:34:28.930 align:start position:0%
+ 
+ 
+
+00:34:28.930 --> 00:34:33.100 align:start position:0%
+ 
+ 
+
+00:34:33.100 --> 00:34:35.740 align:start position:0%
+ 
+ 
+
+00:34:35.740 --> 00:34:37.419 align:start position:0%
+ 
+ 
+
+00:34:37.419 --> 00:34:39.970 align:start position:0%
+ 
+ 
+
+00:34:39.970 --> 00:34:43.720 align:start position:0%
+ 
+ 
+
+00:34:43.720 --> 00:34:46.659 align:start position:0%
+ 
+ 
+
+00:34:46.659 --> 00:34:48.550 align:start position:0%
+ 
+ 
+
+00:34:48.550 --> 00:34:51.700 align:start position:0%
+ 
+ 
+
+00:34:51.700 --> 00:34:54.730 align:start position:0%
+ 
+ 
+
+00:34:54.730 --> 00:34:56.710 align:start position:0%
+ 
+ 
+
+00:34:56.710 --> 00:34:58.810 align:start position:0%
+ 
+ 
+
+00:34:58.810 --> 00:35:01.090 align:start position:0%
+ 
+ 
+
+00:35:01.090 --> 00:35:04.180 align:start position:0%
+ 
+ 
+
+00:35:04.180 --> 00:35:05.380 align:start position:0%
+ 
+ 
+
+00:35:05.380 --> 00:35:07.240 align:start position:0%
+ 
+ 
+
+00:35:07.240 --> 00:35:09.100 align:start position:0%
+ 
+ 
+
+00:35:09.100 --> 00:35:10.660 align:start position:0%
+ 
+ 
+
+00:35:10.660 --> 00:35:12.550 align:start position:0%
+ 
+ 
+
+00:35:12.550 --> 00:35:13.690 align:start position:0%
+ 
+ 
+
+00:35:13.690 --> 00:35:16.780 align:start position:0%
+ 
+ 
+
+00:35:16.780 --> 00:35:18.020 align:start position:0%
+ 
+ 
+
+00:35:18.020 --> 00:35:20.150 align:start position:0%
+ 
+ 
+
+00:35:20.150 --> 00:35:22.730 align:start position:0%
+ 
+ 
+
+00:35:22.730 --> 00:35:24.500 align:start position:0%
+ 
+ 
+
+00:35:24.500 --> 00:35:27.020 align:start position:0%
+ 
+ 
+
+00:35:27.020 --> 00:35:28.610 align:start position:0%
+ 
+ 
+
+00:35:28.610 --> 00:35:31.640 align:start position:0%
+ 
+ 
+
+00:35:31.640 --> 00:35:34.460 align:start position:0%
+ 
+ 
+
+00:35:34.460 --> 00:35:37.430 align:start position:0%
+ 
+ 
+
+00:35:37.430 --> 00:35:39.470 align:start position:0%
+ 
+ 
+
+00:35:39.470 --> 00:35:46.910 align:start position:0%
+ 
+ 
+
+00:35:46.910 --> 00:35:48.800 align:start position:0%
+ 
+ 
+
+00:35:48.800 --> 00:35:51.760 align:start position:0%
+ 
+ 
+
+00:35:51.760 --> 00:35:54.860 align:start position:0%
+ 
+ 
+
+00:35:54.860 --> 00:35:58.100 align:start position:0%
+ 
+ 
+
+00:35:58.100 --> 00:36:01.070 align:start position:0%
+ 
+ 
+
+00:36:01.070 --> 00:36:03.260 align:start position:0%
+ 
+ 
+
+00:36:03.260 --> 00:36:05.360 align:start position:0%
+ 
+ 
+
+00:36:05.360 --> 00:36:08.300 align:start position:0%
+ 
+ 
+
+00:36:08.300 --> 00:36:11.390 align:start position:0%
+ 
+ 
+
+00:36:11.390 --> 00:36:14.780 align:start position:0%
+ 
+ 
+
+00:36:14.780 --> 00:36:17.060 align:start position:0%
+ 
+ 
+
+00:36:17.060 --> 00:36:19.730 align:start position:0%
+ 
+ 
+
+00:36:19.730 --> 00:36:22.550 align:start position:0%
+ 
+ 
+
+00:36:22.550 --> 00:36:24.500 align:start position:0%
+ 
+ 
+
+00:36:24.500 --> 00:36:27.770 align:start position:0%
+ 
+ 
+
+00:36:27.770 --> 00:36:30.610 align:start position:0%
+ 
+ 
+
+00:36:30.610 --> 00:36:33.620 align:start position:0%
+ 
+ 
+
+00:36:33.620 --> 00:36:35.960 align:start position:0%
+ 
+ 
+
+00:36:35.960 --> 00:36:40.010 align:start position:0%
+ 
+ 
+
+00:36:40.010 --> 00:36:42.410 align:start position:0%
+ 
+ 
+
+00:36:42.410 --> 00:36:47.270 align:start position:0%
+ 
+ 
+
+00:36:47.270 --> 00:36:50.660 align:start position:0%
+ 
+ 
+
+00:36:50.660 --> 00:36:54.230 align:start position:0%
+ 
+ 
+
+00:36:54.230 --> 00:36:59.870 align:start position:0%
+ 
+ 
+
+00:36:59.870 --> 00:37:01.550 align:start position:0%
+ 
+ 
+
+00:37:01.550 --> 00:37:03.290 align:start position:0%
+ 
+ 
+
+00:37:03.290 --> 00:37:05.570 align:start position:0%
+ 
+ 
+
+00:37:05.570 --> 00:37:05.580 align:start position:0%
+ 
+ 
+
+00:37:05.580 --> 00:37:06.440 align:start position:0%
+ 
+
+
+00:37:06.440 --> 00:37:08.750 align:start position:0%
+ 
+ 
+
+00:37:08.750 --> 00:37:13.000 align:start position:0%
+ 
+ 
+
+00:37:13.000 --> 00:37:17.230 align:start position:0%
+ 
+ 
+
+00:37:17.230 --> 00:37:21.530 align:start position:0%
+ 
+ 
+
+00:37:21.530 --> 00:37:23.150 align:start position:0%
+ 
+ 
+
+00:37:23.150 --> 00:37:24.800 align:start position:0%
+ 
+ 
+
+00:37:24.800 --> 00:37:27.680 align:start position:0%
+ 
+ 
+
+00:37:27.680 --> 00:37:29.450 align:start position:0%
+ 
+ 
+
+00:37:29.450 --> 00:37:30.220 align:start position:0%
+ 
+ 
+
+00:37:30.220 --> 00:37:32.010 align:start position:0%
+ 
+ 
+
+00:37:32.010 --> 00:37:36.010 align:start position:0%
+ 
+ 
+
+00:37:36.010 --> 00:37:38.500 align:start position:0%
+ 
+ 
+
+00:37:38.500 --> 00:37:41.530 align:start position:0%
+ 
+ 
+
+00:37:41.530 --> 00:37:46.140 align:start position:0%
+ 
+ 
+
+00:37:46.140 --> 00:37:48.370 align:start position:0%
+ 
+ 
+
+00:37:48.370 --> 00:37:51.160 align:start position:0%
+ 
+ 
+
+00:37:51.160 --> 00:37:52.599 align:start position:0%
+ 
+ 
+
+00:37:52.599 --> 00:37:55.330 align:start position:0%
+ 
+ 
+
+00:37:55.330 --> 00:37:58.230 align:start position:0%
+ 
+ 
+
+00:37:58.230 --> 00:38:02.530 align:start position:0%
+ 
+ 
+
+00:38:02.530 --> 00:38:06.880 align:start position:0%
+ 
+ 
+
+00:38:06.880 --> 00:38:12.609 align:start position:0%
+ 
+ 
+
+00:38:12.609 --> 00:38:14.650 align:start position:0%
+ 
+ 
+
+00:38:14.650 --> 00:38:17.020 align:start position:0%
+ 
+ 
+
+00:38:17.020 --> 00:38:19.150 align:start position:0%
+ 
+ 
+
+00:38:19.150 --> 00:38:22.420 align:start position:0%
+ 
+ 
+
+00:38:22.420 --> 00:38:25.720 align:start position:0%
+ 
+ 
+
+00:38:25.720 --> 00:38:28.840 align:start position:0%
+ 
+ 
+
+00:38:28.840 --> 00:38:30.640 align:start position:0%
+ 
+ 
+
+00:38:30.640 --> 00:38:33.460 align:start position:0%
+ 
+ 
+
+00:38:33.460 --> 00:38:38.800 align:start position:0%
+ 
+ 
+
+00:38:38.800 --> 00:38:41.530 align:start position:0%
+ 
+ 
+
+00:38:41.530 --> 00:38:43.330 align:start position:0%
+ 
+ 
+
+00:38:43.330 --> 00:38:47.560 align:start position:0%
+ 
+ 
+
+00:38:47.560 --> 00:38:50.859 align:start position:0%
+ 
+ 
+
+00:38:50.859 --> 00:38:53.410 align:start position:0%
+ 
+ 
+
+00:38:53.410 --> 00:38:55.990 align:start position:0%
+ 
+ 
+
+00:38:55.990 --> 00:39:00.490 align:start position:0%
+ 
+ 
+
+00:39:00.490 --> 00:39:02.290 align:start position:0%
+ 
+ 
+
+00:39:02.290 --> 00:39:03.700 align:start position:0%
+ 
+ 
+
+00:39:03.700 --> 00:39:05.080 align:start position:0%
+ 
+ 
+
+00:39:05.080 --> 00:39:07.090 align:start position:0%
+ 
+ 
+
+00:39:07.090 --> 00:39:09.450 align:start position:0%
+ 
+ 
+
+00:39:09.450 --> 00:39:12.940 align:start position:0%
+ 
+ 
+
+00:39:12.940 --> 00:39:15.400 align:start position:0%
+ 
+ 
+
+00:39:15.400 --> 00:39:17.140 align:start position:0%
+ 
+ 
+
+00:39:17.140 --> 00:39:18.400 align:start position:0%
+ 
+ 
+
+00:39:18.400 --> 00:39:22.540 align:start position:0%
+ 
+ 
+
+00:39:22.540 --> 00:39:23.950 align:start position:0%
+ 
+ 
+
+00:39:23.950 --> 00:39:29.560 align:start position:0%
+ 
+ 
+
+00:39:29.560 --> 00:39:34.410 align:start position:0%
+ 
+ 
+
+00:39:34.410 --> 00:39:37.240 align:start position:0%
+ 
+ 
+
+00:39:37.240 --> 00:39:43.099 align:start position:0%
+ 
+ 
+
+00:39:43.099 --> 00:39:46.309 align:start position:0%
+ 
+ 
+
+00:39:46.309 --> 00:39:48.140 align:start position:0%
+ 
+ 
+
+00:39:48.140 --> 00:39:50.599 align:start position:0%
+ 
+ 
+
+00:39:50.599 --> 00:39:51.950 align:start position:0%
+ 
+ 
+
+00:39:51.950 --> 00:39:54.650 align:start position:0%
+ 
+ 
+
+00:39:54.650 --> 00:39:56.299 align:start position:0%
+ 
+ 
+
+00:39:56.299 --> 00:39:58.099 align:start position:0%
+ 
+ 
+
+00:39:58.099 --> 00:40:01.190 align:start position:0%
+ 
+ 
+
+00:40:01.190 --> 00:40:03.229 align:start position:0%
+ 
+ 
+
+00:40:03.229 --> 00:40:05.630 align:start position:0%
+ 
+ 
+
+00:40:05.630 --> 00:40:07.249 align:start position:0%
+ 
+ 
+
+00:40:07.249 --> 00:40:10.910 align:start position:0%
+ 
+ 
+
+00:40:10.910 --> 00:40:13.789 align:start position:0%
+ 
+ 
+
+00:40:13.789 --> 00:40:17.120 align:start position:0%
+ 
+ 
+
+00:40:17.120 --> 00:40:19.099 align:start position:0%
+ 
+ 
+
+00:40:19.099 --> 00:40:22.640 align:start position:0%
+ 
+ 
+
+00:40:22.640 --> 00:40:24.710 align:start position:0%
+ 
+ 
+
+00:40:24.710 --> 00:40:26.479 align:start position:0%
+ 
+ 
+
+00:40:26.479 --> 00:40:29.509 align:start position:0%
+ 
+ 
+
+00:40:29.509 --> 00:40:31.910 align:start position:0%
+ 
+ 
+
+00:40:31.910 --> 00:40:33.319 align:start position:0%
+ 
+ 
+
+00:40:33.319 --> 00:40:35.180 align:start position:0%
+ 
+ 
+
+00:40:35.180 --> 00:40:37.130 align:start position:0%
+ 
+ 
+
+00:40:37.130 --> 00:40:39.410 align:start position:0%
+ 
+ 
+
+00:40:39.410 --> 00:40:42.319 align:start position:0%
+ 
+ 
+
+00:40:42.319 --> 00:40:46.009 align:start position:0%
+ 
+ 
+
+00:40:46.009 --> 00:40:49.160 align:start position:0%
+ 
+ 
+
+00:40:49.160 --> 00:40:52.309 align:start position:0%
+ 
+ 
+
+00:40:52.309 --> 00:40:54.200 align:start position:0%
+ 
+ 
+
+00:40:54.200 --> 00:40:56.059 align:start position:0%
+ 
+ 
+
+00:40:56.059 --> 00:40:58.039 align:start position:0%
+ 
+ 
+
+00:40:58.039 --> 00:41:01.400 align:start position:0%
+ 
+ 
+
+00:41:01.400 --> 00:41:03.799 align:start position:0%
+ 
+ 
+
+00:41:03.799 --> 00:41:05.809 align:start position:0%
+ 
+ 
+
+00:41:05.809 --> 00:41:07.729 align:start position:0%
+ 
+ 
+
+00:41:07.729 --> 00:41:09.019 align:start position:0%
+ 
+ 
+
+00:41:09.019 --> 00:41:12.890 align:start position:0%
+ 
+ 
+
+00:41:12.890 --> 00:41:14.660 align:start position:0%
+ 
+ 
+
+00:41:14.660 --> 00:41:16.190 align:start position:0%
+ 
+ 
+
+00:41:16.190 --> 00:41:17.749 align:start position:0%
+ 
+ 
+
+00:41:17.749 --> 00:41:19.910 align:start position:0%
+ 
+ 
+
+00:41:19.910 --> 00:41:21.530 align:start position:0%
+ 
+ 
+
+00:41:21.530 --> 00:41:21.540 align:start position:0%
+ 
+ 
+
+00:41:21.540 --> 00:41:25.809 align:start position:0%
+ 
+
+
