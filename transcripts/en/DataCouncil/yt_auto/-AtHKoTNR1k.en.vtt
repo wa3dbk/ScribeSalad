@@ -1,0 +1,4340 @@
+WEBVTT
+Kind: captions
+Language: en
+
+00:00:00.210 --> 00:00:00.490 align:start position:0%
+ 
+you  [Music]  hi welcome to operating multi-tenant  kafka services for developers so this is  the agenda for the talk I'm gonna give  you a little intro about myself and  Heroku Heroku data I look at the  motivation behind building the  multi-tenant kafka service in general  take a look at our existing single  tenant Kafka compare that with  multi-tenancy what the multi-tenancy  implications are and then we'll go into  some of the configurations and changes  that we made and some of the tuning that  we did talk a little bit about testing  and then hopefully cover automation  which is kind of our thing and discuss  some of the limitations that were you  know necessary as a result of making a  multi-tenant service so I'm a Hemi D I'm  an engineer on the Heroku data team at  Salesforce her occur is a cloud platform  that enables companies to build  applications in a variety of languages  deploy on on our platform and actually  it helps them to run that scale it  monitor it Heroku data specifically is  the team at Heroku that provides the  data services on top of it and so we  provide Heroku Postgres or Redis and  cough cough course so a brief about  Kafka hopefully many of you are aware of  it already  Kafka itself is an Apache project it's a  distributed streaming platform it  provides the pub/sub model in calculon's  it's produce and consume you so you  produced the clock of the cluster and  you consume from it  it's a durable meshes message store so  on disk  it's a ordered commit lock and it's  highly available so you have multiple  brokers that can hold multiple replicas  of your data and so if a single broker  goes down you still have replicas and  it'll fail over and you you continue and  so what is Apache cough gone for ku  specifically so we provide a fully  managed service so it's a more of a  batteries included approach  it's opinionated in the sense that in  cases where there are multiple  configuration options we make a decision  based on what we feel is a safe or  productive default and we we provide  that out of the box it's configured for  best practices for most users and I put  a little asterisks because there's no  you know you can't make  one-size-fits-all there are bound to be  use cases that aren't really well suited  but we try to cover as many as possible  and try to get the the largest coverage  as possible  and so I want to talk a little bit about  the use cases for for caffeine in  general so why would you use Kafka and  not some other dates store or other  streaming service and so I'm going to  cover a couple of use cases and then  look at specific customers that were on  procure that used to work with Kafka  so one of the ones I'm looking posing a  monolithic app so in this case we're  taking a a big monolith and we're using  Kafka as a chance port medium or an  interconnect between the various  services or micro services to transport  information and events between them  another use case I'm going to cover is  process dating high-volume  real time date streams so you may have  something that is naturally a stream of  events so like currency information or  events coming from an IOT device or  whatever it is and you just have a a  torrent of data that you're collecting  from various sources you want to make  real-time decisions on those and the  third use case I'm going to cover is  providing real-time event-driven  architecture so this is pretty similar  to the second case but essentially you  have a number of disparate services that  are producing events and you're trying  to make decisions on some kind of  aggregate of that data so you have a  number of sources they're all telling  you different things and you wanna make  real-time decisions on what you should  be doing and so for the first case  decomposing the monolith I'm going to  talk a little bit about shift commerce  so you can actually read about it they  have a blog post on the Heroku blog that  talks about it and so they they  basically leveraged Heroku Kafka as a  path to gradual migration from a  monolith into micro service  so essentially what they did was they  introduced the ability for their  monolith to produce events into Kafka  and then gradually over time they  introduced more and more services that  consume those events and move the logic  out of the monolith into those new micro  services so for the second use case I  wanted to talk a little bit about coin  it's pronounced coin coin is a FinTech  company based out of Singapore and they  mostly deal with a cryptocurrency  exchanges and the mostly active in Japan  and so essentially they have a huge  torrent of pricing data for  cryptocurrencies coming from a number of  different exchanges and they aggregate  them and sort of make decisions in real  time on on what to do and how the prices  affect their decisions the last use case  I wanna cover is Caesars Entertainment  of you know casino fame and other things  and essentially they they use it to  ingest and aggregate a large amount of  customer data from lots and lots of  different sources and they use it to  make decisions on how best to provide  services or offers or deals to their  most prized VIP customers and so these  are like very different systems all  producing events they aggregate them  they process them they try to make  decisions on how best to serve their  customers so I wanna talk a little bit  the motivation why why bother building a  multi-tenant Kafka we already have a  relatively successful dedicated Kafka  product so these are some of the  motivations behind it some of the goals  right now our single tenant Kafka starts  at $1,500 for the for the base plan  which is the standard zero and so with  that you get three brokers and five  zookeepers which is kind of a pretty  standard for our our zookeeper topology  and a thousand five hundred is could be  relatively reasonable for you but we  want to lower that barrier we want to  make it much easier to access and so you  know if you're working in development  you haven't really finished your product  yet that's that might be too high a  barrier-free and so you know targeting  development testing low volume  production we want to introduce  something that's a little bit more  accessible and so our multi-tenant plans  right now start at $100 so it's that's  quite a substantial reduction  so here's the blogpost when we announced  it  it's September 14 2017 so we've had  multi-tenant Kafka for quite a while so  I want to talk a little bit about the  differences single tenant versus multi  tenant and what it looks like  so single tenant is pretty obvious we  have one customer or one tenant that has  access to the entire cluster and so your  security boundaries or your resource  boundaries are really outside of the  cluster everything in the cluster is  yours and so this is really what it  looks like when you talk Kafka you're  really dealing with topics so all the  topics are owned by single customer you  don't really need to worry about any  isolation at that level with  multi-tenancy it kind of looks like this  and so we have a large number of  customers all residing on a single  traffic cluster and so that introduces a  whole range of new sort of issues that  you need to tackle I know this is kind  of a wall of text but I'm gonna break  down and talk about each one separately  so you know we talk about resource  isolation we talk about parity compare  compatibility and costs related to it so  I'm going to focus on resource isolation  first and talk about security  implications performance implications  and safety so when I talk about security  what I really mean is a tenant should  not be able to access on others another  tenants data this is kind of table  stakes for multi-tenancy it would be  kind of a disaster if we put everyone on  the same cluster and everyone could read  everyone else's data so you know the  priority the main thing is this did not  happen you shouldn't be able to read  other people's data with Kafka because  we actually talk about topics all the  time this is really what we mean user a  shouldn't be able to read user B's  topics and so how do we how do we do  that Kafka itself has native support for  access control lists Oracle's and so  it's a somewhat relatively new feature  in Kafka life but essentially what  allows you to do is specify user a can  carry out action be on resource C so  user a can  read or describe or write topic messages  which is owned by user a but there's no  explicit Akal for allowing it to read  anything of topic B or user B so it  can't so the other thing we do is name  spacing so this is something that's  somewhat unique to us and that we  namespace resources per tenant so when  you create a new multi tenant Kafka  add-on on Heroku we automatically  generate a name in this case wall - five  eight seven seven nine so we pick a  river - some numbers and that becomes a  prefix for all of your resources so you  create the topic messages you get wall -  whatever it is thought messages that  also applies to the consumer groups and  that's actually what we applied the  Ackles to so any topic that begins with  wabash whatever is owned by tenant a  anything that has a different prefixes  on by another donor so the second aspect  of that I was looking to his performance  and what I mean here is really this  attendance should not adversely affect  another tenants performance so this is  typically what we refer to as the noisy  neighbor so you're sharing a cluster  with someone they're super active  they're absolutely hammering their  broker and your performance goes down  the toilet as a result of it so  obviously that sucks for everyone except  for the person who's abusing the  resources and so we want to prevent that  and so in the case of Kafka Kafka has  support for quotas so that's super cool  it's really useful it allows you to  specify a produce quota and a consume  quota in terms of bytes per second and  so we say you know ten and a can have  256 kilobytes per second produce and one  megabyte per second consume and calf get  itself enforces that I'll talk a little  bit later about the way that's enforced  because it's kind of interesting the  third part of resource isolation is  safety and so here what I actually mean  is a tenant should not jeopardize the  stability of the cluster so we don't  want the we don't want a single tenant  who does something unusual or has a  misbehaving client to take down the  cluster for everyone else  and so in order to to you know prevent  that we apply limits and so we can apply  limits to topics and by here by that I  mean the number of topics and by  association the number of partitions  which is really the thing that scales on  Kafka the number of consumer groups  storage and throughput I want to talk a  little bit more about storage because  it's kind of interesting kefka's concept  of storage is more of a transient thing  messages live on the Kefka cluster for a  certain amount of time they don't live  there forever it's not a a you know  source of truth for your data forever  and so thinking of it in terms of static  storage is is a little bit strange so  instead we think of it as capacity and  this is a term that we use in all of our  documentation and essentially that's a  function of message throughput  multiplied by the retention on all those  messages multiplied by the replication  so if I do 100 messages per second and I  have a 1-day retention and I want three  replicas of it and you multiply that all  together and that's actually the total  amount of storage using across the  cluster and then there's the the  throughput itself which I kind of  covered with quotas and so imposing  these limits is it's cool some of them  are natively supported within Kafka so  you can specify quotas or ackles to do  certain things and storage is something  that you know we cover with the capacity  which is this slightly more complicated  function but we need to be able to  monitor it we actually need to be able  to look at this and say you know are  these limits being exceeded are they  being you know adhered to in particular  with storage the way it works in our  case is that we allow you to grow the  storage on the cluster so you spin up a  cluster we give you 100 gigabytes of  storage you start putting data into it  and you get close to the hundred  gigabytes we actually grow it  automatically for you so we don't take  down your cluster because you hit your  limit we have a pretty generous grace  sort of area where we will you know  increase the storage and let you  continue but that's great for the  customer but we aren't really doing you  any favors by allowing you to grow  unbounded so we actually have to monitor  it and so we check occasionally see you  know are you still within the limits are  you nearing a dangerous limit and so  monitoring is kind of key to that but  then more so than just monitoring is  actually being able to enforce limits so  some of them are nice because they're  natively supported in Kafka but in the  case of storage if our automation  automatically grows the volumes then you  could just keep growing forever and  eventually the cluster will topple over  and so we actually have to have a  mechanism for enforcing it so in the  case of Kafka multi-tenant will send you  an email saying hey you've exceeded your  storage by 150 percent  you should probably slow it down or  upgrade your plan and if you keep going  faster then we impose an additional more  aggressive throttling to kind of slow  your your growth and get you back under  the limit and then if you just fly past  there for an extended period of time  we actually block access to try to let  it clear out and then we'll enable it  again so another area of multi-tenancy  which is kind of specific to  multi-tenancy is parity and so here  we're talking about feature parity as  well as behavior parity and so I say  parity but what I really mean is for the  service to be useful it needs to behave  like a normal cluster there's no point  in us giving you something that looks  and behaves in a way that's totally  unlike Kafka because you could code  against it and you could deploy your  application against it and it works fine  but then you switch to a regular Kefka  and everything breaks and it just  doesn't do what you think it does and so  I don't dress this we actually give you  access to what is effectively a standard  Kafka cluster it looks very much like  our dedicated clusters it's the same  number of brokers it's the same number  of zookeeper nodes it behaves in exactly  the same way and so one of these things  one of the the things that we thought  about is that we could have gone with a  single broker single zookeeper option  and that would have been pretty cost  effective and we could do it quite  easily but then the customer will be  developing against something that's not  really representative of real life Uwe  would deploy a production catholic  cluster with one broker and one  zookeeper and so you won't have exposure  to things like rolling restarts or when  topics failover and all that stuff so  your application my work fine with only  one but then once you switch to a real  cluster which has eight brokers and  they start failing over and things start  moving around the application breaks so  we actually give you access to something  that represents what a real production  cluster would look like so if you do  move then your application is ready for  it so there are some limitations we have  to make some compromises in order to  provide these you know the level of  safety that I mentioned earlier so as  much as possible we try to keep it  standard but there's there's going to be  some some things that we have to change  compatibility is the next thing I want  to talk about in this case what I really  mean is the service needs to support  standard clients no vendor lock-in so  that's absolutely a core part of  pirozhkis belief and we only use open  source Apache Kafka it's not a custom  fork there's no weird custom code  required on the client side there's  nothing strange that we we do in order  to enable this you use absolutely  standard clients and whatever your  favorite languages and you can connect  to it and you use it that's kind of a  big thing for us and it applies to all  of our data services really so the last  implication I want to talk about is  costs and specifically costs of  resources and operational costs so what  does it cost to run for the things that  we run like VMs and instances plus what  does it cost us to actually operate it  and so here I'm talking about the  service needs to be financially feasible  and in this case I'm actually talking  about our costs not so much the cost for  the customer although they're obviously  related so here the things that go into  the resource costs will be packing  density  how many tenants do we pack on this  cluster and conversely but somewhere  related is the utilization of that  cluster like how well utilized is it the  more utilized it is the more efficiently  we're spending our money on these  resources but with that comes a few sort  of interesting cases where we have  consciously made a decision to take a  hit on our part in order to provide  certain functionality  and so when we look at cluster size we  have some options we could have one  massive cluster with hundreds of brokers  in fact all of the tenants onto there or  we could have very very small clusters  like one broker one zookeeper and so  there's some decisions there where there  are implications related to the way it  performs the way a failover is work  there is a sweet spot for a cluster size  and we've actually already done this  process we've looked into this we did  all the testing when we looked at the  single dedicated plans and we settled on  you know a maximum of eight brokers and  five zookeepers because of the way it  behaves and so we kind of favor that we  also kind of insisted pretty early on  that we don't over provision and so when  we tell a customer you're signing up for  a particular plan we make sure that they  have all those resources and so we don't  over provision it in any way so again if  we say we're gonna pack 20 customers  onto a cluster and they all join on with  the lowest plan then our utilization is  pretty low and so that sucks from a  resource cost but it's great from the  customer point of view because now they  have the resources that they expected  also we wanted to provide seamless  upgrading so the idea is a customer can  join on with the lowest plan and they  should be able to upgrade to the next  lineup or the biggest plan that we have  for a multi-tenant without any  disruption and so unfortunately when it  comes to Kafka there is no easy way to  actually migrate offsets so if you move  from one class to the other the offsets  aren't really translatable in that sense  so in order to get around this we have  to assume the worst case or the best  case depending on your perspective that  every customer could potentially upgrade  to the biggest plan and so inherently  our utilization is pretty low when it  comes to operational costs this is kind  of an area that we want to focus on  because this is the amount of man-hours  that we sink into it and we're not a  huge team so this kind of makes a big  difference for us so we want to minimize  the operational burden and minimize the  impact or the blast radius of particular  issues so again going back to the  cluster size if we had one massive  cluster with 100 brokers and there was a  cluster wide issue then that could  potentially affect hundreds or thousands  of customers and so again we fall back  into the Suites  of saying you know if we have clusters  that are eat brokers and we've hack 2530  tenants onto it we can kind of minimize  the blast radius into a particular area  and minimizing operational costs again  if we match the single tenant clusters  and the topology then we can actually  share the learnings between them so all  of the gaining all the gained knowledge  and experience from operating a fleet of  three and eight broker clusters we  actually map immediately and so we find  a bug in one sort of topology or one  behavior one performance tuning that  works on one we can immediately map it  over to the next to the multi tenant  without really any loss some of the  other ways that we kind of reduce the  operational burden for us is that we we  pick safe default so it's possible to to  kind of put yourself in a unfortunate  situation by picking settings that are  not ideal so if you think about the  situation where you create a topic and  you set replication to one which was the  default in lots of clusters so the  customer creates a topic and they start  writing things to it and we fail over  that broker well what happened to the  data  it only resided on one and so now it's  gone forever that sucks for the customer  and maybe they weren't aware of it or  maybe they assumed that you know as sane  default was used so we actually enforce  that so we pick those safety faults both  to provide a better user experience also  to reduce reduce the operational burden  for us as I mentioned we pick similar  clusters to our dedicated so we can  share those learnings and we do a ton of  automation automation I wrote it's kind  of our thing that's like the epic  understatement we're a very small team  and we manage millions of dates or data  bases and data services millions without  exaggeration that's actually what we do  and we did a ton of testing we did a  huge amount of testing on the  multi-tenant topologies different size  kapha clusters different configurations  different releases all sorts of stuff in  order to arrive a configuration that we  think is is pretty sound and pretty  solid and that all feeds back into  reducing operational cost for us  so I want to talk a little bit about  configuration and tuning and sort of  talk a little bit about some of the  changes that we made some of the  configurations that we did in order to  achieve what we aimed to do in and what  we actually have running in our  multi-tenant fleet so recover partitions  the number of partitions what they look  like  quotas how those work topics and  consumer groups specifically how they're  created and the idea of guardrails and  so this is something that we we kind of  implement to make it better for  customers to run on on Heroku so  partitions we have a we have tested and  we we set a very very large number of  partitions for Kafka for the most part  like the industry average is maybe one  or two thousand partitions per broker  that's kind of like the rule of thumb we  are at close to six thousand and it's  unusually high but this is kind of the  trade-off that we make for being able to  pack so many tenants and give them the  freedom to create the number of topics  that they they want or they need and the  number of partitions per topic that they  need in order to support a large number  of partitions we actually have to tune  the max number of file descriptors and  so all of our clusters run at 500  thousand which again is is pretty  atypical it's unusually high for for  brokers of the size but again this is  you know through our testing our  extensive testing we've arrived at this  number and we know it's it's a safe  number for these clusters and similarly  we've increased the max memory map count  to your 500 thousand if you look at most  Kafka Doc's they'll tell you increase it  but to what is kind of up in the air and  it really depends on your usage I want  to cover quotas a little bit because  there's kind of a unusual implementation  and so tip 13 introduced to kotas and  0.9 and something that's kind of  counterintuitive both the enforcement  and the way it's implemented in the  first place is that quotas are actually  implemented per broker and so  if you think about this if I set a 1  megabyte per second produced quota on  Kafka using the CLI commands what I'm  actually getting is 1 megabyte per  broker so then if I think oh I've given  my customer 8 megabytes and then I  double the size of my cluster I've  actually given them now 16 megabytes  it's not really calculated across the  cluster and if you look at the  documentation they basically say it's  it's easier to implement it this way and  so our quotas are the the quote is  documented are actually the the cluster  wide aggregate the enforcement for  produce quotas is super counterintuitive  and actually caught us out a few times  but the way it works is that when you  produce 2 Kafka it sends you back a  response saying ok I got it  it's been act it's been written when the  quote is in effect and you've exceeded  your quota it actually does all the work  you know it accepts your message it  writes it to the commit log it sends it  off to all the brokers that are  replicating but then it just waits to  respond to you and so the idea is this  introduces backwards compatibility so  even if your client doesn't know  anything about quotas it should if it's  a well behaved client wait for the ACK  before it tries to produce more in  reality many Catholic clients are not  well written or don't really adhere to  this behavior and they'll just keep  throwing more data at it and the Kafka  broker will happily accept it so just  keep accepting as much data as you send  it and just won't respond to you but if  your client doesn't care it will just  keep continuing and so you end up with  this case where it's sort of like the  honored based implementation of quotas  it's like you really shouldn't send me  anything and then you just do  and there's accepts it this actually led  to another issue that we uncovered but  I'll cover that a little bit so yeah if  you are using Kafka and you are using  produce quotas that's something to to  keep in mind  with topics and consumer groups this is  kind of an unfortunate side effect of of  us you know unfortunate necessity and  the way we implemented multi-tenancy and  that there is no way in in Kafka even  with with ackles to specify a numeric  limit to the number of topics so we  can't say user a can create 40 topics  and 200 partitions the Ackles don't have  that kind of granularity so in order for  us to impose those limits instead we  actually split the control plane from  Kafka and Heroku so the idea is we  remove the ability to create topics  dynamically through the admin API and  instead we force the customer to go  through the Heroku API in order to  create these topics and so that gives us  a the gateway the point the entry point  in order to enforce these limits so for  the most part that's not really an issue  most of our users wish that they could  dynamically create topics and consumer  groups but in reality it's not really a  blocker in most cases so last sort of a  major topic in configuration but I want  to cover is guardrails and so the idea  here is to limit potential bad usage so  customers may use clients that are  poorly written because their language  doesn't have like a great supported  client or they may miss configure the  client in a way that introduces bad  behavior that could cause instability or  other performance issues and so this is  quote which I've heard many times in  Heroku but I'm actually not sure who  said it initially but essentially its  customers don't make mistakes we make  bad tools and the idea is if we give the  opportunity for a customer to make a  mistake and behave badly then it's  actually on us like we shouldn't have  let them do that and so wherever  possible we try to build in these  guardrails we try to put things in place  to prevent customers from from making  mistakes essentially and so some of the  configurations that we we have are on  the Heroku data plane side that we  actually enforce is minimum retention  time this is something that customers  often  ask about because it seems kind of weird  like why are you telling me that I  should keep data around for at least  this long it seems kind of like a  bizarre thing for us to enforce but  through our testing and if you look  through the mailing lists  anything less introduces a lot of turn  on the broker  so you're basically wasting cycles  wasting i UPS throwing out data that you  could be doing something productive with  and so we found that 24 hours is kind of  the sweet spot most people most  customers ask us like why is it why is  that the minimum but it's it's almost  never an issue we have a max retention  time for a multi-tenant plan of seven  days we have a default replication  factor of three a minimum replication  factor of three and a maximum replica  replication factor of three so it should  tell you that really you should have a  replication of three we don't allow  anything else and this is kind of one of  the more significant guardrails that we  have in place and the some of the  defaults in Kafka would not necessarily  have three he would create a topic and  it just gives you one replication and  weird things start happening and so we  strictly force in for three within Kafka  itself we've also changed the defaults  again to make them a little bit more  sane more safe and so the default number  of partitions we set is eight  the default for Kafka itself is one and  so with one you aren't gaining any of  the benefits of scale that will only  reside on a single broker and your  performance will be basically pinned to  a single broker's worth of throughput  and if you remember what I mentioned  about quotas essentially quotas are  enforced per broker so if you create a  one partition topic and your quota is  128k the maximum throughput you'll ever  get through it is 128k because it's all  going through one broker so we defaults  to the same number of brokers in the  cluster again replication three we're  pretty serious about it  so if you missed it the first time we're  gonna get it the second time it's gonna  be three minions Inc replicas if you're  not familiar with how this works is  essentially on the Kafka broker you can  specify the number of  confirmed rights from replicas before  you write back to the client and you say  I have received this message previous  releases of Kafka had it set to one and  so it or I think it was may have been  zero actually so just the receiving  broker says I have got this message and  then the client would think great I've  written it I should continue with my  life and then that broker dies and  you've lost all your messages and so  it's kind of confusing and  counterintuitive  so our default is set to two and most  recent versions of Kafka actually have  it to two as well a little bit about  monitoring at Heroku we use a custom  monitoring tool it's called Observatory  it's pretty awesome  it's agentless and the sense that one of  the core beliefs of Heroku data and for  its monitoring is that all monitoring  should be done from the outside in so we  don't actually deploy anything in the  brokers or on the containers or on the  servers themselves what that gives us is  this amazing power where you know  through support or through on-call we  discover oh actually there's this thing  there's this metric that we should be  monitoring and we aren't so we basically  teach our monitoring tool how to look at  that thing and now that metric is being  exposed across every single instance in  our fleet so we push some code and now a  million databases are now telling us  something new it's it's pretty  spectacular it's like one of the best  things that we've come up with I think  jmx is pretty great and so jmx is purely  a java thing which is not great but  Kafka itself exposes a ton of metrics  about every aspect everything you  possibly want from your Kafka broker JMX  can tell you but it's java only which  sucks Jolokia is a HTTP proxy for jmx  and so when we deploy Kafka we deployed  your locator with it and that basically  allows us to reap the benefits of JMX  without having to run java on our  control plane itself or the monitoring  actually so that's pretty fantastic and  I highly recommend it  so testing I mentioned we did a ton of  testing this was was pretty grueling we  tested a ridiculous number of  permutations a number of partitions  maximum partitions  what kind of throughput should we  provide for each tenant what's the  maximum that we can get looking at  different message sizes Kafka behaves  very differently if you send lots of  very small messages or very large  messages what about common operations so  we have a huge number of partitions  we're hammering it with a million large  messages and then we decide to take one  of the brokers out does it survive that  so there were some topologies we were  like yes this is the one it's perfect  everything works fine and then someone  says well let's do a rolling restart and  then it just cascades and everything  dies immediately so yeah we actually  looked through all these failure  scenarios you know we swap out a broker  we replace one we restart one one of the  server's just stops an instance falls  out from underneath us so we retest all  of those yeah similarly failure  scenarios if you run on AWS things will  fail if you have a large fleet that will  fail often and so we look at those cases  where you know we decide we're running a  broker and we detach an EBS volume does  the Khafre cluster survive that we  looked at maximum packing density again  this is kind of a function of partitions  mainly but can we fit 100 tenants can we  fit 500 tenants whatever those look like  what is it how does it perform what are  the implications are failing over that  kind of stuff and bugs bugs was kind of  a painful one we did encounter bugs  obviously Kafka is somewhat immature it  has a crazy development cycle is really  actively being developed all the time so  I'll cover some some of those issues but  one thing which we we are I've done  pretty quickly and I mentioned  automation is kind of our thing  is that we want to automate testing and  so we developed an internal tool that  developed that leverages the internal  Hiroki api's and basically simulates  users and so it stands up a cluster an  empty cluster it creates 50 users and  then it creates a  user and a consumer or many producers  and consumers for these simulated users  and we can actually define profiles for  each user and say we want 10% of our  users to send very small amounts of  traffic we want 20% of them to send very  large messages but at a very slow speed  and then we want the rest of them to do  like some random distribution of data  and so we can actually script this and  it's reproducible so we release a new  version we run a new version of Kafka we  maybe tune the LS a little bit and we  say alright go in and hammer this  cluster and so it'll provision all the  users it will push all this data through  and then we actually monitor it and look  through the logs and say okay you know  this worked pretty well or we noticed  that when we did a rolling restart at  this point it struggled it took too long  to come up so yeah we also made  everything including our testing in this  case yeah so that was pretty cool but we  found a bug while testing Kafka  multi-tenant specifically it effects the  the way the code is enforced it's Kafka  for 725  you can look it up we discover this  while testing we noticed that we'd run a  test and in this particular set of tests  our test was what happens if we set  quotas to one megabyte and then  customers completely ignore it and they  start writing at ten megabytes what  happens and so kotas looked like they  were being enforced and then suddenly  one of the brokers would go down and  then all the other brokers would go down  and we're confused like what is going on  why is this happening and so we dug into  a little bit deeper and we found that  there's a memory leak and so the way  quotas are enforced is as I mentioned  it's delayed by the way they they slow  you down is by holding onto the response  so they don't act your response until  it's ready for to do so which would meet  your quotas but essentially what that  meant was they were holding on to a  reference of that message so you kept  sending me data and I just keep holding  on to more and more references to these  messages that you sent and so a memory  would go through the roof  JVM would sort of kill it because he ran  out of memory and the broker would go  down and then all of your traffic would  shift to the other brokers and they  would do the same thing and so you get  this cascading failure pretty quick  so we found that we contributed a PR and  it was accepted and fixed in zero 10.1  Darwin so yeah we were pretty active in  in testing new releases for Kefka that's  something we do we always provide  feedback on the mailing lists you may  have seen us yeah ultime ssin it's  totally our thing like I mentioned we're  a pretty small team and we manage  millions of databases so we have to  ultimately it does a lot in terms of  maintaining these clusters in terms of  like leader election and failover and  that kind of stuff but it doesn't do  everything it has no awareness of like  underlying instances so as I mentioned  if you're on AWS instances will fail and  if you're on a fleet big enough they  will fail a lot so our our mantra i  guess is to automate everything we  necessarily have to automate as much as  possible I semi jokingly believe that my  job is to automate myself out of a job  and so if I do a really really good job  then I will be useless and things will  just run themselves so what we do in  terms of automation is we have a lot of  tools for cluster resizing for replacing  nodes so the the automation itself looks  at the cluster and says my my plan says  I should have eight brokers so if I  don't have eight I should resize to get  eight and so we can literally go into  the AWS console out-of-band and start  deleting instances our automation will  go uh there's something all right let me  bring up another node and it'll start  filling them out storage expansion is  something I mentioned earlier as you  write more data to Kafka we detect oh  you're at 80% of your storage let's  expand that so we'll keep expanding it  as much as you you need essentially  until you've some other part of  monitoring says hang on you've exceeded  your limit by too much so we're gonna  we're going to do something about that  we actually ultimate version upgrades so  although you as a customer on a  multi-tenant plan can't upgrade yourself  we automate the upgrades for the entire  cluster so it's not possible for us to  manually go in and start messing around  with hundreds of clusters or thousands  of clusters  so we basically say okay now we're gonna  upgrade all of the kefka's to 2.1 and it  ultimately does it restarts I put a star  because it is very surprising how  effective a restart is there is the joke  of have you tried turning off and on  again that works really really well  actually  90% of our pages are handled  automatically by automation and the vast  majority of automation is to restart a  thing it could be restart the service it  could be restart the instance but yeah  turns out turning it off and on again  tends to work really really well  disproportionately well there is always  more stuff that we can automate we  really really ultimate everything our  team is really really small so yeah we  automate as much as possible my  colleague Tom Craver it has a talk about  running hundreds of Khafre clusters  where the team is 5 on how they  recommend you take a look at it he goes  into much more detail about our  automation I'm almost done but some of  the limitations these are the  unfortunate side effects of being able  to provide what we do yeah we don't  allow we don't allow the admin API we  don't we forced explicit topic creation  explicit customer group consumer group  creation those you keep racks us thank  you very much I will be taking office  hours somewhere nearby and if you want  to talk to me more please do so thank  you very much  so when you say you do a lot of testing  do you test with enable the encryption  on the fly so basically is a from client  to broker you encrypt the data it was  how much performance a hit you see when  you do the encryption so by default all  of our multi-tenant plans require SSL  encryption so there is like no way for  you not to use it on multi-tenant we do  see a performance hit but typically it's  like a CPU performance hit and almost a  hundred percent of our clusters are IO  bound and so practical implications are  pretty small the CPU doesn't run hot but  you're testing the limits of IO on the  volumes do you set up any schema  registry - well it ate those produce  input data unfortunately a schema  registry is a confluent product and so  we are not allowed to run a managed  schema registry for you but you can do  play it yourself  [Music]
+
+00:00:00.490 --> 00:00:00.500 align:start position:0%
+you  [Music]  hi welcome to operating multi-tenant  kafka services for developers so this is  the agenda for the talk I'm gonna give  you a little intro about myself and  Heroku Heroku data I look at the  motivation behind building the  multi-tenant kafka service in general  take a look at our existing single  tenant Kafka compare that with  multi-tenancy what the multi-tenancy  implications are and then we'll go into  some of the configurations and changes  that we made and some of the tuning that  we did talk a little bit about testing  and then hopefully cover automation  which is kind of our thing and discuss  some of the limitations that were you  know necessary as a result of making a  multi-tenant service so I'm a Hemi D I'm  an engineer on the Heroku data team at  Salesforce her occur is a cloud platform  that enables companies to build  applications in a variety of languages  deploy on on our platform and actually  it helps them to run that scale it  monitor it Heroku data specifically is  the team at Heroku that provides the  data services on top of it and so we  provide Heroku Postgres or Redis and  cough cough course so a brief about  Kafka hopefully many of you are aware of  it already  Kafka itself is an Apache project it's a  distributed streaming platform it  provides the pub/sub model in calculon's  it's produce and consume you so you  produced the clock of the cluster and  you consume from it  it's a durable meshes message store so  on disk  it's a ordered commit lock and it's  highly available so you have multiple  brokers that can hold multiple replicas  of your data and so if a single broker  goes down you still have replicas and  it'll fail over and you you continue and  so what is Apache cough gone for ku  specifically so we provide a fully  managed service so it's a more of a  batteries included approach  it's opinionated in the sense that in  cases where there are multiple  configuration options we make a decision  based on what we feel is a safe or  productive default and we we provide  that out of the box it's configured for  best practices for most users and I put  a little asterisks because there's no  you know you can't make  one-size-fits-all there are bound to be  use cases that aren't really well suited  but we try to cover as many as possible  and try to get the the largest coverage  as possible  and so I want to talk a little bit about  the use cases for for caffeine in  general so why would you use Kafka and  not some other dates store or other  streaming service and so I'm going to  cover a couple of use cases and then  look at specific customers that were on  procure that used to work with Kafka  so one of the ones I'm looking posing a  monolithic app so in this case we're  taking a a big monolith and we're using  Kafka as a chance port medium or an  interconnect between the various  services or micro services to transport  information and events between them  another use case I'm going to cover is  process dating high-volume  real time date streams so you may have  something that is naturally a stream of  events so like currency information or  events coming from an IOT device or  whatever it is and you just have a a  torrent of data that you're collecting  from various sources you want to make  real-time decisions on those and the  third use case I'm going to cover is  providing real-time event-driven  architecture so this is pretty similar  to the second case but essentially you  have a number of disparate services that  are producing events and you're trying  to make decisions on some kind of  aggregate of that data so you have a  number of sources they're all telling  you different things and you wanna make  real-time decisions on what you should  be doing and so for the first case  decomposing the monolith I'm going to  talk a little bit about shift commerce  so you can actually read about it they  have a blog post on the Heroku blog that  talks about it and so they they  basically leveraged Heroku Kafka as a  path to gradual migration from a  monolith into micro service  so essentially what they did was they  introduced the ability for their  monolith to produce events into Kafka  and then gradually over time they  introduced more and more services that  consume those events and move the logic  out of the monolith into those new micro  services so for the second use case I  wanted to talk a little bit about coin  it's pronounced coin coin is a FinTech  company based out of Singapore and they  mostly deal with a cryptocurrency  exchanges and the mostly active in Japan  and so essentially they have a huge  torrent of pricing data for  cryptocurrencies coming from a number of  different exchanges and they aggregate  them and sort of make decisions in real  time on on what to do and how the prices  affect their decisions the last use case  I wanna cover is Caesars Entertainment  of you know casino fame and other things  and essentially they they use it to  ingest and aggregate a large amount of  customer data from lots and lots of  different sources and they use it to  make decisions on how best to provide  services or offers or deals to their  most prized VIP customers and so these  are like very different systems all  producing events they aggregate them  they process them they try to make  decisions on how best to serve their  customers so I wanna talk a little bit  the motivation why why bother building a  multi-tenant Kafka we already have a  relatively successful dedicated Kafka  product so these are some of the  motivations behind it some of the goals  right now our single tenant Kafka starts  at $1,500 for the for the base plan  which is the standard zero and so with  that you get three brokers and five  zookeepers which is kind of a pretty  standard for our our zookeeper topology  and a thousand five hundred is could be  relatively reasonable for you but we  want to lower that barrier we want to  make it much easier to access and so you  know if you're working in development  you haven't really finished your product  yet that's that might be too high a  barrier-free and so you know targeting  development testing low volume  production we want to introduce  something that's a little bit more  accessible and so our multi-tenant plans  right now start at $100 so it's that's  quite a substantial reduction  so here's the blogpost when we announced  it  it's September 14 2017 so we've had  multi-tenant Kafka for quite a while so  I want to talk a little bit about the  differences single tenant versus multi  tenant and what it looks like  so single tenant is pretty obvious we  have one customer or one tenant that has  access to the entire cluster and so your  security boundaries or your resource  boundaries are really outside of the  cluster everything in the cluster is  yours and so this is really what it  looks like when you talk Kafka you're  really dealing with topics so all the  topics are owned by single customer you  don't really need to worry about any  isolation at that level with  multi-tenancy it kind of looks like this  and so we have a large number of  customers all residing on a single  traffic cluster and so that introduces a  whole range of new sort of issues that  you need to tackle I know this is kind  of a wall of text but I'm gonna break  down and talk about each one separately  so you know we talk about resource  isolation we talk about parity compare  compatibility and costs related to it so  I'm going to focus on resource isolation  first and talk about security  implications performance implications  and safety so when I talk about security  what I really mean is a tenant should  not be able to access on others another  tenants data this is kind of table  stakes for multi-tenancy it would be  kind of a disaster if we put everyone on  the same cluster and everyone could read  everyone else's data so you know the  priority the main thing is this did not  happen you shouldn't be able to read  other people's data with Kafka because  we actually talk about topics all the  time this is really what we mean user a  shouldn't be able to read user B's  topics and so how do we how do we do  that Kafka itself has native support for  access control lists Oracle's and so  it's a somewhat relatively new feature  in Kafka life but essentially what  allows you to do is specify user a can  carry out action be on resource C so  user a can  read or describe or write topic messages  which is owned by user a but there's no  explicit Akal for allowing it to read  anything of topic B or user B so it  can't so the other thing we do is name  spacing so this is something that's  somewhat unique to us and that we  namespace resources per tenant so when  you create a new multi tenant Kafka  add-on on Heroku we automatically  generate a name in this case wall - five  eight seven seven nine so we pick a  river - some numbers and that becomes a  prefix for all of your resources so you  create the topic messages you get wall -  whatever it is thought messages that  also applies to the consumer groups and  that's actually what we applied the  Ackles to so any topic that begins with  wabash whatever is owned by tenant a  anything that has a different prefixes  on by another donor so the second aspect  of that I was looking to his performance  and what I mean here is really this  attendance should not adversely affect  another tenants performance so this is  typically what we refer to as the noisy  neighbor so you're sharing a cluster  with someone they're super active  they're absolutely hammering their  broker and your performance goes down  the toilet as a result of it so  obviously that sucks for everyone except  for the person who's abusing the  resources and so we want to prevent that  and so in the case of Kafka Kafka has  support for quotas so that's super cool  it's really useful it allows you to  specify a produce quota and a consume  quota in terms of bytes per second and  so we say you know ten and a can have  256 kilobytes per second produce and one  megabyte per second consume and calf get  itself enforces that I'll talk a little  bit later about the way that's enforced  because it's kind of interesting the  third part of resource isolation is  safety and so here what I actually mean  is a tenant should not jeopardize the  stability of the cluster so we don't  want the we don't want a single tenant  who does something unusual or has a  misbehaving client to take down the  cluster for everyone else  and so in order to to you know prevent  that we apply limits and so we can apply  limits to topics and by here by that I  mean the number of topics and by  association the number of partitions  which is really the thing that scales on  Kafka the number of consumer groups  storage and throughput I want to talk a  little bit more about storage because  it's kind of interesting kefka's concept  of storage is more of a transient thing  messages live on the Kefka cluster for a  certain amount of time they don't live  there forever it's not a a you know  source of truth for your data forever  and so thinking of it in terms of static  storage is is a little bit strange so  instead we think of it as capacity and  this is a term that we use in all of our  documentation and essentially that's a  function of message throughput  multiplied by the retention on all those  messages multiplied by the replication  so if I do 100 messages per second and I  have a 1-day retention and I want three  replicas of it and you multiply that all  together and that's actually the total  amount of storage using across the  cluster and then there's the the  throughput itself which I kind of  covered with quotas and so imposing  these limits is it's cool some of them  are natively supported within Kafka so  you can specify quotas or ackles to do  certain things and storage is something  that you know we cover with the capacity  which is this slightly more complicated  function but we need to be able to  monitor it we actually need to be able  to look at this and say you know are  these limits being exceeded are they  being you know adhered to in particular  with storage the way it works in our  case is that we allow you to grow the  storage on the cluster so you spin up a  cluster we give you 100 gigabytes of  storage you start putting data into it  and you get close to the hundred  gigabytes we actually grow it  automatically for you so we don't take  down your cluster because you hit your  limit we have a pretty generous grace  sort of area where we will you know  increase the storage and let you  continue but that's great for the  customer but we aren't really doing you  any favors by allowing you to grow  unbounded so we actually have to monitor  it and so we check occasionally see you  know are you still within the limits are  you nearing a dangerous limit and so  monitoring is kind of key to that but  then more so than just monitoring is  actually being able to enforce limits so  some of them are nice because they're  natively supported in Kafka but in the  case of storage if our automation  automatically grows the volumes then you  could just keep growing forever and  eventually the cluster will topple over  and so we actually have to have a  mechanism for enforcing it so in the  case of Kafka multi-tenant will send you  an email saying hey you've exceeded your  storage by 150 percent  you should probably slow it down or  upgrade your plan and if you keep going  faster then we impose an additional more  aggressive throttling to kind of slow  your your growth and get you back under  the limit and then if you just fly past  there for an extended period of time  we actually block access to try to let  it clear out and then we'll enable it  again so another area of multi-tenancy  which is kind of specific to  multi-tenancy is parity and so here  we're talking about feature parity as  well as behavior parity and so I say  parity but what I really mean is for the  service to be useful it needs to behave  like a normal cluster there's no point  in us giving you something that looks  and behaves in a way that's totally  unlike Kafka because you could code  against it and you could deploy your  application against it and it works fine  but then you switch to a regular Kefka  and everything breaks and it just  doesn't do what you think it does and so  I don't dress this we actually give you  access to what is effectively a standard  Kafka cluster it looks very much like  our dedicated clusters it's the same  number of brokers it's the same number  of zookeeper nodes it behaves in exactly  the same way and so one of these things  one of the the things that we thought  about is that we could have gone with a  single broker single zookeeper option  and that would have been pretty cost  effective and we could do it quite  easily but then the customer will be  developing against something that's not  really representative of real life Uwe  would deploy a production catholic  cluster with one broker and one  zookeeper and so you won't have exposure  to things like rolling restarts or when  topics failover and all that stuff so  your application my work fine with only  one but then once you switch to a real  cluster which has eight brokers and  they start failing over and things start  moving around the application breaks so  we actually give you access to something  that represents what a real production  cluster would look like so if you do  move then your application is ready for  it so there are some limitations we have  to make some compromises in order to  provide these you know the level of  safety that I mentioned earlier so as  much as possible we try to keep it  standard but there's there's going to be  some some things that we have to change  compatibility is the next thing I want  to talk about in this case what I really  mean is the service needs to support  standard clients no vendor lock-in so  that's absolutely a core part of  pirozhkis belief and we only use open  source Apache Kafka it's not a custom  fork there's no weird custom code  required on the client side there's  nothing strange that we we do in order  to enable this you use absolutely  standard clients and whatever your  favorite languages and you can connect  to it and you use it that's kind of a  big thing for us and it applies to all  of our data services really so the last  implication I want to talk about is  costs and specifically costs of  resources and operational costs so what  does it cost to run for the things that  we run like VMs and instances plus what  does it cost us to actually operate it  and so here I'm talking about the  service needs to be financially feasible  and in this case I'm actually talking  about our costs not so much the cost for  the customer although they're obviously  related so here the things that go into  the resource costs will be packing  density  how many tenants do we pack on this  cluster and conversely but somewhere  related is the utilization of that  cluster like how well utilized is it the  more utilized it is the more efficiently  we're spending our money on these  resources but with that comes a few sort  of interesting cases where we have  consciously made a decision to take a  hit on our part in order to provide  certain functionality  and so when we look at cluster size we  have some options we could have one  massive cluster with hundreds of brokers  in fact all of the tenants onto there or  we could have very very small clusters  like one broker one zookeeper and so  there's some decisions there where there  are implications related to the way it  performs the way a failover is work  there is a sweet spot for a cluster size  and we've actually already done this  process we've looked into this we did  all the testing when we looked at the  single dedicated plans and we settled on  you know a maximum of eight brokers and  five zookeepers because of the way it  behaves and so we kind of favor that we  also kind of insisted pretty early on  that we don't over provision and so when  we tell a customer you're signing up for  a particular plan we make sure that they  have all those resources and so we don't  over provision it in any way so again if  we say we're gonna pack 20 customers  onto a cluster and they all join on with  the lowest plan then our utilization is  pretty low and so that sucks from a  resource cost but it's great from the  customer point of view because now they  have the resources that they expected  also we wanted to provide seamless  upgrading so the idea is a customer can  join on with the lowest plan and they  should be able to upgrade to the next  lineup or the biggest plan that we have  for a multi-tenant without any  disruption and so unfortunately when it  comes to Kafka there is no easy way to  actually migrate offsets so if you move  from one class to the other the offsets  aren't really translatable in that sense  so in order to get around this we have  to assume the worst case or the best  case depending on your perspective that  every customer could potentially upgrade  to the biggest plan and so inherently  our utilization is pretty low when it  comes to operational costs this is kind  of an area that we want to focus on  because this is the amount of man-hours  that we sink into it and we're not a  huge team so this kind of makes a big  difference for us so we want to minimize  the operational burden and minimize the  impact or the blast radius of particular  issues so again going back to the  cluster size if we had one massive  cluster with 100 brokers and there was a  cluster wide issue then that could  potentially affect hundreds or thousands  of customers and so again we fall back  into the Suites  of saying you know if we have clusters  that are eat brokers and we've hack 2530  tenants onto it we can kind of minimize  the blast radius into a particular area  and minimizing operational costs again  if we match the single tenant clusters  and the topology then we can actually  share the learnings between them so all  of the gaining all the gained knowledge  and experience from operating a fleet of  three and eight broker clusters we  actually map immediately and so we find  a bug in one sort of topology or one  behavior one performance tuning that  works on one we can immediately map it  over to the next to the multi tenant  without really any loss some of the  other ways that we kind of reduce the  operational burden for us is that we we  pick safe default so it's possible to to  kind of put yourself in a unfortunate  situation by picking settings that are  not ideal so if you think about the  situation where you create a topic and  you set replication to one which was the  default in lots of clusters so the  customer creates a topic and they start  writing things to it and we fail over  that broker well what happened to the  data  it only resided on one and so now it's  gone forever that sucks for the customer  and maybe they weren't aware of it or  maybe they assumed that you know as sane  default was used so we actually enforce  that so we pick those safety faults both  to provide a better user experience also  to reduce reduce the operational burden  for us as I mentioned we pick similar  clusters to our dedicated so we can  share those learnings and we do a ton of  automation automation I wrote it's kind  of our thing that's like the epic  understatement we're a very small team  and we manage millions of dates or data  bases and data services millions without  exaggeration that's actually what we do  and we did a ton of testing we did a  huge amount of testing on the  multi-tenant topologies different size  kapha clusters different configurations  different releases all sorts of stuff in  order to arrive a configuration that we  think is is pretty sound and pretty  solid and that all feeds back into  reducing operational cost for us  so I want to talk a little bit about  configuration and tuning and sort of  talk a little bit about some of the  changes that we made some of the  configurations that we did in order to  achieve what we aimed to do in and what  we actually have running in our  multi-tenant fleet so recover partitions  the number of partitions what they look  like  quotas how those work topics and  consumer groups specifically how they're  created and the idea of guardrails and  so this is something that we we kind of  implement to make it better for  customers to run on on Heroku so  partitions we have a we have tested and  we we set a very very large number of  partitions for Kafka for the most part  like the industry average is maybe one  or two thousand partitions per broker  that's kind of like the rule of thumb we  are at close to six thousand and it's  unusually high but this is kind of the  trade-off that we make for being able to  pack so many tenants and give them the  freedom to create the number of topics  that they they want or they need and the  number of partitions per topic that they  need in order to support a large number  of partitions we actually have to tune  the max number of file descriptors and  so all of our clusters run at 500  thousand which again is is pretty  atypical it's unusually high for for  brokers of the size but again this is  you know through our testing our  extensive testing we've arrived at this  number and we know it's it's a safe  number for these clusters and similarly  we've increased the max memory map count  to your 500 thousand if you look at most  Kafka Doc's they'll tell you increase it  but to what is kind of up in the air and  it really depends on your usage I want  to cover quotas a little bit because  there's kind of a unusual implementation  and so tip 13 introduced to kotas and  0.9 and something that's kind of  counterintuitive both the enforcement  and the way it's implemented in the  first place is that quotas are actually  implemented per broker and so  if you think about this if I set a 1  megabyte per second produced quota on  Kafka using the CLI commands what I'm  actually getting is 1 megabyte per  broker so then if I think oh I've given  my customer 8 megabytes and then I  double the size of my cluster I've  actually given them now 16 megabytes  it's not really calculated across the  cluster and if you look at the  documentation they basically say it's  it's easier to implement it this way and  so our quotas are the the quote is  documented are actually the the cluster  wide aggregate the enforcement for  produce quotas is super counterintuitive  and actually caught us out a few times  but the way it works is that when you  produce 2 Kafka it sends you back a  response saying ok I got it  it's been act it's been written when the  quote is in effect and you've exceeded  your quota it actually does all the work  you know it accepts your message it  writes it to the commit log it sends it  off to all the brokers that are  replicating but then it just waits to  respond to you and so the idea is this  introduces backwards compatibility so  even if your client doesn't know  anything about quotas it should if it's  a well behaved client wait for the ACK  before it tries to produce more in  reality many Catholic clients are not  well written or don't really adhere to  this behavior and they'll just keep  throwing more data at it and the Kafka  broker will happily accept it so just  keep accepting as much data as you send  it and just won't respond to you but if  your client doesn't care it will just  keep continuing and so you end up with  this case where it's sort of like the  honored based implementation of quotas  it's like you really shouldn't send me  anything and then you just do  and there's accepts it this actually led  to another issue that we uncovered but  I'll cover that a little bit so yeah if  you are using Kafka and you are using  produce quotas that's something to to  keep in mind  with topics and consumer groups this is  kind of an unfortunate side effect of of  us you know unfortunate necessity and  the way we implemented multi-tenancy and  that there is no way in in Kafka even  with with ackles to specify a numeric  limit to the number of topics so we  can't say user a can create 40 topics  and 200 partitions the Ackles don't have  that kind of granularity so in order for  us to impose those limits instead we  actually split the control plane from  Kafka and Heroku so the idea is we  remove the ability to create topics  dynamically through the admin API and  instead we force the customer to go  through the Heroku API in order to  create these topics and so that gives us  a the gateway the point the entry point  in order to enforce these limits so for  the most part that's not really an issue  most of our users wish that they could  dynamically create topics and consumer  groups but in reality it's not really a  blocker in most cases so last sort of a  major topic in configuration but I want  to cover is guardrails and so the idea  here is to limit potential bad usage so  customers may use clients that are  poorly written because their language  doesn't have like a great supported  client or they may miss configure the  client in a way that introduces bad  behavior that could cause instability or  other performance issues and so this is  quote which I've heard many times in  Heroku but I'm actually not sure who  said it initially but essentially its  customers don't make mistakes we make  bad tools and the idea is if we give the  opportunity for a customer to make a  mistake and behave badly then it's  actually on us like we shouldn't have  let them do that and so wherever  possible we try to build in these  guardrails we try to put things in place  to prevent customers from from making  mistakes essentially and so some of the  configurations that we we have are on  the Heroku data plane side that we  actually enforce is minimum retention  time this is something that customers  often  ask about because it seems kind of weird  like why are you telling me that I  should keep data around for at least  this long it seems kind of like a  bizarre thing for us to enforce but  through our testing and if you look  through the mailing lists  anything less introduces a lot of turn  on the broker  so you're basically wasting cycles  wasting i UPS throwing out data that you  could be doing something productive with  and so we found that 24 hours is kind of  the sweet spot most people most  customers ask us like why is it why is  that the minimum but it's it's almost  never an issue we have a max retention  time for a multi-tenant plan of seven  days we have a default replication  factor of three a minimum replication  factor of three and a maximum replica  replication factor of three so it should  tell you that really you should have a  replication of three we don't allow  anything else and this is kind of one of  the more significant guardrails that we  have in place and the some of the  defaults in Kafka would not necessarily  have three he would create a topic and  it just gives you one replication and  weird things start happening and so we  strictly force in for three within Kafka  itself we've also changed the defaults  again to make them a little bit more  sane more safe and so the default number  of partitions we set is eight  the default for Kafka itself is one and  so with one you aren't gaining any of  the benefits of scale that will only  reside on a single broker and your  performance will be basically pinned to  a single broker's worth of throughput  and if you remember what I mentioned  about quotas essentially quotas are  enforced per broker so if you create a  one partition topic and your quota is  128k the maximum throughput you'll ever  get through it is 128k because it's all  going through one broker so we defaults  to the same number of brokers in the  cluster again replication three we're  pretty serious about it  so if you missed it the first time we're  gonna get it the second time it's gonna  be three minions Inc replicas if you're  not familiar with how this works is  essentially on the Kafka broker you can  specify the number of  confirmed rights from replicas before  you write back to the client and you say  I have received this message previous  releases of Kafka had it set to one and  so it or I think it was may have been  zero actually so just the receiving  broker says I have got this message and  then the client would think great I've  written it I should continue with my  life and then that broker dies and  you've lost all your messages and so  it's kind of confusing and  counterintuitive  so our default is set to two and most  recent versions of Kafka actually have  it to two as well a little bit about  monitoring at Heroku we use a custom  monitoring tool it's called Observatory  it's pretty awesome  it's agentless and the sense that one of  the core beliefs of Heroku data and for  its monitoring is that all monitoring  should be done from the outside in so we  don't actually deploy anything in the  brokers or on the containers or on the  servers themselves what that gives us is  this amazing power where you know  through support or through on-call we  discover oh actually there's this thing  there's this metric that we should be  monitoring and we aren't so we basically  teach our monitoring tool how to look at  that thing and now that metric is being  exposed across every single instance in  our fleet so we push some code and now a  million databases are now telling us  something new it's it's pretty  spectacular it's like one of the best  things that we've come up with I think  jmx is pretty great and so jmx is purely  a java thing which is not great but  Kafka itself exposes a ton of metrics  about every aspect everything you  possibly want from your Kafka broker JMX  can tell you but it's java only which  sucks Jolokia is a HTTP proxy for jmx  and so when we deploy Kafka we deployed  your locator with it and that basically  allows us to reap the benefits of JMX  without having to run java on our  control plane itself or the monitoring  actually so that's pretty fantastic and  I highly recommend it  so testing I mentioned we did a ton of  testing this was was pretty grueling we  tested a ridiculous number of  permutations a number of partitions  maximum partitions  what kind of throughput should we  provide for each tenant what's the  maximum that we can get looking at  different message sizes Kafka behaves  very differently if you send lots of  very small messages or very large  messages what about common operations so  we have a huge number of partitions  we're hammering it with a million large  messages and then we decide to take one  of the brokers out does it survive that  so there were some topologies we were  like yes this is the one it's perfect  everything works fine and then someone  says well let's do a rolling restart and  then it just cascades and everything  dies immediately so yeah we actually  looked through all these failure  scenarios you know we swap out a broker  we replace one we restart one one of the  server's just stops an instance falls  out from underneath us so we retest all  of those yeah similarly failure  scenarios if you run on AWS things will  fail if you have a large fleet that will  fail often and so we look at those cases  where you know we decide we're running a  broker and we detach an EBS volume does  the Khafre cluster survive that we  looked at maximum packing density again  this is kind of a function of partitions  mainly but can we fit 100 tenants can we  fit 500 tenants whatever those look like  what is it how does it perform what are  the implications are failing over that  kind of stuff and bugs bugs was kind of  a painful one we did encounter bugs  obviously Kafka is somewhat immature it  has a crazy development cycle is really  actively being developed all the time so  I'll cover some some of those issues but  one thing which we we are I've done  pretty quickly and I mentioned  automation is kind of our thing  is that we want to automate testing and  so we developed an internal tool that  developed that leverages the internal  Hiroki api's and basically simulates  users and so it stands up a cluster an  empty cluster it creates 50 users and  then it creates a  user and a consumer or many producers  and consumers for these simulated users  and we can actually define profiles for  each user and say we want 10% of our  users to send very small amounts of  traffic we want 20% of them to send very  large messages but at a very slow speed  and then we want the rest of them to do  like some random distribution of data  and so we can actually script this and  it's reproducible so we release a new  version we run a new version of Kafka we  maybe tune the LS a little bit and we  say alright go in and hammer this  cluster and so it'll provision all the  users it will push all this data through  and then we actually monitor it and look  through the logs and say okay you know  this worked pretty well or we noticed  that when we did a rolling restart at  this point it struggled it took too long  to come up so yeah we also made  everything including our testing in this  case yeah so that was pretty cool but we  found a bug while testing Kafka  multi-tenant specifically it effects the  the way the code is enforced it's Kafka  for 725  you can look it up we discover this  while testing we noticed that we'd run a  test and in this particular set of tests  our test was what happens if we set  quotas to one megabyte and then  customers completely ignore it and they  start writing at ten megabytes what  happens and so kotas looked like they  were being enforced and then suddenly  one of the brokers would go down and  then all the other brokers would go down  and we're confused like what is going on  why is this happening and so we dug into  a little bit deeper and we found that  there's a memory leak and so the way  quotas are enforced is as I mentioned  it's delayed by the way they they slow  you down is by holding onto the response  so they don't act your response until  it's ready for to do so which would meet  your quotas but essentially what that  meant was they were holding on to a  reference of that message so you kept  sending me data and I just keep holding  on to more and more references to these  messages that you sent and so a memory  would go through the roof  JVM would sort of kill it because he ran  out of memory and the broker would go  down and then all of your traffic would  shift to the other brokers and they  would do the same thing and so you get  this cascading failure pretty quick  so we found that we contributed a PR and  it was accepted and fixed in zero 10.1  Darwin so yeah we were pretty active in  in testing new releases for Kefka that's  something we do we always provide  feedback on the mailing lists you may  have seen us yeah ultime ssin it's  totally our thing like I mentioned we're  a pretty small team and we manage  millions of databases so we have to  ultimately it does a lot in terms of  maintaining these clusters in terms of  like leader election and failover and  that kind of stuff but it doesn't do  everything it has no awareness of like  underlying instances so as I mentioned  if you're on AWS instances will fail and  if you're on a fleet big enough they  will fail a lot so our our mantra i  guess is to automate everything we  necessarily have to automate as much as  possible I semi jokingly believe that my  job is to automate myself out of a job  and so if I do a really really good job  then I will be useless and things will  just run themselves so what we do in  terms of automation is we have a lot of  tools for cluster resizing for replacing  nodes so the the automation itself looks  at the cluster and says my my plan says  I should have eight brokers so if I  don't have eight I should resize to get  eight and so we can literally go into  the AWS console out-of-band and start  deleting instances our automation will  go uh there's something all right let me  bring up another node and it'll start  filling them out storage expansion is  something I mentioned earlier as you  write more data to Kafka we detect oh  you're at 80% of your storage let's  expand that so we'll keep expanding it  as much as you you need essentially  until you've some other part of  monitoring says hang on you've exceeded  your limit by too much so we're gonna  we're going to do something about that  we actually ultimate version upgrades so  although you as a customer on a  multi-tenant plan can't upgrade yourself  we automate the upgrades for the entire  cluster so it's not possible for us to  manually go in and start messing around  with hundreds of clusters or thousands  of clusters  so we basically say okay now we're gonna  upgrade all of the kefka's to 2.1 and it  ultimately does it restarts I put a star  because it is very surprising how  effective a restart is there is the joke  of have you tried turning off and on  again that works really really well  actually  90% of our pages are handled  automatically by automation and the vast  majority of automation is to restart a  thing it could be restart the service it  could be restart the instance but yeah  turns out turning it off and on again  tends to work really really well  disproportionately well there is always  more stuff that we can automate we  really really ultimate everything our  team is really really small so yeah we  automate as much as possible my  colleague Tom Craver it has a talk about  running hundreds of Khafre clusters  where the team is 5 on how they  recommend you take a look at it he goes  into much more detail about our  automation I'm almost done but some of  the limitations these are the  unfortunate side effects of being able  to provide what we do yeah we don't  allow we don't allow the admin API we  don't we forced explicit topic creation  explicit customer group consumer group  creation those you keep racks us thank  you very much I will be taking office  hours somewhere nearby and if you want  to talk to me more please do so thank  you very much  so when you say you do a lot of testing  do you test with enable the encryption  on the fly so basically is a from client  to broker you encrypt the data it was  how much performance a hit you see when  you do the encryption so by default all  of our multi-tenant plans require SSL  encryption so there is like no way for  you not to use it on multi-tenant we do  see a performance hit but typically it's  like a CPU performance hit and almost a  hundred percent of our clusters are IO  bound and so practical implications are  pretty small the CPU doesn't run hot but  you're testing the limits of IO on the  volumes do you set up any schema  registry - well it ate those produce  input data unfortunately a schema  registry is a confluent product and so  we are not allowed to run a managed  schema registry for you but you can do  play it yourself  [Music]
+ 
+
+00:00:00.500 --> 00:00:10.720 align:start position:0%
+you  [Music]  hi welcome to operating multi-tenant  kafka services for developers so this is  the agenda for the talk I'm gonna give  you a little intro about myself and  Heroku Heroku data I look at the  motivation behind building the  multi-tenant kafka service in general  take a look at our existing single  tenant Kafka compare that with  multi-tenancy what the multi-tenancy  implications are and then we'll go into  some of the configurations and changes  that we made and some of the tuning that  we did talk a little bit about testing  and then hopefully cover automation  which is kind of our thing and discuss  some of the limitations that were you  know necessary as a result of making a  multi-tenant service so I'm a Hemi D I'm  an engineer on the Heroku data team at  Salesforce her occur is a cloud platform  that enables companies to build  applications in a variety of languages  deploy on on our platform and actually  it helps them to run that scale it  monitor it Heroku data specifically is  the team at Heroku that provides the  data services on top of it and so we  provide Heroku Postgres or Redis and  cough cough course so a brief about  Kafka hopefully many of you are aware of  it already  Kafka itself is an Apache project it's a  distributed streaming platform it  provides the pub/sub model in calculon's  it's produce and consume you so you  produced the clock of the cluster and  you consume from it  it's a durable meshes message store so  on disk  it's a ordered commit lock and it's  highly available so you have multiple  brokers that can hold multiple replicas  of your data and so if a single broker  goes down you still have replicas and  it'll fail over and you you continue and  so what is Apache cough gone for ku  specifically so we provide a fully  managed service so it's a more of a  batteries included approach  it's opinionated in the sense that in  cases where there are multiple  configuration options we make a decision  based on what we feel is a safe or  productive default and we we provide  that out of the box it's configured for  best practices for most users and I put  a little asterisks because there's no  you know you can't make  one-size-fits-all there are bound to be  use cases that aren't really well suited  but we try to cover as many as possible  and try to get the the largest coverage  as possible  and so I want to talk a little bit about  the use cases for for caffeine in  general so why would you use Kafka and  not some other dates store or other  streaming service and so I'm going to  cover a couple of use cases and then  look at specific customers that were on  procure that used to work with Kafka  so one of the ones I'm looking posing a  monolithic app so in this case we're  taking a a big monolith and we're using  Kafka as a chance port medium or an  interconnect between the various  services or micro services to transport  information and events between them  another use case I'm going to cover is  process dating high-volume  real time date streams so you may have  something that is naturally a stream of  events so like currency information or  events coming from an IOT device or  whatever it is and you just have a a  torrent of data that you're collecting  from various sources you want to make  real-time decisions on those and the  third use case I'm going to cover is  providing real-time event-driven  architecture so this is pretty similar  to the second case but essentially you  have a number of disparate services that  are producing events and you're trying  to make decisions on some kind of  aggregate of that data so you have a  number of sources they're all telling  you different things and you wanna make  real-time decisions on what you should  be doing and so for the first case  decomposing the monolith I'm going to  talk a little bit about shift commerce  so you can actually read about it they  have a blog post on the Heroku blog that  talks about it and so they they  basically leveraged Heroku Kafka as a  path to gradual migration from a  monolith into micro service  so essentially what they did was they  introduced the ability for their  monolith to produce events into Kafka  and then gradually over time they  introduced more and more services that  consume those events and move the logic  out of the monolith into those new micro  services so for the second use case I  wanted to talk a little bit about coin  it's pronounced coin coin is a FinTech  company based out of Singapore and they  mostly deal with a cryptocurrency  exchanges and the mostly active in Japan  and so essentially they have a huge  torrent of pricing data for  cryptocurrencies coming from a number of  different exchanges and they aggregate  them and sort of make decisions in real  time on on what to do and how the prices  affect their decisions the last use case  I wanna cover is Caesars Entertainment  of you know casino fame and other things  and essentially they they use it to  ingest and aggregate a large amount of  customer data from lots and lots of  different sources and they use it to  make decisions on how best to provide  services or offers or deals to their  most prized VIP customers and so these  are like very different systems all  producing events they aggregate them  they process them they try to make  decisions on how best to serve their  customers so I wanna talk a little bit  the motivation why why bother building a  multi-tenant Kafka we already have a  relatively successful dedicated Kafka  product so these are some of the  motivations behind it some of the goals  right now our single tenant Kafka starts  at $1,500 for the for the base plan  which is the standard zero and so with  that you get three brokers and five  zookeepers which is kind of a pretty  standard for our our zookeeper topology  and a thousand five hundred is could be  relatively reasonable for you but we  want to lower that barrier we want to  make it much easier to access and so you  know if you're working in development  you haven't really finished your product  yet that's that might be too high a  barrier-free and so you know targeting  development testing low volume  production we want to introduce  something that's a little bit more  accessible and so our multi-tenant plans  right now start at $100 so it's that's  quite a substantial reduction  so here's the blogpost when we announced  it  it's September 14 2017 so we've had  multi-tenant Kafka for quite a while so  I want to talk a little bit about the  differences single tenant versus multi  tenant and what it looks like  so single tenant is pretty obvious we  have one customer or one tenant that has  access to the entire cluster and so your  security boundaries or your resource  boundaries are really outside of the  cluster everything in the cluster is  yours and so this is really what it  looks like when you talk Kafka you're  really dealing with topics so all the  topics are owned by single customer you  don't really need to worry about any  isolation at that level with  multi-tenancy it kind of looks like this  and so we have a large number of  customers all residing on a single  traffic cluster and so that introduces a  whole range of new sort of issues that  you need to tackle I know this is kind  of a wall of text but I'm gonna break  down and talk about each one separately  so you know we talk about resource  isolation we talk about parity compare  compatibility and costs related to it so  I'm going to focus on resource isolation  first and talk about security  implications performance implications  and safety so when I talk about security  what I really mean is a tenant should  not be able to access on others another  tenants data this is kind of table  stakes for multi-tenancy it would be  kind of a disaster if we put everyone on  the same cluster and everyone could read  everyone else's data so you know the  priority the main thing is this did not  happen you shouldn't be able to read  other people's data with Kafka because  we actually talk about topics all the  time this is really what we mean user a  shouldn't be able to read user B's  topics and so how do we how do we do  that Kafka itself has native support for  access control lists Oracle's and so  it's a somewhat relatively new feature  in Kafka life but essentially what  allows you to do is specify user a can  carry out action be on resource C so  user a can  read or describe or write topic messages  which is owned by user a but there's no  explicit Akal for allowing it to read  anything of topic B or user B so it  can't so the other thing we do is name  spacing so this is something that's  somewhat unique to us and that we  namespace resources per tenant so when  you create a new multi tenant Kafka  add-on on Heroku we automatically  generate a name in this case wall - five  eight seven seven nine so we pick a  river - some numbers and that becomes a  prefix for all of your resources so you  create the topic messages you get wall -  whatever it is thought messages that  also applies to the consumer groups and  that's actually what we applied the  Ackles to so any topic that begins with  wabash whatever is owned by tenant a  anything that has a different prefixes  on by another donor so the second aspect  of that I was looking to his performance  and what I mean here is really this  attendance should not adversely affect  another tenants performance so this is  typically what we refer to as the noisy  neighbor so you're sharing a cluster  with someone they're super active  they're absolutely hammering their  broker and your performance goes down  the toilet as a result of it so  obviously that sucks for everyone except  for the person who's abusing the  resources and so we want to prevent that  and so in the case of Kafka Kafka has  support for quotas so that's super cool  it's really useful it allows you to  specify a produce quota and a consume  quota in terms of bytes per second and  so we say you know ten and a can have  256 kilobytes per second produce and one  megabyte per second consume and calf get  itself enforces that I'll talk a little  bit later about the way that's enforced  because it's kind of interesting the  third part of resource isolation is  safety and so here what I actually mean  is a tenant should not jeopardize the  stability of the cluster so we don't  want the we don't want a single tenant  who does something unusual or has a  misbehaving client to take down the  cluster for everyone else  and so in order to to you know prevent  that we apply limits and so we can apply  limits to topics and by here by that I  mean the number of topics and by  association the number of partitions  which is really the thing that scales on  Kafka the number of consumer groups  storage and throughput I want to talk a  little bit more about storage because  it's kind of interesting kefka's concept  of storage is more of a transient thing  messages live on the Kefka cluster for a  certain amount of time they don't live  there forever it's not a a you know  source of truth for your data forever  and so thinking of it in terms of static  storage is is a little bit strange so  instead we think of it as capacity and  this is a term that we use in all of our  documentation and essentially that's a  function of message throughput  multiplied by the retention on all those  messages multiplied by the replication  so if I do 100 messages per second and I  have a 1-day retention and I want three  replicas of it and you multiply that all  together and that's actually the total  amount of storage using across the  cluster and then there's the the  throughput itself which I kind of  covered with quotas and so imposing  these limits is it's cool some of them  are natively supported within Kafka so  you can specify quotas or ackles to do  certain things and storage is something  that you know we cover with the capacity  which is this slightly more complicated  function but we need to be able to  monitor it we actually need to be able  to look at this and say you know are  these limits being exceeded are they  being you know adhered to in particular  with storage the way it works in our  case is that we allow you to grow the  storage on the cluster so you spin up a  cluster we give you 100 gigabytes of  storage you start putting data into it  and you get close to the hundred  gigabytes we actually grow it  automatically for you so we don't take  down your cluster because you hit your  limit we have a pretty generous grace  sort of area where we will you know  increase the storage and let you  continue but that's great for the  customer but we aren't really doing you  any favors by allowing you to grow  unbounded so we actually have to monitor  it and so we check occasionally see you  know are you still within the limits are  you nearing a dangerous limit and so  monitoring is kind of key to that but  then more so than just monitoring is  actually being able to enforce limits so  some of them are nice because they're  natively supported in Kafka but in the  case of storage if our automation  automatically grows the volumes then you  could just keep growing forever and  eventually the cluster will topple over  and so we actually have to have a  mechanism for enforcing it so in the  case of Kafka multi-tenant will send you  an email saying hey you've exceeded your  storage by 150 percent  you should probably slow it down or  upgrade your plan and if you keep going  faster then we impose an additional more  aggressive throttling to kind of slow  your your growth and get you back under  the limit and then if you just fly past  there for an extended period of time  we actually block access to try to let  it clear out and then we'll enable it  again so another area of multi-tenancy  which is kind of specific to  multi-tenancy is parity and so here  we're talking about feature parity as  well as behavior parity and so I say  parity but what I really mean is for the  service to be useful it needs to behave  like a normal cluster there's no point  in us giving you something that looks  and behaves in a way that's totally  unlike Kafka because you could code  against it and you could deploy your  application against it and it works fine  but then you switch to a regular Kefka  and everything breaks and it just  doesn't do what you think it does and so  I don't dress this we actually give you  access to what is effectively a standard  Kafka cluster it looks very much like  our dedicated clusters it's the same  number of brokers it's the same number  of zookeeper nodes it behaves in exactly  the same way and so one of these things  one of the the things that we thought  about is that we could have gone with a  single broker single zookeeper option  and that would have been pretty cost  effective and we could do it quite  easily but then the customer will be  developing against something that's not  really representative of real life Uwe  would deploy a production catholic  cluster with one broker and one  zookeeper and so you won't have exposure  to things like rolling restarts or when  topics failover and all that stuff so  your application my work fine with only  one but then once you switch to a real  cluster which has eight brokers and  they start failing over and things start  moving around the application breaks so  we actually give you access to something  that represents what a real production  cluster would look like so if you do  move then your application is ready for  it so there are some limitations we have  to make some compromises in order to  provide these you know the level of  safety that I mentioned earlier so as  much as possible we try to keep it  standard but there's there's going to be  some some things that we have to change  compatibility is the next thing I want  to talk about in this case what I really  mean is the service needs to support  standard clients no vendor lock-in so  that's absolutely a core part of  pirozhkis belief and we only use open  source Apache Kafka it's not a custom  fork there's no weird custom code  required on the client side there's  nothing strange that we we do in order  to enable this you use absolutely  standard clients and whatever your  favorite languages and you can connect  to it and you use it that's kind of a  big thing for us and it applies to all  of our data services really so the last  implication I want to talk about is  costs and specifically costs of  resources and operational costs so what  does it cost to run for the things that  we run like VMs and instances plus what  does it cost us to actually operate it  and so here I'm talking about the  service needs to be financially feasible  and in this case I'm actually talking  about our costs not so much the cost for  the customer although they're obviously  related so here the things that go into  the resource costs will be packing  density  how many tenants do we pack on this  cluster and conversely but somewhere  related is the utilization of that  cluster like how well utilized is it the  more utilized it is the more efficiently  we're spending our money on these  resources but with that comes a few sort  of interesting cases where we have  consciously made a decision to take a  hit on our part in order to provide  certain functionality  and so when we look at cluster size we  have some options we could have one  massive cluster with hundreds of brokers  in fact all of the tenants onto there or  we could have very very small clusters  like one broker one zookeeper and so  there's some decisions there where there  are implications related to the way it  performs the way a failover is work  there is a sweet spot for a cluster size  and we've actually already done this  process we've looked into this we did  all the testing when we looked at the  single dedicated plans and we settled on  you know a maximum of eight brokers and  five zookeepers because of the way it  behaves and so we kind of favor that we  also kind of insisted pretty early on  that we don't over provision and so when  we tell a customer you're signing up for  a particular plan we make sure that they  have all those resources and so we don't  over provision it in any way so again if  we say we're gonna pack 20 customers  onto a cluster and they all join on with  the lowest plan then our utilization is  pretty low and so that sucks from a  resource cost but it's great from the  customer point of view because now they  have the resources that they expected  also we wanted to provide seamless  upgrading so the idea is a customer can  join on with the lowest plan and they  should be able to upgrade to the next  lineup or the biggest plan that we have  for a multi-tenant without any  disruption and so unfortunately when it  comes to Kafka there is no easy way to  actually migrate offsets so if you move  from one class to the other the offsets  aren't really translatable in that sense  so in order to get around this we have  to assume the worst case or the best  case depending on your perspective that  every customer could potentially upgrade  to the biggest plan and so inherently  our utilization is pretty low when it  comes to operational costs this is kind  of an area that we want to focus on  because this is the amount of man-hours  that we sink into it and we're not a  huge team so this kind of makes a big  difference for us so we want to minimize  the operational burden and minimize the  impact or the blast radius of particular  issues so again going back to the  cluster size if we had one massive  cluster with 100 brokers and there was a  cluster wide issue then that could  potentially affect hundreds or thousands  of customers and so again we fall back  into the Suites  of saying you know if we have clusters  that are eat brokers and we've hack 2530  tenants onto it we can kind of minimize  the blast radius into a particular area  and minimizing operational costs again  if we match the single tenant clusters  and the topology then we can actually  share the learnings between them so all  of the gaining all the gained knowledge  and experience from operating a fleet of  three and eight broker clusters we  actually map immediately and so we find  a bug in one sort of topology or one  behavior one performance tuning that  works on one we can immediately map it  over to the next to the multi tenant  without really any loss some of the  other ways that we kind of reduce the  operational burden for us is that we we  pick safe default so it's possible to to  kind of put yourself in a unfortunate  situation by picking settings that are  not ideal so if you think about the  situation where you create a topic and  you set replication to one which was the  default in lots of clusters so the  customer creates a topic and they start  writing things to it and we fail over  that broker well what happened to the  data  it only resided on one and so now it's  gone forever that sucks for the customer  and maybe they weren't aware of it or  maybe they assumed that you know as sane  default was used so we actually enforce  that so we pick those safety faults both  to provide a better user experience also  to reduce reduce the operational burden  for us as I mentioned we pick similar  clusters to our dedicated so we can  share those learnings and we do a ton of  automation automation I wrote it's kind  of our thing that's like the epic  understatement we're a very small team  and we manage millions of dates or data  bases and data services millions without  exaggeration that's actually what we do  and we did a ton of testing we did a  huge amount of testing on the  multi-tenant topologies different size  kapha clusters different configurations  different releases all sorts of stuff in  order to arrive a configuration that we  think is is pretty sound and pretty  solid and that all feeds back into  reducing operational cost for us  so I want to talk a little bit about  configuration and tuning and sort of  talk a little bit about some of the  changes that we made some of the  configurations that we did in order to  achieve what we aimed to do in and what  we actually have running in our  multi-tenant fleet so recover partitions  the number of partitions what they look  like  quotas how those work topics and  consumer groups specifically how they're  created and the idea of guardrails and  so this is something that we we kind of  implement to make it better for  customers to run on on Heroku so  partitions we have a we have tested and  we we set a very very large number of  partitions for Kafka for the most part  like the industry average is maybe one  or two thousand partitions per broker  that's kind of like the rule of thumb we  are at close to six thousand and it's  unusually high but this is kind of the  trade-off that we make for being able to  pack so many tenants and give them the  freedom to create the number of topics  that they they want or they need and the  number of partitions per topic that they  need in order to support a large number  of partitions we actually have to tune  the max number of file descriptors and  so all of our clusters run at 500  thousand which again is is pretty  atypical it's unusually high for for  brokers of the size but again this is  you know through our testing our  extensive testing we've arrived at this  number and we know it's it's a safe  number for these clusters and similarly  we've increased the max memory map count  to your 500 thousand if you look at most  Kafka Doc's they'll tell you increase it  but to what is kind of up in the air and  it really depends on your usage I want  to cover quotas a little bit because  there's kind of a unusual implementation  and so tip 13 introduced to kotas and  0.9 and something that's kind of  counterintuitive both the enforcement  and the way it's implemented in the  first place is that quotas are actually  implemented per broker and so  if you think about this if I set a 1  megabyte per second produced quota on  Kafka using the CLI commands what I'm  actually getting is 1 megabyte per  broker so then if I think oh I've given  my customer 8 megabytes and then I  double the size of my cluster I've  actually given them now 16 megabytes  it's not really calculated across the  cluster and if you look at the  documentation they basically say it's  it's easier to implement it this way and  so our quotas are the the quote is  documented are actually the the cluster  wide aggregate the enforcement for  produce quotas is super counterintuitive  and actually caught us out a few times  but the way it works is that when you  produce 2 Kafka it sends you back a  response saying ok I got it  it's been act it's been written when the  quote is in effect and you've exceeded  your quota it actually does all the work  you know it accepts your message it  writes it to the commit log it sends it  off to all the brokers that are  replicating but then it just waits to  respond to you and so the idea is this  introduces backwards compatibility so  even if your client doesn't know  anything about quotas it should if it's  a well behaved client wait for the ACK  before it tries to produce more in  reality many Catholic clients are not  well written or don't really adhere to  this behavior and they'll just keep  throwing more data at it and the Kafka  broker will happily accept it so just  keep accepting as much data as you send  it and just won't respond to you but if  your client doesn't care it will just  keep continuing and so you end up with  this case where it's sort of like the  honored based implementation of quotas  it's like you really shouldn't send me  anything and then you just do  and there's accepts it this actually led  to another issue that we uncovered but  I'll cover that a little bit so yeah if  you are using Kafka and you are using  produce quotas that's something to to  keep in mind  with topics and consumer groups this is  kind of an unfortunate side effect of of  us you know unfortunate necessity and  the way we implemented multi-tenancy and  that there is no way in in Kafka even  with with ackles to specify a numeric  limit to the number of topics so we  can't say user a can create 40 topics  and 200 partitions the Ackles don't have  that kind of granularity so in order for  us to impose those limits instead we  actually split the control plane from  Kafka and Heroku so the idea is we  remove the ability to create topics  dynamically through the admin API and  instead we force the customer to go  through the Heroku API in order to  create these topics and so that gives us  a the gateway the point the entry point  in order to enforce these limits so for  the most part that's not really an issue  most of our users wish that they could  dynamically create topics and consumer  groups but in reality it's not really a  blocker in most cases so last sort of a  major topic in configuration but I want  to cover is guardrails and so the idea  here is to limit potential bad usage so  customers may use clients that are  poorly written because their language  doesn't have like a great supported  client or they may miss configure the  client in a way that introduces bad  behavior that could cause instability or  other performance issues and so this is  quote which I've heard many times in  Heroku but I'm actually not sure who  said it initially but essentially its  customers don't make mistakes we make  bad tools and the idea is if we give the  opportunity for a customer to make a  mistake and behave badly then it's  actually on us like we shouldn't have  let them do that and so wherever  possible we try to build in these  guardrails we try to put things in place  to prevent customers from from making  mistakes essentially and so some of the  configurations that we we have are on  the Heroku data plane side that we  actually enforce is minimum retention  time this is something that customers  often  ask about because it seems kind of weird  like why are you telling me that I  should keep data around for at least  this long it seems kind of like a  bizarre thing for us to enforce but  through our testing and if you look  through the mailing lists  anything less introduces a lot of turn  on the broker  so you're basically wasting cycles  wasting i UPS throwing out data that you  could be doing something productive with  and so we found that 24 hours is kind of  the sweet spot most people most  customers ask us like why is it why is  that the minimum but it's it's almost  never an issue we have a max retention  time for a multi-tenant plan of seven  days we have a default replication  factor of three a minimum replication  factor of three and a maximum replica  replication factor of three so it should  tell you that really you should have a  replication of three we don't allow  anything else and this is kind of one of  the more significant guardrails that we  have in place and the some of the  defaults in Kafka would not necessarily  have three he would create a topic and  it just gives you one replication and  weird things start happening and so we  strictly force in for three within Kafka  itself we've also changed the defaults  again to make them a little bit more  sane more safe and so the default number  of partitions we set is eight  the default for Kafka itself is one and  so with one you aren't gaining any of  the benefits of scale that will only  reside on a single broker and your  performance will be basically pinned to  a single broker's worth of throughput  and if you remember what I mentioned  about quotas essentially quotas are  enforced per broker so if you create a  one partition topic and your quota is  128k the maximum throughput you'll ever  get through it is 128k because it's all  going through one broker so we defaults  to the same number of brokers in the  cluster again replication three we're  pretty serious about it  so if you missed it the first time we're  gonna get it the second time it's gonna  be three minions Inc replicas if you're  not familiar with how this works is  essentially on the Kafka broker you can  specify the number of  confirmed rights from replicas before  you write back to the client and you say  I have received this message previous  releases of Kafka had it set to one and  so it or I think it was may have been  zero actually so just the receiving  broker says I have got this message and  then the client would think great I've  written it I should continue with my  life and then that broker dies and  you've lost all your messages and so  it's kind of confusing and  counterintuitive  so our default is set to two and most  recent versions of Kafka actually have  it to two as well a little bit about  monitoring at Heroku we use a custom  monitoring tool it's called Observatory  it's pretty awesome  it's agentless and the sense that one of  the core beliefs of Heroku data and for  its monitoring is that all monitoring  should be done from the outside in so we  don't actually deploy anything in the  brokers or on the containers or on the  servers themselves what that gives us is  this amazing power where you know  through support or through on-call we  discover oh actually there's this thing  there's this metric that we should be  monitoring and we aren't so we basically  teach our monitoring tool how to look at  that thing and now that metric is being  exposed across every single instance in  our fleet so we push some code and now a  million databases are now telling us  something new it's it's pretty  spectacular it's like one of the best  things that we've come up with I think  jmx is pretty great and so jmx is purely  a java thing which is not great but  Kafka itself exposes a ton of metrics  about every aspect everything you  possibly want from your Kafka broker JMX  can tell you but it's java only which  sucks Jolokia is a HTTP proxy for jmx  and so when we deploy Kafka we deployed  your locator with it and that basically  allows us to reap the benefits of JMX  without having to run java on our  control plane itself or the monitoring  actually so that's pretty fantastic and  I highly recommend it  so testing I mentioned we did a ton of  testing this was was pretty grueling we  tested a ridiculous number of  permutations a number of partitions  maximum partitions  what kind of throughput should we  provide for each tenant what's the  maximum that we can get looking at  different message sizes Kafka behaves  very differently if you send lots of  very small messages or very large  messages what about common operations so  we have a huge number of partitions  we're hammering it with a million large  messages and then we decide to take one  of the brokers out does it survive that  so there were some topologies we were  like yes this is the one it's perfect  everything works fine and then someone  says well let's do a rolling restart and  then it just cascades and everything  dies immediately so yeah we actually  looked through all these failure  scenarios you know we swap out a broker  we replace one we restart one one of the  server's just stops an instance falls  out from underneath us so we retest all  of those yeah similarly failure  scenarios if you run on AWS things will  fail if you have a large fleet that will  fail often and so we look at those cases  where you know we decide we're running a  broker and we detach an EBS volume does  the Khafre cluster survive that we  looked at maximum packing density again  this is kind of a function of partitions  mainly but can we fit 100 tenants can we  fit 500 tenants whatever those look like  what is it how does it perform what are  the implications are failing over that  kind of stuff and bugs bugs was kind of  a painful one we did encounter bugs  obviously Kafka is somewhat immature it  has a crazy development cycle is really  actively being developed all the time so  I'll cover some some of those issues but  one thing which we we are I've done  pretty quickly and I mentioned  automation is kind of our thing  is that we want to automate testing and  so we developed an internal tool that  developed that leverages the internal  Hiroki api's and basically simulates  users and so it stands up a cluster an  empty cluster it creates 50 users and  then it creates a  user and a consumer or many producers  and consumers for these simulated users  and we can actually define profiles for  each user and say we want 10% of our  users to send very small amounts of  traffic we want 20% of them to send very  large messages but at a very slow speed  and then we want the rest of them to do  like some random distribution of data  and so we can actually script this and  it's reproducible so we release a new  version we run a new version of Kafka we  maybe tune the LS a little bit and we  say alright go in and hammer this  cluster and so it'll provision all the  users it will push all this data through  and then we actually monitor it and look  through the logs and say okay you know  this worked pretty well or we noticed  that when we did a rolling restart at  this point it struggled it took too long  to come up so yeah we also made  everything including our testing in this  case yeah so that was pretty cool but we  found a bug while testing Kafka  multi-tenant specifically it effects the  the way the code is enforced it's Kafka  for 725  you can look it up we discover this  while testing we noticed that we'd run a  test and in this particular set of tests  our test was what happens if we set  quotas to one megabyte and then  customers completely ignore it and they  start writing at ten megabytes what  happens and so kotas looked like they  were being enforced and then suddenly  one of the brokers would go down and  then all the other brokers would go down  and we're confused like what is going on  why is this happening and so we dug into  a little bit deeper and we found that  there's a memory leak and so the way  quotas are enforced is as I mentioned  it's delayed by the way they they slow  you down is by holding onto the response  so they don't act your response until  it's ready for to do so which would meet  your quotas but essentially what that  meant was they were holding on to a  reference of that message so you kept  sending me data and I just keep holding  on to more and more references to these  messages that you sent and so a memory  would go through the roof  JVM would sort of kill it because he ran  out of memory and the broker would go  down and then all of your traffic would  shift to the other brokers and they  would do the same thing and so you get  this cascading failure pretty quick  so we found that we contributed a PR and  it was accepted and fixed in zero 10.1  Darwin so yeah we were pretty active in  in testing new releases for Kefka that's  something we do we always provide  feedback on the mailing lists you may  have seen us yeah ultime ssin it's  totally our thing like I mentioned we're  a pretty small team and we manage  millions of databases so we have to  ultimately it does a lot in terms of  maintaining these clusters in terms of  like leader election and failover and  that kind of stuff but it doesn't do  everything it has no awareness of like  underlying instances so as I mentioned  if you're on AWS instances will fail and  if you're on a fleet big enough they  will fail a lot so our our mantra i  guess is to automate everything we  necessarily have to automate as much as  possible I semi jokingly believe that my  job is to automate myself out of a job  and so if I do a really really good job  then I will be useless and things will  just run themselves so what we do in  terms of automation is we have a lot of  tools for cluster resizing for replacing  nodes so the the automation itself looks  at the cluster and says my my plan says  I should have eight brokers so if I  don't have eight I should resize to get  eight and so we can literally go into  the AWS console out-of-band and start  deleting instances our automation will  go uh there's something all right let me  bring up another node and it'll start  filling them out storage expansion is  something I mentioned earlier as you  write more data to Kafka we detect oh  you're at 80% of your storage let's  expand that so we'll keep expanding it  as much as you you need essentially  until you've some other part of  monitoring says hang on you've exceeded  your limit by too much so we're gonna  we're going to do something about that  we actually ultimate version upgrades so  although you as a customer on a  multi-tenant plan can't upgrade yourself  we automate the upgrades for the entire  cluster so it's not possible for us to  manually go in and start messing around  with hundreds of clusters or thousands  of clusters  so we basically say okay now we're gonna  upgrade all of the kefka's to 2.1 and it  ultimately does it restarts I put a star  because it is very surprising how  effective a restart is there is the joke  of have you tried turning off and on  again that works really really well  actually  90% of our pages are handled  automatically by automation and the vast  majority of automation is to restart a  thing it could be restart the service it  could be restart the instance but yeah  turns out turning it off and on again  tends to work really really well  disproportionately well there is always  more stuff that we can automate we  really really ultimate everything our  team is really really small so yeah we  automate as much as possible my  colleague Tom Craver it has a talk about  running hundreds of Khafre clusters  where the team is 5 on how they  recommend you take a look at it he goes  into much more detail about our  automation I'm almost done but some of  the limitations these are the  unfortunate side effects of being able  to provide what we do yeah we don't  allow we don't allow the admin API we  don't we forced explicit topic creation  explicit customer group consumer group  creation those you keep racks us thank  you very much I will be taking office  hours somewhere nearby and if you want  to talk to me more please do so thank  you very much  so when you say you do a lot of testing  do you test with enable the encryption  on the fly so basically is a from client  to broker you encrypt the data it was  how much performance a hit you see when  you do the encryption so by default all  of our multi-tenant plans require SSL  encryption so there is like no way for  you not to use it on multi-tenant we do  see a performance hit but typically it's  like a CPU performance hit and almost a  hundred percent of our clusters are IO  bound and so practical implications are  pretty small the CPU doesn't run hot but  you're testing the limits of IO on the  volumes do you set up any schema  registry - well it ate those produce  input data unfortunately a schema  registry is a confluent product and so  we are not allowed to run a managed  schema registry for you but you can do  play it yourself  [Music]
+
+
+00:00:10.720 --> 00:00:13.539 align:start position:0%
+ 
+ 
+
+00:00:13.539 --> 00:00:17.800 align:start position:0%
+ 
+ 
+
+00:00:17.800 --> 00:00:20.440 align:start position:0%
+ 
+ 
+
+00:00:20.440 --> 00:00:21.970 align:start position:0%
+ 
+ 
+
+00:00:21.970 --> 00:00:25.030 align:start position:0%
+ 
+ 
+
+00:00:25.030 --> 00:00:26.380 align:start position:0%
+ 
+ 
+
+00:00:26.380 --> 00:00:28.499 align:start position:0%
+ 
+ 
+
+00:00:28.499 --> 00:00:31.120 align:start position:0%
+ 
+ 
+
+00:00:31.120 --> 00:00:33.729 align:start position:0%
+ 
+ 
+
+00:00:33.729 --> 00:00:35.200 align:start position:0%
+ 
+ 
+
+00:00:35.200 --> 00:00:37.720 align:start position:0%
+ 
+ 
+
+00:00:37.720 --> 00:00:39.250 align:start position:0%
+ 
+ 
+
+00:00:39.250 --> 00:00:40.569 align:start position:0%
+ 
+ 
+
+00:00:40.569 --> 00:00:42.970 align:start position:0%
+ 
+ 
+
+00:00:42.970 --> 00:00:46.270 align:start position:0%
+ 
+ 
+
+00:00:46.270 --> 00:00:49.420 align:start position:0%
+ 
+ 
+
+00:00:49.420 --> 00:00:51.550 align:start position:0%
+ 
+ 
+
+00:00:51.550 --> 00:00:53.380 align:start position:0%
+ 
+ 
+
+00:00:53.380 --> 00:00:58.540 align:start position:0%
+ 
+ 
+
+00:00:58.540 --> 00:01:00.819 align:start position:0%
+ 
+ 
+
+00:01:00.819 --> 00:01:03.420 align:start position:0%
+ 
+ 
+
+00:01:03.420 --> 00:01:05.950 align:start position:0%
+ 
+ 
+
+00:01:05.950 --> 00:01:07.389 align:start position:0%
+ 
+ 
+
+00:01:07.389 --> 00:01:10.539 align:start position:0%
+ 
+ 
+
+00:01:10.539 --> 00:01:14.289 align:start position:0%
+ 
+ 
+
+00:01:14.289 --> 00:01:16.779 align:start position:0%
+ 
+ 
+
+00:01:16.779 --> 00:01:19.569 align:start position:0%
+ 
+ 
+
+00:01:19.569 --> 00:01:21.669 align:start position:0%
+ 
+ 
+
+00:01:21.669 --> 00:01:24.249 align:start position:0%
+ 
+ 
+
+00:01:24.249 --> 00:01:29.529 align:start position:0%
+ 
+ 
+
+00:01:29.529 --> 00:01:32.800 align:start position:0%
+ 
+ 
+
+00:01:32.800 --> 00:01:34.120 align:start position:0%
+ 
+ 
+
+00:01:34.120 --> 00:01:36.489 align:start position:0%
+ 
+ 
+
+00:01:36.489 --> 00:01:39.099 align:start position:0%
+ 
+ 
+
+00:01:39.099 --> 00:01:43.179 align:start position:0%
+ 
+ 
+
+00:01:43.179 --> 00:01:44.889 align:start position:0%
+ 
+ 
+
+00:01:44.889 --> 00:01:46.510 align:start position:0%
+ 
+ 
+
+00:01:46.510 --> 00:01:48.029 align:start position:0%
+ 
+ 
+
+00:01:48.029 --> 00:01:50.830 align:start position:0%
+ 
+ 
+
+00:01:50.830 --> 00:01:51.910 align:start position:0%
+ 
+ 
+
+00:01:51.910 --> 00:01:55.300 align:start position:0%
+ 
+ 
+
+00:01:55.300 --> 00:01:57.039 align:start position:0%
+ 
+ 
+
+00:01:57.039 --> 00:02:00.609 align:start position:0%
+ 
+ 
+
+00:02:00.609 --> 00:02:03.370 align:start position:0%
+ 
+ 
+
+00:02:03.370 --> 00:02:05.050 align:start position:0%
+ 
+ 
+
+00:02:05.050 --> 00:02:07.980 align:start position:0%
+ 
+ 
+
+00:02:07.980 --> 00:02:12.490 align:start position:0%
+ 
+ 
+
+00:02:12.490 --> 00:02:16.000 align:start position:0%
+ 
+ 
+
+00:02:16.000 --> 00:02:17.620 align:start position:0%
+ 
+ 
+
+00:02:17.620 --> 00:02:20.289 align:start position:0%
+ 
+ 
+
+00:02:20.289 --> 00:02:22.960 align:start position:0%
+ 
+ 
+
+00:02:22.960 --> 00:02:24.520 align:start position:0%
+ 
+ 
+
+00:02:24.520 --> 00:02:27.340 align:start position:0%
+ 
+ 
+
+00:02:27.340 --> 00:02:30.340 align:start position:0%
+ 
+ 
+
+00:02:30.340 --> 00:02:33.640 align:start position:0%
+ 
+ 
+
+00:02:33.640 --> 00:02:37.090 align:start position:0%
+ 
+ 
+
+00:02:37.090 --> 00:02:39.130 align:start position:0%
+ 
+ 
+
+00:02:39.130 --> 00:02:40.480 align:start position:0%
+ 
+ 
+
+00:02:40.480 --> 00:02:41.590 align:start position:0%
+ 
+ 
+
+00:02:41.590 --> 00:02:43.750 align:start position:0%
+ 
+ 
+
+00:02:43.750 --> 00:02:45.910 align:start position:0%
+ 
+ 
+
+00:02:45.910 --> 00:02:47.290 align:start position:0%
+ 
+ 
+
+00:02:47.290 --> 00:02:50.800 align:start position:0%
+ 
+ 
+
+00:02:50.800 --> 00:02:52.890 align:start position:0%
+ 
+ 
+
+00:02:52.890 --> 00:02:54.670 align:start position:0%
+ 
+ 
+
+00:02:54.670 --> 00:02:56.740 align:start position:0%
+ 
+ 
+
+00:02:56.740 --> 00:02:58.390 align:start position:0%
+ 
+ 
+
+00:02:58.390 --> 00:02:59.979 align:start position:0%
+ 
+ 
+
+00:02:59.979 --> 00:03:02.380 align:start position:0%
+ 
+ 
+
+00:03:02.380 --> 00:03:03.850 align:start position:0%
+ 
+ 
+
+00:03:03.850 --> 00:03:06.610 align:start position:0%
+ 
+ 
+
+00:03:06.610 --> 00:03:08.110 align:start position:0%
+ 
+ 
+
+00:03:08.110 --> 00:03:11.410 align:start position:0%
+ 
+ 
+
+00:03:11.410 --> 00:03:13.720 align:start position:0%
+ 
+ 
+
+00:03:13.720 --> 00:03:16.600 align:start position:0%
+ 
+ 
+
+00:03:16.600 --> 00:03:19.870 align:start position:0%
+ 
+ 
+
+00:03:19.870 --> 00:03:21.250 align:start position:0%
+ 
+ 
+
+00:03:21.250 --> 00:03:23.770 align:start position:0%
+ 
+ 
+
+00:03:23.770 --> 00:03:25.770 align:start position:0%
+ 
+ 
+
+00:03:25.770 --> 00:03:28.059 align:start position:0%
+ 
+ 
+
+00:03:28.059 --> 00:03:29.560 align:start position:0%
+ 
+ 
+
+00:03:29.560 --> 00:03:34.050 align:start position:0%
+ 
+ 
+
+00:03:34.050 --> 00:03:36.250 align:start position:0%
+ 
+ 
+
+00:03:36.250 --> 00:03:39.130 align:start position:0%
+ 
+ 
+
+00:03:39.130 --> 00:03:41.020 align:start position:0%
+ 
+ 
+
+00:03:41.020 --> 00:03:43.300 align:start position:0%
+ 
+ 
+
+00:03:43.300 --> 00:03:44.560 align:start position:0%
+ 
+ 
+
+00:03:44.560 --> 00:03:46.600 align:start position:0%
+ 
+ 
+
+00:03:46.600 --> 00:03:49.210 align:start position:0%
+ 
+ 
+
+00:03:49.210 --> 00:03:50.650 align:start position:0%
+ 
+ 
+
+00:03:50.650 --> 00:03:52.210 align:start position:0%
+ 
+ 
+
+00:03:52.210 --> 00:03:54.819 align:start position:0%
+ 
+ 
+
+00:03:54.819 --> 00:03:56.170 align:start position:0%
+ 
+ 
+
+00:03:56.170 --> 00:03:58.720 align:start position:0%
+ 
+ 
+
+00:03:58.720 --> 00:04:01.000 align:start position:0%
+ 
+ 
+
+00:04:01.000 --> 00:04:02.620 align:start position:0%
+ 
+ 
+
+00:04:02.620 --> 00:04:04.810 align:start position:0%
+ 
+ 
+
+00:04:04.810 --> 00:04:05.949 align:start position:0%
+ 
+ 
+
+00:04:05.949 --> 00:04:07.000 align:start position:0%
+ 
+ 
+
+00:04:07.000 --> 00:04:08.440 align:start position:0%
+ 
+ 
+
+00:04:08.440 --> 00:04:12.090 align:start position:0%
+ 
+ 
+
+00:04:12.090 --> 00:04:14.500 align:start position:0%
+ 
+ 
+
+00:04:14.500 --> 00:04:15.789 align:start position:0%
+ 
+ 
+
+00:04:15.789 --> 00:04:18.690 align:start position:0%
+ 
+ 
+
+00:04:18.690 --> 00:04:21.159 align:start position:0%
+ 
+ 
+
+00:04:21.159 --> 00:04:22.930 align:start position:0%
+ 
+ 
+
+00:04:22.930 --> 00:04:25.750 align:start position:0%
+ 
+ 
+
+00:04:25.750 --> 00:04:28.360 align:start position:0%
+ 
+ 
+
+00:04:28.360 --> 00:04:30.550 align:start position:0%
+ 
+ 
+
+00:04:30.550 --> 00:04:33.330 align:start position:0%
+ 
+ 
+
+00:04:33.330 --> 00:04:35.409 align:start position:0%
+ 
+ 
+
+00:04:35.409 --> 00:04:38.260 align:start position:0%
+ 
+ 
+
+00:04:38.260 --> 00:04:39.700 align:start position:0%
+ 
+ 
+
+00:04:39.700 --> 00:04:41.230 align:start position:0%
+ 
+ 
+
+00:04:41.230 --> 00:04:43.270 align:start position:0%
+ 
+ 
+
+00:04:43.270 --> 00:04:45.070 align:start position:0%
+ 
+ 
+
+00:04:45.070 --> 00:04:49.420 align:start position:0%
+ 
+ 
+
+00:04:49.420 --> 00:04:51.570 align:start position:0%
+ 
+ 
+
+00:04:51.570 --> 00:04:55.570 align:start position:0%
+ 
+ 
+
+00:04:55.570 --> 00:04:57.760 align:start position:0%
+ 
+ 
+
+00:04:57.760 --> 00:04:59.710 align:start position:0%
+ 
+ 
+
+00:04:59.710 --> 00:05:02.920 align:start position:0%
+ 
+ 
+
+00:05:02.920 --> 00:05:05.740 align:start position:0%
+ 
+ 
+
+00:05:05.740 --> 00:05:07.630 align:start position:0%
+ 
+ 
+
+00:05:07.630 --> 00:05:08.980 align:start position:0%
+ 
+ 
+
+00:05:08.980 --> 00:05:10.600 align:start position:0%
+ 
+ 
+
+00:05:10.600 --> 00:05:13.000 align:start position:0%
+ 
+ 
+
+00:05:13.000 --> 00:05:15.490 align:start position:0%
+ 
+ 
+
+00:05:15.490 --> 00:05:20.080 align:start position:0%
+ 
+ 
+
+00:05:20.080 --> 00:05:21.270 align:start position:0%
+ 
+ 
+
+00:05:21.270 --> 00:05:24.730 align:start position:0%
+ 
+ 
+
+00:05:24.730 --> 00:05:27.160 align:start position:0%
+ 
+ 
+
+00:05:27.160 --> 00:05:29.380 align:start position:0%
+ 
+ 
+
+00:05:29.380 --> 00:05:31.120 align:start position:0%
+ 
+ 
+
+00:05:31.120 --> 00:05:33.640 align:start position:0%
+ 
+ 
+
+00:05:33.640 --> 00:05:36.600 align:start position:0%
+ 
+ 
+
+00:05:36.600 --> 00:05:39.340 align:start position:0%
+ 
+ 
+
+00:05:39.340 --> 00:05:42.520 align:start position:0%
+ 
+ 
+
+00:05:42.520 --> 00:05:44.110 align:start position:0%
+ 
+ 
+
+00:05:44.110 --> 00:05:45.970 align:start position:0%
+ 
+ 
+
+00:05:45.970 --> 00:05:47.020 align:start position:0%
+ 
+ 
+
+00:05:47.020 --> 00:05:48.880 align:start position:0%
+ 
+ 
+
+00:05:48.880 --> 00:05:52.900 align:start position:0%
+ 
+ 
+
+00:05:52.900 --> 00:05:54.940 align:start position:0%
+ 
+ 
+
+00:05:54.940 --> 00:05:56.410 align:start position:0%
+ 
+ 
+
+00:05:56.410 --> 00:05:59.490 align:start position:0%
+ 
+ 
+
+00:05:59.490 --> 00:06:04.780 align:start position:0%
+ 
+ 
+
+00:06:04.780 --> 00:06:06.420 align:start position:0%
+ 
+ 
+
+00:06:06.420 --> 00:06:10.120 align:start position:0%
+ 
+ 
+
+00:06:10.120 --> 00:06:12.970 align:start position:0%
+ 
+ 
+
+00:06:12.970 --> 00:06:14.740 align:start position:0%
+ 
+ 
+
+00:06:14.740 --> 00:06:17.500 align:start position:0%
+ 
+ 
+
+00:06:17.500 --> 00:06:19.210 align:start position:0%
+ 
+ 
+
+00:06:19.210 --> 00:06:21.160 align:start position:0%
+ 
+ 
+
+00:06:21.160 --> 00:06:24.190 align:start position:0%
+ 
+ 
+
+00:06:24.190 --> 00:06:26.200 align:start position:0%
+ 
+ 
+
+00:06:26.200 --> 00:06:27.400 align:start position:0%
+ 
+ 
+
+00:06:27.400 --> 00:06:31.060 align:start position:0%
+ 
+ 
+
+00:06:31.060 --> 00:06:32.500 align:start position:0%
+ 
+ 
+
+00:06:32.500 --> 00:06:34.750 align:start position:0%
+ 
+ 
+
+00:06:34.750 --> 00:06:36.850 align:start position:0%
+ 
+ 
+
+00:06:36.850 --> 00:06:39.370 align:start position:0%
+ 
+ 
+
+00:06:39.370 --> 00:06:40.690 align:start position:0%
+ 
+ 
+
+00:06:40.690 --> 00:06:42.070 align:start position:0%
+ 
+ 
+
+00:06:42.070 --> 00:06:43.150 align:start position:0%
+ 
+ 
+
+00:06:43.150 --> 00:06:45.310 align:start position:0%
+ 
+ 
+
+00:06:45.310 --> 00:06:47.890 align:start position:0%
+ 
+ 
+
+00:06:47.890 --> 00:06:52.749 align:start position:0%
+ 
+ 
+
+00:06:52.749 --> 00:06:55.369 align:start position:0%
+ 
+ 
+
+00:06:55.369 --> 00:06:55.379 align:start position:0%
+ 
+ 
+
+00:06:55.379 --> 00:06:56.119 align:start position:0%
+ 
+
+
+00:06:56.119 --> 00:06:59.269 align:start position:0%
+ 
+ 
+
+00:06:59.269 --> 00:07:05.029 align:start position:0%
+ 
+ 
+
+00:07:05.029 --> 00:07:06.499 align:start position:0%
+ 
+ 
+
+00:07:06.499 --> 00:07:08.119 align:start position:0%
+ 
+ 
+
+00:07:08.119 --> 00:07:09.999 align:start position:0%
+ 
+ 
+
+00:07:09.999 --> 00:07:13.129 align:start position:0%
+ 
+ 
+
+00:07:13.129 --> 00:07:15.319 align:start position:0%
+ 
+ 
+
+00:07:15.319 --> 00:07:18.350 align:start position:0%
+ 
+ 
+
+00:07:18.350 --> 00:07:20.449 align:start position:0%
+ 
+ 
+
+00:07:20.449 --> 00:07:21.619 align:start position:0%
+ 
+ 
+
+00:07:21.619 --> 00:07:22.999 align:start position:0%
+ 
+ 
+
+00:07:22.999 --> 00:07:25.159 align:start position:0%
+ 
+ 
+
+00:07:25.159 --> 00:07:26.689 align:start position:0%
+ 
+ 
+
+00:07:26.689 --> 00:07:29.479 align:start position:0%
+ 
+ 
+
+00:07:29.479 --> 00:07:30.769 align:start position:0%
+ 
+ 
+
+00:07:30.769 --> 00:07:32.499 align:start position:0%
+ 
+ 
+
+00:07:32.499 --> 00:07:34.999 align:start position:0%
+ 
+ 
+
+00:07:34.999 --> 00:07:37.100 align:start position:0%
+ 
+ 
+
+00:07:37.100 --> 00:07:39.199 align:start position:0%
+ 
+ 
+
+00:07:39.199 --> 00:07:41.329 align:start position:0%
+ 
+ 
+
+00:07:41.329 --> 00:07:45.289 align:start position:0%
+ 
+ 
+
+00:07:45.289 --> 00:07:47.539 align:start position:0%
+ 
+ 
+
+00:07:47.539 --> 00:07:50.059 align:start position:0%
+ 
+ 
+
+00:07:50.059 --> 00:07:51.199 align:start position:0%
+ 
+ 
+
+00:07:51.199 --> 00:07:53.089 align:start position:0%
+ 
+ 
+
+00:07:53.089 --> 00:07:55.219 align:start position:0%
+ 
+ 
+
+00:07:55.219 --> 00:07:57.799 align:start position:0%
+ 
+ 
+
+00:07:57.799 --> 00:08:01.819 align:start position:0%
+ 
+ 
+
+00:08:01.819 --> 00:08:03.350 align:start position:0%
+ 
+ 
+
+00:08:03.350 --> 00:08:05.600 align:start position:0%
+ 
+ 
+
+00:08:05.600 --> 00:08:06.739 align:start position:0%
+ 
+ 
+
+00:08:06.739 --> 00:08:12.049 align:start position:0%
+ 
+ 
+
+00:08:12.049 --> 00:08:14.359 align:start position:0%
+ 
+ 
+
+00:08:14.359 --> 00:08:16.219 align:start position:0%
+ 
+ 
+
+00:08:16.219 --> 00:08:18.109 align:start position:0%
+ 
+ 
+
+00:08:18.109 --> 00:08:19.819 align:start position:0%
+ 
+ 
+
+00:08:19.819 --> 00:08:22.009 align:start position:0%
+ 
+ 
+
+00:08:22.009 --> 00:08:23.149 align:start position:0%
+ 
+ 
+
+00:08:23.149 --> 00:08:25.489 align:start position:0%
+ 
+ 
+
+00:08:25.489 --> 00:08:28.159 align:start position:0%
+ 
+ 
+
+00:08:28.159 --> 00:08:29.600 align:start position:0%
+ 
+ 
+
+00:08:29.600 --> 00:08:32.149 align:start position:0%
+ 
+ 
+
+00:08:32.149 --> 00:08:33.350 align:start position:0%
+ 
+ 
+
+00:08:33.350 --> 00:08:36.110 align:start position:0%
+ 
+ 
+
+00:08:36.110 --> 00:08:37.790 align:start position:0%
+ 
+ 
+
+00:08:37.790 --> 00:08:42.290 align:start position:0%
+ 
+ 
+
+00:08:42.290 --> 00:08:46.069 align:start position:0%
+ 
+ 
+
+00:08:46.069 --> 00:08:49.629 align:start position:0%
+ 
+ 
+
+00:08:49.629 --> 00:08:52.999 align:start position:0%
+ 
+ 
+
+00:08:52.999 --> 00:08:56.480 align:start position:0%
+ 
+ 
+
+00:08:56.480 --> 00:08:59.990 align:start position:0%
+ 
+ 
+
+00:08:59.990 --> 00:09:02.960 align:start position:0%
+ 
+ 
+
+00:09:02.960 --> 00:09:04.460 align:start position:0%
+ 
+ 
+
+00:09:04.460 --> 00:09:09.110 align:start position:0%
+ 
+ 
+
+00:09:09.110 --> 00:09:11.840 align:start position:0%
+ 
+ 
+
+00:09:11.840 --> 00:09:13.850 align:start position:0%
+ 
+ 
+
+00:09:13.850 --> 00:09:16.790 align:start position:0%
+ 
+ 
+
+00:09:16.790 --> 00:09:20.900 align:start position:0%
+ 
+ 
+
+00:09:20.900 --> 00:09:22.690 align:start position:0%
+ 
+ 
+
+00:09:22.690 --> 00:09:25.160 align:start position:0%
+ 
+ 
+
+00:09:25.160 --> 00:09:27.560 align:start position:0%
+ 
+ 
+
+00:09:27.560 --> 00:09:29.360 align:start position:0%
+ 
+ 
+
+00:09:29.360 --> 00:09:32.120 align:start position:0%
+ 
+ 
+
+00:09:32.120 --> 00:09:37.070 align:start position:0%
+ 
+ 
+
+00:09:37.070 --> 00:09:39.680 align:start position:0%
+ 
+ 
+
+00:09:39.680 --> 00:09:42.980 align:start position:0%
+ 
+ 
+
+00:09:42.980 --> 00:09:44.570 align:start position:0%
+ 
+ 
+
+00:09:44.570 --> 00:09:47.030 align:start position:0%
+ 
+ 
+
+00:09:47.030 --> 00:09:49.700 align:start position:0%
+ 
+ 
+
+00:09:49.700 --> 00:09:50.930 align:start position:0%
+ 
+ 
+
+00:09:50.930 --> 00:09:52.520 align:start position:0%
+ 
+ 
+
+00:09:52.520 --> 00:09:55.010 align:start position:0%
+ 
+ 
+
+00:09:55.010 --> 00:09:57.920 align:start position:0%
+ 
+ 
+
+00:09:57.920 --> 00:10:00.230 align:start position:0%
+ 
+ 
+
+00:10:00.230 --> 00:10:05.930 align:start position:0%
+ 
+ 
+
+00:10:05.930 --> 00:10:08.780 align:start position:0%
+ 
+ 
+
+00:10:08.780 --> 00:10:11.020 align:start position:0%
+ 
+ 
+
+00:10:11.020 --> 00:10:13.370 align:start position:0%
+ 
+ 
+
+00:10:13.370 --> 00:10:15.260 align:start position:0%
+ 
+ 
+
+00:10:15.260 --> 00:10:16.730 align:start position:0%
+ 
+ 
+
+00:10:16.730 --> 00:10:18.770 align:start position:0%
+ 
+ 
+
+00:10:18.770 --> 00:10:20.180 align:start position:0%
+ 
+ 
+
+00:10:20.180 --> 00:10:21.230 align:start position:0%
+ 
+ 
+
+00:10:21.230 --> 00:10:22.910 align:start position:0%
+ 
+ 
+
+00:10:22.910 --> 00:10:25.070 align:start position:0%
+ 
+ 
+
+00:10:25.070 --> 00:10:27.380 align:start position:0%
+ 
+ 
+
+00:10:27.380 --> 00:10:28.400 align:start position:0%
+ 
+ 
+
+00:10:28.400 --> 00:10:30.530 align:start position:0%
+ 
+ 
+
+00:10:30.530 --> 00:10:33.440 align:start position:0%
+ 
+ 
+
+00:10:33.440 --> 00:10:35.630 align:start position:0%
+ 
+ 
+
+00:10:35.630 --> 00:10:37.130 align:start position:0%
+ 
+ 
+
+00:10:37.130 --> 00:10:39.980 align:start position:0%
+ 
+ 
+
+00:10:39.980 --> 00:10:42.650 align:start position:0%
+ 
+ 
+
+00:10:42.650 --> 00:10:45.260 align:start position:0%
+ 
+ 
+
+00:10:45.260 --> 00:10:49.130 align:start position:0%
+ 
+ 
+
+00:10:49.130 --> 00:10:53.270 align:start position:0%
+ 
+ 
+
+00:10:53.270 --> 00:10:55.220 align:start position:0%
+ 
+ 
+
+00:10:55.220 --> 00:10:57.020 align:start position:0%
+ 
+ 
+
+00:10:57.020 --> 00:10:59.230 align:start position:0%
+ 
+ 
+
+00:10:59.230 --> 00:11:01.579 align:start position:0%
+ 
+ 
+
+00:11:01.579 --> 00:11:04.370 align:start position:0%
+ 
+ 
+
+00:11:04.370 --> 00:11:06.110 align:start position:0%
+ 
+ 
+
+00:11:06.110 --> 00:11:08.090 align:start position:0%
+ 
+ 
+
+00:11:08.090 --> 00:11:10.670 align:start position:0%
+ 
+ 
+
+00:11:10.670 --> 00:11:12.710 align:start position:0%
+ 
+ 
+
+00:11:12.710 --> 00:11:14.120 align:start position:0%
+ 
+ 
+
+00:11:14.120 --> 00:11:16.519 align:start position:0%
+ 
+ 
+
+00:11:16.519 --> 00:11:19.489 align:start position:0%
+ 
+ 
+
+00:11:19.489 --> 00:11:22.039 align:start position:0%
+ 
+ 
+
+00:11:22.039 --> 00:11:24.409 align:start position:0%
+ 
+ 
+
+00:11:24.409 --> 00:11:27.199 align:start position:0%
+ 
+ 
+
+00:11:27.199 --> 00:11:28.369 align:start position:0%
+ 
+ 
+
+00:11:28.369 --> 00:11:30.529 align:start position:0%
+ 
+ 
+
+00:11:30.529 --> 00:11:33.129 align:start position:0%
+ 
+ 
+
+00:11:33.129 --> 00:11:35.689 align:start position:0%
+ 
+ 
+
+00:11:35.689 --> 00:11:36.859 align:start position:0%
+ 
+ 
+
+00:11:36.859 --> 00:11:39.379 align:start position:0%
+ 
+ 
+
+00:11:39.379 --> 00:11:41.979 align:start position:0%
+ 
+ 
+
+00:11:41.979 --> 00:11:44.449 align:start position:0%
+ 
+ 
+
+00:11:44.449 --> 00:11:45.679 align:start position:0%
+ 
+ 
+
+00:11:45.679 --> 00:11:48.439 align:start position:0%
+ 
+ 
+
+00:11:48.439 --> 00:11:49.789 align:start position:0%
+ 
+ 
+
+00:11:49.789 --> 00:11:53.269 align:start position:0%
+ 
+ 
+
+00:11:53.269 --> 00:11:55.089 align:start position:0%
+ 
+ 
+
+00:11:55.089 --> 00:11:58.069 align:start position:0%
+ 
+ 
+
+00:11:58.069 --> 00:12:00.139 align:start position:0%
+ 
+ 
+
+00:12:00.139 --> 00:12:02.179 align:start position:0%
+ 
+ 
+
+00:12:02.179 --> 00:12:03.799 align:start position:0%
+ 
+ 
+
+00:12:03.799 --> 00:12:06.379 align:start position:0%
+ 
+ 
+
+00:12:06.379 --> 00:12:08.569 align:start position:0%
+ 
+ 
+
+00:12:08.569 --> 00:12:11.659 align:start position:0%
+ 
+ 
+
+00:12:11.659 --> 00:12:14.269 align:start position:0%
+ 
+ 
+
+00:12:14.269 --> 00:12:15.919 align:start position:0%
+ 
+ 
+
+00:12:15.919 --> 00:12:17.119 align:start position:0%
+ 
+ 
+
+00:12:17.119 --> 00:12:18.919 align:start position:0%
+ 
+ 
+
+00:12:18.919 --> 00:12:22.279 align:start position:0%
+ 
+ 
+
+00:12:22.279 --> 00:12:24.139 align:start position:0%
+ 
+ 
+
+00:12:24.139 --> 00:12:30.019 align:start position:0%
+ 
+ 
+
+00:12:30.019 --> 00:12:31.849 align:start position:0%
+ 
+ 
+
+00:12:31.849 --> 00:12:34.489 align:start position:0%
+ 
+ 
+
+00:12:34.489 --> 00:12:37.639 align:start position:0%
+ 
+ 
+
+00:12:37.639 --> 00:12:40.759 align:start position:0%
+ 
+ 
+
+00:12:40.759 --> 00:12:42.289 align:start position:0%
+ 
+ 
+
+00:12:42.289 --> 00:12:43.759 align:start position:0%
+ 
+ 
+
+00:12:43.759 --> 00:12:46.879 align:start position:0%
+ 
+ 
+
+00:12:46.879 --> 00:12:48.109 align:start position:0%
+ 
+ 
+
+00:12:48.109 --> 00:12:49.999 align:start position:0%
+ 
+ 
+
+00:12:49.999 --> 00:12:51.319 align:start position:0%
+ 
+ 
+
+00:12:51.319 --> 00:12:53.960 align:start position:0%
+ 
+ 
+
+00:12:53.960 --> 00:12:55.639 align:start position:0%
+ 
+ 
+
+00:12:55.639 --> 00:12:58.249 align:start position:0%
+ 
+ 
+
+00:12:58.249 --> 00:13:00.409 align:start position:0%
+ 
+ 
+
+00:13:00.409 --> 00:13:03.619 align:start position:0%
+ 
+ 
+
+00:13:03.619 --> 00:13:05.389 align:start position:0%
+ 
+ 
+
+00:13:05.389 --> 00:13:06.949 align:start position:0%
+ 
+ 
+
+00:13:06.949 --> 00:13:07.999 align:start position:0%
+ 
+ 
+
+00:13:07.999 --> 00:13:10.189 align:start position:0%
+ 
+ 
+
+00:13:10.189 --> 00:13:11.479 align:start position:0%
+ 
+ 
+
+00:13:11.479 --> 00:13:13.669 align:start position:0%
+ 
+ 
+
+00:13:13.669 --> 00:13:16.399 align:start position:0%
+ 
+ 
+
+00:13:16.399 --> 00:13:18.019 align:start position:0%
+ 
+ 
+
+00:13:18.019 --> 00:13:20.389 align:start position:0%
+ 
+ 
+
+00:13:20.389 --> 00:13:22.549 align:start position:0%
+ 
+ 
+
+00:13:22.549 --> 00:13:24.469 align:start position:0%
+ 
+ 
+
+00:13:24.469 --> 00:13:26.210 align:start position:0%
+ 
+ 
+
+00:13:26.210 --> 00:13:28.129 align:start position:0%
+ 
+ 
+
+00:13:28.129 --> 00:13:29.840 align:start position:0%
+ 
+ 
+
+00:13:29.840 --> 00:13:31.850 align:start position:0%
+ 
+ 
+
+00:13:31.850 --> 00:13:34.340 align:start position:0%
+ 
+ 
+
+00:13:34.340 --> 00:13:36.559 align:start position:0%
+ 
+ 
+
+00:13:36.559 --> 00:13:38.900 align:start position:0%
+ 
+ 
+
+00:13:38.900 --> 00:13:39.920 align:start position:0%
+ 
+ 
+
+00:13:39.920 --> 00:13:41.990 align:start position:0%
+ 
+ 
+
+00:13:41.990 --> 00:13:43.879 align:start position:0%
+ 
+ 
+
+00:13:43.879 --> 00:13:46.879 align:start position:0%
+ 
+ 
+
+00:13:46.879 --> 00:13:48.079 align:start position:0%
+ 
+ 
+
+00:13:48.079 --> 00:13:50.120 align:start position:0%
+ 
+ 
+
+00:13:50.120 --> 00:13:51.379 align:start position:0%
+ 
+ 
+
+00:13:51.379 --> 00:13:54.230 align:start position:0%
+ 
+ 
+
+00:13:54.230 --> 00:13:55.939 align:start position:0%
+ 
+ 
+
+00:13:55.939 --> 00:13:57.819 align:start position:0%
+ 
+ 
+
+00:13:57.819 --> 00:14:00.590 align:start position:0%
+ 
+ 
+
+00:14:00.590 --> 00:14:02.720 align:start position:0%
+ 
+ 
+
+00:14:02.720 --> 00:14:04.910 align:start position:0%
+ 
+ 
+
+00:14:04.910 --> 00:14:07.129 align:start position:0%
+ 
+ 
+
+00:14:07.129 --> 00:14:08.629 align:start position:0%
+ 
+ 
+
+00:14:08.629 --> 00:14:10.819 align:start position:0%
+ 
+ 
+
+00:14:10.819 --> 00:14:12.710 align:start position:0%
+ 
+ 
+
+00:14:12.710 --> 00:14:14.809 align:start position:0%
+ 
+ 
+
+00:14:14.809 --> 00:14:16.670 align:start position:0%
+ 
+ 
+
+00:14:16.670 --> 00:14:18.319 align:start position:0%
+ 
+ 
+
+00:14:18.319 --> 00:14:24.050 align:start position:0%
+ 
+ 
+
+00:14:24.050 --> 00:14:26.180 align:start position:0%
+ 
+ 
+
+00:14:26.180 --> 00:14:29.030 align:start position:0%
+ 
+ 
+
+00:14:29.030 --> 00:14:30.620 align:start position:0%
+ 
+ 
+
+00:14:30.620 --> 00:14:34.249 align:start position:0%
+ 
+ 
+
+00:14:34.249 --> 00:14:36.530 align:start position:0%
+ 
+ 
+
+00:14:36.530 --> 00:14:37.790 align:start position:0%
+ 
+ 
+
+00:14:37.790 --> 00:14:39.829 align:start position:0%
+ 
+ 
+
+00:14:39.829 --> 00:14:42.050 align:start position:0%
+ 
+ 
+
+00:14:42.050 --> 00:14:43.970 align:start position:0%
+ 
+ 
+
+00:14:43.970 --> 00:14:45.800 align:start position:0%
+ 
+ 
+
+00:14:45.800 --> 00:14:47.329 align:start position:0%
+ 
+ 
+
+00:14:47.329 --> 00:14:48.620 align:start position:0%
+ 
+ 
+
+00:14:48.620 --> 00:14:50.990 align:start position:0%
+ 
+ 
+
+00:14:50.990 --> 00:14:51.980 align:start position:0%
+ 
+ 
+
+00:14:51.980 --> 00:14:54.559 align:start position:0%
+ 
+ 
+
+00:14:54.559 --> 00:14:56.540 align:start position:0%
+ 
+ 
+
+00:14:56.540 --> 00:14:58.670 align:start position:0%
+ 
+ 
+
+00:14:58.670 --> 00:15:00.679 align:start position:0%
+ 
+ 
+
+00:15:00.679 --> 00:15:02.269 align:start position:0%
+ 
+ 
+
+00:15:02.269 --> 00:15:04.759 align:start position:0%
+ 
+ 
+
+00:15:04.759 --> 00:15:08.090 align:start position:0%
+ 
+ 
+
+00:15:08.090 --> 00:15:10.519 align:start position:0%
+ 
+ 
+
+00:15:10.519 --> 00:15:11.840 align:start position:0%
+ 
+ 
+
+00:15:11.840 --> 00:15:15.170 align:start position:0%
+ 
+ 
+
+00:15:15.170 --> 00:15:18.290 align:start position:0%
+ 
+ 
+
+00:15:18.290 --> 00:15:20.179 align:start position:0%
+ 
+ 
+
+00:15:20.179 --> 00:15:21.499 align:start position:0%
+ 
+ 
+
+00:15:21.499 --> 00:15:24.019 align:start position:0%
+ 
+ 
+
+00:15:24.019 --> 00:15:25.429 align:start position:0%
+ 
+ 
+
+00:15:25.429 --> 00:15:27.889 align:start position:0%
+ 
+ 
+
+00:15:27.889 --> 00:15:29.210 align:start position:0%
+ 
+ 
+
+00:15:29.210 --> 00:15:30.470 align:start position:0%
+ 
+ 
+
+00:15:30.470 --> 00:15:32.629 align:start position:0%
+ 
+ 
+
+00:15:32.629 --> 00:15:36.620 align:start position:0%
+ 
+ 
+
+00:15:36.620 --> 00:15:38.179 align:start position:0%
+ 
+ 
+
+00:15:38.179 --> 00:15:40.129 align:start position:0%
+ 
+ 
+
+00:15:40.129 --> 00:15:42.049 align:start position:0%
+ 
+ 
+
+00:15:42.049 --> 00:15:43.759 align:start position:0%
+ 
+ 
+
+00:15:43.759 --> 00:15:45.019 align:start position:0%
+ 
+ 
+
+00:15:45.019 --> 00:15:46.939 align:start position:0%
+ 
+ 
+
+00:15:46.939 --> 00:15:48.319 align:start position:0%
+ 
+ 
+
+00:15:48.319 --> 00:15:50.210 align:start position:0%
+ 
+ 
+
+00:15:50.210 --> 00:15:51.650 align:start position:0%
+ 
+ 
+
+00:15:51.650 --> 00:15:53.269 align:start position:0%
+ 
+ 
+
+00:15:53.269 --> 00:15:59.359 align:start position:0%
+ 
+ 
+
+00:15:59.359 --> 00:16:00.859 align:start position:0%
+ 
+ 
+
+00:16:00.859 --> 00:16:02.419 align:start position:0%
+ 
+ 
+
+00:16:02.419 --> 00:16:05.600 align:start position:0%
+ 
+ 
+
+00:16:05.600 --> 00:16:06.829 align:start position:0%
+ 
+ 
+
+00:16:06.829 --> 00:16:09.109 align:start position:0%
+ 
+ 
+
+00:16:09.109 --> 00:16:15.429 align:start position:0%
+ 
+ 
+
+00:16:15.429 --> 00:16:17.479 align:start position:0%
+ 
+ 
+
+00:16:17.479 --> 00:16:20.509 align:start position:0%
+ 
+ 
+
+00:16:20.509 --> 00:16:21.829 align:start position:0%
+ 
+ 
+
+00:16:21.829 --> 00:16:24.739 align:start position:0%
+ 
+ 
+
+00:16:24.739 --> 00:16:26.799 align:start position:0%
+ 
+ 
+
+00:16:26.799 --> 00:16:30.590 align:start position:0%
+ 
+ 
+
+00:16:30.590 --> 00:16:33.109 align:start position:0%
+ 
+ 
+
+00:16:33.109 --> 00:16:34.939 align:start position:0%
+ 
+ 
+
+00:16:34.939 --> 00:16:36.619 align:start position:0%
+ 
+ 
+
+00:16:36.619 --> 00:16:38.749 align:start position:0%
+ 
+ 
+
+00:16:38.749 --> 00:16:40.280 align:start position:0%
+ 
+ 
+
+00:16:40.280 --> 00:16:41.479 align:start position:0%
+ 
+ 
+
+00:16:41.479 --> 00:16:43.879 align:start position:0%
+ 
+ 
+
+00:16:43.879 --> 00:16:47.660 align:start position:0%
+ 
+ 
+
+00:16:47.660 --> 00:16:49.160 align:start position:0%
+ 
+ 
+
+00:16:49.160 --> 00:16:55.369 align:start position:0%
+ 
+ 
+
+00:16:55.369 --> 00:16:56.720 align:start position:0%
+ 
+ 
+
+00:16:56.720 --> 00:16:59.150 align:start position:0%
+ 
+ 
+
+00:16:59.150 --> 00:17:02.299 align:start position:0%
+ 
+ 
+
+00:17:02.299 --> 00:17:03.769 align:start position:0%
+ 
+ 
+
+00:17:03.769 --> 00:17:07.519 align:start position:0%
+ 
+ 
+
+00:17:07.519 --> 00:17:09.549 align:start position:0%
+ 
+ 
+
+00:17:09.549 --> 00:17:13.699 align:start position:0%
+ 
+ 
+
+00:17:13.699 --> 00:17:14.990 align:start position:0%
+ 
+ 
+
+00:17:14.990 --> 00:17:17.480 align:start position:0%
+ 
+ 
+
+00:17:17.480 --> 00:17:19.129 align:start position:0%
+ 
+ 
+
+00:17:19.129 --> 00:17:20.510 align:start position:0%
+ 
+ 
+
+00:17:20.510 --> 00:17:25.250 align:start position:0%
+ 
+ 
+
+00:17:25.250 --> 00:17:28.549 align:start position:0%
+ 
+ 
+
+00:17:28.549 --> 00:17:28.559 align:start position:0%
+ 
+ 
+
+00:17:28.559 --> 00:17:29.029 align:start position:0%
+ 
+
+
+00:17:29.029 --> 00:17:30.260 align:start position:0%
+ 
+ 
+
+00:17:30.260 --> 00:17:33.289 align:start position:0%
+ 
+ 
+
+00:17:33.289 --> 00:17:35.120 align:start position:0%
+ 
+ 
+
+00:17:35.120 --> 00:17:37.669 align:start position:0%
+ 
+ 
+
+00:17:37.669 --> 00:17:40.730 align:start position:0%
+ 
+ 
+
+00:17:40.730 --> 00:17:41.779 align:start position:0%
+ 
+ 
+
+00:17:41.779 --> 00:17:46.220 align:start position:0%
+ 
+ 
+
+00:17:46.220 --> 00:17:49.879 align:start position:0%
+ 
+ 
+
+00:17:49.879 --> 00:17:51.590 align:start position:0%
+ 
+ 
+
+00:17:51.590 --> 00:17:53.029 align:start position:0%
+ 
+ 
+
+00:17:53.029 --> 00:17:54.980 align:start position:0%
+ 
+ 
+
+00:17:54.980 --> 00:17:58.370 align:start position:0%
+ 
+ 
+
+00:17:58.370 --> 00:17:59.779 align:start position:0%
+ 
+ 
+
+00:17:59.779 --> 00:18:02.120 align:start position:0%
+ 
+ 
+
+00:18:02.120 --> 00:18:04.190 align:start position:0%
+ 
+ 
+
+00:18:04.190 --> 00:18:06.139 align:start position:0%
+ 
+ 
+
+00:18:06.139 --> 00:18:09.010 align:start position:0%
+ 
+ 
+
+00:18:09.010 --> 00:18:11.840 align:start position:0%
+ 
+ 
+
+00:18:11.840 --> 00:18:13.399 align:start position:0%
+ 
+ 
+
+00:18:13.399 --> 00:18:14.870 align:start position:0%
+ 
+ 
+
+00:18:14.870 --> 00:18:16.970 align:start position:0%
+ 
+ 
+
+00:18:16.970 --> 00:18:18.740 align:start position:0%
+ 
+ 
+
+00:18:18.740 --> 00:18:20.299 align:start position:0%
+ 
+ 
+
+00:18:20.299 --> 00:18:21.950 align:start position:0%
+ 
+ 
+
+00:18:21.950 --> 00:18:23.870 align:start position:0%
+ 
+ 
+
+00:18:23.870 --> 00:18:26.180 align:start position:0%
+ 
+ 
+
+00:18:26.180 --> 00:18:27.980 align:start position:0%
+ 
+ 
+
+00:18:27.980 --> 00:18:31.760 align:start position:0%
+ 
+ 
+
+00:18:31.760 --> 00:18:33.649 align:start position:0%
+ 
+ 
+
+00:18:33.649 --> 00:18:35.690 align:start position:0%
+ 
+ 
+
+00:18:35.690 --> 00:18:37.010 align:start position:0%
+ 
+ 
+
+00:18:37.010 --> 00:18:39.590 align:start position:0%
+ 
+ 
+
+00:18:39.590 --> 00:18:41.570 align:start position:0%
+ 
+ 
+
+00:18:41.570 --> 00:18:44.000 align:start position:0%
+ 
+ 
+
+00:18:44.000 --> 00:18:47.450 align:start position:0%
+ 
+ 
+
+00:18:47.450 --> 00:18:50.240 align:start position:0%
+ 
+ 
+
+00:18:50.240 --> 00:18:51.860 align:start position:0%
+ 
+ 
+
+00:18:51.860 --> 00:18:53.659 align:start position:0%
+ 
+ 
+
+00:18:53.659 --> 00:18:55.370 align:start position:0%
+ 
+ 
+
+00:18:55.370 --> 00:18:56.630 align:start position:0%
+ 
+ 
+
+00:18:56.630 --> 00:18:59.560 align:start position:0%
+ 
+ 
+
+00:18:59.560 --> 00:19:01.639 align:start position:0%
+ 
+ 
+
+00:19:01.639 --> 00:19:03.740 align:start position:0%
+ 
+ 
+
+00:19:03.740 --> 00:19:05.389 align:start position:0%
+ 
+ 
+
+00:19:05.389 --> 00:19:07.250 align:start position:0%
+ 
+ 
+
+00:19:07.250 --> 00:19:08.840 align:start position:0%
+ 
+ 
+
+00:19:08.840 --> 00:19:11.029 align:start position:0%
+ 
+ 
+
+00:19:11.029 --> 00:19:13.490 align:start position:0%
+ 
+ 
+
+00:19:13.490 --> 00:19:16.250 align:start position:0%
+ 
+ 
+
+00:19:16.250 --> 00:19:18.260 align:start position:0%
+ 
+ 
+
+00:19:18.260 --> 00:19:20.450 align:start position:0%
+ 
+ 
+
+00:19:20.450 --> 00:19:22.340 align:start position:0%
+ 
+ 
+
+00:19:22.340 --> 00:19:24.980 align:start position:0%
+ 
+ 
+
+00:19:24.980 --> 00:19:27.620 align:start position:0%
+ 
+ 
+
+00:19:27.620 --> 00:19:29.630 align:start position:0%
+ 
+ 
+
+00:19:29.630 --> 00:19:31.460 align:start position:0%
+ 
+ 
+
+00:19:31.460 --> 00:19:33.200 align:start position:0%
+ 
+ 
+
+00:19:33.200 --> 00:19:39.200 align:start position:0%
+ 
+ 
+
+00:19:39.200 --> 00:19:41.299 align:start position:0%
+ 
+ 
+
+00:19:41.299 --> 00:19:42.500 align:start position:0%
+ 
+ 
+
+00:19:42.500 --> 00:19:43.820 align:start position:0%
+ 
+ 
+
+00:19:43.820 --> 00:19:46.250 align:start position:0%
+ 
+ 
+
+00:19:46.250 --> 00:19:48.320 align:start position:0%
+ 
+ 
+
+00:19:48.320 --> 00:19:49.880 align:start position:0%
+ 
+ 
+
+00:19:49.880 --> 00:19:52.850 align:start position:0%
+ 
+ 
+
+00:19:52.850 --> 00:19:54.529 align:start position:0%
+ 
+ 
+
+00:19:54.529 --> 00:19:56.360 align:start position:0%
+ 
+ 
+
+00:19:56.360 --> 00:19:59.750 align:start position:0%
+ 
+ 
+
+00:19:59.750 --> 00:20:02.180 align:start position:0%
+ 
+ 
+
+00:20:02.180 --> 00:20:03.769 align:start position:0%
+ 
+ 
+
+00:20:03.769 --> 00:20:05.659 align:start position:0%
+ 
+ 
+
+00:20:05.659 --> 00:20:07.970 align:start position:0%
+ 
+ 
+
+00:20:07.970 --> 00:20:08.690 align:start position:0%
+ 
+ 
+
+00:20:08.690 --> 00:20:10.850 align:start position:0%
+ 
+ 
+
+00:20:10.850 --> 00:20:15.800 align:start position:0%
+ 
+ 
+
+00:20:15.800 --> 00:20:18.020 align:start position:0%
+ 
+ 
+
+00:20:18.020 --> 00:20:19.730 align:start position:0%
+ 
+ 
+
+00:20:19.730 --> 00:20:22.820 align:start position:0%
+ 
+ 
+
+00:20:22.820 --> 00:20:26.510 align:start position:0%
+ 
+ 
+
+00:20:26.510 --> 00:20:28.010 align:start position:0%
+ 
+ 
+
+00:20:28.010 --> 00:20:29.840 align:start position:0%
+ 
+ 
+
+00:20:29.840 --> 00:20:31.820 align:start position:0%
+ 
+ 
+
+00:20:31.820 --> 00:20:34.040 align:start position:0%
+ 
+ 
+
+00:20:34.040 --> 00:20:36.350 align:start position:0%
+ 
+ 
+
+00:20:36.350 --> 00:20:38.330 align:start position:0%
+ 
+ 
+
+00:20:38.330 --> 00:20:39.980 align:start position:0%
+ 
+ 
+
+00:20:39.980 --> 00:20:41.540 align:start position:0%
+ 
+ 
+
+00:20:41.540 --> 00:20:43.220 align:start position:0%
+ 
+ 
+
+00:20:43.220 --> 00:20:44.780 align:start position:0%
+ 
+ 
+
+00:20:44.780 --> 00:20:49.520 align:start position:0%
+ 
+ 
+
+00:20:49.520 --> 00:20:50.750 align:start position:0%
+ 
+ 
+
+00:20:50.750 --> 00:20:53.990 align:start position:0%
+ 
+ 
+
+00:20:53.990 --> 00:20:57.860 align:start position:0%
+ 
+ 
+
+00:20:57.860 --> 00:21:01.070 align:start position:0%
+ 
+ 
+
+00:21:01.070 --> 00:21:03.620 align:start position:0%
+ 
+ 
+
+00:21:03.620 --> 00:21:06.290 align:start position:0%
+ 
+ 
+
+00:21:06.290 --> 00:21:08.660 align:start position:0%
+ 
+ 
+
+00:21:08.660 --> 00:21:12.560 align:start position:0%
+ 
+ 
+
+00:21:12.560 --> 00:21:14.660 align:start position:0%
+ 
+ 
+
+00:21:14.660 --> 00:21:16.580 align:start position:0%
+ 
+ 
+
+00:21:16.580 --> 00:21:18.260 align:start position:0%
+ 
+ 
+
+00:21:18.260 --> 00:21:20.090 align:start position:0%
+ 
+ 
+
+00:21:20.090 --> 00:21:20.100 align:start position:0%
+ 
+ 
+
+00:21:20.100 --> 00:21:20.390 align:start position:0%
+ 
+
+
+00:21:20.390 --> 00:21:22.280 align:start position:0%
+ 
+ 
+
+00:21:22.280 --> 00:21:24.590 align:start position:0%
+ 
+ 
+
+00:21:24.590 --> 00:21:26.120 align:start position:0%
+ 
+ 
+
+00:21:26.120 --> 00:21:28.250 align:start position:0%
+ 
+ 
+
+00:21:28.250 --> 00:21:30.530 align:start position:0%
+ 
+ 
+
+00:21:30.530 --> 00:21:32.330 align:start position:0%
+ 
+ 
+
+00:21:32.330 --> 00:21:34.250 align:start position:0%
+ 
+ 
+
+00:21:34.250 --> 00:21:35.780 align:start position:0%
+ 
+ 
+
+00:21:35.780 --> 00:21:38.360 align:start position:0%
+ 
+ 
+
+00:21:38.360 --> 00:21:39.740 align:start position:0%
+ 
+ 
+
+00:21:39.740 --> 00:21:43.010 align:start position:0%
+ 
+ 
+
+00:21:43.010 --> 00:21:45.800 align:start position:0%
+ 
+ 
+
+00:21:45.800 --> 00:21:47.780 align:start position:0%
+ 
+ 
+
+00:21:47.780 --> 00:21:49.940 align:start position:0%
+ 
+ 
+
+00:21:49.940 --> 00:21:53.180 align:start position:0%
+ 
+ 
+
+00:21:53.180 --> 00:21:56.810 align:start position:0%
+ 
+ 
+
+00:21:56.810 --> 00:21:58.570 align:start position:0%
+ 
+ 
+
+00:21:58.570 --> 00:22:02.180 align:start position:0%
+ 
+ 
+
+00:22:02.180 --> 00:22:03.560 align:start position:0%
+ 
+ 
+
+00:22:03.560 --> 00:22:06.140 align:start position:0%
+ 
+ 
+
+00:22:06.140 --> 00:22:08.470 align:start position:0%
+ 
+ 
+
+00:22:08.470 --> 00:22:11.180 align:start position:0%
+ 
+ 
+
+00:22:11.180 --> 00:22:14.090 align:start position:0%
+ 
+ 
+
+00:22:14.090 --> 00:22:15.620 align:start position:0%
+ 
+ 
+
+00:22:15.620 --> 00:22:17.600 align:start position:0%
+ 
+ 
+
+00:22:17.600 --> 00:22:23.289 align:start position:0%
+ 
+ 
+
+00:22:23.289 --> 00:22:25.840 align:start position:0%
+ 
+ 
+
+00:22:25.840 --> 00:22:28.130 align:start position:0%
+ 
+ 
+
+00:22:28.130 --> 00:22:29.570 align:start position:0%
+ 
+ 
+
+00:22:29.570 --> 00:22:31.010 align:start position:0%
+ 
+ 
+
+00:22:31.010 --> 00:22:32.529 align:start position:0%
+ 
+ 
+
+00:22:32.529 --> 00:22:36.110 align:start position:0%
+ 
+ 
+
+00:22:36.110 --> 00:22:37.399 align:start position:0%
+ 
+ 
+
+00:22:37.399 --> 00:22:43.090 align:start position:0%
+ 
+ 
+
+00:22:43.090 --> 00:22:45.380 align:start position:0%
+ 
+ 
+
+00:22:45.380 --> 00:22:45.390 align:start position:0%
+ 
+ 
+
+00:22:45.390 --> 00:22:45.799 align:start position:0%
+ 
+
+
+00:22:45.799 --> 00:22:50.090 align:start position:0%
+ 
+ 
+
+00:22:50.090 --> 00:22:52.070 align:start position:0%
+ 
+ 
+
+00:22:52.070 --> 00:22:55.549 align:start position:0%
+ 
+ 
+
+00:22:55.549 --> 00:22:57.409 align:start position:0%
+ 
+ 
+
+00:22:57.409 --> 00:22:59.659 align:start position:0%
+ 
+ 
+
+00:22:59.659 --> 00:23:04.190 align:start position:0%
+ 
+ 
+
+00:23:04.190 --> 00:23:07.370 align:start position:0%
+ 
+ 
+
+00:23:07.370 --> 00:23:09.590 align:start position:0%
+ 
+ 
+
+00:23:09.590 --> 00:23:12.230 align:start position:0%
+ 
+ 
+
+00:23:12.230 --> 00:23:15.649 align:start position:0%
+ 
+ 
+
+00:23:15.649 --> 00:23:17.600 align:start position:0%
+ 
+ 
+
+00:23:17.600 --> 00:23:20.360 align:start position:0%
+ 
+ 
+
+00:23:20.360 --> 00:23:24.490 align:start position:0%
+ 
+ 
+
+00:23:24.490 --> 00:23:26.750 align:start position:0%
+ 
+ 
+
+00:23:26.750 --> 00:23:29.090 align:start position:0%
+ 
+ 
+
+00:23:29.090 --> 00:23:30.950 align:start position:0%
+ 
+ 
+
+00:23:30.950 --> 00:23:32.960 align:start position:0%
+ 
+ 
+
+00:23:32.960 --> 00:23:34.669 align:start position:0%
+ 
+ 
+
+00:23:34.669 --> 00:23:36.019 align:start position:0%
+ 
+ 
+
+00:23:36.019 --> 00:23:38.299 align:start position:0%
+ 
+ 
+
+00:23:38.299 --> 00:23:40.279 align:start position:0%
+ 
+ 
+
+00:23:40.279 --> 00:23:42.049 align:start position:0%
+ 
+ 
+
+00:23:42.049 --> 00:23:44.389 align:start position:0%
+ 
+ 
+
+00:23:44.389 --> 00:23:46.930 align:start position:0%
+ 
+ 
+
+00:23:46.930 --> 00:23:50.419 align:start position:0%
+ 
+ 
+
+00:23:50.419 --> 00:23:53.539 align:start position:0%
+ 
+ 
+
+00:23:53.539 --> 00:23:54.560 align:start position:0%
+ 
+ 
+
+00:23:54.560 --> 00:23:55.909 align:start position:0%
+ 
+ 
+
+00:23:55.909 --> 00:23:57.680 align:start position:0%
+ 
+ 
+
+00:23:57.680 --> 00:24:00.380 align:start position:0%
+ 
+ 
+
+00:24:00.380 --> 00:24:02.510 align:start position:0%
+ 
+ 
+
+00:24:02.510 --> 00:24:05.330 align:start position:0%
+ 
+ 
+
+00:24:05.330 --> 00:24:07.100 align:start position:0%
+ 
+ 
+
+00:24:07.100 --> 00:24:10.070 align:start position:0%
+ 
+ 
+
+00:24:10.070 --> 00:24:15.440 align:start position:0%
+ 
+ 
+
+00:24:15.440 --> 00:24:16.850 align:start position:0%
+ 
+ 
+
+00:24:16.850 --> 00:24:19.909 align:start position:0%
+ 
+ 
+
+00:24:19.909 --> 00:24:23.779 align:start position:0%
+ 
+ 
+
+00:24:23.779 --> 00:24:27.200 align:start position:0%
+ 
+ 
+
+00:24:27.200 --> 00:24:29.180 align:start position:0%
+ 
+ 
+
+00:24:29.180 --> 00:24:30.260 align:start position:0%
+ 
+ 
+
+00:24:30.260 --> 00:24:32.120 align:start position:0%
+ 
+ 
+
+00:24:32.120 --> 00:24:34.820 align:start position:0%
+ 
+ 
+
+00:24:34.820 --> 00:24:36.409 align:start position:0%
+ 
+ 
+
+00:24:36.409 --> 00:24:38.149 align:start position:0%
+ 
+ 
+
+00:24:38.149 --> 00:24:41.450 align:start position:0%
+ 
+ 
+
+00:24:41.450 --> 00:24:42.740 align:start position:0%
+ 
+ 
+
+00:24:42.740 --> 00:24:45.529 align:start position:0%
+ 
+ 
+
+00:24:45.529 --> 00:24:47.659 align:start position:0%
+ 
+ 
+
+00:24:47.659 --> 00:24:49.310 align:start position:0%
+ 
+ 
+
+00:24:49.310 --> 00:24:51.580 align:start position:0%
+ 
+ 
+
+00:24:51.580 --> 00:24:53.930 align:start position:0%
+ 
+ 
+
+00:24:53.930 --> 00:24:54.710 align:start position:0%
+ 
+ 
+
+00:24:54.710 --> 00:24:56.000 align:start position:0%
+ 
+ 
+
+00:24:56.000 --> 00:24:58.549 align:start position:0%
+ 
+ 
+
+00:24:58.549 --> 00:25:02.000 align:start position:0%
+ 
+ 
+
+00:25:02.000 --> 00:25:04.070 align:start position:0%
+ 
+ 
+
+00:25:04.070 --> 00:25:08.330 align:start position:0%
+ 
+ 
+
+00:25:08.330 --> 00:25:10.549 align:start position:0%
+ 
+ 
+
+00:25:10.549 --> 00:25:13.310 align:start position:0%
+ 
+ 
+
+00:25:13.310 --> 00:25:15.889 align:start position:0%
+ 
+ 
+
+00:25:15.889 --> 00:25:18.289 align:start position:0%
+ 
+ 
+
+00:25:18.289 --> 00:25:20.389 align:start position:0%
+ 
+ 
+
+00:25:20.389 --> 00:25:22.879 align:start position:0%
+ 
+ 
+
+00:25:22.879 --> 00:25:24.409 align:start position:0%
+ 
+ 
+
+00:25:24.409 --> 00:25:26.299 align:start position:0%
+ 
+ 
+
+00:25:26.299 --> 00:25:27.860 align:start position:0%
+ 
+ 
+
+00:25:27.860 --> 00:25:29.149 align:start position:0%
+ 
+ 
+
+00:25:29.149 --> 00:25:30.139 align:start position:0%
+ 
+ 
+
+00:25:30.139 --> 00:25:32.269 align:start position:0%
+ 
+ 
+
+00:25:32.269 --> 00:25:34.759 align:start position:0%
+ 
+ 
+
+00:25:34.759 --> 00:25:37.039 align:start position:0%
+ 
+ 
+
+00:25:37.039 --> 00:25:38.149 align:start position:0%
+ 
+ 
+
+00:25:38.149 --> 00:25:40.549 align:start position:0%
+ 
+ 
+
+00:25:40.549 --> 00:25:42.289 align:start position:0%
+ 
+ 
+
+00:25:42.289 --> 00:25:44.810 align:start position:0%
+ 
+ 
+
+00:25:44.810 --> 00:25:48.110 align:start position:0%
+ 
+ 
+
+00:25:48.110 --> 00:25:49.970 align:start position:0%
+ 
+ 
+
+00:25:49.970 --> 00:25:51.620 align:start position:0%
+ 
+ 
+
+00:25:51.620 --> 00:25:53.899 align:start position:0%
+ 
+ 
+
+00:25:53.899 --> 00:25:55.700 align:start position:0%
+ 
+ 
+
+00:25:55.700 --> 00:25:57.169 align:start position:0%
+ 
+ 
+
+00:25:57.169 --> 00:25:59.180 align:start position:0%
+ 
+ 
+
+00:25:59.180 --> 00:26:00.500 align:start position:0%
+ 
+ 
+
+00:26:00.500 --> 00:26:02.269 align:start position:0%
+ 
+ 
+
+00:26:02.269 --> 00:26:04.100 align:start position:0%
+ 
+ 
+
+00:26:04.100 --> 00:26:07.159 align:start position:0%
+ 
+ 
+
+00:26:07.159 --> 00:26:08.750 align:start position:0%
+ 
+ 
+
+00:26:08.750 --> 00:26:09.950 align:start position:0%
+ 
+ 
+
+00:26:09.950 --> 00:26:13.009 align:start position:0%
+ 
+ 
+
+00:26:13.009 --> 00:26:15.019 align:start position:0%
+ 
+ 
+
+00:26:15.019 --> 00:26:17.570 align:start position:0%
+ 
+ 
+
+00:26:17.570 --> 00:26:19.250 align:start position:0%
+ 
+ 
+
+00:26:19.250 --> 00:26:21.289 align:start position:0%
+ 
+ 
+
+00:26:21.289 --> 00:26:26.600 align:start position:0%
+ 
+ 
+
+00:26:26.600 --> 00:26:29.060 align:start position:0%
+ 
+ 
+
+00:26:29.060 --> 00:26:31.330 align:start position:0%
+ 
+ 
+
+00:26:31.330 --> 00:26:35.720 align:start position:0%
+ 
+ 
+
+00:26:35.720 --> 00:26:37.310 align:start position:0%
+ 
+ 
+
+00:26:37.310 --> 00:26:40.490 align:start position:0%
+ 
+ 
+
+00:26:40.490 --> 00:26:43.039 align:start position:0%
+ 
+ 
+
+00:26:43.039 --> 00:26:45.019 align:start position:0%
+ 
+ 
+
+00:26:45.019 --> 00:26:48.470 align:start position:0%
+ 
+ 
+
+00:26:48.470 --> 00:26:52.490 align:start position:0%
+ 
+ 
+
+00:26:52.490 --> 00:26:53.930 align:start position:0%
+ 
+ 
+
+00:26:53.930 --> 00:26:56.180 align:start position:0%
+ 
+ 
+
+00:26:56.180 --> 00:26:57.680 align:start position:0%
+ 
+ 
+
+00:26:57.680 --> 00:27:00.980 align:start position:0%
+ 
+ 
+
+00:27:00.980 --> 00:27:02.889 align:start position:0%
+ 
+ 
+
+00:27:02.889 --> 00:27:05.509 align:start position:0%
+ 
+ 
+
+00:27:05.509 --> 00:27:07.940 align:start position:0%
+ 
+ 
+
+00:27:07.940 --> 00:27:10.070 align:start position:0%
+ 
+ 
+
+00:27:10.070 --> 00:27:12.649 align:start position:0%
+ 
+ 
+
+00:27:12.649 --> 00:27:14.840 align:start position:0%
+ 
+ 
+
+00:27:14.840 --> 00:27:19.039 align:start position:0%
+ 
+ 
+
+00:27:19.039 --> 00:27:20.919 align:start position:0%
+ 
+ 
+
+00:27:20.919 --> 00:27:24.379 align:start position:0%
+ 
+ 
+
+00:27:24.379 --> 00:27:26.060 align:start position:0%
+ 
+ 
+
+00:27:26.060 --> 00:27:28.039 align:start position:0%
+ 
+ 
+
+00:27:28.039 --> 00:27:35.930 align:start position:0%
+ 
+ 
+
+00:27:35.930 --> 00:27:37.850 align:start position:0%
+ 
+ 
+
+00:27:37.850 --> 00:27:40.159 align:start position:0%
+ 
+ 
+
+00:27:40.159 --> 00:27:44.409 align:start position:0%
+ 
+ 
+
+00:27:44.409 --> 00:27:47.600 align:start position:0%
+ 
+ 
+
+00:27:47.600 --> 00:27:49.490 align:start position:0%
+ 
+ 
+
+00:27:49.490 --> 00:27:51.980 align:start position:0%
+ 
+ 
+
+00:27:51.980 --> 00:27:54.139 align:start position:0%
+ 
+ 
+
+00:27:54.139 --> 00:27:56.090 align:start position:0%
+ 
+ 
+
+00:27:56.090 --> 00:27:58.669 align:start position:0%
+ 
+ 
+
+00:27:58.669 --> 00:28:03.620 align:start position:0%
+ 
+ 
+
+00:28:03.620 --> 00:28:05.210 align:start position:0%
+ 
+ 
+
+00:28:05.210 --> 00:28:06.919 align:start position:0%
+ 
+ 
+
+00:28:06.919 --> 00:28:08.870 align:start position:0%
+ 
+ 
+
+00:28:08.870 --> 00:28:10.399 align:start position:0%
+ 
+ 
+
+00:28:10.399 --> 00:28:13.580 align:start position:0%
+ 
+ 
+
+00:28:13.580 --> 00:28:15.139 align:start position:0%
+ 
+ 
+
+00:28:15.139 --> 00:28:17.450 align:start position:0%
+ 
+ 
+
+00:28:17.450 --> 00:28:18.950 align:start position:0%
+ 
+ 
+
+00:28:18.950 --> 00:28:21.470 align:start position:0%
+ 
+ 
+
+00:28:21.470 --> 00:28:22.789 align:start position:0%
+ 
+ 
+
+00:28:22.789 --> 00:28:25.279 align:start position:0%
+ 
+ 
+
+00:28:25.279 --> 00:28:27.230 align:start position:0%
+ 
+ 
+
+00:28:27.230 --> 00:28:29.720 align:start position:0%
+ 
+ 
+
+00:28:29.720 --> 00:28:33.799 align:start position:0%
+ 
+ 
+
+00:28:33.799 --> 00:28:36.080 align:start position:0%
+ 
+ 
+
+00:28:36.080 --> 00:28:38.180 align:start position:0%
+ 
+ 
+
+00:28:38.180 --> 00:28:40.129 align:start position:0%
+ 
+ 
+
+00:28:40.129 --> 00:28:40.139 align:start position:0%
+ 
+ 
+
+00:28:40.139 --> 00:28:40.440 align:start position:0%
+ 
+
+
+00:28:40.440 --> 00:28:41.700 align:start position:0%
+ 
+ 
+
+00:28:41.700 --> 00:28:43.590 align:start position:0%
+ 
+ 
+
+00:28:43.590 --> 00:28:46.170 align:start position:0%
+ 
+ 
+
+00:28:46.170 --> 00:28:48.720 align:start position:0%
+ 
+ 
+
+00:28:48.720 --> 00:28:50.010 align:start position:0%
+ 
+ 
+
+00:28:50.010 --> 00:28:51.840 align:start position:0%
+ 
+ 
+
+00:28:51.840 --> 00:28:53.070 align:start position:0%
+ 
+ 
+
+00:28:53.070 --> 00:28:55.530 align:start position:0%
+ 
+ 
+
+00:28:55.530 --> 00:28:56.670 align:start position:0%
+ 
+ 
+
+00:28:56.670 --> 00:28:58.200 align:start position:0%
+ 
+ 
+
+00:28:58.200 --> 00:29:01.110 align:start position:0%
+ 
+ 
+
+00:29:01.110 --> 00:29:02.550 align:start position:0%
+ 
+ 
+
+00:29:02.550 --> 00:29:05.190 align:start position:0%
+ 
+ 
+
+00:29:05.190 --> 00:29:08.040 align:start position:0%
+ 
+ 
+
+00:29:08.040 --> 00:29:10.020 align:start position:0%
+ 
+ 
+
+00:29:10.020 --> 00:29:12.510 align:start position:0%
+ 
+ 
+
+00:29:12.510 --> 00:29:16.020 align:start position:0%
+ 
+ 
+
+00:29:16.020 --> 00:29:18.150 align:start position:0%
+ 
+ 
+
+00:29:18.150 --> 00:29:22.680 align:start position:0%
+ 
+ 
+
+00:29:22.680 --> 00:29:25.290 align:start position:0%
+ 
+ 
+
+00:29:25.290 --> 00:29:27.030 align:start position:0%
+ 
+ 
+
+00:29:27.030 --> 00:29:29.340 align:start position:0%
+ 
+ 
+
+00:29:29.340 --> 00:29:30.930 align:start position:0%
+ 
+ 
+
+00:29:30.930 --> 00:29:32.790 align:start position:0%
+ 
+ 
+
+00:29:32.790 --> 00:29:35.970 align:start position:0%
+ 
+ 
+
+00:29:35.970 --> 00:29:37.410 align:start position:0%
+ 
+ 
+
+00:29:37.410 --> 00:29:40.590 align:start position:0%
+ 
+ 
+
+00:29:40.590 --> 00:29:42.270 align:start position:0%
+ 
+ 
+
+00:29:42.270 --> 00:29:44.820 align:start position:0%
+ 
+ 
+
+00:29:44.820 --> 00:29:46.170 align:start position:0%
+ 
+ 
+
+00:29:46.170 --> 00:29:48.510 align:start position:0%
+ 
+ 
+
+00:29:48.510 --> 00:29:53.370 align:start position:0%
+ 
+ 
+
+00:29:53.370 --> 00:29:55.230 align:start position:0%
+ 
+ 
+
+00:29:55.230 --> 00:29:56.340 align:start position:0%
+ 
+ 
+
+00:29:56.340 --> 00:29:59.490 align:start position:0%
+ 
+ 
+
+00:29:59.490 --> 00:30:01.860 align:start position:0%
+ 
+ 
+
+00:30:01.860 --> 00:30:03.570 align:start position:0%
+ 
+ 
+
+00:30:03.570 --> 00:30:07.020 align:start position:0%
+ 
+ 
+
+00:30:07.020 --> 00:30:09.390 align:start position:0%
+ 
+ 
+
+00:30:09.390 --> 00:30:11.220 align:start position:0%
+ 
+ 
+
+00:30:11.220 --> 00:30:13.200 align:start position:0%
+ 
+ 
+
+00:30:13.200 --> 00:30:14.460 align:start position:0%
+ 
+ 
+
+00:30:14.460 --> 00:30:16.800 align:start position:0%
+ 
+ 
+
+00:30:16.800 --> 00:30:18.900 align:start position:0%
+ 
+ 
+
+00:30:18.900 --> 00:30:21.120 align:start position:0%
+ 
+ 
+
+00:30:21.120 --> 00:30:26.090 align:start position:0%
+ 
+ 
+
+00:30:26.090 --> 00:30:28.470 align:start position:0%
+ 
+ 
+
+00:30:28.470 --> 00:30:30.480 align:start position:0%
+ 
+ 
+
+00:30:30.480 --> 00:30:32.580 align:start position:0%
+ 
+ 
+
+00:30:32.580 --> 00:30:34.410 align:start position:0%
+ 
+ 
+
+00:30:34.410 --> 00:30:38.490 align:start position:0%
+ 
+ 
+
+00:30:38.490 --> 00:30:39.480 align:start position:0%
+ 
+ 
+
+00:30:39.480 --> 00:30:41.190 align:start position:0%
+ 
+ 
+
+00:30:41.190 --> 00:30:42.960 align:start position:0%
+ 
+ 
+
+00:30:42.960 --> 00:30:47.280 align:start position:0%
+ 
+ 
+
+00:30:47.280 --> 00:30:49.040 align:start position:0%
+ 
+ 
+
+00:30:49.040 --> 00:30:51.900 align:start position:0%
+ 
+ 
+
+00:30:51.900 --> 00:30:54.539 align:start position:0%
+ 
+ 
+
+00:30:54.539 --> 00:30:58.149 align:start position:0%
+ 
+ 
+
+00:30:58.149 --> 00:30:59.499 align:start position:0%
+ 
+ 
+
+00:30:59.499 --> 00:31:02.470 align:start position:0%
+ 
+ 
+
+00:31:02.470 --> 00:31:04.749 align:start position:0%
+ 
+ 
+
+00:31:04.749 --> 00:31:07.539 align:start position:0%
+ 
+ 
+
+00:31:07.539 --> 00:31:09.070 align:start position:0%
+ 
+ 
+
+00:31:09.070 --> 00:31:11.049 align:start position:0%
+ 
+ 
+
+00:31:11.049 --> 00:31:13.480 align:start position:0%
+ 
+ 
+
+00:31:13.480 --> 00:31:15.070 align:start position:0%
+ 
+ 
+
+00:31:15.070 --> 00:31:16.539 align:start position:0%
+ 
+ 
+
+00:31:16.539 --> 00:31:19.120 align:start position:0%
+ 
+ 
+
+00:31:19.120 --> 00:31:20.889 align:start position:0%
+ 
+ 
+
+00:31:20.889 --> 00:31:20.899 align:start position:0%
+ 
+ 
+
+00:31:20.899 --> 00:31:21.639 align:start position:0%
+ 
+
+
+00:31:21.639 --> 00:31:24.039 align:start position:0%
+ 
+ 
+
+00:31:24.039 --> 00:31:25.330 align:start position:0%
+ 
+ 
+
+00:31:25.330 --> 00:31:30.399 align:start position:0%
+ 
+ 
+
+00:31:30.399 --> 00:31:33.220 align:start position:0%
+ 
+ 
+
+00:31:33.220 --> 00:31:36.190 align:start position:0%
+ 
+ 
+
+00:31:36.190 --> 00:31:37.990 align:start position:0%
+ 
+ 
+
+00:31:37.990 --> 00:31:40.210 align:start position:0%
+ 
+ 
+
+00:31:40.210 --> 00:31:43.360 align:start position:0%
+ 
+ 
+
+00:31:43.360 --> 00:31:46.119 align:start position:0%
+ 
+ 
+
+00:31:46.119 --> 00:31:48.340 align:start position:0%
+ 
+ 
+
+00:31:48.340 --> 00:31:50.080 align:start position:0%
+ 
+ 
+
+00:31:50.080 --> 00:31:52.539 align:start position:0%
+ 
+ 
+
+00:31:52.539 --> 00:31:54.909 align:start position:0%
+ 
+ 
+
+00:31:54.909 --> 00:31:57.100 align:start position:0%
+ 
+ 
+
+00:31:57.100 --> 00:32:00.220 align:start position:0%
+ 
+ 
+
+00:32:00.220 --> 00:32:01.960 align:start position:0%
+ 
+ 
+
+00:32:01.960 --> 00:32:03.610 align:start position:0%
+ 
+ 
+
+00:32:03.610 --> 00:32:06.060 align:start position:0%
+ 
+ 
+
+00:32:06.060 --> 00:32:08.769 align:start position:0%
+ 
+ 
+
+00:32:08.769 --> 00:32:11.169 align:start position:0%
+ 
+ 
+
+00:32:11.169 --> 00:32:13.269 align:start position:0%
+ 
+ 
+
+00:32:13.269 --> 00:32:15.759 align:start position:0%
+ 
+ 
+
+00:32:15.759 --> 00:32:17.649 align:start position:0%
+ 
+ 
+
+00:32:17.649 --> 00:32:20.139 align:start position:0%
+ 
+ 
+
+00:32:20.139 --> 00:32:21.759 align:start position:0%
+ 
+ 
+
+00:32:21.759 --> 00:32:24.960 align:start position:0%
+ 
+ 
+
+00:32:24.960 --> 00:32:28.659 align:start position:0%
+ 
+ 
+
+00:32:28.659 --> 00:32:32.019 align:start position:0%
+ 
+ 
+
+00:32:32.019 --> 00:32:34.539 align:start position:0%
+ 
+ 
+
+00:32:34.539 --> 00:32:36.730 align:start position:0%
+ 
+ 
+
+00:32:36.730 --> 00:32:40.180 align:start position:0%
+ 
+ 
+
+00:32:40.180 --> 00:32:43.119 align:start position:0%
+ 
+ 
+
+00:32:43.119 --> 00:32:48.789 align:start position:0%
+ 
+ 
+
+00:32:48.789 --> 00:32:51.340 align:start position:0%
+ 
+ 
+
+00:32:51.340 --> 00:32:54.249 align:start position:0%
+ 
+ 
+
+00:32:54.249 --> 00:32:57.129 align:start position:0%
+ 
+ 
+
+00:32:57.129 --> 00:33:00.610 align:start position:0%
+ 
+ 
+
+00:33:00.610 --> 00:33:02.289 align:start position:0%
+ 
+ 
+
+00:33:02.289 --> 00:33:05.409 align:start position:0%
+ 
+ 
+
+00:33:05.409 --> 00:33:10.530 align:start position:0%
+ 
+ 
+
+00:33:10.530 --> 00:33:13.690 align:start position:0%
+ 
+ 
+
+00:33:13.690 --> 00:33:17.050 align:start position:0%
+ 
+ 
+
+00:33:17.050 --> 00:33:19.900 align:start position:0%
+ 
+ 
+
+00:33:19.900 --> 00:33:22.240 align:start position:0%
+ 
+ 
+
+00:33:22.240 --> 00:33:24.100 align:start position:0%
+ 
+ 
+
+00:33:24.100 --> 00:33:25.240 align:start position:0%
+ 
+ 
+
+00:33:25.240 --> 00:33:26.800 align:start position:0%
+ 
+ 
+
+00:33:26.800 --> 00:33:28.600 align:start position:0%
+ 
+ 
+
+00:33:28.600 --> 00:33:30.940 align:start position:0%
+ 
+ 
+
+00:33:30.940 --> 00:33:32.350 align:start position:0%
+ 
+ 
+
+00:33:32.350 --> 00:33:33.820 align:start position:0%
+ 
+ 
+
+00:33:33.820 --> 00:33:36.940 align:start position:0%
+ 
+ 
+
+00:33:36.940 --> 00:33:38.950 align:start position:0%
+ 
+ 
+
+00:33:38.950 --> 00:33:41.860 align:start position:0%
+ 
+ 
+
+00:33:41.860 --> 00:33:44.230 align:start position:0%
+ 
+ 
+
+00:33:44.230 --> 00:33:46.060 align:start position:0%
+ 
+ 
+
+00:33:46.060 --> 00:33:47.830 align:start position:0%
+ 
+ 
+
+00:33:47.830 --> 00:33:49.720 align:start position:0%
+ 
+ 
+
+00:33:49.720 --> 00:33:51.430 align:start position:0%
+ 
+ 
+
+00:33:51.430 --> 00:33:52.990 align:start position:0%
+ 
+ 
+
+00:33:52.990 --> 00:33:55.390 align:start position:0%
+ 
+ 
+
+00:33:55.390 --> 00:33:58.960 align:start position:0%
+ 
+ 
+
+00:33:58.960 --> 00:34:00.220 align:start position:0%
+ 
+ 
+
+00:34:00.220 --> 00:34:01.630 align:start position:0%
+ 
+ 
+
+00:34:01.630 --> 00:34:04.090 align:start position:0%
+ 
+ 
+
+00:34:04.090 --> 00:34:07.120 align:start position:0%
+ 
+ 
+
+00:34:07.120 --> 00:34:09.430 align:start position:0%
+ 
+ 
+
+00:34:09.430 --> 00:34:11.680 align:start position:0%
+ 
+ 
+
+00:34:11.680 --> 00:34:14.260 align:start position:0%
+ 
+ 
+
+00:34:14.260 --> 00:34:16.750 align:start position:0%
+ 
+ 
+
+00:34:16.750 --> 00:34:19.389 align:start position:0%
+ 
+ 
+
+00:34:19.389 --> 00:34:22.060 align:start position:0%
+ 
+ 
+
+00:34:22.060 --> 00:34:25.149 align:start position:0%
+ 
+ 
+
+00:34:25.149 --> 00:34:27.430 align:start position:0%
+ 
+ 
+
+00:34:27.430 --> 00:34:29.230 align:start position:0%
+ 
+ 
+
+00:34:29.230 --> 00:34:31.600 align:start position:0%
+ 
+ 
+
+00:34:31.600 --> 00:34:35.590 align:start position:0%
+ 
+ 
+
+00:34:35.590 --> 00:34:38.020 align:start position:0%
+ 
+ 
+
+00:34:38.020 --> 00:34:40.510 align:start position:0%
+ 
+ 
+
+00:34:40.510 --> 00:34:42.070 align:start position:0%
+ 
+ 
+
+00:34:42.070 --> 00:34:45.040 align:start position:0%
+ 
+ 
+
+00:34:45.040 --> 00:34:47.619 align:start position:0%
+ 
+ 
+
+00:34:47.619 --> 00:34:51.010 align:start position:0%
+ 
+ 
+
+00:34:51.010 --> 00:34:53.530 align:start position:0%
+ 
+ 
+
+00:34:53.530 --> 00:34:57.100 align:start position:0%
+ 
+ 
+
+00:34:57.100 --> 00:35:00.070 align:start position:0%
+ 
+ 
+
+00:35:00.070 --> 00:35:01.270 align:start position:0%
+ 
+ 
+
+00:35:01.270 --> 00:35:02.500 align:start position:0%
+ 
+ 
+
+00:35:02.500 --> 00:35:03.670 align:start position:0%
+ 
+ 
+
+00:35:03.670 --> 00:35:05.740 align:start position:0%
+ 
+ 
+
+00:35:05.740 --> 00:35:08.080 align:start position:0%
+ 
+ 
+
+00:35:08.080 --> 00:35:10.300 align:start position:0%
+ 
+ 
+
+00:35:10.300 --> 00:35:12.310 align:start position:0%
+ 
+ 
+
+00:35:12.310 --> 00:35:15.880 align:start position:0%
+ 
+ 
+
+00:35:15.880 --> 00:35:19.600 align:start position:0%
+ 
+ 
+
+00:35:19.600 --> 00:35:21.100 align:start position:0%
+ 
+ 
+
+00:35:21.100 --> 00:35:22.960 align:start position:0%
+ 
+ 
+
+00:35:22.960 --> 00:35:25.630 align:start position:0%
+ 
+ 
+
+00:35:25.630 --> 00:35:28.000 align:start position:0%
+ 
+ 
+
+00:35:28.000 --> 00:35:30.940 align:start position:0%
+ 
+ 
+
+00:35:30.940 --> 00:35:33.490 align:start position:0%
+ 
+ 
+
+00:35:33.490 --> 00:35:37.480 align:start position:0%
+ 
+ 
+
+00:35:37.480 --> 00:35:39.640 align:start position:0%
+ 
+ 
+
+00:35:39.640 --> 00:35:41.650 align:start position:0%
+ 
+ 
+
+00:35:41.650 --> 00:35:43.840 align:start position:0%
+ 
+ 
+
+00:35:43.840 --> 00:35:46.780 align:start position:0%
+ 
+ 
+
+00:35:46.780 --> 00:35:49.030 align:start position:0%
+ 
+ 
+
+00:35:49.030 --> 00:35:51.100 align:start position:0%
+ 
+ 
+
+00:35:51.100 --> 00:35:52.570 align:start position:0%
+ 
+ 
+
+00:35:52.570 --> 00:35:54.460 align:start position:0%
+ 
+ 
+
+00:35:54.460 --> 00:35:56.170 align:start position:0%
+ 
+ 
+
+00:35:56.170 --> 00:35:57.610 align:start position:0%
+ 
+ 
+
+00:35:57.610 --> 00:35:59.350 align:start position:0%
+ 
+ 
+
+00:35:59.350 --> 00:36:00.610 align:start position:0%
+ 
+ 
+
+00:36:00.610 --> 00:36:02.620 align:start position:0%
+ 
+ 
+
+00:36:02.620 --> 00:36:04.060 align:start position:0%
+ 
+ 
+
+00:36:04.060 --> 00:36:05.830 align:start position:0%
+ 
+ 
+
+00:36:05.830 --> 00:36:08.530 align:start position:0%
+ 
+ 
+
+00:36:08.530 --> 00:36:11.560 align:start position:0%
+ 
+ 
+
+00:36:11.560 --> 00:36:18.130 align:start position:0%
+ 
+ 
+
+00:36:18.130 --> 00:36:20.380 align:start position:0%
+ 
+ 
+
+00:36:20.380 --> 00:36:22.180 align:start position:0%
+ 
+ 
+
+00:36:22.180 --> 00:36:24.730 align:start position:0%
+ 
+ 
+
+00:36:24.730 --> 00:36:25.720 align:start position:0%
+ 
+ 
+
+00:36:25.720 --> 00:36:29.170 align:start position:0%
+ 
+ 
+
+00:36:29.170 --> 00:36:31.810 align:start position:0%
+ 
+ 
+
+00:36:31.810 --> 00:36:34.660 align:start position:0%
+ 
+ 
+
+00:36:34.660 --> 00:36:37.780 align:start position:0%
+ 
+ 
+
+00:36:37.780 --> 00:36:39.430 align:start position:0%
+ 
+ 
+
+00:36:39.430 --> 00:36:41.350 align:start position:0%
+ 
+ 
+
+00:36:41.350 --> 00:36:43.750 align:start position:0%
+ 
+ 
+
+00:36:43.750 --> 00:36:45.940 align:start position:0%
+ 
+ 
+
+00:36:45.940 --> 00:36:47.290 align:start position:0%
+ 
+ 
+
+00:36:47.290 --> 00:36:48.970 align:start position:0%
+ 
+ 
+
+00:36:48.970 --> 00:36:51.100 align:start position:0%
+ 
+ 
+
+00:36:51.100 --> 00:36:53.860 align:start position:0%
+ 
+ 
+
+00:36:53.860 --> 00:36:56.950 align:start position:0%
+ 
+ 
+
+00:36:56.950 --> 00:36:58.330 align:start position:0%
+ 
+ 
+
+00:36:58.330 --> 00:37:00.640 align:start position:0%
+ 
+ 
+
+00:37:00.640 --> 00:37:02.680 align:start position:0%
+ 
+ 
+
+00:37:02.680 --> 00:37:04.870 align:start position:0%
+ 
+ 
+
+00:37:04.870 --> 00:37:07.000 align:start position:0%
+ 
+ 
+
+00:37:07.000 --> 00:37:09.610 align:start position:0%
+ 
+ 
+
+00:37:09.610 --> 00:37:12.640 align:start position:0%
+ 
+ 
+
+00:37:12.640 --> 00:37:14.620 align:start position:0%
+ 
+ 
+
+00:37:14.620 --> 00:37:15.940 align:start position:0%
+ 
+ 
+
+00:37:15.940 --> 00:37:17.830 align:start position:0%
+ 
+ 
+
+00:37:17.830 --> 00:37:19.570 align:start position:0%
+ 
+ 
+
+00:37:19.570 --> 00:37:20.890 align:start position:0%
+ 
+ 
+
+00:37:20.890 --> 00:37:22.660 align:start position:0%
+ 
+ 
+
+00:37:22.660 --> 00:37:24.190 align:start position:0%
+ 
+ 
+
+00:37:24.190 --> 00:37:27.790 align:start position:0%
+ 
+ 
+
+00:37:27.790 --> 00:37:29.320 align:start position:0%
+ 
+ 
+
+00:37:29.320 --> 00:37:30.970 align:start position:0%
+ 
+ 
+
+00:37:30.970 --> 00:37:32.110 align:start position:0%
+ 
+ 
+
+00:37:32.110 --> 00:37:33.640 align:start position:0%
+ 
+ 
+
+00:37:33.640 --> 00:37:35.910 align:start position:0%
+ 
+ 
+
+00:37:35.910 --> 00:37:38.609 align:start position:0%
+ 
+ 
+
+00:37:38.609 --> 00:37:41.670 align:start position:0%
+ 
+ 
+
+00:37:41.670 --> 00:37:44.970 align:start position:0%
+ 
+ 
+
+00:37:44.970 --> 00:37:47.099 align:start position:0%
+ 
+ 
+
+00:37:47.099 --> 00:37:48.120 align:start position:0%
+ 
+ 
+
+00:37:48.120 --> 00:37:50.670 align:start position:0%
+ 
+ 
+
+00:37:50.670 --> 00:37:56.490 align:start position:0%
+ 
+ 
+
+00:37:56.490 --> 00:37:58.740 align:start position:0%
+ 
+ 
+
+00:37:58.740 --> 00:38:00.569 align:start position:0%
+ 
+ 
+
+00:38:00.569 --> 00:38:02.819 align:start position:0%
+ 
+ 
+
+00:38:02.819 --> 00:38:06.750 align:start position:0%
+ 
+ 
+
+00:38:06.750 --> 00:38:08.910 align:start position:0%
+ 
+ 
+
+00:38:08.910 --> 00:38:10.559 align:start position:0%
+ 
+ 
+
+00:38:10.559 --> 00:38:12.420 align:start position:0%
+ 
+ 
+
+00:38:12.420 --> 00:38:15.029 align:start position:0%
+ 
+ 
+
+00:38:15.029 --> 00:38:17.220 align:start position:0%
+ 
+ 
+
+00:38:17.220 --> 00:38:19.710 align:start position:0%
+ 
+ 
+
+00:38:19.710 --> 00:38:20.849 align:start position:0%
+ 
+ 
+
+00:38:20.849 --> 00:38:25.170 align:start position:0%
+ 
+ 
+
+00:38:25.170 --> 00:38:28.339 align:start position:0%
+ 
+ 
+
+00:38:28.339 --> 00:38:30.329 align:start position:0%
+ 
+ 
+
+00:38:30.329 --> 00:38:33.539 align:start position:0%
+ 
+ 
+
+00:38:33.539 --> 00:38:35.069 align:start position:0%
+ 
+ 
+
+00:38:35.069 --> 00:38:37.620 align:start position:0%
+ 
+ 
+
+00:38:37.620 --> 00:38:39.960 align:start position:0%
+ 
+ 
+
+00:38:39.960 --> 00:38:44.579 align:start position:0%
+ 
+ 
+
+00:38:44.579 --> 00:38:46.500 align:start position:0%
+ 
+ 
+
+00:38:46.500 --> 00:38:50.490 align:start position:0%
+ 
+ 
+
+00:38:50.490 --> 00:38:54.269 align:start position:0%
+ 
+ 
+
+00:38:54.269 --> 00:38:57.269 align:start position:0%
+ 
+ 
+
+00:38:57.269 --> 00:38:59.099 align:start position:0%
+ 
+ 
+
+00:38:59.099 --> 00:39:00.839 align:start position:0%
+ 
+ 
+
+00:39:00.839 --> 00:39:03.990 align:start position:0%
+ 
+ 
+
+00:39:03.990 --> 00:39:06.390 align:start position:0%
+ 
+ 
+
+00:39:06.390 --> 00:39:08.099 align:start position:0%
+ 
+ 
+
+00:39:08.099 --> 00:39:09.809 align:start position:0%
+ 
+ 
+
+00:39:09.809 --> 00:39:11.870 align:start position:0%
+ 
+ 
+
+00:39:11.870 --> 00:39:15.690 align:start position:0%
+ 
+ 
+
+00:39:15.690 --> 00:39:17.279 align:start position:0%
+ 
+ 
+
+00:39:17.279 --> 00:39:19.559 align:start position:0%
+ 
+ 
+
+00:39:19.559 --> 00:39:21.569 align:start position:0%
+ 
+ 
+
+00:39:21.569 --> 00:39:23.519 align:start position:0%
+ 
+ 
+
+00:39:23.519 --> 00:39:26.609 align:start position:0%
+ 
+ 
+
+00:39:26.609 --> 00:39:28.740 align:start position:0%
+ 
+ 
+
+00:39:28.740 --> 00:39:30.210 align:start position:0%
+ 
+ 
+
+00:39:30.210 --> 00:39:31.710 align:start position:0%
+ 
+ 
+
+00:39:31.710 --> 00:39:33.049 align:start position:0%
+ 
+ 
+
+00:39:33.049 --> 00:39:35.910 align:start position:0%
+ 
+ 
+
+00:39:35.910 --> 00:39:37.559 align:start position:0%
+ 
+ 
+
+00:39:37.559 --> 00:39:39.650 align:start position:0%
+ 
+ 
+
+00:39:39.650 --> 00:39:42.390 align:start position:0%
+ 
+ 
+
+00:39:42.390 --> 00:39:44.240 align:start position:0%
+ 
+ 
+
+00:39:44.240 --> 00:39:46.500 align:start position:0%
+ 
+ 
+
+00:39:46.500 --> 00:39:48.269 align:start position:0%
+ 
+ 
+
+00:39:48.269 --> 00:39:48.849 align:start position:0%
+ 
+ 
+
+00:39:48.849 --> 00:39:50.979 align:start position:0%
+ 
+ 
+
+00:39:50.979 --> 00:39:55.239 align:start position:0%
+ 
+ 
+
+00:39:55.239 --> 00:39:59.019 align:start position:0%
+ 
+ 
+
+00:39:59.019 --> 00:40:02.579 align:start position:0%
+ 
+ 
+
+00:40:02.579 --> 00:40:05.620 align:start position:0%
+ 
+ 
+
+00:40:05.620 --> 00:40:07.269 align:start position:0%
+ 
+ 
+
+00:40:07.269 --> 00:40:09.599 align:start position:0%
+ 
+ 
+
+00:40:09.599 --> 00:40:09.609 align:start position:0%
+ 
+ 
+
+00:40:09.609 --> 00:40:11.249 align:start position:0%
+ 
+
+
+00:40:11.249 --> 00:40:14.440 align:start position:0%
+ 
+ 
+
+00:40:14.440 --> 00:40:16.930 align:start position:0%
+ 
+ 
+
+00:40:16.930 --> 00:40:19.390 align:start position:0%
+ 
+ 
+
+00:40:19.390 --> 00:40:21.940 align:start position:0%
+ 
+ 
+
+00:40:21.940 --> 00:40:25.180 align:start position:0%
+ 
+ 
+
+00:40:25.180 --> 00:40:26.979 align:start position:0%
+ 
+ 
+
+00:40:26.979 --> 00:40:29.049 align:start position:0%
+ 
+ 
+
+00:40:29.049 --> 00:40:33.039 align:start position:0%
+ 
+ 
+
+00:40:33.039 --> 00:40:35.370 align:start position:0%
+ 
+ 
+
+00:40:35.370 --> 00:40:37.870 align:start position:0%
+ 
+ 
+
+00:40:37.870 --> 00:40:41.529 align:start position:0%
+ 
+ 
+
+00:40:41.529 --> 00:40:43.930 align:start position:0%
+ 
+ 
+
+00:40:43.930 --> 00:40:46.359 align:start position:0%
+ 
+ 
+
+00:40:46.359 --> 00:40:48.009 align:start position:0%
+ 
+ 
+
+00:40:48.009 --> 00:40:49.630 align:start position:0%
+ 
+ 
+
+00:40:49.630 --> 00:40:51.400 align:start position:0%
+ 
+ 
+
+00:40:51.400 --> 00:40:52.359 align:start position:0%
+ 
+ 
+
+00:40:52.359 --> 00:40:58.930 align:start position:0%
+ 
+ 
+
+00:40:58.930 --> 00:41:00.009 align:start position:0%
+ 
+ 
+
+00:41:00.009 --> 00:41:01.930 align:start position:0%
+ 
+ 
+
+00:41:01.930 --> 00:41:05.890 align:start position:0%
+ 
+ 
+
+00:41:05.890 --> 00:41:09.099 align:start position:0%
+ 
+ 
+
+00:41:09.099 --> 00:41:11.069 align:start position:0%
+ 
+ 
+
+00:41:11.069 --> 00:41:13.660 align:start position:0%
+ 
+ 
+
+00:41:13.660 --> 00:41:16.359 align:start position:0%
+ 
+ 
+
+00:41:16.359 --> 00:41:17.949 align:start position:0%
+ 
+ 
+
+00:41:17.949 --> 00:41:22.150 align:start position:0%
+ 
+ 
+
+00:41:22.150 --> 00:41:24.219 align:start position:0%
+ 
+ 
+
+00:41:24.219 --> 00:41:28.430 align:start position:0%
+ 
+ 
+
+00:41:28.430 --> 00:41:31.380 align:start position:0%
+ 
+ 
+
+00:41:31.380 --> 00:41:34.349 align:start position:0%
+ 
+ 
+
+00:41:34.349 --> 00:41:37.380 align:start position:0%
+ 
+ 
+
+00:41:37.380 --> 00:41:39.539 align:start position:0%
+ 
+ 
+
+00:41:39.539 --> 00:41:42.510 align:start position:0%
+ 
+ 
+
+00:41:42.510 --> 00:41:45.630 align:start position:0%
+ 
+ 
+
+00:41:45.630 --> 00:41:48.720 align:start position:0%
+ 
+ 
+
+00:41:48.720 --> 00:41:51.299 align:start position:0%
+ 
+ 
+
+00:41:51.299 --> 00:41:54.150 align:start position:0%
+ 
+ 
+
+00:41:54.150 --> 00:41:56.190 align:start position:0%
+ 
+ 
+
+00:41:56.190 --> 00:41:59.819 align:start position:0%
+ 
+ 
+
+00:41:59.819 --> 00:42:01.890 align:start position:0%
+ 
+ 
+
+00:42:01.890 --> 00:42:04.440 align:start position:0%
+ 
+ 
+
+00:42:04.440 --> 00:42:08.069 align:start position:0%
+ 
+ 
+
+00:42:08.069 --> 00:42:10.260 align:start position:0%
+ 
+ 
+
+00:42:10.260 --> 00:42:12.839 align:start position:0%
+ 
+ 
+
+00:42:12.839 --> 00:42:15.140 align:start position:0%
+ 
+ 
+
+00:42:15.140 --> 00:42:18.510 align:start position:0%
+ 
+ 
+
+00:42:18.510 --> 00:42:21.450 align:start position:0%
+ 
+ 
+
+00:42:21.450 --> 00:42:23.960 align:start position:0%
+ 
+ 
+
+00:42:23.960 --> 00:42:26.760 align:start position:0%
+ 
+ 
+
+00:42:26.760 --> 00:42:30.190 align:start position:0%
+ 
+ 
+
+00:42:30.190 --> 00:42:30.200 align:start position:0%
+ 
+ 
+
+00:42:30.200 --> 00:42:34.480 align:start position:0%
+ 
+
+

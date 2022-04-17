@@ -1,0 +1,3632 @@
+WEBVTT
+Kind: captions
+Language: en
+
+00:00:06.330 --> 00:00:09.150 align:start position:0%
+ 
+my name is Devin Odell I'm a software  engineer at fastly I work on our core  caching infrastructure we're based on  top of varnish so that's sort of my  platform everyday personally I'm a  really big fan of performance work and  debugging work debugging mostly because  when you do performance work you have to  do a lot of debugging work so it's just  easier to be a fan of it because  otherwise your life so miserable I'm  also a pretty big Frank Zappa fan and  don't know if I'm a bigger Frank Zappa  fan or performance fan but I'm clearly a  little bit bigger than I was in that  picture anyway a lot of the time when  people add fastly give talks they're  talking about sort of our distributed  system the challenges coming with  implementing a you know large global  network distributed systems problems but  I'm gonna focus at something at a  smaller level so something that happens  in our points of presence our pops and  in fact even something that happens on  an individual machine level so as a  content delivery network what we do is  effectively caching content for our  customers and delivering it to our  customers users and doing that at a  massive scale and there's there's  problems with being able to do that at a  systems language level like see one of  these problems is as many of you  probably know sharing memory is really  hard to do and especially if you need to  do that across process concurrently so  on a cache node we may have many  processes and these processes are sort  of able to allocate and free memory from  their own private heaps and because  there's no real general-purpose way for  us to share these any data between these  heaps concurrently safely or really at  all because they're private heaps these  processes can't really communicate at  least not through memory directly and it  would be really great if we had some  kind of system to do that right because  then we could start off sort of problems  with things like cache eviction lists or  indexes of objects on SSDs or that kind  of  that could help processes help each  other complete tasks so we implemented a  concurrent allocator it's called micro  slab and it allows us to basically do  just this it's a shared state memory  allocator that works concurrently  between processes and the talk today is  sort of going to be an exploration about  sort of how you get from the idea of  doing this to making something that  performs predictably under a high  concurrent load so first off as you  might have guessed by the name microsnap  this is a slab allocator a slab  allocator is a class of memory allocator  that hands out fixed sized objects right  so we don't have the same problems with  slab allocators with fragmentation  because it's really easy we can just  sort of put objects back in and get them  out because they're all fixed size but  what's a slab well the slab is just some  contiguous section of memory that's  broken up into a bunch of these fixed  size objects and if we want to allocate  from this slab all we have to do is just  sort of you know what we want to do is  call our allocation routine oops and  apparently that's not gonna work  but we pulled objects off the front if  we want to free them we're gonna free  them back they're also going to the  front this looks like a stack it is a  stack it's also called a free list but  we're sort of looking at this from a  single process perspective so what  happens if we add concurrency into the  mix and and really the question that we  need to answer is how do we actually  reason about the correctness of our  allocator in the face of concurrency  well something that's really useful to  do is to sort of define a protocol so  even though we're not really like doing  sort of defining message passing  semantics or something we can think of  our allocator as a sort of protocol  where we have requests for objects that  receive responses containing objects we  also have requests to free objects back  onto the allocator and those free  requests are responded to when the free  completes and I think we probably should  all intuitively agree that a request  comes before a response but I'm going to  come  I didn't make that totally clear because  that's important that that's really a  constraint right and we have other  constraints that we can define on our  allocation protocol so for instance we  can't perform an allocation and have a  subsequent allocation return the same  object without having an interstitial  free and a similar pattern constraint  holds for freeing objects so how do we  describe this  well we describe this with execution  histories and in this particular case we  have processes a and be issuing  allocation requests and they both  receive responses these requests and  responses are interleaved but they do  have an order so the execution history  allows us to sort of think about the  particular ways that we can sort of  order the operations of our of our  software and how it's going to execute  now it should also be well maybe not  obvious but we can also permute these  execution histories so we could reorder  these execution execution lines in in  four factorial ways so we get 24  different particular execution histories  but not all of them are valid right so  for instance if we reorder so that  begets a response before its sentence  request that's breaks causality and  that's mind-bending and like we can't do  that so so we say that this has violated  our protocol so let's put it back so  these constraints that we've declared on  our protocol really help us better  reason about the correctness of it and  and it seems like it's providing us a  way to sort of talk about an execution  history that that can help us become  convinced that our protocol is correct  or that an implementation of it is  correct so what other constraints do we  need to put on this particular execution  history to sort of get some some better  feelings of correctness well the first  thing that we can do is we can constrain  the type of history that we're talking  about so an execution history allows  reorder  you know arbitrary elements and  arbitrary orders but we can we can talk  about sequential histories as well in a  sequential history is a history where  any requests from our protocol is  succeeded immediately by a response so  this is an atomic effectively operation  requests and responses then become  atomic within these execution histories  and that seems to be like kind of a  property that we were missing from our  execution history and if we want  concurrent access to our allocator  seems like atom isset e is something  that we need so what does this look like  well here we have requests and responses  and and their atomic which is maybe  easier to see if they're grouped like  this the previous execution history  obviously was not a sequential history  because the requests and responses were  interleaved and what this means is that  if we introduced sequential consistency  into our allocator we we now have a  constraint where no allocation can  happen with at the same time as another  allocation no free can happen at the  same time as another allocation so we  have this sort of ordering it seems of  events but notice that while we can't  enter leave our requests and responses  that all of these operations have to  complete atomically we can still reorder  them all with respect to themselves okay  and reordering request and response  pairs can still yield a valid sequential  history and so that I am talking about  reordering because what we're actually  allowed to reorder within history is  about to become really important so just  keep keep this reordering in mind but  first let's kind of look at some code  like what what is what is a stack  effectively look like what is our free  list going to look like well we're gonna  have an allocate and free interface the  allocation for a slab allocator is just  going to read the head of the stack it's  going to read the next element off of  the head and it's going to put that next  element as the new head of the stack  simple freeing we have an object we just  read the stack head that becomes  objects next element we make the stack  head the object that we're freeing so  what do we have to add to this to get  sequential consistency well we can just  lock right we can just put locks around  it and right that's great so lock based  synchronization is is nearly like the  canonical sort of a solution to shared  memory or sharing memory and  multiprocessor and multiprocessor  systems and they're easy to reason about  right because they serialize access to  the critical sections right the part in  between the lock and the unlock and this  serialization creates a sequential  behavior so that's cool let's let's take  a look actually at how a lock itself is  implemented right because it's useful to  understand the guarantees that the lock  makes and how it makes them so really  understand why the lock protects our  structure and the kind of lock that  we're gonna be talking about just  basically for simplicity purposes as a  spin lock and in particular we're going  to talk about a test and set spin lock  so the way that this lock works is that  it snapshots the state of the of the  mutex of the lock resource it sets the  state to locked and then it says what  was the state of the snapshot when I  read it if the state was locked  we didn't acquire the lock because it  was already locked right so we just spin  and we keep doing that as long as we  have seen that we didn't change the  state from unlocked to locked if the  previous state was unlocked we have  acquired the lock right so in that case  we just exit now in the case of  unlocking that's pretty simple all we  have to do set the state to unlocked  we're good so this is how an  implementation might look like in the C  language this code is actually sort of  simplified from concurrent the  concurrency ket library which provides a  number of really great interfaces to  concurrent data structures spin locks  and other things and this looks correct  right like this this basically looks  like the sort of flowchart that we just  looked at but how can we reason or  define the correctness of this  implementation formally well because an  atomic operation by  definition is individual indivisible any  atomic operations to our mutex to this M  variable right here are sequentially  consistent among themselves so there's a  couple things to notice about this one  is this sort of test and set operation  is it actually embedded in a larger  sequence of histories which is actually  entering the lock function and exiting  the lock function or trying to acquire  the lock and acquiring the lock and in  the case of multiple processes let's  imagine that that process be previously  held the lock write and process a is  trying to to acquire it well we we have  a stronger constraint actually than just  sequential history that we have to apply  to this because sequential histories  would allow us to reorder these  operations these these atomic lock  release or the store request response  and in process be an atomic lock acquire  in process a we can't do that because  that violates the guarantee of mutual  exclusion the lock is giving us in the  first place so if we've concluded that  out of the set of all execution  histories we have some subset of  sequentially consistent execution  histories it looks like we're even  moving towards a stricter subset of  those that satisfies some other  desirable property and that property is  linearize ability so linearizable  history is a sequential history but it  has an additional constraint on it that  requested response pairs cannot be  reordered with respect to each other and  linearize ability was actually defined  by the Herlihy twing paper that we saw a  few slides back so what about linearize  ability is actually better so this a tol  CH paper gives us a couple of properties  in particular linearizable linearize  ability is easier to verify formally and  this is because linearize ability has  two other properties number one it  applies to individual objects so this is  different from serializability and  database systems we're sort of the the  entire set of multiple operations on  multiple objects is gets the sort of  serial treatment whereas with linearize  ability individual operations on single  objects get the sort of serial treatment  this property of applying operations to  individual objects also makes  linearizable algorithms or linearizable  data structures composable so if I want  to apply a linearizable operation to  some object all of those operations  applied to the objects linearize as well  so given that sort of definition we  might think that there's only one  particular execution history here that's  valid which is maybe the one presented  but notice actually that we can sort of  still reorder the entry and exit of  these functions without breaking our  protocol and in fact we can even reorder  it a little bit more right so as long as  the unlock happens before the lock  this is linearizable now it seems that  there's something special about these  these atomic instructions why why do  they provide this linearizable this  linearizable  guarantee well in a paper that predates  me from Leslie Lamport he's talking  about in queueing and D queuing elements  from a concurrent list or concurrent  queue and what he's telling us is it's  actually sufficient for there to be an  atomic moment in in lock and unlock  operations we're sort of this  transaction appears to complete and and  this is the paper that sort of credited  for coining the toy the term  linearizable by the way but this atomic  moment in our functions is also called a  linearization point and prior to this  paper there was sort of an insistence  that sort of the entire function had to  be atomic so this this gives us a new  way of thinking about linearize ability  how we can apply it to objects so in our  functions that use this lock based  synchronization plan these these  linearizable moments are anywhere within  the locks critical section and with  respect to our locking interface  it also has linearization points which  are the atomic operations changing the  state of the mutex so now we have a  formal basis for understanding our lock  and understanding its correctness how  does this perform right at the beginning  I said you know we sort of want an  alligator to perform well and that makes  sense because you know performance  matters but what do I actually mean by  performance because that's also a really  nebulous term right so what I mean is  that we get some decent throughput but  we also get predictable throughput with  concurrent load and that's really hard  to do so does our locking strategy  provide that well with so this graph is  showing the number average number of  acquisitions per second well not  acquisitions but lock allocate free  unlock operations per second across you  know sort of threads on the x-axis and  and the test was run for 10 seconds so  although with no contention we sort of  complete and something like 18  nanoseconds as soon as we add one thread  contending and you could also think of  this as processes if you want our  throughput immediately drops by an order  of magnitude like a factor of 20 25  something like that and it continues to  degrade as we add more threads which is  maybe easier to see on this logarithmic  plot so we're crossing nearly four  orders of magnitude of throughput  degradation as we add contending threads  and this is going to actually put a  limit on how our allocator will behave  because these operations wrap sort of  the the stack mutation so recall that  this test and set algorithm the way that  it works is it reads the state and then  it writes a state  and then it tests a state effectively  well why do we write every time right  this seems kind of wasteful why are we  gonna go and write some value back to  memory every time through the loop if  the locks already unlocked why are we  wasting these rights and sending them  back to memory well it smells like  something we can improve on and sure we  can so let's introduce this sort of  inner loop and instead of every time we  go through our lock acquisition trying  to set it to lock every time through we  have an inner loop that if it was locked  we just wait for it to be locked so  we're not doing any rights anymore right  we're just reading this memory now but  at first blush this this kind of feels  incorrect right because what if we've  got you know a thousand threads or  processes in here and aren't they all  going to wake up and see that the mutex  is unlocked and then race sure they are  and and this is a race condition right a  race condition simply said is a sort of  a system behavior where the output were  behavior of the system is dependent on  sort of the sequence or timing of  uncontrollable events like scheduling  maybe so can they be safe yeah we  linearize at this atomic test and set  that provides us a guaranteed global  order of operations on this mutex so  race conditions really only become bugs  when they happen out of the order that  we intended with respect to our protocol  and thinking about race conditions in  this way can maybe help us get some  additional throughput out of our lock  and later we'll see how it can also help  us get even even more predictable  throughput because if we actually look  at the performance it's a little better  but it's not that much better and more  importantly it's still not predictable  so let's try another trick let's add  some some local state right so if we  implement some exponential back-off now  we're not sharing any memory but we  might think this is bad for another  reason right maybe we're  oversleep right maybe the lock is  unlocked halfway through our back off  and then we're gonna sleep for too long  right is is is that bad is that gonna  happen well no actually this turns out  to be a pretty decent way to get  additional throughput out of our spin  lock however we still have this like  kink in the graph it basically x equals  two right and that's depressing  we could probably keep trying like every  trick in the book on our locks but  really what it looks like is we're just  changing a coefficient in exponential  decay right and in order to understand  why let's we're going to talk about  something called a progress guarantee so  let's say we've got two processes and  some spin lock that's available to both  so we have the first process that enters  the function it switches the state to  locked and then it exits the function so  now it's within its critical section  somewhere maybe so now our next thread  or next process comes in it tries to  grab the lock but it can't so it's  spinning and it's not making progress so  there is actually no progress guarantee  being made in this system because the  first process is not under any  obligation ever to release the lock  there's nothing about a locking protocol  that defines win and unlock must happen  so furthermore our second process has no  choice but to wait until the unlock  happens before it can make progress  so in our total system we have no  progress being made so that's bad so  maybe we should have look into something  that that gives us system progress so we  can talk about one thing which is lock  freedom and that defines a system where  given contention on some resource at  least one thread or process will make  progress at any particular contended  moment so you you get this sort of  system-wide throughput guarantee  so maybe maybe we want to use that  solution and maybe we want to embed that  into our data structure instead of just  you know simply using locks around these  sort of sections that clearly need  protection to prevent you know  concurrent access to this from from  becoming a race condition that does  happen out of order so this is where non  blocking algorithms come in so lock  freedom is a class of non blocking  algorithm like I said where we guarantee  progress of one thread at least and and  it seems like that this might be  something that actually provides some of  the predictability that we're looking  for so how do we implement something  like this well we're not tied to test  and set processors and most modern  processors in fact all commodity  processors for machines that I'm aware  of that people are using in data centers  and most mobile devices all support  compare-and-swap as well as a number of  other atomic read-modify-write  operations so what does compare-and-swap  do well given some value and some place  in memory what we're gonna try to do is  compare these values if they're not  equal we just return false if they are  equal we additionally have a new value  and we're going to try to swap that in  to the destination and if we do that we  return true and now the processor is  providing us also an atomic interface to  this and therefore we can also use it  for linearizing so if we apply this to  the allocator we get something like this  right up at the top here you can see  sort of a stack of or the state of the  stack so if we were executing here we  would as before read sort of the state  of our stack the variables a and B here  or sort of corresponding to a and B  elements in the stack up there and the  next thing that we're gonna do is we're  gonna try to swap B to be the head of  the stack using this compare and swap  operation so if we succeeded we've  acquired a and  is the new head of the stack right that  makes sense but what if this  compare-and-swap returns false well if  we go back to sort of this color-coded  example if if it returned false then  then we know what happened right either  well period the head was changed right  somewhere in in between our read of the  head and our attempt to compare and swap  that seems like a race so so what could  have happened well we could have had  some process free and now we have a new  element at the front of the stack  maybe another allocation happened and a  got pulled off of the stack so this  seems like really racy behavior but  again because of the linearization point  provided by our atomic compare-and-swap  we we are guaranteed in this case that  the the state we've observed will be  consistent the a is no longer there  we're gonna retry so what about free  well free is actually simpler because we  only have an object we read the head you  know it's the same thing we try to swap  the new object into the head atomically  if we can't you know we had another one  of these classes of race conditions  happen and we just retry right  effectively this compare-and-swap is  letting us detect a state change and  retry so now this is great right we've  got this concurrent stack and the stack  is we can treat it like a free list so  it's it's our allocator right let's just  race a bunch of cards against it right  we've just been already seen like this  is concurrent safe right so let's  imagine that we have this this process  and it goes in and it reads everything  it reads the front of the the slab head  it's going to read the next element and  it's going to stop executing before it  gets to the compare-and-swap  because that's actually a thing that  happens all the time in the meanwhile we  have another process that comes in and  it's got some execution time so it's  going to go ahead and allocate and a  comes off of the head of the slab so  let's play this game again let's take  another process and it's going to come  in and this process is going to allocate  and B is now off of the slab so we still  haven't executed our compare-and-swap  yet but it's fine because now C is the  head so we'll just retry if we were to  execute right now but instead of doing  that let's say that now our second  process decides that it's done with  object that it got and it's gonna go  ahead and put it back okay so now we can  see we read a was the stack head we read  B was the next element but now the state  of our stack has changed from under us  and this is no longer true so let's  finally do our compare and swap  operation well we got a but now B's back  in the list right and that violates the  semantics of our alligator protocol so  this is actually a classic concurrency  bug and it's called the ABA problem but  it's it's only a problem for us because  of our workload right we've defined that  we need to have multiple concurrent  effectively readers and writers to our  allocation pool depending on your  workload you may not actually need to  solve this problem depending on sort of  the amount of state that you care about  from your structure and the number of  concurrent processes that you have on  either side of maybe the push or pop  operation or whatever other operations  you might have on another similar  structure so solving this problem costs  definitely time overhead it can also  cost memory overhead  the way that we're going to solve it  does so it's definitely something to  keep in mind as to whether you can  change your workload to one that doesn't  have to solve it for our purposes as we  do so what we're going to do is we're  going to add a generation on to our  stack and this is just like a counter  and it's basically going to count the  number of allocations that happened  right  this is providing additional state into  our structure that we can use to check  the validity of our assumptions based on  our snapshot at the beginning so by  introducing this counter if we're  checking it we can we can pop a off the  stack and then we can push B in push a  and then we can't actually ever have a  be a happened because the pop would have  incremented the generation counter from  anybody who had read it the first time  so what does this look like in code well  instead of using our objects like we  used to have object pointer a B up here  now we're representing this sort of  entire slab head and the reason that we  have to do this is now we're comparing  to two words of memory that are side by  side it's important to note that these  do actually have to be contiguous the  the head pointer and the generation  counter and that's because this deck has  this double wide calves  it's a compare and swap operation but it  works over to two words of memory or two  double words of memory in the case of  you know a 64-bit system but whatever I  guess it depends on how you define word  so this solves the problem because of  the reasons that I I mentioned  previously but another thing to point  out here is that we're reading the  generation before the head and that's  actually super important not actually  for our allocator but I want to point it  out because if you go and you start  writing your own concurrent data  structures this becomes very important  so uniqueness is also a property of our  allocator and that's implied by the sort  of you can't allocate the same thing  twice and you can't free the same thing  twice right that implies a uniqueness of  objects in the system so any object that  you allocate is distinct from any other  object in a general-purpose stack that's  not necessarily true we might have  element a that we can push on to the  stack 50 million times and it's fine  right if we do have that case we could  have a case where a concurrent reader  from the stack or somebody trying to pop  reads a as the stack head somebody else  pushes another a onto the stack and then  we read the generation counter right so  now we see a at the front and we have  the latest generation counter so we're  going to mutate our stack again and it's  going to be the wrong state so reading  the generation counter first solves that  because we're guaranteed that if any  other operations happen the generation  counter will be different the next time  or when we actually operate our  compare-and-swap  do we have to do the same thing for free  well no free stays the same and it  this is really because free only depends  on the stack head first eight right the  reason that we need to do this  generation counter the reason that ABA  becomes a problem for us  really is because we read the stack head  we read the next element and that joint  state that that multi-level state is  effectively what's coming back and  biting us and causing us or combined  with our workload as I said coming back  and biting us into cause the ABA problem  okay  well it turns out that that's actually  all of the problems because I'm not  going to talk about cache coherence your  memory ordering in this talk so that's  all basically the race conditions that  we're going to see here so we've we've  solved this problem now we have a  correct concurrent lock free slab  allocator okay so what is the throughput  look like that's great that's  predictable right we have the this is  the same test but with our concurrent  allocator we see that as we increase  contention in some cases we're getting  even better throughput right it looks  linear it definitely looks linear on the  logarithmic plot but why is this right  like what what is it about this property  of lock freedom that that's really  helping us out so much well to do that  we need to look at something other than  throughput like throughputs great but it  doesn't tell you the whole story and in  particular we need to look at latency  plots okay so this is a min Max and 25th  to 75th quartiles box and whisker plots  of our testin testin set lock that was  the the test and set with the the nested  loop and what we see is that sort of in  the general case up to 75th percentile  we've got pretty reasonable latency but  from 75th to max value we've got this  just enormous variation it's  unpredictable and this is because of the  lack of progress guarantee from the lock  you you aren't guaranteed to make  progress and this introduces jitter  additionally it introduces a queuing  effect into the system so if you're  familiar with littles law that could  sort of explain this this jitter and  latency it takes your system out of a  stable State  I should also mention that I have also  skimmed the top 1% off of these numbers  to you know just account for any like  huge amount of system jitter that might  have been introduced and it's get off of  all of these plots I haven't talked  about pthreads a lot I suspect that a  number of people are using P threads for  reasons that have to do with having more  threads than you have cores in the  system which is a good case for not  using spin locks in fact but what we see  here is that we actually have  significant variance in distribution  from our twenty-fifth to 75th percentile  as well and we're also still in the same  order of magnitude on our y-axis here so  when we look at our exponential back-off  spinlock in general it seems fine but we  still at from from 75th percentile to  max we still have all of this jitter all  of this variance even though we've we've  decreased latency by an order of  magnitude so this decrease in latency is  actually the only thing that is giving  our tests and sets pinlock additional  throughput and this comes back back to  littles law right which says that the  number of outstanding items in a queuing  system in average outstanding items in a  queueing system is equal to the arrival  rate of new requests so contention on  the log rate plus the time it takes to  service a request so latency of the lock  because we were able to reduce the  latency in our exponential back-off  spinlock that's the only reason that we  got the throughput but because of the  queuing effect of locks that is why our  throughput still remains unpredictable  under high contention so finally let's  look at our latency four are concurrent  allocator that looks really good right  that is predictable right we're two  orders of magnitude town.the the  deviation between men and max is still  in the same order of magnitude  everything looks really good this is  what we need right under under  contention actually it performed or  under no contention it performed worse  I'd be happy to talk about that  afterwards if you're interested but as  we add contention we see that we still  get this very predictable latency and  that gives us our throughput again this  is that coupled with the progress  guarantee gives us the throughput  consistency as we add contention on the  structure so takeaways well one thing  that I really want to drive home because  I think maybe I didn't do it enough is  that racing processes with each other  it's not only like common when when  we're addressing throughput and latency  issues in our software it actually is  kind of a crucial part of designing  non-blocking algorithms it's a crucial  part of trying to improve throughput in  perhaps our locking functions where we  see that doing something that reduces  latency can help us increase throughput  by by racing these processes in a way  that's friendlier to the system and and  furthermore we can do that safely  because our systems provide us with  these atomic read-modify-write  primitives like test and set like  compare and compare and swap fetch and  fee you know whatever operation you want  to do and and these linearization points  provide us with a total globally  observable order between all processes  in the system that they all agree on all  the time because it linearizes good so  that's a that's we're wrapping it up I  definitely did not cover all of the  things about a slab allocator or  performance things that you want to keep  in mind in particular per thread slabs  what to do when your slab is out of  memory stealing from elsewhere that kind  of stuff if you're interested in this  code or using this in your systems  definitely check check out use lab bio  which right now is just redirecting to  our github page we've open sourced this  and it's under the Apache 2 license also  before I wrap up I want to thank my  colleague Nathan Taylor so he actually  presented this talk at  Serg yesterday but the conferences were  happening concurrently so I couldn't be  at both I also really can't overstate  how much he helped both with content and  you know teasing out bugs and some of  the testing stuff and you know giving  these slides a consistent total order so  that's all I've got for you thank you  for coming if you've got questions I  think there's only two minutes left so  I'm gonna head out to the fastly booth  that's just down the hall so feel free  to come see me and ask questions there  and thank you for coming  [Applause]
+
+00:00:09.150 --> 00:00:11.879 align:start position:0%
+my name is Devin Odell I'm a software  engineer at fastly I work on our core  caching infrastructure we're based on  top of varnish so that's sort of my  platform everyday personally I'm a  really big fan of performance work and  debugging work debugging mostly because  when you do performance work you have to  do a lot of debugging work so it's just  easier to be a fan of it because  otherwise your life so miserable I'm  also a pretty big Frank Zappa fan and  don't know if I'm a bigger Frank Zappa  fan or performance fan but I'm clearly a  little bit bigger than I was in that  picture anyway a lot of the time when  people add fastly give talks they're  talking about sort of our distributed  system the challenges coming with  implementing a you know large global  network distributed systems problems but  I'm gonna focus at something at a  smaller level so something that happens  in our points of presence our pops and  in fact even something that happens on  an individual machine level so as a  content delivery network what we do is  effectively caching content for our  customers and delivering it to our  customers users and doing that at a  massive scale and there's there's  problems with being able to do that at a  systems language level like see one of  these problems is as many of you  probably know sharing memory is really  hard to do and especially if you need to  do that across process concurrently so  on a cache node we may have many  processes and these processes are sort  of able to allocate and free memory from  their own private heaps and because  there's no real general-purpose way for  us to share these any data between these  heaps concurrently safely or really at  all because they're private heaps these  processes can't really communicate at  least not through memory directly and it  would be really great if we had some  kind of system to do that right because  then we could start off sort of problems  with things like cache eviction lists or  indexes of objects on SSDs or that kind  of  that could help processes help each  other complete tasks so we implemented a  concurrent allocator it's called micro  slab and it allows us to basically do  just this it's a shared state memory  allocator that works concurrently  between processes and the talk today is  sort of going to be an exploration about  sort of how you get from the idea of  doing this to making something that  performs predictably under a high  concurrent load so first off as you  might have guessed by the name microsnap  this is a slab allocator a slab  allocator is a class of memory allocator  that hands out fixed sized objects right  so we don't have the same problems with  slab allocators with fragmentation  because it's really easy we can just  sort of put objects back in and get them  out because they're all fixed size but  what's a slab well the slab is just some  contiguous section of memory that's  broken up into a bunch of these fixed  size objects and if we want to allocate  from this slab all we have to do is just  sort of you know what we want to do is  call our allocation routine oops and  apparently that's not gonna work  but we pulled objects off the front if  we want to free them we're gonna free  them back they're also going to the  front this looks like a stack it is a  stack it's also called a free list but  we're sort of looking at this from a  single process perspective so what  happens if we add concurrency into the  mix and and really the question that we  need to answer is how do we actually  reason about the correctness of our  allocator in the face of concurrency  well something that's really useful to  do is to sort of define a protocol so  even though we're not really like doing  sort of defining message passing  semantics or something we can think of  our allocator as a sort of protocol  where we have requests for objects that  receive responses containing objects we  also have requests to free objects back  onto the allocator and those free  requests are responded to when the free  completes and I think we probably should  all intuitively agree that a request  comes before a response but I'm going to  come  I didn't make that totally clear because  that's important that that's really a  constraint right and we have other  constraints that we can define on our  allocation protocol so for instance we  can't perform an allocation and have a  subsequent allocation return the same  object without having an interstitial  free and a similar pattern constraint  holds for freeing objects so how do we  describe this  well we describe this with execution  histories and in this particular case we  have processes a and be issuing  allocation requests and they both  receive responses these requests and  responses are interleaved but they do  have an order so the execution history  allows us to sort of think about the  particular ways that we can sort of  order the operations of our of our  software and how it's going to execute  now it should also be well maybe not  obvious but we can also permute these  execution histories so we could reorder  these execution execution lines in in  four factorial ways so we get 24  different particular execution histories  but not all of them are valid right so  for instance if we reorder so that  begets a response before its sentence  request that's breaks causality and  that's mind-bending and like we can't do  that so so we say that this has violated  our protocol so let's put it back so  these constraints that we've declared on  our protocol really help us better  reason about the correctness of it and  and it seems like it's providing us a  way to sort of talk about an execution  history that that can help us become  convinced that our protocol is correct  or that an implementation of it is  correct so what other constraints do we  need to put on this particular execution  history to sort of get some some better  feelings of correctness well the first  thing that we can do is we can constrain  the type of history that we're talking  about so an execution history allows  reorder  you know arbitrary elements and  arbitrary orders but we can we can talk  about sequential histories as well in a  sequential history is a history where  any requests from our protocol is  succeeded immediately by a response so  this is an atomic effectively operation  requests and responses then become  atomic within these execution histories  and that seems to be like kind of a  property that we were missing from our  execution history and if we want  concurrent access to our allocator  seems like atom isset e is something  that we need so what does this look like  well here we have requests and responses  and and their atomic which is maybe  easier to see if they're grouped like  this the previous execution history  obviously was not a sequential history  because the requests and responses were  interleaved and what this means is that  if we introduced sequential consistency  into our allocator we we now have a  constraint where no allocation can  happen with at the same time as another  allocation no free can happen at the  same time as another allocation so we  have this sort of ordering it seems of  events but notice that while we can't  enter leave our requests and responses  that all of these operations have to  complete atomically we can still reorder  them all with respect to themselves okay  and reordering request and response  pairs can still yield a valid sequential  history and so that I am talking about  reordering because what we're actually  allowed to reorder within history is  about to become really important so just  keep keep this reordering in mind but  first let's kind of look at some code  like what what is what is a stack  effectively look like what is our free  list going to look like well we're gonna  have an allocate and free interface the  allocation for a slab allocator is just  going to read the head of the stack it's  going to read the next element off of  the head and it's going to put that next  element as the new head of the stack  simple freeing we have an object we just  read the stack head that becomes  objects next element we make the stack  head the object that we're freeing so  what do we have to add to this to get  sequential consistency well we can just  lock right we can just put locks around  it and right that's great so lock based  synchronization is is nearly like the  canonical sort of a solution to shared  memory or sharing memory and  multiprocessor and multiprocessor  systems and they're easy to reason about  right because they serialize access to  the critical sections right the part in  between the lock and the unlock and this  serialization creates a sequential  behavior so that's cool let's let's take  a look actually at how a lock itself is  implemented right because it's useful to  understand the guarantees that the lock  makes and how it makes them so really  understand why the lock protects our  structure and the kind of lock that  we're gonna be talking about just  basically for simplicity purposes as a  spin lock and in particular we're going  to talk about a test and set spin lock  so the way that this lock works is that  it snapshots the state of the of the  mutex of the lock resource it sets the  state to locked and then it says what  was the state of the snapshot when I  read it if the state was locked  we didn't acquire the lock because it  was already locked right so we just spin  and we keep doing that as long as we  have seen that we didn't change the  state from unlocked to locked if the  previous state was unlocked we have  acquired the lock right so in that case  we just exit now in the case of  unlocking that's pretty simple all we  have to do set the state to unlocked  we're good so this is how an  implementation might look like in the C  language this code is actually sort of  simplified from concurrent the  concurrency ket library which provides a  number of really great interfaces to  concurrent data structures spin locks  and other things and this looks correct  right like this this basically looks  like the sort of flowchart that we just  looked at but how can we reason or  define the correctness of this  implementation formally well because an  atomic operation by  definition is individual indivisible any  atomic operations to our mutex to this M  variable right here are sequentially  consistent among themselves so there's a  couple things to notice about this one  is this sort of test and set operation  is it actually embedded in a larger  sequence of histories which is actually  entering the lock function and exiting  the lock function or trying to acquire  the lock and acquiring the lock and in  the case of multiple processes let's  imagine that that process be previously  held the lock write and process a is  trying to to acquire it well we we have  a stronger constraint actually than just  sequential history that we have to apply  to this because sequential histories  would allow us to reorder these  operations these these atomic lock  release or the store request response  and in process be an atomic lock acquire  in process a we can't do that because  that violates the guarantee of mutual  exclusion the lock is giving us in the  first place so if we've concluded that  out of the set of all execution  histories we have some subset of  sequentially consistent execution  histories it looks like we're even  moving towards a stricter subset of  those that satisfies some other  desirable property and that property is  linearize ability so linearizable  history is a sequential history but it  has an additional constraint on it that  requested response pairs cannot be  reordered with respect to each other and  linearize ability was actually defined  by the Herlihy twing paper that we saw a  few slides back so what about linearize  ability is actually better so this a tol  CH paper gives us a couple of properties  in particular linearizable linearize  ability is easier to verify formally and  this is because linearize ability has  two other properties number one it  applies to individual objects so this is  different from serializability and  database systems we're sort of the the  entire set of multiple operations on  multiple objects is gets the sort of  serial treatment whereas with linearize  ability individual operations on single  objects get the sort of serial treatment  this property of applying operations to  individual objects also makes  linearizable algorithms or linearizable  data structures composable so if I want  to apply a linearizable operation to  some object all of those operations  applied to the objects linearize as well  so given that sort of definition we  might think that there's only one  particular execution history here that's  valid which is maybe the one presented  but notice actually that we can sort of  still reorder the entry and exit of  these functions without breaking our  protocol and in fact we can even reorder  it a little bit more right so as long as  the unlock happens before the lock  this is linearizable now it seems that  there's something special about these  these atomic instructions why why do  they provide this linearizable this  linearizable  guarantee well in a paper that predates  me from Leslie Lamport he's talking  about in queueing and D queuing elements  from a concurrent list or concurrent  queue and what he's telling us is it's  actually sufficient for there to be an  atomic moment in in lock and unlock  operations we're sort of this  transaction appears to complete and and  this is the paper that sort of credited  for coining the toy the term  linearizable by the way but this atomic  moment in our functions is also called a  linearization point and prior to this  paper there was sort of an insistence  that sort of the entire function had to  be atomic so this this gives us a new  way of thinking about linearize ability  how we can apply it to objects so in our  functions that use this lock based  synchronization plan these these  linearizable moments are anywhere within  the locks critical section and with  respect to our locking interface  it also has linearization points which  are the atomic operations changing the  state of the mutex so now we have a  formal basis for understanding our lock  and understanding its correctness how  does this perform right at the beginning  I said you know we sort of want an  alligator to perform well and that makes  sense because you know performance  matters but what do I actually mean by  performance because that's also a really  nebulous term right so what I mean is  that we get some decent throughput but  we also get predictable throughput with  concurrent load and that's really hard  to do so does our locking strategy  provide that well with so this graph is  showing the number average number of  acquisitions per second well not  acquisitions but lock allocate free  unlock operations per second across you  know sort of threads on the x-axis and  and the test was run for 10 seconds so  although with no contention we sort of  complete and something like 18  nanoseconds as soon as we add one thread  contending and you could also think of  this as processes if you want our  throughput immediately drops by an order  of magnitude like a factor of 20 25  something like that and it continues to  degrade as we add more threads which is  maybe easier to see on this logarithmic  plot so we're crossing nearly four  orders of magnitude of throughput  degradation as we add contending threads  and this is going to actually put a  limit on how our allocator will behave  because these operations wrap sort of  the the stack mutation so recall that  this test and set algorithm the way that  it works is it reads the state and then  it writes a state  and then it tests a state effectively  well why do we write every time right  this seems kind of wasteful why are we  gonna go and write some value back to  memory every time through the loop if  the locks already unlocked why are we  wasting these rights and sending them  back to memory well it smells like  something we can improve on and sure we  can so let's introduce this sort of  inner loop and instead of every time we  go through our lock acquisition trying  to set it to lock every time through we  have an inner loop that if it was locked  we just wait for it to be locked so  we're not doing any rights anymore right  we're just reading this memory now but  at first blush this this kind of feels  incorrect right because what if we've  got you know a thousand threads or  processes in here and aren't they all  going to wake up and see that the mutex  is unlocked and then race sure they are  and and this is a race condition right a  race condition simply said is a sort of  a system behavior where the output were  behavior of the system is dependent on  sort of the sequence or timing of  uncontrollable events like scheduling  maybe so can they be safe yeah we  linearize at this atomic test and set  that provides us a guaranteed global  order of operations on this mutex so  race conditions really only become bugs  when they happen out of the order that  we intended with respect to our protocol  and thinking about race conditions in  this way can maybe help us get some  additional throughput out of our lock  and later we'll see how it can also help  us get even even more predictable  throughput because if we actually look  at the performance it's a little better  but it's not that much better and more  importantly it's still not predictable  so let's try another trick let's add  some some local state right so if we  implement some exponential back-off now  we're not sharing any memory but we  might think this is bad for another  reason right maybe we're  oversleep right maybe the lock is  unlocked halfway through our back off  and then we're gonna sleep for too long  right is is is that bad is that gonna  happen well no actually this turns out  to be a pretty decent way to get  additional throughput out of our spin  lock however we still have this like  kink in the graph it basically x equals  two right and that's depressing  we could probably keep trying like every  trick in the book on our locks but  really what it looks like is we're just  changing a coefficient in exponential  decay right and in order to understand  why let's we're going to talk about  something called a progress guarantee so  let's say we've got two processes and  some spin lock that's available to both  so we have the first process that enters  the function it switches the state to  locked and then it exits the function so  now it's within its critical section  somewhere maybe so now our next thread  or next process comes in it tries to  grab the lock but it can't so it's  spinning and it's not making progress so  there is actually no progress guarantee  being made in this system because the  first process is not under any  obligation ever to release the lock  there's nothing about a locking protocol  that defines win and unlock must happen  so furthermore our second process has no  choice but to wait until the unlock  happens before it can make progress  so in our total system we have no  progress being made so that's bad so  maybe we should have look into something  that that gives us system progress so we  can talk about one thing which is lock  freedom and that defines a system where  given contention on some resource at  least one thread or process will make  progress at any particular contended  moment so you you get this sort of  system-wide throughput guarantee  so maybe maybe we want to use that  solution and maybe we want to embed that  into our data structure instead of just  you know simply using locks around these  sort of sections that clearly need  protection to prevent you know  concurrent access to this from from  becoming a race condition that does  happen out of order so this is where non  blocking algorithms come in so lock  freedom is a class of non blocking  algorithm like I said where we guarantee  progress of one thread at least and and  it seems like that this might be  something that actually provides some of  the predictability that we're looking  for so how do we implement something  like this well we're not tied to test  and set processors and most modern  processors in fact all commodity  processors for machines that I'm aware  of that people are using in data centers  and most mobile devices all support  compare-and-swap as well as a number of  other atomic read-modify-write  operations so what does compare-and-swap  do well given some value and some place  in memory what we're gonna try to do is  compare these values if they're not  equal we just return false if they are  equal we additionally have a new value  and we're going to try to swap that in  to the destination and if we do that we  return true and now the processor is  providing us also an atomic interface to  this and therefore we can also use it  for linearizing so if we apply this to  the allocator we get something like this  right up at the top here you can see  sort of a stack of or the state of the  stack so if we were executing here we  would as before read sort of the state  of our stack the variables a and B here  or sort of corresponding to a and B  elements in the stack up there and the  next thing that we're gonna do is we're  gonna try to swap B to be the head of  the stack using this compare and swap  operation so if we succeeded we've  acquired a and  is the new head of the stack right that  makes sense but what if this  compare-and-swap returns false well if  we go back to sort of this color-coded  example if if it returned false then  then we know what happened right either  well period the head was changed right  somewhere in in between our read of the  head and our attempt to compare and swap  that seems like a race so so what could  have happened well we could have had  some process free and now we have a new  element at the front of the stack  maybe another allocation happened and a  got pulled off of the stack so this  seems like really racy behavior but  again because of the linearization point  provided by our atomic compare-and-swap  we we are guaranteed in this case that  the the state we've observed will be  consistent the a is no longer there  we're gonna retry so what about free  well free is actually simpler because we  only have an object we read the head you  know it's the same thing we try to swap  the new object into the head atomically  if we can't you know we had another one  of these classes of race conditions  happen and we just retry right  effectively this compare-and-swap is  letting us detect a state change and  retry so now this is great right we've  got this concurrent stack and the stack  is we can treat it like a free list so  it's it's our allocator right let's just  race a bunch of cards against it right  we've just been already seen like this  is concurrent safe right so let's  imagine that we have this this process  and it goes in and it reads everything  it reads the front of the the slab head  it's going to read the next element and  it's going to stop executing before it  gets to the compare-and-swap  because that's actually a thing that  happens all the time in the meanwhile we  have another process that comes in and  it's got some execution time so it's  going to go ahead and allocate and a  comes off of the head of the slab so  let's play this game again let's take  another process and it's going to come  in and this process is going to allocate  and B is now off of the slab so we still  haven't executed our compare-and-swap  yet but it's fine because now C is the  head so we'll just retry if we were to  execute right now but instead of doing  that let's say that now our second  process decides that it's done with  object that it got and it's gonna go  ahead and put it back okay so now we can  see we read a was the stack head we read  B was the next element but now the state  of our stack has changed from under us  and this is no longer true so let's  finally do our compare and swap  operation well we got a but now B's back  in the list right and that violates the  semantics of our alligator protocol so  this is actually a classic concurrency  bug and it's called the ABA problem but  it's it's only a problem for us because  of our workload right we've defined that  we need to have multiple concurrent  effectively readers and writers to our  allocation pool depending on your  workload you may not actually need to  solve this problem depending on sort of  the amount of state that you care about  from your structure and the number of  concurrent processes that you have on  either side of maybe the push or pop  operation or whatever other operations  you might have on another similar  structure so solving this problem costs  definitely time overhead it can also  cost memory overhead  the way that we're going to solve it  does so it's definitely something to  keep in mind as to whether you can  change your workload to one that doesn't  have to solve it for our purposes as we  do so what we're going to do is we're  going to add a generation on to our  stack and this is just like a counter  and it's basically going to count the  number of allocations that happened  right  this is providing additional state into  our structure that we can use to check  the validity of our assumptions based on  our snapshot at the beginning so by  introducing this counter if we're  checking it we can we can pop a off the  stack and then we can push B in push a  and then we can't actually ever have a  be a happened because the pop would have  incremented the generation counter from  anybody who had read it the first time  so what does this look like in code well  instead of using our objects like we  used to have object pointer a B up here  now we're representing this sort of  entire slab head and the reason that we  have to do this is now we're comparing  to two words of memory that are side by  side it's important to note that these  do actually have to be contiguous the  the head pointer and the generation  counter and that's because this deck has  this double wide calves  it's a compare and swap operation but it  works over to two words of memory or two  double words of memory in the case of  you know a 64-bit system but whatever I  guess it depends on how you define word  so this solves the problem because of  the reasons that I I mentioned  previously but another thing to point  out here is that we're reading the  generation before the head and that's  actually super important not actually  for our allocator but I want to point it  out because if you go and you start  writing your own concurrent data  structures this becomes very important  so uniqueness is also a property of our  allocator and that's implied by the sort  of you can't allocate the same thing  twice and you can't free the same thing  twice right that implies a uniqueness of  objects in the system so any object that  you allocate is distinct from any other  object in a general-purpose stack that's  not necessarily true we might have  element a that we can push on to the  stack 50 million times and it's fine  right if we do have that case we could  have a case where a concurrent reader  from the stack or somebody trying to pop  reads a as the stack head somebody else  pushes another a onto the stack and then  we read the generation counter right so  now we see a at the front and we have  the latest generation counter so we're  going to mutate our stack again and it's  going to be the wrong state so reading  the generation counter first solves that  because we're guaranteed that if any  other operations happen the generation  counter will be different the next time  or when we actually operate our  compare-and-swap  do we have to do the same thing for free  well no free stays the same and it  this is really because free only depends  on the stack head first eight right the  reason that we need to do this  generation counter the reason that ABA  becomes a problem for us  really is because we read the stack head  we read the next element and that joint  state that that multi-level state is  effectively what's coming back and  biting us and causing us or combined  with our workload as I said coming back  and biting us into cause the ABA problem  okay  well it turns out that that's actually  all of the problems because I'm not  going to talk about cache coherence your  memory ordering in this talk so that's  all basically the race conditions that  we're going to see here so we've we've  solved this problem now we have a  correct concurrent lock free slab  allocator okay so what is the throughput  look like that's great that's  predictable right we have the this is  the same test but with our concurrent  allocator we see that as we increase  contention in some cases we're getting  even better throughput right it looks  linear it definitely looks linear on the  logarithmic plot but why is this right  like what what is it about this property  of lock freedom that that's really  helping us out so much well to do that  we need to look at something other than  throughput like throughputs great but it  doesn't tell you the whole story and in  particular we need to look at latency  plots okay so this is a min Max and 25th  to 75th quartiles box and whisker plots  of our testin testin set lock that was  the the test and set with the the nested  loop and what we see is that sort of in  the general case up to 75th percentile  we've got pretty reasonable latency but  from 75th to max value we've got this  just enormous variation it's  unpredictable and this is because of the  lack of progress guarantee from the lock  you you aren't guaranteed to make  progress and this introduces jitter  additionally it introduces a queuing  effect into the system so if you're  familiar with littles law that could  sort of explain this this jitter and  latency it takes your system out of a  stable State  I should also mention that I have also  skimmed the top 1% off of these numbers  to you know just account for any like  huge amount of system jitter that might  have been introduced and it's get off of  all of these plots I haven't talked  about pthreads a lot I suspect that a  number of people are using P threads for  reasons that have to do with having more  threads than you have cores in the  system which is a good case for not  using spin locks in fact but what we see  here is that we actually have  significant variance in distribution  from our twenty-fifth to 75th percentile  as well and we're also still in the same  order of magnitude on our y-axis here so  when we look at our exponential back-off  spinlock in general it seems fine but we  still at from from 75th percentile to  max we still have all of this jitter all  of this variance even though we've we've  decreased latency by an order of  magnitude so this decrease in latency is  actually the only thing that is giving  our tests and sets pinlock additional  throughput and this comes back back to  littles law right which says that the  number of outstanding items in a queuing  system in average outstanding items in a  queueing system is equal to the arrival  rate of new requests so contention on  the log rate plus the time it takes to  service a request so latency of the lock  because we were able to reduce the  latency in our exponential back-off  spinlock that's the only reason that we  got the throughput but because of the  queuing effect of locks that is why our  throughput still remains unpredictable  under high contention so finally let's  look at our latency four are concurrent  allocator that looks really good right  that is predictable right we're two  orders of magnitude town.the the  deviation between men and max is still  in the same order of magnitude  everything looks really good this is  what we need right under under  contention actually it performed or  under no contention it performed worse  I'd be happy to talk about that  afterwards if you're interested but as  we add contention we see that we still  get this very predictable latency and  that gives us our throughput again this  is that coupled with the progress  guarantee gives us the throughput  consistency as we add contention on the  structure so takeaways well one thing  that I really want to drive home because  I think maybe I didn't do it enough is  that racing processes with each other  it's not only like common when when  we're addressing throughput and latency  issues in our software it actually is  kind of a crucial part of designing  non-blocking algorithms it's a crucial  part of trying to improve throughput in  perhaps our locking functions where we  see that doing something that reduces  latency can help us increase throughput  by by racing these processes in a way  that's friendlier to the system and and  furthermore we can do that safely  because our systems provide us with  these atomic read-modify-write  primitives like test and set like  compare and compare and swap fetch and  fee you know whatever operation you want  to do and and these linearization points  provide us with a total globally  observable order between all processes  in the system that they all agree on all  the time because it linearizes good so  that's a that's we're wrapping it up I  definitely did not cover all of the  things about a slab allocator or  performance things that you want to keep  in mind in particular per thread slabs  what to do when your slab is out of  memory stealing from elsewhere that kind  of stuff if you're interested in this  code or using this in your systems  definitely check check out use lab bio  which right now is just redirecting to  our github page we've open sourced this  and it's under the Apache 2 license also  before I wrap up I want to thank my  colleague Nathan Taylor so he actually  presented this talk at  Serg yesterday but the conferences were  happening concurrently so I couldn't be  at both I also really can't overstate  how much he helped both with content and  you know teasing out bugs and some of  the testing stuff and you know giving  these slides a consistent total order so  that's all I've got for you thank you  for coming if you've got questions I  think there's only two minutes left so  I'm gonna head out to the fastly booth  that's just down the hall so feel free  to come see me and ask questions there  and thank you for coming  [Applause]
+ 
+
+00:00:11.879 --> 00:00:13.799 align:start position:0%
+ 
+ 
+
+00:00:13.799 --> 00:00:15.470 align:start position:0%
+ 
+ 
+
+00:00:15.470 --> 00:00:19.230 align:start position:0%
+ 
+ 
+
+00:00:19.230 --> 00:00:21.179 align:start position:0%
+ 
+ 
+
+00:00:21.179 --> 00:00:24.240 align:start position:0%
+ 
+ 
+
+00:00:24.240 --> 00:00:25.859 align:start position:0%
+ 
+ 
+
+00:00:25.859 --> 00:00:27.990 align:start position:0%
+ 
+ 
+
+00:00:27.990 --> 00:00:29.609 align:start position:0%
+ 
+ 
+
+00:00:29.609 --> 00:00:31.740 align:start position:0%
+ 
+ 
+
+00:00:31.740 --> 00:00:34.790 align:start position:0%
+ 
+ 
+
+00:00:34.790 --> 00:00:37.200 align:start position:0%
+ 
+ 
+
+00:00:37.200 --> 00:00:39.419 align:start position:0%
+ 
+ 
+
+00:00:39.419 --> 00:00:40.709 align:start position:0%
+ 
+ 
+
+00:00:40.709 --> 00:00:43.439 align:start position:0%
+ 
+ 
+
+00:00:43.439 --> 00:00:46.169 align:start position:0%
+ 
+ 
+
+00:00:46.169 --> 00:00:49.049 align:start position:0%
+ 
+ 
+
+00:00:49.049 --> 00:00:50.880 align:start position:0%
+ 
+ 
+
+00:00:50.880 --> 00:00:52.889 align:start position:0%
+ 
+ 
+
+00:00:52.889 --> 00:00:57.180 align:start position:0%
+ 
+ 
+
+00:00:57.180 --> 00:00:59.399 align:start position:0%
+ 
+ 
+
+00:00:59.399 --> 00:01:01.349 align:start position:0%
+ 
+ 
+
+00:01:01.349 --> 00:01:03.689 align:start position:0%
+ 
+ 
+
+00:01:03.689 --> 00:01:05.550 align:start position:0%
+ 
+ 
+
+00:01:05.550 --> 00:01:09.030 align:start position:0%
+ 
+ 
+
+00:01:09.030 --> 00:01:11.490 align:start position:0%
+ 
+ 
+
+00:01:11.490 --> 00:01:13.770 align:start position:0%
+ 
+ 
+
+00:01:13.770 --> 00:01:15.900 align:start position:0%
+ 
+ 
+
+00:01:15.900 --> 00:01:18.330 align:start position:0%
+ 
+ 
+
+00:01:18.330 --> 00:01:21.420 align:start position:0%
+ 
+ 
+
+00:01:21.420 --> 00:01:24.030 align:start position:0%
+ 
+ 
+
+00:01:24.030 --> 00:01:27.000 align:start position:0%
+ 
+ 
+
+00:01:27.000 --> 00:01:29.160 align:start position:0%
+ 
+ 
+
+00:01:29.160 --> 00:01:31.260 align:start position:0%
+ 
+ 
+
+00:01:31.260 --> 00:01:33.660 align:start position:0%
+ 
+ 
+
+00:01:33.660 --> 00:01:36.990 align:start position:0%
+ 
+ 
+
+00:01:36.990 --> 00:01:39.150 align:start position:0%
+ 
+ 
+
+00:01:39.150 --> 00:01:41.850 align:start position:0%
+ 
+ 
+
+00:01:41.850 --> 00:01:44.550 align:start position:0%
+ 
+ 
+
+00:01:44.550 --> 00:01:47.670 align:start position:0%
+ 
+ 
+
+00:01:47.670 --> 00:01:49.470 align:start position:0%
+ 
+ 
+
+00:01:49.470 --> 00:01:53.130 align:start position:0%
+ 
+ 
+
+00:01:53.130 --> 00:01:56.130 align:start position:0%
+ 
+ 
+
+00:01:56.130 --> 00:01:59.310 align:start position:0%
+ 
+ 
+
+00:01:59.310 --> 00:02:01.710 align:start position:0%
+ 
+ 
+
+00:02:01.710 --> 00:02:04.620 align:start position:0%
+ 
+ 
+
+00:02:04.620 --> 00:02:06.150 align:start position:0%
+ 
+ 
+
+00:02:06.150 --> 00:02:07.740 align:start position:0%
+ 
+ 
+
+00:02:07.740 --> 00:02:10.320 align:start position:0%
+ 
+ 
+
+00:02:10.320 --> 00:02:12.959 align:start position:0%
+ 
+ 
+
+00:02:12.959 --> 00:02:17.130 align:start position:0%
+ 
+ 
+
+00:02:17.130 --> 00:02:17.140 align:start position:0%
+ 
+ 
+
+00:02:17.140 --> 00:02:18.030 align:start position:0%
+ 
+
+
+00:02:18.030 --> 00:02:20.370 align:start position:0%
+ 
+ 
+
+00:02:20.370 --> 00:02:24.450 align:start position:0%
+ 
+ 
+
+00:02:24.450 --> 00:02:26.520 align:start position:0%
+ 
+ 
+
+00:02:26.520 --> 00:02:29.040 align:start position:0%
+ 
+ 
+
+00:02:29.040 --> 00:02:31.830 align:start position:0%
+ 
+ 
+
+00:02:31.830 --> 00:02:33.660 align:start position:0%
+ 
+ 
+
+00:02:33.660 --> 00:02:36.660 align:start position:0%
+ 
+ 
+
+00:02:36.660 --> 00:02:38.850 align:start position:0%
+ 
+ 
+
+00:02:38.850 --> 00:02:41.940 align:start position:0%
+ 
+ 
+
+00:02:41.940 --> 00:02:44.220 align:start position:0%
+ 
+ 
+
+00:02:44.220 --> 00:02:45.960 align:start position:0%
+ 
+ 
+
+00:02:45.960 --> 00:02:48.660 align:start position:0%
+ 
+ 
+
+00:02:48.660 --> 00:02:50.160 align:start position:0%
+ 
+ 
+
+00:02:50.160 --> 00:02:53.070 align:start position:0%
+ 
+ 
+
+00:02:53.070 --> 00:02:54.960 align:start position:0%
+ 
+ 
+
+00:02:54.960 --> 00:02:57.060 align:start position:0%
+ 
+ 
+
+00:02:57.060 --> 00:02:59.670 align:start position:0%
+ 
+ 
+
+00:02:59.670 --> 00:03:01.200 align:start position:0%
+ 
+ 
+
+00:03:01.200 --> 00:03:02.970 align:start position:0%
+ 
+ 
+
+00:03:02.970 --> 00:03:05.100 align:start position:0%
+ 
+ 
+
+00:03:05.100 --> 00:03:07.950 align:start position:0%
+ 
+ 
+
+00:03:07.950 --> 00:03:10.050 align:start position:0%
+ 
+ 
+
+00:03:10.050 --> 00:03:12.120 align:start position:0%
+ 
+ 
+
+00:03:12.120 --> 00:03:14.760 align:start position:0%
+ 
+ 
+
+00:03:14.760 --> 00:03:17.550 align:start position:0%
+ 
+ 
+
+00:03:17.550 --> 00:03:19.950 align:start position:0%
+ 
+ 
+
+00:03:19.950 --> 00:03:21.390 align:start position:0%
+ 
+ 
+
+00:03:21.390 --> 00:03:25.620 align:start position:0%
+ 
+ 
+
+00:03:25.620 --> 00:03:27.120 align:start position:0%
+ 
+ 
+
+00:03:27.120 --> 00:03:30.090 align:start position:0%
+ 
+ 
+
+00:03:30.090 --> 00:03:31.470 align:start position:0%
+ 
+ 
+
+00:03:31.470 --> 00:03:33.479 align:start position:0%
+ 
+ 
+
+00:03:33.479 --> 00:03:36.060 align:start position:0%
+ 
+ 
+
+00:03:36.060 --> 00:03:39.360 align:start position:0%
+ 
+ 
+
+00:03:39.360 --> 00:03:40.500 align:start position:0%
+ 
+ 
+
+00:03:40.500 --> 00:03:42.780 align:start position:0%
+ 
+ 
+
+00:03:42.780 --> 00:03:44.370 align:start position:0%
+ 
+ 
+
+00:03:44.370 --> 00:03:47.040 align:start position:0%
+ 
+ 
+
+00:03:47.040 --> 00:03:48.660 align:start position:0%
+ 
+ 
+
+00:03:48.660 --> 00:03:51.540 align:start position:0%
+ 
+ 
+
+00:03:51.540 --> 00:03:55.190 align:start position:0%
+ 
+ 
+
+00:03:55.190 --> 00:03:57.540 align:start position:0%
+ 
+ 
+
+00:03:57.540 --> 00:03:59.670 align:start position:0%
+ 
+ 
+
+00:03:59.670 --> 00:04:01.800 align:start position:0%
+ 
+ 
+
+00:04:01.800 --> 00:04:03.960 align:start position:0%
+ 
+ 
+
+00:04:03.960 --> 00:04:06.360 align:start position:0%
+ 
+ 
+
+00:04:06.360 --> 00:04:08.310 align:start position:0%
+ 
+ 
+
+00:04:08.310 --> 00:04:11.040 align:start position:0%
+ 
+ 
+
+00:04:11.040 --> 00:04:13.500 align:start position:0%
+ 
+ 
+
+00:04:13.500 --> 00:04:15.600 align:start position:0%
+ 
+ 
+
+00:04:15.600 --> 00:04:19.039 align:start position:0%
+ 
+ 
+
+00:04:19.039 --> 00:04:22.409 align:start position:0%
+ 
+ 
+
+00:04:22.409 --> 00:04:25.560 align:start position:0%
+ 
+ 
+
+00:04:25.560 --> 00:04:28.529 align:start position:0%
+ 
+ 
+
+00:04:28.529 --> 00:04:30.630 align:start position:0%
+ 
+ 
+
+00:04:30.630 --> 00:04:30.640 align:start position:0%
+ 
+ 
+
+00:04:30.640 --> 00:04:30.900 align:start position:0%
+ 
+
+
+00:04:30.900 --> 00:04:32.520 align:start position:0%
+ 
+ 
+
+00:04:32.520 --> 00:04:35.460 align:start position:0%
+ 
+ 
+
+00:04:35.460 --> 00:04:37.440 align:start position:0%
+ 
+ 
+
+00:04:37.440 --> 00:04:39.030 align:start position:0%
+ 
+ 
+
+00:04:39.030 --> 00:04:42.210 align:start position:0%
+ 
+ 
+
+00:04:42.210 --> 00:04:44.850 align:start position:0%
+ 
+ 
+
+00:04:44.850 --> 00:04:46.590 align:start position:0%
+ 
+ 
+
+00:04:46.590 --> 00:04:49.410 align:start position:0%
+ 
+ 
+
+00:04:49.410 --> 00:04:52.800 align:start position:0%
+ 
+ 
+
+00:04:52.800 --> 00:04:55.920 align:start position:0%
+ 
+ 
+
+00:04:55.920 --> 00:04:56.780 align:start position:0%
+ 
+ 
+
+00:04:56.780 --> 00:04:59.160 align:start position:0%
+ 
+ 
+
+00:04:59.160 --> 00:05:01.260 align:start position:0%
+ 
+ 
+
+00:05:01.260 --> 00:05:03.870 align:start position:0%
+ 
+ 
+
+00:05:03.870 --> 00:05:06.600 align:start position:0%
+ 
+ 
+
+00:05:06.600 --> 00:05:09.570 align:start position:0%
+ 
+ 
+
+00:05:09.570 --> 00:05:12.000 align:start position:0%
+ 
+ 
+
+00:05:12.000 --> 00:05:14.610 align:start position:0%
+ 
+ 
+
+00:05:14.610 --> 00:05:18.300 align:start position:0%
+ 
+ 
+
+00:05:18.300 --> 00:05:20.550 align:start position:0%
+ 
+ 
+
+00:05:20.550 --> 00:05:22.440 align:start position:0%
+ 
+ 
+
+00:05:22.440 --> 00:05:26.210 align:start position:0%
+ 
+ 
+
+00:05:26.210 --> 00:05:29.250 align:start position:0%
+ 
+ 
+
+00:05:29.250 --> 00:05:31.830 align:start position:0%
+ 
+ 
+
+00:05:31.830 --> 00:05:33.690 align:start position:0%
+ 
+ 
+
+00:05:33.690 --> 00:05:39.120 align:start position:0%
+ 
+ 
+
+00:05:39.120 --> 00:05:41.880 align:start position:0%
+ 
+ 
+
+00:05:41.880 --> 00:05:43.970 align:start position:0%
+ 
+ 
+
+00:05:43.970 --> 00:05:47.640 align:start position:0%
+ 
+ 
+
+00:05:47.640 --> 00:05:50.820 align:start position:0%
+ 
+ 
+
+00:05:50.820 --> 00:05:53.550 align:start position:0%
+ 
+ 
+
+00:05:53.550 --> 00:05:56.280 align:start position:0%
+ 
+ 
+
+00:05:56.280 --> 00:05:58.200 align:start position:0%
+ 
+ 
+
+00:05:58.200 --> 00:06:01.230 align:start position:0%
+ 
+ 
+
+00:06:01.230 --> 00:06:04.640 align:start position:0%
+ 
+ 
+
+00:06:04.640 --> 00:06:07.800 align:start position:0%
+ 
+ 
+
+00:06:07.800 --> 00:06:09.450 align:start position:0%
+ 
+ 
+
+00:06:09.450 --> 00:06:12.860 align:start position:0%
+ 
+ 
+
+00:06:12.860 --> 00:06:15.600 align:start position:0%
+ 
+ 
+
+00:06:15.600 --> 00:06:18.780 align:start position:0%
+ 
+ 
+
+00:06:18.780 --> 00:06:22.740 align:start position:0%
+ 
+ 
+
+00:06:22.740 --> 00:06:24.680 align:start position:0%
+ 
+ 
+
+00:06:24.680 --> 00:06:27.000 align:start position:0%
+ 
+ 
+
+00:06:27.000 --> 00:06:29.340 align:start position:0%
+ 
+ 
+
+00:06:29.340 --> 00:06:31.140 align:start position:0%
+ 
+ 
+
+00:06:31.140 --> 00:06:34.490 align:start position:0%
+ 
+ 
+
+00:06:34.490 --> 00:06:38.820 align:start position:0%
+ 
+ 
+
+00:06:38.820 --> 00:06:40.350 align:start position:0%
+ 
+ 
+
+00:06:40.350 --> 00:06:41.730 align:start position:0%
+ 
+ 
+
+00:06:41.730 --> 00:06:44.159 align:start position:0%
+ 
+ 
+
+00:06:44.159 --> 00:06:44.169 align:start position:0%
+ 
+ 
+
+00:06:44.169 --> 00:06:44.820 align:start position:0%
+ 
+
+
+00:06:44.820 --> 00:06:46.740 align:start position:0%
+ 
+ 
+
+00:06:46.740 --> 00:06:49.680 align:start position:0%
+ 
+ 
+
+00:06:49.680 --> 00:06:51.510 align:start position:0%
+ 
+ 
+
+00:06:51.510 --> 00:06:53.670 align:start position:0%
+ 
+ 
+
+00:06:53.670 --> 00:06:57.090 align:start position:0%
+ 
+ 
+
+00:06:57.090 --> 00:06:59.970 align:start position:0%
+ 
+ 
+
+00:06:59.970 --> 00:07:02.730 align:start position:0%
+ 
+ 
+
+00:07:02.730 --> 00:07:04.590 align:start position:0%
+ 
+ 
+
+00:07:04.590 --> 00:07:06.600 align:start position:0%
+ 
+ 
+
+00:07:06.600 --> 00:07:08.730 align:start position:0%
+ 
+ 
+
+00:07:08.730 --> 00:07:10.440 align:start position:0%
+ 
+ 
+
+00:07:10.440 --> 00:07:13.010 align:start position:0%
+ 
+ 
+
+00:07:13.010 --> 00:07:16.430 align:start position:0%
+ 
+ 
+
+00:07:16.430 --> 00:07:18.570 align:start position:0%
+ 
+ 
+
+00:07:18.570 --> 00:07:20.690 align:start position:0%
+ 
+ 
+
+00:07:20.690 --> 00:07:25.920 align:start position:0%
+ 
+ 
+
+00:07:25.920 --> 00:07:28.080 align:start position:0%
+ 
+ 
+
+00:07:28.080 --> 00:07:29.610 align:start position:0%
+ 
+ 
+
+00:07:29.610 --> 00:07:32.400 align:start position:0%
+ 
+ 
+
+00:07:32.400 --> 00:07:34.650 align:start position:0%
+ 
+ 
+
+00:07:34.650 --> 00:07:37.830 align:start position:0%
+ 
+ 
+
+00:07:37.830 --> 00:07:40.950 align:start position:0%
+ 
+ 
+
+00:07:40.950 --> 00:07:42.720 align:start position:0%
+ 
+ 
+
+00:07:42.720 --> 00:07:45.960 align:start position:0%
+ 
+ 
+
+00:07:45.960 --> 00:07:48.900 align:start position:0%
+ 
+ 
+
+00:07:48.900 --> 00:07:52.410 align:start position:0%
+ 
+ 
+
+00:07:52.410 --> 00:07:54.120 align:start position:0%
+ 
+ 
+
+00:07:54.120 --> 00:07:57.210 align:start position:0%
+ 
+ 
+
+00:07:57.210 --> 00:07:59.430 align:start position:0%
+ 
+ 
+
+00:07:59.430 --> 00:08:04.770 align:start position:0%
+ 
+ 
+
+00:08:04.770 --> 00:08:06.990 align:start position:0%
+ 
+ 
+
+00:08:06.990 --> 00:08:08.850 align:start position:0%
+ 
+ 
+
+00:08:08.850 --> 00:08:12.810 align:start position:0%
+ 
+ 
+
+00:08:12.810 --> 00:08:15.060 align:start position:0%
+ 
+ 
+
+00:08:15.060 --> 00:08:17.460 align:start position:0%
+ 
+ 
+
+00:08:17.460 --> 00:08:20.310 align:start position:0%
+ 
+ 
+
+00:08:20.310 --> 00:08:23.160 align:start position:0%
+ 
+ 
+
+00:08:23.160 --> 00:08:24.690 align:start position:0%
+ 
+ 
+
+00:08:24.690 --> 00:08:27.540 align:start position:0%
+ 
+ 
+
+00:08:27.540 --> 00:08:29.220 align:start position:0%
+ 
+ 
+
+00:08:29.220 --> 00:08:32.510 align:start position:0%
+ 
+ 
+
+00:08:32.510 --> 00:08:34.710 align:start position:0%
+ 
+ 
+
+00:08:34.710 --> 00:08:36.870 align:start position:0%
+ 
+ 
+
+00:08:36.870 --> 00:08:39.090 align:start position:0%
+ 
+ 
+
+00:08:39.090 --> 00:08:41.370 align:start position:0%
+ 
+ 
+
+00:08:41.370 --> 00:08:43.890 align:start position:0%
+ 
+ 
+
+00:08:43.890 --> 00:08:46.080 align:start position:0%
+ 
+ 
+
+00:08:46.080 --> 00:08:47.670 align:start position:0%
+ 
+ 
+
+00:08:47.670 --> 00:08:49.140 align:start position:0%
+ 
+ 
+
+00:08:49.140 --> 00:08:51.120 align:start position:0%
+ 
+ 
+
+00:08:51.120 --> 00:08:52.800 align:start position:0%
+ 
+ 
+
+00:08:52.800 --> 00:08:56.400 align:start position:0%
+ 
+ 
+
+00:08:56.400 --> 00:08:57.790 align:start position:0%
+ 
+ 
+
+00:08:57.790 --> 00:09:00.040 align:start position:0%
+ 
+ 
+
+00:09:00.040 --> 00:09:02.230 align:start position:0%
+ 
+ 
+
+00:09:02.230 --> 00:09:04.870 align:start position:0%
+ 
+ 
+
+00:09:04.870 --> 00:09:07.960 align:start position:0%
+ 
+ 
+
+00:09:07.960 --> 00:09:10.420 align:start position:0%
+ 
+ 
+
+00:09:10.420 --> 00:09:13.420 align:start position:0%
+ 
+ 
+
+00:09:13.420 --> 00:09:15.940 align:start position:0%
+ 
+ 
+
+00:09:15.940 --> 00:09:20.050 align:start position:0%
+ 
+ 
+
+00:09:20.050 --> 00:09:21.819 align:start position:0%
+ 
+ 
+
+00:09:21.819 --> 00:09:23.680 align:start position:0%
+ 
+ 
+
+00:09:23.680 --> 00:09:26.590 align:start position:0%
+ 
+ 
+
+00:09:26.590 --> 00:09:28.900 align:start position:0%
+ 
+ 
+
+00:09:28.900 --> 00:09:30.850 align:start position:0%
+ 
+ 
+
+00:09:30.850 --> 00:09:33.790 align:start position:0%
+ 
+ 
+
+00:09:33.790 --> 00:09:35.650 align:start position:0%
+ 
+ 
+
+00:09:35.650 --> 00:09:39.730 align:start position:0%
+ 
+ 
+
+00:09:39.730 --> 00:09:42.490 align:start position:0%
+ 
+ 
+
+00:09:42.490 --> 00:09:46.180 align:start position:0%
+ 
+ 
+
+00:09:46.180 --> 00:09:48.250 align:start position:0%
+ 
+ 
+
+00:09:48.250 --> 00:09:50.019 align:start position:0%
+ 
+ 
+
+00:09:50.019 --> 00:09:52.449 align:start position:0%
+ 
+ 
+
+00:09:52.449 --> 00:09:54.940 align:start position:0%
+ 
+ 
+
+00:09:54.940 --> 00:09:56.769 align:start position:0%
+ 
+ 
+
+00:09:56.769 --> 00:09:58.750 align:start position:0%
+ 
+ 
+
+00:09:58.750 --> 00:10:01.180 align:start position:0%
+ 
+ 
+
+00:10:01.180 --> 00:10:02.910 align:start position:0%
+ 
+ 
+
+00:10:02.910 --> 00:10:05.860 align:start position:0%
+ 
+ 
+
+00:10:05.860 --> 00:10:07.870 align:start position:0%
+ 
+ 
+
+00:10:07.870 --> 00:10:11.440 align:start position:0%
+ 
+ 
+
+00:10:11.440 --> 00:10:13.750 align:start position:0%
+ 
+ 
+
+00:10:13.750 --> 00:10:15.310 align:start position:0%
+ 
+ 
+
+00:10:15.310 --> 00:10:17.530 align:start position:0%
+ 
+ 
+
+00:10:17.530 --> 00:10:19.240 align:start position:0%
+ 
+ 
+
+00:10:19.240 --> 00:10:20.920 align:start position:0%
+ 
+ 
+
+00:10:20.920 --> 00:10:22.630 align:start position:0%
+ 
+ 
+
+00:10:22.630 --> 00:10:25.030 align:start position:0%
+ 
+ 
+
+00:10:25.030 --> 00:10:28.030 align:start position:0%
+ 
+ 
+
+00:10:28.030 --> 00:10:29.920 align:start position:0%
+ 
+ 
+
+00:10:29.920 --> 00:10:33.069 align:start position:0%
+ 
+ 
+
+00:10:33.069 --> 00:10:36.040 align:start position:0%
+ 
+ 
+
+00:10:36.040 --> 00:10:37.960 align:start position:0%
+ 
+ 
+
+00:10:37.960 --> 00:10:39.519 align:start position:0%
+ 
+ 
+
+00:10:39.519 --> 00:10:42.730 align:start position:0%
+ 
+ 
+
+00:10:42.730 --> 00:10:44.380 align:start position:0%
+ 
+ 
+
+00:10:44.380 --> 00:10:46.750 align:start position:0%
+ 
+ 
+
+00:10:46.750 --> 00:10:49.420 align:start position:0%
+ 
+ 
+
+00:10:49.420 --> 00:10:51.250 align:start position:0%
+ 
+ 
+
+00:10:51.250 --> 00:10:53.530 align:start position:0%
+ 
+ 
+
+00:10:53.530 --> 00:10:55.660 align:start position:0%
+ 
+ 
+
+00:10:55.660 --> 00:10:59.530 align:start position:0%
+ 
+ 
+
+00:10:59.530 --> 00:11:01.389 align:start position:0%
+ 
+ 
+
+00:11:01.389 --> 00:11:03.189 align:start position:0%
+ 
+ 
+
+00:11:03.189 --> 00:11:05.199 align:start position:0%
+ 
+ 
+
+00:11:05.199 --> 00:11:06.579 align:start position:0%
+ 
+ 
+
+00:11:06.579 --> 00:11:10.360 align:start position:0%
+ 
+ 
+
+00:11:10.360 --> 00:11:11.800 align:start position:0%
+ 
+ 
+
+00:11:11.800 --> 00:11:15.670 align:start position:0%
+ 
+ 
+
+00:11:15.670 --> 00:11:18.460 align:start position:0%
+ 
+ 
+
+00:11:18.460 --> 00:11:20.800 align:start position:0%
+ 
+ 
+
+00:11:20.800 --> 00:11:23.530 align:start position:0%
+ 
+ 
+
+00:11:23.530 --> 00:11:25.240 align:start position:0%
+ 
+ 
+
+00:11:25.240 --> 00:11:28.960 align:start position:0%
+ 
+ 
+
+00:11:28.960 --> 00:11:31.750 align:start position:0%
+ 
+ 
+
+00:11:31.750 --> 00:11:34.269 align:start position:0%
+ 
+ 
+
+00:11:34.269 --> 00:11:36.250 align:start position:0%
+ 
+ 
+
+00:11:36.250 --> 00:11:39.880 align:start position:0%
+ 
+ 
+
+00:11:39.880 --> 00:11:43.720 align:start position:0%
+ 
+ 
+
+00:11:43.720 --> 00:11:45.880 align:start position:0%
+ 
+ 
+
+00:11:45.880 --> 00:11:48.340 align:start position:0%
+ 
+ 
+
+00:11:48.340 --> 00:11:50.829 align:start position:0%
+ 
+ 
+
+00:11:50.829 --> 00:11:54.700 align:start position:0%
+ 
+ 
+
+00:11:54.700 --> 00:11:57.070 align:start position:0%
+ 
+ 
+
+00:11:57.070 --> 00:11:58.750 align:start position:0%
+ 
+ 
+
+00:11:58.750 --> 00:12:01.090 align:start position:0%
+ 
+ 
+
+00:12:01.090 --> 00:12:02.620 align:start position:0%
+ 
+ 
+
+00:12:02.620 --> 00:12:05.829 align:start position:0%
+ 
+ 
+
+00:12:05.829 --> 00:12:07.780 align:start position:0%
+ 
+ 
+
+00:12:07.780 --> 00:12:10.420 align:start position:0%
+ 
+ 
+
+00:12:10.420 --> 00:12:14.440 align:start position:0%
+ 
+ 
+
+00:12:14.440 --> 00:12:16.210 align:start position:0%
+ 
+ 
+
+00:12:16.210 --> 00:12:18.070 align:start position:0%
+ 
+ 
+
+00:12:18.070 --> 00:12:21.910 align:start position:0%
+ 
+ 
+
+00:12:21.910 --> 00:12:23.920 align:start position:0%
+ 
+ 
+
+00:12:23.920 --> 00:12:26.190 align:start position:0%
+ 
+ 
+
+00:12:26.190 --> 00:12:28.120 align:start position:0%
+ 
+ 
+
+00:12:28.120 --> 00:12:30.040 align:start position:0%
+ 
+ 
+
+00:12:30.040 --> 00:12:31.960 align:start position:0%
+ 
+ 
+
+00:12:31.960 --> 00:12:34.810 align:start position:0%
+ 
+ 
+
+00:12:34.810 --> 00:12:38.020 align:start position:0%
+ 
+ 
+
+00:12:38.020 --> 00:12:40.840 align:start position:0%
+ 
+ 
+
+00:12:40.840 --> 00:12:43.360 align:start position:0%
+ 
+ 
+
+00:12:43.360 --> 00:12:47.760 align:start position:0%
+ 
+ 
+
+00:12:47.760 --> 00:12:50.290 align:start position:0%
+ 
+ 
+
+00:12:50.290 --> 00:12:52.329 align:start position:0%
+ 
+ 
+
+00:12:52.329 --> 00:12:55.140 align:start position:0%
+ 
+ 
+
+00:12:55.140 --> 00:12:59.230 align:start position:0%
+ 
+ 
+
+00:12:59.230 --> 00:13:03.820 align:start position:0%
+ 
+ 
+
+00:13:03.820 --> 00:13:07.060 align:start position:0%
+ 
+ 
+
+00:13:07.060 --> 00:13:09.810 align:start position:0%
+ 
+ 
+
+00:13:09.810 --> 00:13:14.530 align:start position:0%
+ 
+ 
+
+00:13:14.530 --> 00:13:18.610 align:start position:0%
+ 
+ 
+
+00:13:18.610 --> 00:13:21.520 align:start position:0%
+ 
+ 
+
+00:13:21.520 --> 00:13:23.170 align:start position:0%
+ 
+ 
+
+00:13:23.170 --> 00:13:25.210 align:start position:0%
+ 
+ 
+
+00:13:25.210 --> 00:13:26.740 align:start position:0%
+ 
+ 
+
+00:13:26.740 --> 00:13:29.350 align:start position:0%
+ 
+ 
+
+00:13:29.350 --> 00:13:32.050 align:start position:0%
+ 
+ 
+
+00:13:32.050 --> 00:13:36.490 align:start position:0%
+ 
+ 
+
+00:13:36.490 --> 00:13:38.650 align:start position:0%
+ 
+ 
+
+00:13:38.650 --> 00:13:41.140 align:start position:0%
+ 
+ 
+
+00:13:41.140 --> 00:13:43.200 align:start position:0%
+ 
+ 
+
+00:13:43.200 --> 00:13:48.760 align:start position:0%
+ 
+ 
+
+00:13:48.760 --> 00:13:50.520 align:start position:0%
+ 
+ 
+
+00:13:50.520 --> 00:13:53.830 align:start position:0%
+ 
+ 
+
+00:13:53.830 --> 00:13:57.850 align:start position:0%
+ 
+ 
+
+00:13:57.850 --> 00:14:01.000 align:start position:0%
+ 
+ 
+
+00:14:01.000 --> 00:14:05.830 align:start position:0%
+ 
+ 
+
+00:14:05.830 --> 00:14:09.540 align:start position:0%
+ 
+ 
+
+00:14:09.540 --> 00:14:12.790 align:start position:0%
+ 
+ 
+
+00:14:12.790 --> 00:14:14.110 align:start position:0%
+ 
+ 
+
+00:14:14.110 --> 00:14:17.020 align:start position:0%
+ 
+ 
+
+00:14:17.020 --> 00:14:18.940 align:start position:0%
+ 
+ 
+
+00:14:18.940 --> 00:14:21.790 align:start position:0%
+ 
+ 
+
+00:14:21.790 --> 00:14:24.190 align:start position:0%
+ 
+ 
+
+00:14:24.190 --> 00:14:25.750 align:start position:0%
+ 
+ 
+
+00:14:25.750 --> 00:14:29.050 align:start position:0%
+ 
+ 
+
+00:14:29.050 --> 00:14:31.840 align:start position:0%
+ 
+ 
+
+00:14:31.840 --> 00:14:34.900 align:start position:0%
+ 
+ 
+
+00:14:34.900 --> 00:14:40.300 align:start position:0%
+ 
+ 
+
+00:14:40.300 --> 00:14:43.030 align:start position:0%
+ 
+ 
+
+00:14:43.030 --> 00:14:46.360 align:start position:0%
+ 
+ 
+
+00:14:46.360 --> 00:14:48.790 align:start position:0%
+ 
+ 
+
+00:14:48.790 --> 00:14:48.800 align:start position:0%
+ 
+ 
+
+00:14:48.800 --> 00:14:49.570 align:start position:0%
+ 
+
+
+00:14:49.570 --> 00:14:53.920 align:start position:0%
+ 
+ 
+
+00:14:53.920 --> 00:14:56.890 align:start position:0%
+ 
+ 
+
+00:14:56.890 --> 00:14:59.410 align:start position:0%
+ 
+ 
+
+00:14:59.410 --> 00:15:02.320 align:start position:0%
+ 
+ 
+
+00:15:02.320 --> 00:15:05.380 align:start position:0%
+ 
+ 
+
+00:15:05.380 --> 00:15:07.210 align:start position:0%
+ 
+ 
+
+00:15:07.210 --> 00:15:09.700 align:start position:0%
+ 
+ 
+
+00:15:09.700 --> 00:15:11.829 align:start position:0%
+ 
+ 
+
+00:15:11.829 --> 00:15:15.460 align:start position:0%
+ 
+ 
+
+00:15:15.460 --> 00:15:18.220 align:start position:0%
+ 
+ 
+
+00:15:18.220 --> 00:15:20.350 align:start position:0%
+ 
+ 
+
+00:15:20.350 --> 00:15:23.110 align:start position:0%
+ 
+ 
+
+00:15:23.110 --> 00:15:25.810 align:start position:0%
+ 
+ 
+
+00:15:25.810 --> 00:15:28.090 align:start position:0%
+ 
+ 
+
+00:15:28.090 --> 00:15:29.770 align:start position:0%
+ 
+ 
+
+00:15:29.770 --> 00:15:32.110 align:start position:0%
+ 
+ 
+
+00:15:32.110 --> 00:15:35.770 align:start position:0%
+ 
+ 
+
+00:15:35.770 --> 00:15:39.079 align:start position:0%
+ 
+ 
+
+00:15:39.079 --> 00:15:42.619 align:start position:0%
+ 
+ 
+
+00:15:42.619 --> 00:15:44.090 align:start position:0%
+ 
+ 
+
+00:15:44.090 --> 00:15:46.489 align:start position:0%
+ 
+ 
+
+00:15:46.489 --> 00:15:48.410 align:start position:0%
+ 
+ 
+
+00:15:48.410 --> 00:15:53.090 align:start position:0%
+ 
+ 
+
+00:15:53.090 --> 00:15:54.710 align:start position:0%
+ 
+ 
+
+00:15:54.710 --> 00:15:56.540 align:start position:0%
+ 
+ 
+
+00:15:56.540 --> 00:15:58.519 align:start position:0%
+ 
+ 
+
+00:15:58.519 --> 00:16:01.759 align:start position:0%
+ 
+ 
+
+00:16:01.759 --> 00:16:05.480 align:start position:0%
+ 
+ 
+
+00:16:05.480 --> 00:16:08.989 align:start position:0%
+ 
+ 
+
+00:16:08.989 --> 00:16:10.819 align:start position:0%
+ 
+ 
+
+00:16:10.819 --> 00:16:12.619 align:start position:0%
+ 
+ 
+
+00:16:12.619 --> 00:16:14.239 align:start position:0%
+ 
+ 
+
+00:16:14.239 --> 00:16:15.980 align:start position:0%
+ 
+ 
+
+00:16:15.980 --> 00:16:17.900 align:start position:0%
+ 
+ 
+
+00:16:17.900 --> 00:16:20.119 align:start position:0%
+ 
+ 
+
+00:16:20.119 --> 00:16:23.030 align:start position:0%
+ 
+ 
+
+00:16:23.030 --> 00:16:26.210 align:start position:0%
+ 
+ 
+
+00:16:26.210 --> 00:16:28.189 align:start position:0%
+ 
+ 
+
+00:16:28.189 --> 00:16:30.290 align:start position:0%
+ 
+ 
+
+00:16:30.290 --> 00:16:33.889 align:start position:0%
+ 
+ 
+
+00:16:33.889 --> 00:16:38.600 align:start position:0%
+ 
+ 
+
+00:16:38.600 --> 00:16:41.600 align:start position:0%
+ 
+ 
+
+00:16:41.600 --> 00:16:44.389 align:start position:0%
+ 
+ 
+
+00:16:44.389 --> 00:16:46.579 align:start position:0%
+ 
+ 
+
+00:16:46.579 --> 00:16:51.290 align:start position:0%
+ 
+ 
+
+00:16:51.290 --> 00:16:54.939 align:start position:0%
+ 
+ 
+
+00:16:54.939 --> 00:16:58.389 align:start position:0%
+ 
+ 
+
+00:16:58.389 --> 00:17:02.179 align:start position:0%
+ 
+ 
+
+00:17:02.179 --> 00:17:03.590 align:start position:0%
+ 
+ 
+
+00:17:03.590 --> 00:17:06.409 align:start position:0%
+ 
+ 
+
+00:17:06.409 --> 00:17:08.720 align:start position:0%
+ 
+ 
+
+00:17:08.720 --> 00:17:11.870 align:start position:0%
+ 
+ 
+
+00:17:11.870 --> 00:17:13.789 align:start position:0%
+ 
+ 
+
+00:17:13.789 --> 00:17:16.460 align:start position:0%
+ 
+ 
+
+00:17:16.460 --> 00:17:18.409 align:start position:0%
+ 
+ 
+
+00:17:18.409 --> 00:17:20.750 align:start position:0%
+ 
+ 
+
+00:17:20.750 --> 00:17:23.000 align:start position:0%
+ 
+ 
+
+00:17:23.000 --> 00:17:25.699 align:start position:0%
+ 
+ 
+
+00:17:25.699 --> 00:17:29.060 align:start position:0%
+ 
+ 
+
+00:17:29.060 --> 00:17:32.980 align:start position:0%
+ 
+ 
+
+00:17:32.980 --> 00:17:35.779 align:start position:0%
+ 
+ 
+
+00:17:35.779 --> 00:17:37.880 align:start position:0%
+ 
+ 
+
+00:17:37.880 --> 00:17:40.430 align:start position:0%
+ 
+ 
+
+00:17:40.430 --> 00:17:45.740 align:start position:0%
+ 
+ 
+
+00:17:45.740 --> 00:17:49.279 align:start position:0%
+ 
+ 
+
+00:17:49.279 --> 00:17:51.169 align:start position:0%
+ 
+ 
+
+00:17:51.169 --> 00:17:52.730 align:start position:0%
+ 
+ 
+
+00:17:52.730 --> 00:17:54.200 align:start position:0%
+ 
+ 
+
+00:17:54.200 --> 00:17:58.610 align:start position:0%
+ 
+ 
+
+00:17:58.610 --> 00:18:00.140 align:start position:0%
+ 
+ 
+
+00:18:00.140 --> 00:18:01.549 align:start position:0%
+ 
+ 
+
+00:18:01.549 --> 00:18:03.230 align:start position:0%
+ 
+ 
+
+00:18:03.230 --> 00:18:05.240 align:start position:0%
+ 
+ 
+
+00:18:05.240 --> 00:18:06.799 align:start position:0%
+ 
+ 
+
+00:18:06.799 --> 00:18:09.049 align:start position:0%
+ 
+ 
+
+00:18:09.049 --> 00:18:12.380 align:start position:0%
+ 
+ 
+
+00:18:12.380 --> 00:18:14.600 align:start position:0%
+ 
+ 
+
+00:18:14.600 --> 00:18:19.850 align:start position:0%
+ 
+ 
+
+00:18:19.850 --> 00:18:23.600 align:start position:0%
+ 
+ 
+
+00:18:23.600 --> 00:18:26.510 align:start position:0%
+ 
+ 
+
+00:18:26.510 --> 00:18:28.250 align:start position:0%
+ 
+ 
+
+00:18:28.250 --> 00:18:30.650 align:start position:0%
+ 
+ 
+
+00:18:30.650 --> 00:18:33.020 align:start position:0%
+ 
+ 
+
+00:18:33.020 --> 00:18:36.620 align:start position:0%
+ 
+ 
+
+00:18:36.620 --> 00:18:38.510 align:start position:0%
+ 
+ 
+
+00:18:38.510 --> 00:18:41.390 align:start position:0%
+ 
+ 
+
+00:18:41.390 --> 00:18:43.760 align:start position:0%
+ 
+ 
+
+00:18:43.760 --> 00:18:45.980 align:start position:0%
+ 
+ 
+
+00:18:45.980 --> 00:18:48.440 align:start position:0%
+ 
+ 
+
+00:18:48.440 --> 00:18:51.350 align:start position:0%
+ 
+ 
+
+00:18:51.350 --> 00:18:53.930 align:start position:0%
+ 
+ 
+
+00:18:53.930 --> 00:18:59.870 align:start position:0%
+ 
+ 
+
+00:18:59.870 --> 00:19:02.980 align:start position:0%
+ 
+ 
+
+00:19:02.980 --> 00:19:05.630 align:start position:0%
+ 
+ 
+
+00:19:05.630 --> 00:19:07.669 align:start position:0%
+ 
+ 
+
+00:19:07.669 --> 00:19:09.710 align:start position:0%
+ 
+ 
+
+00:19:09.710 --> 00:19:14.210 align:start position:0%
+ 
+ 
+
+00:19:14.210 --> 00:19:16.549 align:start position:0%
+ 
+ 
+
+00:19:16.549 --> 00:19:18.440 align:start position:0%
+ 
+ 
+
+00:19:18.440 --> 00:19:21.350 align:start position:0%
+ 
+ 
+
+00:19:21.350 --> 00:19:24.110 align:start position:0%
+ 
+ 
+
+00:19:24.110 --> 00:19:27.260 align:start position:0%
+ 
+ 
+
+00:19:27.260 --> 00:19:30.160 align:start position:0%
+ 
+ 
+
+00:19:30.160 --> 00:19:32.600 align:start position:0%
+ 
+ 
+
+00:19:32.600 --> 00:19:35.270 align:start position:0%
+ 
+ 
+
+00:19:35.270 --> 00:19:36.919 align:start position:0%
+ 
+ 
+
+00:19:36.919 --> 00:19:39.260 align:start position:0%
+ 
+ 
+
+00:19:39.260 --> 00:19:41.480 align:start position:0%
+ 
+ 
+
+00:19:41.480 --> 00:19:44.150 align:start position:0%
+ 
+ 
+
+00:19:44.150 --> 00:19:46.430 align:start position:0%
+ 
+ 
+
+00:19:46.430 --> 00:19:49.850 align:start position:0%
+ 
+ 
+
+00:19:49.850 --> 00:19:51.460 align:start position:0%
+ 
+ 
+
+00:19:51.460 --> 00:19:54.049 align:start position:0%
+ 
+ 
+
+00:19:54.049 --> 00:19:57.200 align:start position:0%
+ 
+ 
+
+00:19:57.200 --> 00:20:00.290 align:start position:0%
+ 
+ 
+
+00:20:00.290 --> 00:20:03.169 align:start position:0%
+ 
+ 
+
+00:20:03.169 --> 00:20:04.520 align:start position:0%
+ 
+ 
+
+00:20:04.520 --> 00:20:05.710 align:start position:0%
+ 
+ 
+
+00:20:05.710 --> 00:20:07.840 align:start position:0%
+ 
+ 
+
+00:20:07.840 --> 00:20:10.540 align:start position:0%
+ 
+ 
+
+00:20:10.540 --> 00:20:12.160 align:start position:0%
+ 
+ 
+
+00:20:12.160 --> 00:20:15.070 align:start position:0%
+ 
+ 
+
+00:20:15.070 --> 00:20:17.920 align:start position:0%
+ 
+ 
+
+00:20:17.920 --> 00:20:19.330 align:start position:0%
+ 
+ 
+
+00:20:19.330 --> 00:20:20.890 align:start position:0%
+ 
+ 
+
+00:20:20.890 --> 00:20:24.670 align:start position:0%
+ 
+ 
+
+00:20:24.670 --> 00:20:27.160 align:start position:0%
+ 
+ 
+
+00:20:27.160 --> 00:20:30.040 align:start position:0%
+ 
+ 
+
+00:20:30.040 --> 00:20:32.440 align:start position:0%
+ 
+ 
+
+00:20:32.440 --> 00:20:35.110 align:start position:0%
+ 
+ 
+
+00:20:35.110 --> 00:20:36.460 align:start position:0%
+ 
+ 
+
+00:20:36.460 --> 00:20:38.320 align:start position:0%
+ 
+ 
+
+00:20:38.320 --> 00:20:41.440 align:start position:0%
+ 
+ 
+
+00:20:41.440 --> 00:20:44.290 align:start position:0%
+ 
+ 
+
+00:20:44.290 --> 00:20:46.840 align:start position:0%
+ 
+ 
+
+00:20:46.840 --> 00:20:48.750 align:start position:0%
+ 
+ 
+
+00:20:48.750 --> 00:20:52.200 align:start position:0%
+ 
+ 
+
+00:20:52.200 --> 00:20:54.820 align:start position:0%
+ 
+ 
+
+00:20:54.820 --> 00:20:56.920 align:start position:0%
+ 
+ 
+
+00:20:56.920 --> 00:20:59.320 align:start position:0%
+ 
+ 
+
+00:20:59.320 --> 00:21:00.730 align:start position:0%
+ 
+ 
+
+00:21:00.730 --> 00:21:05.770 align:start position:0%
+ 
+ 
+
+00:21:05.770 --> 00:21:08.080 align:start position:0%
+ 
+ 
+
+00:21:08.080 --> 00:21:09.880 align:start position:0%
+ 
+ 
+
+00:21:09.880 --> 00:21:14.230 align:start position:0%
+ 
+ 
+
+00:21:14.230 --> 00:21:17.260 align:start position:0%
+ 
+ 
+
+00:21:17.260 --> 00:21:19.150 align:start position:0%
+ 
+ 
+
+00:21:19.150 --> 00:21:20.770 align:start position:0%
+ 
+ 
+
+00:21:20.770 --> 00:21:23.230 align:start position:0%
+ 
+ 
+
+00:21:23.230 --> 00:21:25.420 align:start position:0%
+ 
+ 
+
+00:21:25.420 --> 00:21:28.500 align:start position:0%
+ 
+ 
+
+00:21:28.500 --> 00:21:33.610 align:start position:0%
+ 
+ 
+
+00:21:33.610 --> 00:21:36.670 align:start position:0%
+ 
+ 
+
+00:21:36.670 --> 00:21:38.860 align:start position:0%
+ 
+ 
+
+00:21:38.860 --> 00:21:41.650 align:start position:0%
+ 
+ 
+
+00:21:41.650 --> 00:21:48.820 align:start position:0%
+ 
+ 
+
+00:21:48.820 --> 00:21:51.430 align:start position:0%
+ 
+ 
+
+00:21:51.430 --> 00:21:55.390 align:start position:0%
+ 
+ 
+
+00:21:55.390 --> 00:21:57.010 align:start position:0%
+ 
+ 
+
+00:21:57.010 --> 00:22:01.410 align:start position:0%
+ 
+ 
+
+00:22:01.410 --> 00:22:05.140 align:start position:0%
+ 
+ 
+
+00:22:05.140 --> 00:22:07.600 align:start position:0%
+ 
+ 
+
+00:22:07.600 --> 00:22:11.830 align:start position:0%
+ 
+ 
+
+00:22:11.830 --> 00:22:13.840 align:start position:0%
+ 
+ 
+
+00:22:13.840 --> 00:22:18.510 align:start position:0%
+ 
+ 
+
+00:22:18.510 --> 00:22:20.820 align:start position:0%
+ 
+ 
+
+00:22:20.820 --> 00:22:23.040 align:start position:0%
+ 
+ 
+
+00:22:23.040 --> 00:22:25.350 align:start position:0%
+ 
+ 
+
+00:22:25.350 --> 00:22:27.510 align:start position:0%
+ 
+ 
+
+00:22:27.510 --> 00:22:29.790 align:start position:0%
+ 
+ 
+
+00:22:29.790 --> 00:22:32.970 align:start position:0%
+ 
+ 
+
+00:22:32.970 --> 00:22:35.220 align:start position:0%
+ 
+ 
+
+00:22:35.220 --> 00:22:36.990 align:start position:0%
+ 
+ 
+
+00:22:36.990 --> 00:22:39.570 align:start position:0%
+ 
+ 
+
+00:22:39.570 --> 00:22:41.790 align:start position:0%
+ 
+ 
+
+00:22:41.790 --> 00:22:43.470 align:start position:0%
+ 
+ 
+
+00:22:43.470 --> 00:22:46.530 align:start position:0%
+ 
+ 
+
+00:22:46.530 --> 00:22:50.700 align:start position:0%
+ 
+ 
+
+00:22:50.700 --> 00:22:52.440 align:start position:0%
+ 
+ 
+
+00:22:52.440 --> 00:22:53.730 align:start position:0%
+ 
+ 
+
+00:22:53.730 --> 00:22:55.230 align:start position:0%
+ 
+ 
+
+00:22:55.230 --> 00:22:57.630 align:start position:0%
+ 
+ 
+
+00:22:57.630 --> 00:23:01.380 align:start position:0%
+ 
+ 
+
+00:23:01.380 --> 00:23:03.950 align:start position:0%
+ 
+ 
+
+00:23:03.950 --> 00:23:08.750 align:start position:0%
+ 
+ 
+
+00:23:08.750 --> 00:23:11.730 align:start position:0%
+ 
+ 
+
+00:23:11.730 --> 00:23:13.799 align:start position:0%
+ 
+ 
+
+00:23:13.799 --> 00:23:17.100 align:start position:0%
+ 
+ 
+
+00:23:17.100 --> 00:23:19.230 align:start position:0%
+ 
+ 
+
+00:23:19.230 --> 00:23:21.440 align:start position:0%
+ 
+ 
+
+00:23:21.440 --> 00:23:24.690 align:start position:0%
+ 
+ 
+
+00:23:24.690 --> 00:23:30.180 align:start position:0%
+ 
+ 
+
+00:23:30.180 --> 00:23:32.549 align:start position:0%
+ 
+ 
+
+00:23:32.549 --> 00:23:35.100 align:start position:0%
+ 
+ 
+
+00:23:35.100 --> 00:23:38.160 align:start position:0%
+ 
+ 
+
+00:23:38.160 --> 00:23:40.080 align:start position:0%
+ 
+ 
+
+00:23:40.080 --> 00:23:42.330 align:start position:0%
+ 
+ 
+
+00:23:42.330 --> 00:23:46.650 align:start position:0%
+ 
+ 
+
+00:23:46.650 --> 00:23:49.290 align:start position:0%
+ 
+ 
+
+00:23:49.290 --> 00:23:51.720 align:start position:0%
+ 
+ 
+
+00:23:51.720 --> 00:23:53.850 align:start position:0%
+ 
+ 
+
+00:23:53.850 --> 00:23:58.380 align:start position:0%
+ 
+ 
+
+00:23:58.380 --> 00:24:00.540 align:start position:0%
+ 
+ 
+
+00:24:00.540 --> 00:24:03.060 align:start position:0%
+ 
+ 
+
+00:24:03.060 --> 00:24:05.970 align:start position:0%
+ 
+ 
+
+00:24:05.970 --> 00:24:10.169 align:start position:0%
+ 
+ 
+
+00:24:10.169 --> 00:24:12.270 align:start position:0%
+ 
+ 
+
+00:24:12.270 --> 00:24:15.030 align:start position:0%
+ 
+ 
+
+00:24:15.030 --> 00:24:16.710 align:start position:0%
+ 
+ 
+
+00:24:16.710 --> 00:24:20.400 align:start position:0%
+ 
+ 
+
+00:24:20.400 --> 00:24:21.720 align:start position:0%
+ 
+ 
+
+00:24:21.720 --> 00:24:24.450 align:start position:0%
+ 
+ 
+
+00:24:24.450 --> 00:24:26.970 align:start position:0%
+ 
+ 
+
+00:24:26.970 --> 00:24:30.390 align:start position:0%
+ 
+ 
+
+00:24:30.390 --> 00:24:31.720 align:start position:0%
+ 
+ 
+
+00:24:31.720 --> 00:24:33.400 align:start position:0%
+ 
+ 
+
+00:24:33.400 --> 00:24:35.260 align:start position:0%
+ 
+ 
+
+00:24:35.260 --> 00:24:38.650 align:start position:0%
+ 
+ 
+
+00:24:38.650 --> 00:24:40.240 align:start position:0%
+ 
+ 
+
+00:24:40.240 --> 00:24:43.750 align:start position:0%
+ 
+ 
+
+00:24:43.750 --> 00:24:46.870 align:start position:0%
+ 
+ 
+
+00:24:46.870 --> 00:24:49.540 align:start position:0%
+ 
+ 
+
+00:24:49.540 --> 00:24:51.790 align:start position:0%
+ 
+ 
+
+00:24:51.790 --> 00:24:53.820 align:start position:0%
+ 
+ 
+
+00:24:53.820 --> 00:24:56.530 align:start position:0%
+ 
+ 
+
+00:24:56.530 --> 00:24:58.210 align:start position:0%
+ 
+ 
+
+00:24:58.210 --> 00:25:01.810 align:start position:0%
+ 
+ 
+
+00:25:01.810 --> 00:25:03.880 align:start position:0%
+ 
+ 
+
+00:25:03.880 --> 00:25:06.820 align:start position:0%
+ 
+ 
+
+00:25:06.820 --> 00:25:09.700 align:start position:0%
+ 
+ 
+
+00:25:09.700 --> 00:25:11.920 align:start position:0%
+ 
+ 
+
+00:25:11.920 --> 00:25:13.870 align:start position:0%
+ 
+ 
+
+00:25:13.870 --> 00:25:16.260 align:start position:0%
+ 
+ 
+
+00:25:16.260 --> 00:25:20.820 align:start position:0%
+ 
+ 
+
+00:25:20.820 --> 00:25:23.410 align:start position:0%
+ 
+ 
+
+00:25:23.410 --> 00:25:25.750 align:start position:0%
+ 
+ 
+
+00:25:25.750 --> 00:25:30.130 align:start position:0%
+ 
+ 
+
+00:25:30.130 --> 00:25:33.520 align:start position:0%
+ 
+ 
+
+00:25:33.520 --> 00:25:35.380 align:start position:0%
+ 
+ 
+
+00:25:35.380 --> 00:25:36.910 align:start position:0%
+ 
+ 
+
+00:25:36.910 --> 00:25:39.400 align:start position:0%
+ 
+ 
+
+00:25:39.400 --> 00:25:42.280 align:start position:0%
+ 
+ 
+
+00:25:42.280 --> 00:25:43.720 align:start position:0%
+ 
+ 
+
+00:25:43.720 --> 00:25:45.400 align:start position:0%
+ 
+ 
+
+00:25:45.400 --> 00:25:47.080 align:start position:0%
+ 
+ 
+
+00:25:47.080 --> 00:25:49.390 align:start position:0%
+ 
+ 
+
+00:25:49.390 --> 00:25:55.060 align:start position:0%
+ 
+ 
+
+00:25:55.060 --> 00:25:57.880 align:start position:0%
+ 
+ 
+
+00:25:57.880 --> 00:26:01.600 align:start position:0%
+ 
+ 
+
+00:26:01.600 --> 00:26:04.930 align:start position:0%
+ 
+ 
+
+00:26:04.930 --> 00:26:06.790 align:start position:0%
+ 
+ 
+
+00:26:06.790 --> 00:26:08.740 align:start position:0%
+ 
+ 
+
+00:26:08.740 --> 00:26:10.990 align:start position:0%
+ 
+ 
+
+00:26:10.990 --> 00:26:13.080 align:start position:0%
+ 
+ 
+
+00:26:13.080 --> 00:26:16.450 align:start position:0%
+ 
+ 
+
+00:26:16.450 --> 00:26:19.720 align:start position:0%
+ 
+ 
+
+00:26:19.720 --> 00:26:21.550 align:start position:0%
+ 
+ 
+
+00:26:21.550 --> 00:26:23.530 align:start position:0%
+ 
+ 
+
+00:26:23.530 --> 00:26:24.780 align:start position:0%
+ 
+ 
+
+00:26:24.780 --> 00:26:26.740 align:start position:0%
+ 
+ 
+
+00:26:26.740 --> 00:26:30.340 align:start position:0%
+ 
+ 
+
+00:26:30.340 --> 00:26:32.080 align:start position:0%
+ 
+ 
+
+00:26:32.080 --> 00:26:34.060 align:start position:0%
+ 
+ 
+
+00:26:34.060 --> 00:26:36.040 align:start position:0%
+ 
+ 
+
+00:26:36.040 --> 00:26:39.640 align:start position:0%
+ 
+ 
+
+00:26:39.640 --> 00:26:41.260 align:start position:0%
+ 
+ 
+
+00:26:41.260 --> 00:26:43.060 align:start position:0%
+ 
+ 
+
+00:26:43.060 --> 00:26:45.060 align:start position:0%
+ 
+ 
+
+00:26:45.060 --> 00:26:50.490 align:start position:0%
+ 
+ 
+
+00:26:50.490 --> 00:26:53.190 align:start position:0%
+ 
+ 
+
+00:26:53.190 --> 00:26:55.470 align:start position:0%
+ 
+ 
+
+00:26:55.470 --> 00:26:57.690 align:start position:0%
+ 
+ 
+
+00:26:57.690 --> 00:27:00.120 align:start position:0%
+ 
+ 
+
+00:27:00.120 --> 00:27:02.130 align:start position:0%
+ 
+ 
+
+00:27:02.130 --> 00:27:03.960 align:start position:0%
+ 
+ 
+
+00:27:03.960 --> 00:27:05.700 align:start position:0%
+ 
+ 
+
+00:27:05.700 --> 00:27:09.150 align:start position:0%
+ 
+ 
+
+00:27:09.150 --> 00:27:12.480 align:start position:0%
+ 
+ 
+
+00:27:12.480 --> 00:27:15.300 align:start position:0%
+ 
+ 
+
+00:27:15.300 --> 00:27:17.310 align:start position:0%
+ 
+ 
+
+00:27:17.310 --> 00:27:19.620 align:start position:0%
+ 
+ 
+
+00:27:19.620 --> 00:27:20.840 align:start position:0%
+ 
+ 
+
+00:27:20.840 --> 00:27:25.260 align:start position:0%
+ 
+ 
+
+00:27:25.260 --> 00:27:27.930 align:start position:0%
+ 
+ 
+
+00:27:27.930 --> 00:27:31.050 align:start position:0%
+ 
+ 
+
+00:27:31.050 --> 00:27:33.180 align:start position:0%
+ 
+ 
+
+00:27:33.180 --> 00:27:36.510 align:start position:0%
+ 
+ 
+
+00:27:36.510 --> 00:27:39.060 align:start position:0%
+ 
+ 
+
+00:27:39.060 --> 00:27:41.340 align:start position:0%
+ 
+ 
+
+00:27:41.340 --> 00:27:44.810 align:start position:0%
+ 
+ 
+
+00:27:44.810 --> 00:27:47.430 align:start position:0%
+ 
+ 
+
+00:27:47.430 --> 00:27:51.000 align:start position:0%
+ 
+ 
+
+00:27:51.000 --> 00:27:52.620 align:start position:0%
+ 
+ 
+
+00:27:52.620 --> 00:27:55.260 align:start position:0%
+ 
+ 
+
+00:27:55.260 --> 00:27:57.300 align:start position:0%
+ 
+ 
+
+00:27:57.300 --> 00:28:00.480 align:start position:0%
+ 
+ 
+
+00:28:00.480 --> 00:28:02.550 align:start position:0%
+ 
+ 
+
+00:28:02.550 --> 00:28:04.230 align:start position:0%
+ 
+ 
+
+00:28:04.230 --> 00:28:06.240 align:start position:0%
+ 
+ 
+
+00:28:06.240 --> 00:28:07.740 align:start position:0%
+ 
+ 
+
+00:28:07.740 --> 00:28:11.460 align:start position:0%
+ 
+ 
+
+00:28:11.460 --> 00:28:13.440 align:start position:0%
+ 
+ 
+
+00:28:13.440 --> 00:28:14.640 align:start position:0%
+ 
+ 
+
+00:28:14.640 --> 00:28:16.140 align:start position:0%
+ 
+ 
+
+00:28:16.140 --> 00:28:18.990 align:start position:0%
+ 
+ 
+
+00:28:18.990 --> 00:28:20.520 align:start position:0%
+ 
+ 
+
+00:28:20.520 --> 00:28:22.230 align:start position:0%
+ 
+ 
+
+00:28:22.230 --> 00:28:25.230 align:start position:0%
+ 
+ 
+
+00:28:25.230 --> 00:28:27.270 align:start position:0%
+ 
+ 
+
+00:28:27.270 --> 00:28:29.040 align:start position:0%
+ 
+ 
+
+00:28:29.040 --> 00:28:30.720 align:start position:0%
+ 
+ 
+
+00:28:30.720 --> 00:28:32.010 align:start position:0%
+ 
+ 
+
+00:28:32.010 --> 00:28:33.570 align:start position:0%
+ 
+ 
+
+00:28:33.570 --> 00:28:33.580 align:start position:0%
+ 
+ 
+
+00:28:33.580 --> 00:28:34.860 align:start position:0%
+ 
+
+
+00:28:34.860 --> 00:28:37.200 align:start position:0%
+ 
+ 
+
+00:28:37.200 --> 00:28:38.640 align:start position:0%
+ 
+ 
+
+00:28:38.640 --> 00:28:40.530 align:start position:0%
+ 
+ 
+
+00:28:40.530 --> 00:28:43.470 align:start position:0%
+ 
+ 
+
+00:28:43.470 --> 00:28:46.350 align:start position:0%
+ 
+ 
+
+00:28:46.350 --> 00:28:49.230 align:start position:0%
+ 
+ 
+
+00:28:49.230 --> 00:28:51.210 align:start position:0%
+ 
+ 
+
+00:28:51.210 --> 00:28:54.180 align:start position:0%
+ 
+ 
+
+00:28:54.180 --> 00:28:56.460 align:start position:0%
+ 
+ 
+
+00:28:56.460 --> 00:28:58.210 align:start position:0%
+ 
+ 
+
+00:28:58.210 --> 00:28:59.970 align:start position:0%
+ 
+ 
+
+00:28:59.970 --> 00:29:03.130 align:start position:0%
+ 
+ 
+
+00:29:03.130 --> 00:29:05.560 align:start position:0%
+ 
+ 
+
+00:29:05.560 --> 00:29:07.930 align:start position:0%
+ 
+ 
+
+00:29:07.930 --> 00:29:09.520 align:start position:0%
+ 
+ 
+
+00:29:09.520 --> 00:29:12.100 align:start position:0%
+ 
+ 
+
+00:29:12.100 --> 00:29:13.960 align:start position:0%
+ 
+ 
+
+00:29:13.960 --> 00:29:16.600 align:start position:0%
+ 
+ 
+
+00:29:16.600 --> 00:29:18.220 align:start position:0%
+ 
+ 
+
+00:29:18.220 --> 00:29:20.350 align:start position:0%
+ 
+ 
+
+00:29:20.350 --> 00:29:22.240 align:start position:0%
+ 
+ 
+
+00:29:22.240 --> 00:29:24.730 align:start position:0%
+ 
+ 
+
+00:29:24.730 --> 00:29:26.320 align:start position:0%
+ 
+ 
+
+00:29:26.320 --> 00:29:28.480 align:start position:0%
+ 
+ 
+
+00:29:28.480 --> 00:29:31.750 align:start position:0%
+ 
+ 
+
+00:29:31.750 --> 00:29:33.250 align:start position:0%
+ 
+ 
+
+00:29:33.250 --> 00:29:35.260 align:start position:0%
+ 
+ 
+
+00:29:35.260 --> 00:29:38.520 align:start position:0%
+ 
+ 
+
+00:29:38.520 --> 00:29:42.130 align:start position:0%
+ 
+ 
+
+00:29:42.130 --> 00:29:43.539 align:start position:0%
+ 
+ 
+
+00:29:43.539 --> 00:29:45.580 align:start position:0%
+ 
+ 
+
+00:29:45.580 --> 00:29:46.960 align:start position:0%
+ 
+ 
+
+00:29:46.960 --> 00:29:49.000 align:start position:0%
+ 
+ 
+
+00:29:49.000 --> 00:29:51.789 align:start position:0%
+ 
+ 
+
+00:29:51.789 --> 00:29:53.470 align:start position:0%
+ 
+ 
+
+00:29:53.470 --> 00:29:54.880 align:start position:0%
+ 
+ 
+
+00:29:54.880 --> 00:29:57.340 align:start position:0%
+ 
+ 
+
+00:29:57.340 --> 00:29:59.770 align:start position:0%
+ 
+ 
+
+00:29:59.770 --> 00:30:03.370 align:start position:0%
+ 
+ 
+
+00:30:03.370 --> 00:30:05.680 align:start position:0%
+ 
+ 
+
+00:30:05.680 --> 00:30:07.600 align:start position:0%
+ 
+ 
+
+00:30:07.600 --> 00:30:09.430 align:start position:0%
+ 
+ 
+
+00:30:09.430 --> 00:30:11.560 align:start position:0%
+ 
+ 
+
+00:30:11.560 --> 00:30:14.440 align:start position:0%
+ 
+ 
+
+00:30:14.440 --> 00:30:16.060 align:start position:0%
+ 
+ 
+
+00:30:16.060 --> 00:30:18.130 align:start position:0%
+ 
+ 
+
+00:30:18.130 --> 00:30:20.260 align:start position:0%
+ 
+ 
+
+00:30:20.260 --> 00:30:22.060 align:start position:0%
+ 
+ 
+
+00:30:22.060 --> 00:30:23.860 align:start position:0%
+ 
+ 
+
+00:30:23.860 --> 00:30:27.250 align:start position:0%
+ 
+ 
+
+00:30:27.250 --> 00:30:28.960 align:start position:0%
+ 
+ 
+
+00:30:28.960 --> 00:30:30.820 align:start position:0%
+ 
+ 
+
+00:30:30.820 --> 00:30:34.299 align:start position:0%
+ 
+ 
+
+00:30:34.299 --> 00:30:37.149 align:start position:0%
+ 
+ 
+
+00:30:37.149 --> 00:30:39.520 align:start position:0%
+ 
+ 
+
+00:30:39.520 --> 00:30:41.919 align:start position:0%
+ 
+ 
+
+00:30:41.919 --> 00:30:44.560 align:start position:0%
+ 
+ 
+
+00:30:44.560 --> 00:30:48.340 align:start position:0%
+ 
+ 
+
+00:30:48.340 --> 00:30:51.100 align:start position:0%
+ 
+ 
+
+00:30:51.100 --> 00:30:52.899 align:start position:0%
+ 
+ 
+
+00:30:52.899 --> 00:30:55.480 align:start position:0%
+ 
+ 
+
+00:30:55.480 --> 00:30:57.880 align:start position:0%
+ 
+ 
+
+00:30:57.880 --> 00:30:59.980 align:start position:0%
+ 
+ 
+
+00:30:59.980 --> 00:31:02.020 align:start position:0%
+ 
+ 
+
+00:31:02.020 --> 00:31:02.030 align:start position:0%
+ 
+ 
+
+00:31:02.030 --> 00:31:02.680 align:start position:0%
+ 
+
+
+00:31:02.680 --> 00:31:05.010 align:start position:0%
+ 
+ 
+
+00:31:05.010 --> 00:31:09.340 align:start position:0%
+ 
+ 
+
+00:31:09.340 --> 00:31:11.830 align:start position:0%
+ 
+ 
+
+00:31:11.830 --> 00:31:14.320 align:start position:0%
+ 
+ 
+
+00:31:14.320 --> 00:31:15.669 align:start position:0%
+ 
+ 
+
+00:31:15.669 --> 00:31:17.350 align:start position:0%
+ 
+ 
+
+00:31:17.350 --> 00:31:18.700 align:start position:0%
+ 
+ 
+
+00:31:18.700 --> 00:31:21.370 align:start position:0%
+ 
+ 
+
+00:31:21.370 --> 00:31:24.130 align:start position:0%
+ 
+ 
+
+00:31:24.130 --> 00:31:26.590 align:start position:0%
+ 
+ 
+
+00:31:26.590 --> 00:31:28.450 align:start position:0%
+ 
+ 
+
+00:31:28.450 --> 00:31:30.159 align:start position:0%
+ 
+ 
+
+00:31:30.159 --> 00:31:32.020 align:start position:0%
+ 
+ 
+
+00:31:32.020 --> 00:31:35.039 align:start position:0%
+ 
+ 
+
+00:31:35.039 --> 00:31:35.049 align:start position:0%
+ 
+ 
+
+00:31:35.049 --> 00:31:36.310 align:start position:0%
+ 
+
+
+00:31:36.310 --> 00:31:38.140 align:start position:0%
+ 
+ 
+
+00:31:38.140 --> 00:31:41.350 align:start position:0%
+ 
+ 
+
+00:31:41.350 --> 00:31:42.850 align:start position:0%
+ 
+ 
+
+00:31:42.850 --> 00:31:46.210 align:start position:0%
+ 
+ 
+
+00:31:46.210 --> 00:31:47.950 align:start position:0%
+ 
+ 
+
+00:31:47.950 --> 00:31:50.080 align:start position:0%
+ 
+ 
+
+00:31:50.080 --> 00:31:51.549 align:start position:0%
+ 
+ 
+
+00:31:51.549 --> 00:31:54.880 align:start position:0%
+ 
+ 
+
+00:31:54.880 --> 00:31:57.549 align:start position:0%
+ 
+ 
+
+00:31:57.549 --> 00:32:00.100 align:start position:0%
+ 
+ 
+
+00:32:00.100 --> 00:32:02.860 align:start position:0%
+ 
+ 
+
+00:32:02.860 --> 00:32:05.289 align:start position:0%
+ 
+ 
+
+00:32:05.289 --> 00:32:07.570 align:start position:0%
+ 
+ 
+
+00:32:07.570 --> 00:32:10.390 align:start position:0%
+ 
+ 
+
+00:32:10.390 --> 00:32:12.130 align:start position:0%
+ 
+ 
+
+00:32:12.130 --> 00:32:14.350 align:start position:0%
+ 
+ 
+
+00:32:14.350 --> 00:32:17.230 align:start position:0%
+ 
+ 
+
+00:32:17.230 --> 00:32:19.600 align:start position:0%
+ 
+ 
+
+00:32:19.600 --> 00:32:22.090 align:start position:0%
+ 
+ 
+
+00:32:22.090 --> 00:32:25.720 align:start position:0%
+ 
+ 
+
+00:32:25.720 --> 00:32:27.190 align:start position:0%
+ 
+ 
+
+00:32:27.190 --> 00:32:29.110 align:start position:0%
+ 
+ 
+
+00:32:29.110 --> 00:32:30.909 align:start position:0%
+ 
+ 
+
+00:32:30.909 --> 00:32:32.620 align:start position:0%
+ 
+ 
+
+00:32:32.620 --> 00:32:36.880 align:start position:0%
+ 
+ 
+
+00:32:36.880 --> 00:32:39.750 align:start position:0%
+ 
+ 
+
+00:32:39.750 --> 00:32:43.870 align:start position:0%
+ 
+ 
+
+00:32:43.870 --> 00:32:47.020 align:start position:0%
+ 
+ 
+
+00:32:47.020 --> 00:32:51.220 align:start position:0%
+ 
+ 
+
+00:32:51.220 --> 00:32:53.680 align:start position:0%
+ 
+ 
+
+00:32:53.680 --> 00:32:56.860 align:start position:0%
+ 
+ 
+
+00:32:56.860 --> 00:33:01.480 align:start position:0%
+ 
+ 
+
+00:33:01.480 --> 00:33:03.370 align:start position:0%
+ 
+ 
+
+00:33:03.370 --> 00:33:05.320 align:start position:0%
+ 
+ 
+
+00:33:05.320 --> 00:33:07.210 align:start position:0%
+ 
+ 
+
+00:33:07.210 --> 00:33:09.460 align:start position:0%
+ 
+ 
+
+00:33:09.460 --> 00:33:11.680 align:start position:0%
+ 
+ 
+
+00:33:11.680 --> 00:33:14.529 align:start position:0%
+ 
+ 
+
+00:33:14.529 --> 00:33:16.120 align:start position:0%
+ 
+ 
+
+00:33:16.120 --> 00:33:18.490 align:start position:0%
+ 
+ 
+
+00:33:18.490 --> 00:33:20.230 align:start position:0%
+ 
+ 
+
+00:33:20.230 --> 00:33:22.180 align:start position:0%
+ 
+ 
+
+00:33:22.180 --> 00:33:23.139 align:start position:0%
+ 
+ 
+
+00:33:23.139 --> 00:33:26.320 align:start position:0%
+ 
+ 
+
+00:33:26.320 --> 00:33:29.109 align:start position:0%
+ 
+ 
+
+00:33:29.109 --> 00:33:31.509 align:start position:0%
+ 
+ 
+
+00:33:31.509 --> 00:33:33.219 align:start position:0%
+ 
+ 
+
+00:33:33.219 --> 00:33:35.349 align:start position:0%
+ 
+ 
+
+00:33:35.349 --> 00:33:38.049 align:start position:0%
+ 
+ 
+
+00:33:38.049 --> 00:33:40.299 align:start position:0%
+ 
+ 
+
+00:33:40.299 --> 00:33:42.249 align:start position:0%
+ 
+ 
+
+00:33:42.249 --> 00:33:46.389 align:start position:0%
+ 
+ 
+
+00:33:46.389 --> 00:33:47.739 align:start position:0%
+ 
+ 
+
+00:33:47.739 --> 00:33:50.200 align:start position:0%
+ 
+ 
+
+00:33:50.200 --> 00:33:53.079 align:start position:0%
+ 
+ 
+
+00:33:53.079 --> 00:33:54.419 align:start position:0%
+ 
+ 
+
+00:33:54.419 --> 00:33:56.950 align:start position:0%
+ 
+ 
+
+00:33:56.950 --> 00:33:58.989 align:start position:0%
+ 
+ 
+
+00:33:58.989 --> 00:34:01.239 align:start position:0%
+ 
+ 
+
+00:34:01.239 --> 00:34:04.539 align:start position:0%
+ 
+ 
+
+00:34:04.539 --> 00:34:06.609 align:start position:0%
+ 
+ 
+
+00:34:06.609 --> 00:34:08.980 align:start position:0%
+ 
+ 
+
+00:34:08.980 --> 00:34:11.230 align:start position:0%
+ 
+ 
+
+00:34:11.230 --> 00:34:14.289 align:start position:0%
+ 
+ 
+
+00:34:14.289 --> 00:34:17.700 align:start position:0%
+ 
+ 
+
+00:34:17.700 --> 00:34:20.139 align:start position:0%
+ 
+ 
+
+00:34:20.139 --> 00:34:23.889 align:start position:0%
+ 
+ 
+
+00:34:23.889 --> 00:34:26.409 align:start position:0%
+ 
+ 
+
+00:34:26.409 --> 00:34:28.779 align:start position:0%
+ 
+ 
+
+00:34:28.779 --> 00:34:30.789 align:start position:0%
+ 
+ 
+
+00:34:30.789 --> 00:34:32.529 align:start position:0%
+ 
+ 
+
+00:34:32.529 --> 00:34:36.849 align:start position:0%
+ 
+ 
+
+00:34:36.849 --> 00:34:39.220 align:start position:0%
+ 
+ 
+
+00:34:39.220 --> 00:34:41.139 align:start position:0%
+ 
+ 
+
+00:34:41.139 --> 00:34:43.899 align:start position:0%
+ 
+ 
+
+00:34:43.899 --> 00:34:46.149 align:start position:0%
+ 
+ 
+
+00:34:46.149 --> 00:34:49.379 align:start position:0%
+ 
+ 
+
+00:34:49.379 --> 00:34:51.760 align:start position:0%
+ 
+ 
+
+00:34:51.760 --> 00:34:54.309 align:start position:0%
+ 
+ 
+
+00:34:54.309 --> 00:34:56.289 align:start position:0%
+ 
+ 
+
+00:34:56.289 --> 00:35:00.010 align:start position:0%
+ 
+ 
+
+00:35:00.010 --> 00:35:02.380 align:start position:0%
+ 
+ 
+
+00:35:02.380 --> 00:35:04.690 align:start position:0%
+ 
+ 
+
+00:35:04.690 --> 00:35:09.970 align:start position:0%
+ 
+ 
+
+00:35:09.970 --> 00:35:12.099 align:start position:0%
+ 
+ 
+
+00:35:12.099 --> 00:35:14.349 align:start position:0%
+ 
+ 
+
+00:35:14.349 --> 00:35:16.750 align:start position:0%
+ 
+ 
+
+00:35:16.750 --> 00:35:19.720 align:start position:0%
+ 
+ 
+
+00:35:19.720 --> 00:35:22.120 align:start position:0%
+ 
+ 
+
+00:35:22.120 --> 00:35:24.059 align:start position:0%
+ 
+ 
+
+00:35:24.059 --> 00:35:27.370 align:start position:0%
+ 
+ 
+
+00:35:27.370 --> 00:35:29.410 align:start position:0%
+ 
+ 
+
+00:35:29.410 --> 00:35:31.390 align:start position:0%
+ 
+ 
+
+00:35:31.390 --> 00:35:33.069 align:start position:0%
+ 
+ 
+
+00:35:33.069 --> 00:35:34.800 align:start position:0%
+ 
+ 
+
+00:35:34.800 --> 00:35:38.310 align:start position:0%
+ 
+ 
+
+00:35:38.310 --> 00:35:40.710 align:start position:0%
+ 
+ 
+
+00:35:40.710 --> 00:35:43.740 align:start position:0%
+ 
+ 
+
+00:35:43.740 --> 00:35:46.590 align:start position:0%
+ 
+ 
+
+00:35:46.590 --> 00:35:48.840 align:start position:0%
+ 
+ 
+
+00:35:48.840 --> 00:35:51.770 align:start position:0%
+ 
+ 
+
+00:35:51.770 --> 00:35:54.240 align:start position:0%
+ 
+ 
+
+00:35:54.240 --> 00:35:58.980 align:start position:0%
+ 
+ 
+
+00:35:58.980 --> 00:36:00.270 align:start position:0%
+ 
+ 
+
+00:36:00.270 --> 00:36:01.740 align:start position:0%
+ 
+ 
+
+00:36:01.740 --> 00:36:04.020 align:start position:0%
+ 
+ 
+
+00:36:04.020 --> 00:36:07.770 align:start position:0%
+ 
+ 
+
+00:36:07.770 --> 00:36:10.020 align:start position:0%
+ 
+ 
+
+00:36:10.020 --> 00:36:12.060 align:start position:0%
+ 
+ 
+
+00:36:12.060 --> 00:36:14.300 align:start position:0%
+ 
+ 
+
+00:36:14.300 --> 00:36:17.040 align:start position:0%
+ 
+ 
+
+00:36:17.040 --> 00:36:22.140 align:start position:0%
+ 
+ 
+
+00:36:22.140 --> 00:36:24.210 align:start position:0%
+ 
+ 
+
+00:36:24.210 --> 00:36:26.760 align:start position:0%
+ 
+ 
+
+00:36:26.760 --> 00:36:29.900 align:start position:0%
+ 
+ 
+
+00:36:29.900 --> 00:36:33.900 align:start position:0%
+ 
+ 
+
+00:36:33.900 --> 00:36:37.530 align:start position:0%
+ 
+ 
+
+00:36:37.530 --> 00:36:39.510 align:start position:0%
+ 
+ 
+
+00:36:39.510 --> 00:36:42.150 align:start position:0%
+ 
+ 
+
+00:36:42.150 --> 00:36:43.340 align:start position:0%
+ 
+ 
+
+00:36:43.340 --> 00:36:45.930 align:start position:0%
+ 
+ 
+
+00:36:45.930 --> 00:36:48.720 align:start position:0%
+ 
+ 
+
+00:36:48.720 --> 00:36:51.270 align:start position:0%
+ 
+ 
+
+00:36:51.270 --> 00:36:55.410 align:start position:0%
+ 
+ 
+
+00:36:55.410 --> 00:36:57.720 align:start position:0%
+ 
+ 
+
+00:36:57.720 --> 00:37:00.000 align:start position:0%
+ 
+ 
+
+00:37:00.000 --> 00:37:02.010 align:start position:0%
+ 
+ 
+
+00:37:02.010 --> 00:37:06.450 align:start position:0%
+ 
+ 
+
+00:37:06.450 --> 00:37:09.630 align:start position:0%
+ 
+ 
+
+00:37:09.630 --> 00:37:11.790 align:start position:0%
+ 
+ 
+
+00:37:11.790 --> 00:37:13.650 align:start position:0%
+ 
+ 
+
+00:37:13.650 --> 00:37:15.240 align:start position:0%
+ 
+ 
+
+00:37:15.240 --> 00:37:17.700 align:start position:0%
+ 
+ 
+
+00:37:17.700 --> 00:37:20.610 align:start position:0%
+ 
+ 
+
+00:37:20.610 --> 00:37:23.100 align:start position:0%
+ 
+ 
+
+00:37:23.100 --> 00:37:24.810 align:start position:0%
+ 
+ 
+
+00:37:24.810 --> 00:37:27.650 align:start position:0%
+ 
+ 
+
+00:37:27.650 --> 00:37:30.740 align:start position:0%
+ 
+ 
+
+00:37:30.740 --> 00:37:33.240 align:start position:0%
+ 
+ 
+
+00:37:33.240 --> 00:37:36.030 align:start position:0%
+ 
+ 
+
+00:37:36.030 --> 00:37:40.590 align:start position:0%
+ 
+ 
+
+00:37:40.590 --> 00:37:42.960 align:start position:0%
+ 
+ 
+
+00:37:42.960 --> 00:37:46.080 align:start position:0%
+ 
+ 
+
+00:37:46.080 --> 00:37:47.460 align:start position:0%
+ 
+ 
+
+00:37:47.460 --> 00:37:50.550 align:start position:0%
+ 
+ 
+
+00:37:50.550 --> 00:37:52.170 align:start position:0%
+ 
+ 
+
+00:37:52.170 --> 00:37:55.650 align:start position:0%
+ 
+ 
+
+00:37:55.650 --> 00:37:59.550 align:start position:0%
+ 
+ 
+
+00:37:59.550 --> 00:38:01.800 align:start position:0%
+ 
+ 
+
+00:38:01.800 --> 00:38:04.440 align:start position:0%
+ 
+ 
+
+00:38:04.440 --> 00:38:08.220 align:start position:0%
+ 
+ 
+
+00:38:08.220 --> 00:38:09.480 align:start position:0%
+ 
+ 
+
+00:38:09.480 --> 00:38:11.730 align:start position:0%
+ 
+ 
+
+00:38:11.730 --> 00:38:13.770 align:start position:0%
+ 
+ 
+
+00:38:13.770 --> 00:38:16.080 align:start position:0%
+ 
+ 
+
+00:38:16.080 --> 00:38:18.690 align:start position:0%
+ 
+ 
+
+00:38:18.690 --> 00:38:20.750 align:start position:0%
+ 
+ 
+
+00:38:20.750 --> 00:38:23.670 align:start position:0%
+ 
+ 
+
+00:38:23.670 --> 00:38:23.680 align:start position:0%
+ 
+ 
+
+00:38:23.680 --> 00:38:27.660 align:start position:0%
+ 
+
+

@@ -1,0 +1,3432 @@
+WEBVTT
+Kind: captions
+Language: en
+
+00:00:00.090 --> 00:00:09.749 align:start position:0%
+ 
+[Music]  the subject of the talk is some of the  statistical problems that have arisen in  designing a distributed tracing system  so I will spend some time on the on the  problem context which veers a little bit  towards engineering but I'll try to  spend the bulk of the time on on some of  the pure statistical problems and data  structures that that we've worked on in  in answering these these challenges and  and building this product so a little  bit about myself so actually I was a  graduate student here a very long time  ago so lots of lots of memories I was an  academic mathematician for a while after  finishing a postdoc at USC I decided to  leave her industry for almost four years  now I've been at signal effects where a  real-time monitoring and alerting  monitoring and alerting solution for  time series data a few months ago we  were acquired by Splunk so we're now a  Splunk company a lot of people ask me  how is this been used to be in a  start-up now you're working for a big  company well one thing I've noticed is  that there are many more resources  around in a big company and one of those  resources is of a legal nature and so  out of an abundance of caution I think I  have to put this up for a few seconds so  anyway moving on so after after  mentioning some of the background I'd  like to focus on on three statistical  themes so the the first is various data  structures for doing quantile estimation  and a particular focus on a new version  of a tea digest which we've developed  then I'll discuss the problem of undoing  sampling bias and then I'll say a few  words about how to handle non  stationarity in this in this context ok  so as as you've probably gathered from  from some of the other talks at this  conference and and and and other  conferences much of the world is is  moving towards micro surface micro  services architectures which basically  means that instead of an application  being deployed as a single monolith is  broken up into little pieces that do  some little subset of the work needed to  run the application so some may front  databases some may perform calculations  some may may operate the rest layer but  in general this allows the different  pieces of the application to to scale as  they need rather than scaling the the  infrastructure rather than scaling all  the infrastructure and it's also kind of  needed to handle engineering teams that  that are just working on some small  piece so there there are many many  forces pushing us in this pushing us in  this direction one of the challenges  that arises is that it is not so easy  for a single person to reason about how  work flows through some of these more  complicated architectures and so  distributed tracing is generally viewed  as complement to more traditional  methods like logging and metrics as a  way of offering insight into how work is  flowing through a micro-services  architecture and so I I also I brought  some some traces with me so so here's  one so each each horizontal bar is a  span that's basically a particular  operation in a particular service doing  some work the durations spent is the is  the length of the bar and then there are  also parent-child relationships among  the different operations so some  services may call themselves and then  eventually call other services and in  this case the the different colors  represent that the represent different  services so here the rest layers doing  some work and then it's asking analytics  to to make a calculation analytics has  to setup a job and then eventually  starts querying starts querying a time  series service ok so that's a little a  little chunk of a distributed trace and  then if you zoom out a little bit it  looks it looks like this so fascinating  so a little bit a little bit more about  the data model so the so a span is  basically consists of a start and end  time and then the service and operation  that are involved in doing the work and  of course these can be  with some some additional tags that  capture some of the context of the  execution and there's also some  identifiers we have to do some  accounting the parent ID which allows us  to construct a directed acyclic graph  from one of these executions and also  the ID of the containing trace and so  you can kind of think of this as an  atomic unit of instrumented code and  then a trace is just a collection of  these that share the same the same trace  ID so this is a very brief introduction  to disbands and traces with with some  pictures and so one one problem that  arises you know some of the some of the  larger tech companies that I've  implemented these solutions in-house  have noticed this one of the problems is  that for large applications or  applications that they handle a lot of  traffic this is just a very large amount  of data and it probably doesn't make  sense to store at all there are  definitely cases when it makes sense to  sample it down and so this creates a  problem which we can convert to your  statistics or data science which is how  do we decide which traces to keep any  any questions so far on the on the  context seems fine okay okay so so one  approach is is to flip a coin probably  everyone could have come up with that so  you pick some probability like you know  0.1% and you you keep everybody with  that probability so this does have some  virtues it's very easy to implement like  no one's going to give a talk about this  it's very resource efficient it's very  easy to reason about so you can easily  construct confidence intervals for  example if you if you know the size of  your sample all right there's no  statistical algorithm to maintain in  code there's no issues with distributing  this it's dead simple but of course the  problem is that most executions are  pretty uninteresting and problems don't  announce themselves at the beginning of  the of the execution they sometimes  happen only only towards the end  relatively deep down in the in the  execute in the trace and so this is  kind of kind of clear but just for  concreteness I made an example so now I  have to navigate over so this is this is  an actual trace let's see is it gonna  work okay so this the database is making  a bunch of asynchronous calls  everything's totally fine executing  quickly no errors and then all of a  sudden out of nowhere you know there's a  what basically there is a timeout and  the the Graybar timed out and then the  red bar that bubbles up to an error in  the in the calling operation and so if  you want to have a higher probability of  keeping traces like this then you need  to somehow bias your sampling and this  will require you to buffer the traces  for at least some time because you don't  know in advance whether this is going to  happen so you can't just flip a coin it  you can't just flip a coin that's it at  the beginning of the execution okay now  I have to navigate back over okay that's  the end of the end of the video okay no  sound okay so instead we would like to  take a tale based approach which means  that we defer the sampling decision  until the trace completes by the way  trace completion is not a well-defined  thing right spans complete but traces  don't actually complete and then show a  preference for for interesting traces  okay and so what are some you know  heuristics that come from come from this  business context so what makes a trace  interesting well latency is interesting  so a span or a trace that takes longer  than it's supposed to is interesting  could reveal some problem span or trace  that has an error on it especially if  the error rate is generally very low for  that operation or endpoint is  interesting the the overall frequency of  execution is interesting so you know the  the authentication layer may have a very  large volume of a very large volume of  traffic but all of those executions are  basically the same we don't really need  to keep very many of them but relatively  rarely used services or operations may  surface more interesting patterns that  would be hard to detect by by a head  based sampling strategy and then there's  also some interesting there are some  interesting anomalies in the structure  of a trace  so does this execution tend to have a  particular graph shape and then if it if  it doesn't what does that mean or does  the does the vector of span counts tend  to be in a particular location in a  vector space and if we see a cluster  growing somewhere else does that mean  something about the about the execution  and so the challenge will be to develop  some ideas for a tale based sampling  while preserving some of the the virtues  of head based sampling namely the the  ease of implementation the not using  excess of resources and allowing for the  for the calculation of summary  statistics okay  so I'll try to communicate the the main  idea in a cartoon example so let's say  we we give ourselves a budget of thirty  thirty traces to keep every minute and  we have an application with three end  points get thing regenerate generally  receives about a thousand requests a  minute the median the median latency is  300 milliseconds create has a hundred  with a median of 400 and update as ten  with a meeting of 500 so the idea will  be to divide this budget up with the  preference for the infrequently used  endpoints so we have 30 let's give 15 to  get 10 to create and 5 to update and  then within each of them will prefer the  abnormally long or erroneous traces  so our target might be for example among  those 15 we're gonna keep forget for get  let's keep 3 under the median and 12  over for example for the other ones 2  and 8 and so on ok so this is a kind of  a cartoon of an algorithm so in a little  bit and we should do something similar  for for error rates but this is actually  a bit easier because we don't have to  track distributions it just counts so in  a little bit more detail we'll form a  sort of forecast for every endpoint you  can view this as a multivariate  forecasting problems problem so what is  the expected volume of traffic I should  receive for this endpoint in the next  minute divide up the budget among them  and then perform a kind of biased biased  sampling for each endpoint  okay and so maybe I'll I'll breeze  through this rather than you know use  allocation by the sort of Senate or  house rules will apply a concave  function to all of the all of the  contributions and then divide the budget  up that way instead and so one one  consequence of this is that you can see  parts of the in some cases you can see  parts of the micro-services architecture  that you may not otherwise have seen so  a common way to visualize a set of  traces is to sort of glue all of the  dependencies together into a graph to  see how to see how the data is flowing  through it and so first I'll first I  have here the graph corresponding the  the graph made from a set of traces that  were sampled via the head based strategy  so with some some fixed probability and  then taking into account the overall  frequency of execution we actually  discovered a new new service and then a  new dependency so of course it's sort of  easy to understand this what happened  theoretically but it also it happens in  real life okay so what we'd like to do -  to show to show a preference for the for  the traces and for traces and spans that  took longer than expected we need to be  able to answer questions like how  unusual is it for this operation to take  250 milliseconds to respond and so this  demands are sort of ranking data  structure so a data structure that can  support CDF or quantile type queries  should be neutral and representative so  even if our sampling is biased it should  reflect it should have the the correct  values that reflect the overall  population not just those we decided to  keep it would be great if it had a sense  of time maybe some kind of exponentially  exponentially weighted structure and of  course since we're since we want to make  this scalable the data structure should  be as small as possible it should also  be mirja below that if many machines are  operating this we can glue the results  together and still have and still have a  good estimate and it should be able to  operate incrementally so we can  incorporate one data point at  okay and this this leads us into the  into the world of data structures for  online quantile estimation and so I'll  just briefly show how how you would use  one of these so if you if you don't have  one of these maybe you are you're  allowed to keep you know 20 percent of a  particular end point you would sample  like this so the the horizontal axis is  the quantile space sorry if you know the  median maybe you would do something like  this show a preference for those that  took longer and if you knew the  distribution itself or some  approximation then you could sample like  this so the this is showing the the  probability of retention or the sampling  probability as a function of the  quantile okay and of course all of these  will will have the same integral so that  they were overall keeps a twenty percent  of the of the executions for an endpoint  okay and so if you use the green curve  what do you get well first let's so the  the blue curve is is head based sampling  and so if you if you run this on a data  set you might get a distribution that  looks like this and if instead you use  the green curve and show some preference  for the show some preference for the  right side of the distribution then you  get something that looks like this okay  so the the horizontal axes are almost  aligned the vertical axes are actually a  little bit different so I will say these  distributions look sort of tame but the  this is in log log axes and in general  these latency distributions have quite a  bit of positive skew which is which is  something we'll return to later okay so  there's similar there's a similar story  for errors so if you show a preference  for errors you can keep more of them and  so since there are maybe some I don't  know scientists or or mathematicians in  the audience you're probably saying well  thanks for the screenshots but you know  what is this work okay so  let's talk a little bit about different  data structures that can do ranking okay  so so what one proposal so without doing  any ranking one proposal would just be  to say maintain a rolling mean and  standard deviation and then make the the  sampling probability a function of the  z-score okay but this is not this  doesn't behave so well for distributions  with a lot of skew and possibly with a  large chunk of outliers so there's a way  to extend this to make it a little bit  more accurate and this is the so called  moment based quantile sketch so of  course if you have the first two moments  you don't know that much about the  distribution but if you know all of them  you can you can reconstruct the data set  and therefore and therefore any order  statistic but you could do something in  between which is keep a handful of the  moments and also some of the log moments  and then for all the distributions  realizing those moments pick the one  with the largest entropy and use that to  estimate quantiles okay and this is the  so-called moment based quantile sketch  and just like the the you know using  just the z-score you're maintaining just  a few statistics for each data set and  it's very easy to merge them so across  time or across space so so this has some  has some good properties we didn't use  this but it's it's something that's  that's out there another approach is to  use reservoir sampling so to keep just  to keep a sample where the the  probability of being in that sample  depends on where you are in time so if  you're very recent you have a high  probability of being in the sample if  you're older you're much less likely to  be around and then this device can be  used to support CDF and and quantile  type queries so this is another option  what we well we ended up using after  some experimentation is the so called  tea digest of of Dunning and Oertel and  this is basically a form of dynamic  histogram so rather than specify the the  bins in advance the bins sort of adapt  to the to the distribution as the as the  data arrives and so I'll spend a little  bit of time a little bit of time on this  so this is you can think of it as  maintaining a soar  list of centroids and a centroid is a  value and a weight and this represents a  certain number of points weight many  points that are near value okay there  are other implementations but you can  you can think of this as you can think  of this as an implementation and then if  you're asked to estimate a quantile if  you know the overall weight you just  sweep through the centroids and order or  maybe or maybe you do something more  intelligent until you've until you've  accumulated that much weight okay and so  the the permissible size of a centroid  is governed by a so called scale  function so this is a non decreasing  function from quantile space to the real  line and the requirement is that if if a  if a cluster occupies a certain range in  quantile space say q1 to q2 then the  difference between K of q1 + KF q2 so in  other words the length of the interval  after you apply the scale function has  to be less than or equal to 1 ok so it's  telling you how the how the cluster size  is allowed to grow as a function of the  quantile and the idea is that you can  keep smaller clusters in those parts of  the quantile space where you desire more  accuracy and allow the clusters to  become larger if you don't care about a  particular location and quantile space  okay so what are some scale functions so  let me disappoint you for a couple for a  couple seconds so how about 10 times Q  so this is just saying keep 10 bins with  roughly the same number of samples okay  that's what it's trying to do okay not  so interesting this is slightly more  interesting so now keep keep a thousand  bins okay it's gonna get better so here  here are some other scale functions so  here Delta is just some some positive  number that's kind of like the ten or  thousand in the previous slide and the  nice thing about scale functions like  this is that they have they have  variable accuracy in particular they are  extremely accurate towards the extremes  of the distribution right the the the  clusters are required to be very small  near the minimum and very small near the  maximum but  towards the median maybe we don't care  that much about the accuracy of our  estimates or we care less we want to  spend less memory and less computation  there and so we allow the clusters to be  larger okay so these are these already  appear in the in the original paper in  the original tea digest paper okay okay  and so I mentioned before that the  latency distributions have a significant  positive skew and this creates a desire  to have a data structure with asymmetric  accuracy so you don't really care what  the difference is between the first and  third percentile latency for example but  you may care a lot about the difference  between the 97th and 99th percentile so  that could affect whether or not you're  in violation of an SLA for example okay  and so if you're if you're given just  the single data set you know you can  specify your favorite scale function say  I don't care about anything less than  the median  give me one cluster and I care I care  really a lot about everything above the  90th percentile and you can compress it  with respect to some scale function the  the problem is that if you have two of  these you need to know that when you  merge them you will have the same error  bounds on the merged result and so it  actually didn't appear in the original  paper but in a follow-up paper  Dunning proved that for for these scale  functions and one other one which is  kind of similar to the log to the  logarithmic one if you have if you have  a digest with respect to that scale  function and you insert something the  resulting clustering continues to  satisfy the the size condition that the  the clusters have size less than or  equal to one  after you apply the function K and as a  consequence you can merge clusters and  retain the retain the error bounds okay  and that's just saying this so that if  you can merge two you can get a digest  on the Union and so the main problem is  that when you insert something or when  you merge to the location of a cluster  will change in the in the union of the  two datasets and you need to know that  its size doesn't grow too much as you  slide along in quantile space and so it  is actually a property of the scale  function  clusters continue to satisfy the  condition that they're not too large  after insertion and merging okay  and so I I felt this didn't have or I  couldn't find a proper theoretical  treatment and so I I came up with a  creative term decent and a definition  which just means that the function  itself and any positive scalar multiple  accepts insertions in the sense that if  you have a clustering with respect to  that scale function and make an  insertion the resulting clustering will  continue to satisfy the the scale  function the condition imposed by the  scale function and this turns out to be  equivalent to the condition that  whenever you have a pair of numbers in  quantile space which you can think of as  the balance for a cluster and a number  alpha which is going to be the  proportion occupied by the cluster you  insert that the difference between the  the values the endpoints of the new  cluster after the insertion those are  the primed ones is less than or equal to  the difference between the the values of  the original the endpoints of the  original cluster okay and there's sort  of two cases one is where you move to  the right the other is where you move to  the left but the the techniques don't  care too much about this distinction  okay so there's this characterization of  scale functions that we can use we can  sort of use in an emergent 'el way and  from this you can actually prove  something about scale functions so a  decent scale function has to be  continuous in fact differentiable so  this is my cartoon of the proof that  continuity is required so the I don't  know if you can see it the the black  dots represent the quantile bounds of a  cluster before insertion and the the red  dots have the primes those represent the  quantile bounds of a cluster after the  insertion and so the idea is that if you  can if you have a point of discontinuity  then you just imagine you have a cluster  very close to that point of  discontinuity where the difference  between K of Q 1 and K of Q 2 is very  small compared to the difference between  the values there the right and left hand  limits at the point of discontinuity  right and then you just make an  insertion that pushes exactly q2 but not  q1 over that line and then the K of Q 2  prime minus K of Q 1 prime will be much  bigger than K of Q 2 minus K of Q 1 ok  so and there's kind of a similar  argument for differentiability you you  have to handle the denominator as well  and you can and I and I wrote this up  it's not fascinating but it's true  and so this this requirement that a  decent scale function has to be  differentiable actually suggests a  construction which is that well we want  this asymmetric accuracy we care a lot  about one side of the distribution and  not the other why don't we pick some  point like 1/2 and instead of using you  know this arc sine or log of Q over 1  minus Q take the tangent line at some  point and extend the function that way  which is to say use one of these ok and  so if you if you imagine forming a  digest on a data set with respect to  either of these scale functions you can  see that the clusters will be relatively  large on the left hand side and become  progressively smaller as you move to the  right hand side okay so so that's just  that's just a suggestion and it turns  out to work so to actually verify this  if you think about the the inequality  involving the Q 1 Q 2 Q 1 prime Q 2  prime if you sort of rearrange it you  can write it as a one variable problem  you just have to verify that a couple of  functions are non increasing and that  you can do by calculus and I won't I  won't show you that I will I'll show you  some results instead  and so the it's actually sort of visible  ok  that's the surprise so the the top row  represents the results of digesting 1  million samples a hundred times on a  sort of traditional tea digest using the  log of Q over 1 minus Q scale function  and the second row represents the the  new version where we use the tangent  line construction on the on the  left-hand side okay so that that  explains the rose so the first column  represents the error so this is the  difference between the quantile we're  trying to approximate and the empirical  CDF of the estimated quantile and so the  the horizontal axis that's sorry that's  here the the horizontal you can almost  see it the the zero is the median minus  one and plus one our the tenth and 90th  percentiles and then 99th and so on and  that's also that also explains the  horizontal axis in the in the middle  column and so what you can see is that  for the for the log of Q over 1 minus Q  the sort of traditional tea digest the  the error is symmetric about the median  and if you normalize the error which is  to say divide it by the smaller of Q and  1 minus Q you have this you have this  nice shape and the I guess row-one  column-two  but if you instead use the glued version  where you allow the clusters to become  larger on the left hand side you you  have less accuracy on the left hand side  which is much more visible when you look  at the normalized error and of course  the so you've lost some accuracy you've  pretty much kept the same accuracy on  the right hand side and you've kept many  fewer centroids okay and to first order  the number of centroids is what controls  the the memory consumption of one of  these data structures okay and and  actually the it's kind of a side note  but you you actually save some CPU as  well because when you do the merging you  have to evaluate some transcendental  function and so now we only have to  evaluate it half of the time roughly we  have to evaluate just a linear function  on the left hand side so some some more  some more engineering goodness okay so  this is kind of the end of the story  with asymmetric T digest so this is the  one the one topic that I want to discuss  in the most depth and so maybe it's a  good time to just pause for a pause for  any questions  the central counts yes so alright so I  ran this experiment 100 times and so the  on the Left panels the it's a box and  whiskers plot from the fifth 95th and  then the interquartile range and the  median is in orange and then in each of  those runs you get a certain number of  centroids and I'm just showing the  histogram of the the number of centroids  and so in this case I use Delta equals  100 so generally the number of centroids  is is close to close to Delta and so if  you use the log of Q over 1 minus Q you  get it looks like 70 centroids most of  the time whereas if you use the  asymmetric version and allow compression  on the left hand side you keep about you  only have to keep about 40 centroids  yeah so sorry yeah the horizontal axis  on the rightmost column is yeah number  of centroids in the data structure  okay so maybe should we discuss one more  topic so that as I explained to mark the  talk is kind of designed it's easily  truncate a bowl so you can stop it at  any point and hopefully makes sense so  there's another topic which we which we  can discuss but once we start it we have  to finish it so so one problem is that  you know when you intentionally bias  your sampling you know you you you show  a preference for the the traces that  took longer than you expected and then  you for example calculate a percentile  on that data set it's wrong and you  would like to know what the baseline  what the the baseline actually is and we  would like some some accurate  characterization of the steady state and  so the way we solve this is to also  record the sampling probability when we  decide to retain a trace and so to kind  of demonstrate how this works you can  imagine a generator spitting out  examples from a distribution and  recording the truth a sampler that keeps  a biased sample say 10% maybe according  to the the green curve from some slides  ago and then you can compare these okay  so I take yeah there's a there's a data  set very cool there's a weighted sample  according to the green curve or  something qualitatively very similar so  we we really try to keep the the long  guys and then when you use the if you  record also the sampling probability  then you you kind of have the same thing  and you show this to people and they're  like it looks great and you know that's  probably not good enough for you  so to just say a little bit about the  quantitative methodology one way to  measure the difference between  distributions is the relative entropy  which is kind of saying in this case how  much information do you lose if you pass  from the full data set to the weighted  sample that you've decided to retain  okay so it's it's a certain it's a  certain integral this is by the way a  non-negative number and it's zero  exactly when when P and Q are the same  which is to say the the distributions  are the same and it's not symmetric  so then what you can do is say well if I  start with the full dataset and  construct a uniform random sample with  with the same sampling probability say  10% I can understand I understand  roughly how much information is lost and  I can compare that to the biased sample  so in other words I calculate first the  the relative entropy between the full  dataset the truth and a sample  constructed by sampling uniformly at  random to the the relative entropy of  relative entropy of the the full dataset  with regard to the weighted sample with  the same sampling rates and what you'll  find is that these distributions are  very similar and you can actually see  where they disagree right because this  is kind of a function of the the  distribution function of the of the full  sample it's an expectation with respect  to with respect to that distribution and  this also allows you to understand how  the confidence intervals behave in  particular when you do this weighted  sampling your confidence intervals are  relatively tight towards the right-hand  side of the distribution and and much  looser towards the the left-hand side of  the distribution but that's exactly what  we want because we don't really care  about those first percentile executions  and those differences are are very small  in in in relative terms anyway okay so I  think I think this is probably a good  place to probably a good place to stop  but I'll I'll say who stay up here if  there are some questions and then I'll  I'll be available for for a while on  office hours I guess  you have example of result when you  calculate the above I burn divergence  right like for example the previous  slide you have like a new network if you  look at the no I I don't have I don't  have any results for this one they are  somewhere there just not in this there  not in this slide a what do you remember  the kind of rank of number because  sometimes it's it's kind of because of  the log and things like that like it's  it's sometime even when they look very  similar like that number you get like  it's not so much yeah so so the numbers  themselves are small small positive  numbers I know that's kind of a  meaningless statement I think this also  depends on the units of information you  use but they're relatively small  positive numbers so actually there's it  yeah there's a the joke is that you  calculate this for the the weighted  sample and then you go to your product  manager and say I got a relative entropy  of point 0 0 0 1 is that good enough  that was the joke and you get you  calculated from the histogram so so in  this case we so the this is you can  think of this as an expectation with  respect to the the the empirical density  of the full sample a cap capital capital  and lowercase P correspond to the full  sample so you're kind of doing you an  empirical distribution you don't out  like the continuous  and you cannot really do the the  integral per se you do it as a histogram  just like adding the area of the  rectangle yeah that's right I mean you  do some numerical integration yeah I  mean in fact the yeah the samples are  drawn from some fixed distribution so  you you could do it as a continuous  integral I don't think that would change  the results very much yeah but so you  basically calculate this for P is equal  to the full data set and Q is equal to a  random sample and compare that to P is  equal to the full data set q is equal to  the weighted sample  [Music]
+
+00:00:09.749 --> 00:00:12.909 align:start position:0%
+ 
+ 
+
+00:00:12.909 --> 00:00:15.720 align:start position:0%
+ 
+ 
+
+00:00:15.720 --> 00:00:18.130 align:start position:0%
+ 
+ 
+
+00:00:18.130 --> 00:00:21.249 align:start position:0%
+ 
+ 
+
+00:00:21.249 --> 00:00:23.769 align:start position:0%
+ 
+ 
+
+00:00:23.769 --> 00:00:25.300 align:start position:0%
+ 
+ 
+
+00:00:25.300 --> 00:00:27.519 align:start position:0%
+ 
+ 
+
+00:00:27.519 --> 00:00:29.529 align:start position:0%
+ 
+ 
+
+00:00:29.529 --> 00:00:31.749 align:start position:0%
+ 
+ 
+
+00:00:31.749 --> 00:00:34.479 align:start position:0%
+ 
+ 
+
+00:00:34.479 --> 00:00:38.110 align:start position:0%
+ 
+ 
+
+00:00:38.110 --> 00:00:40.029 align:start position:0%
+ 
+ 
+
+00:00:40.029 --> 00:00:42.279 align:start position:0%
+ 
+ 
+
+00:00:42.279 --> 00:00:47.319 align:start position:0%
+ 
+ 
+
+00:00:47.319 --> 00:00:49.389 align:start position:0%
+ 
+ 
+
+00:00:49.389 --> 00:00:52.090 align:start position:0%
+ 
+ 
+
+00:00:52.090 --> 00:00:54.340 align:start position:0%
+ 
+ 
+
+00:00:54.340 --> 00:00:56.950 align:start position:0%
+ 
+ 
+
+00:00:56.950 --> 00:00:59.410 align:start position:0%
+ 
+ 
+
+00:00:59.410 --> 00:01:01.360 align:start position:0%
+ 
+ 
+
+00:01:01.360 --> 00:01:04.060 align:start position:0%
+ 
+ 
+
+00:01:04.060 --> 00:01:06.550 align:start position:0%
+ 
+ 
+
+00:01:06.550 --> 00:01:09.490 align:start position:0%
+ 
+ 
+
+00:01:09.490 --> 00:01:10.750 align:start position:0%
+ 
+ 
+
+00:01:10.750 --> 00:01:12.040 align:start position:0%
+ 
+ 
+
+00:01:12.040 --> 00:01:14.920 align:start position:0%
+ 
+ 
+
+00:01:14.920 --> 00:01:16.330 align:start position:0%
+ 
+ 
+
+00:01:16.330 --> 00:01:19.060 align:start position:0%
+ 
+ 
+
+00:01:19.060 --> 00:01:21.910 align:start position:0%
+ 
+ 
+
+00:01:21.910 --> 00:01:24.490 align:start position:0%
+ 
+ 
+
+00:01:24.490 --> 00:01:28.410 align:start position:0%
+ 
+ 
+
+00:01:28.410 --> 00:01:33.040 align:start position:0%
+ 
+ 
+
+00:01:33.040 --> 00:01:34.420 align:start position:0%
+ 
+ 
+
+00:01:34.420 --> 00:01:36.910 align:start position:0%
+ 
+ 
+
+00:01:36.910 --> 00:01:40.120 align:start position:0%
+ 
+ 
+
+00:01:40.120 --> 00:01:42.670 align:start position:0%
+ 
+ 
+
+00:01:42.670 --> 00:01:45.910 align:start position:0%
+ 
+ 
+
+00:01:45.910 --> 00:01:47.770 align:start position:0%
+ 
+ 
+
+00:01:47.770 --> 00:01:50.440 align:start position:0%
+ 
+ 
+
+00:01:50.440 --> 00:01:53.470 align:start position:0%
+ 
+ 
+
+00:01:53.470 --> 00:01:55.150 align:start position:0%
+ 
+ 
+
+00:01:55.150 --> 00:02:00.450 align:start position:0%
+ 
+ 
+
+00:02:00.450 --> 00:02:04.140 align:start position:0%
+ 
+ 
+
+00:02:04.140 --> 00:02:06.550 align:start position:0%
+ 
+ 
+
+00:02:06.550 --> 00:02:08.830 align:start position:0%
+ 
+ 
+
+00:02:08.830 --> 00:02:11.530 align:start position:0%
+ 
+ 
+
+00:02:11.530 --> 00:02:13.809 align:start position:0%
+ 
+ 
+
+00:02:13.809 --> 00:02:15.699 align:start position:0%
+ 
+ 
+
+00:02:15.699 --> 00:02:17.170 align:start position:0%
+ 
+ 
+
+00:02:17.170 --> 00:02:19.720 align:start position:0%
+ 
+ 
+
+00:02:19.720 --> 00:02:21.819 align:start position:0%
+ 
+ 
+
+00:02:21.819 --> 00:02:24.640 align:start position:0%
+ 
+ 
+
+00:02:24.640 --> 00:02:27.309 align:start position:0%
+ 
+ 
+
+00:02:27.309 --> 00:02:29.129 align:start position:0%
+ 
+ 
+
+00:02:29.129 --> 00:02:32.470 align:start position:0%
+ 
+ 
+
+00:02:32.470 --> 00:02:33.940 align:start position:0%
+ 
+ 
+
+00:02:33.940 --> 00:02:36.339 align:start position:0%
+ 
+ 
+
+00:02:36.339 --> 00:02:38.319 align:start position:0%
+ 
+ 
+
+00:02:38.319 --> 00:02:40.750 align:start position:0%
+ 
+ 
+
+00:02:40.750 --> 00:02:42.699 align:start position:0%
+ 
+ 
+
+00:02:42.699 --> 00:02:46.599 align:start position:0%
+ 
+ 
+
+00:02:46.599 --> 00:02:48.490 align:start position:0%
+ 
+ 
+
+00:02:48.490 --> 00:02:50.050 align:start position:0%
+ 
+ 
+
+00:02:50.050 --> 00:02:52.240 align:start position:0%
+ 
+ 
+
+00:02:52.240 --> 00:02:54.580 align:start position:0%
+ 
+ 
+
+00:02:54.580 --> 00:02:57.520 align:start position:0%
+ 
+ 
+
+00:02:57.520 --> 00:03:00.069 align:start position:0%
+ 
+ 
+
+00:03:00.069 --> 00:03:02.500 align:start position:0%
+ 
+ 
+
+00:03:02.500 --> 00:03:05.129 align:start position:0%
+ 
+ 
+
+00:03:05.129 --> 00:03:07.959 align:start position:0%
+ 
+ 
+
+00:03:07.959 --> 00:03:11.050 align:start position:0%
+ 
+ 
+
+00:03:11.050 --> 00:03:13.629 align:start position:0%
+ 
+ 
+
+00:03:13.629 --> 00:03:16.270 align:start position:0%
+ 
+ 
+
+00:03:16.270 --> 00:03:17.619 align:start position:0%
+ 
+ 
+
+00:03:17.619 --> 00:03:22.360 align:start position:0%
+ 
+ 
+
+00:03:22.360 --> 00:03:24.969 align:start position:0%
+ 
+ 
+
+00:03:24.969 --> 00:03:28.780 align:start position:0%
+ 
+ 
+
+00:03:28.780 --> 00:03:32.259 align:start position:0%
+ 
+ 
+
+00:03:32.259 --> 00:03:34.089 align:start position:0%
+ 
+ 
+
+00:03:34.089 --> 00:03:37.629 align:start position:0%
+ 
+ 
+
+00:03:37.629 --> 00:03:39.369 align:start position:0%
+ 
+ 
+
+00:03:39.369 --> 00:03:41.379 align:start position:0%
+ 
+ 
+
+00:03:41.379 --> 00:03:43.449 align:start position:0%
+ 
+ 
+
+00:03:43.449 --> 00:03:45.429 align:start position:0%
+ 
+ 
+
+00:03:45.429 --> 00:03:47.409 align:start position:0%
+ 
+ 
+
+00:03:47.409 --> 00:03:48.999 align:start position:0%
+ 
+ 
+
+00:03:48.999 --> 00:03:51.280 align:start position:0%
+ 
+ 
+
+00:03:51.280 --> 00:03:53.469 align:start position:0%
+ 
+ 
+
+00:03:53.469 --> 00:03:55.210 align:start position:0%
+ 
+ 
+
+00:03:55.210 --> 00:03:57.879 align:start position:0%
+ 
+ 
+
+00:03:57.879 --> 00:03:59.170 align:start position:0%
+ 
+ 
+
+00:03:59.170 --> 00:04:02.259 align:start position:0%
+ 
+ 
+
+00:04:02.259 --> 00:04:05.110 align:start position:0%
+ 
+ 
+
+00:04:05.110 --> 00:04:08.199 align:start position:0%
+ 
+ 
+
+00:04:08.199 --> 00:04:10.569 align:start position:0%
+ 
+ 
+
+00:04:10.569 --> 00:04:13.990 align:start position:0%
+ 
+ 
+
+00:04:13.990 --> 00:04:16.240 align:start position:0%
+ 
+ 
+
+00:04:16.240 --> 00:04:19.990 align:start position:0%
+ 
+ 
+
+00:04:19.990 --> 00:04:22.659 align:start position:0%
+ 
+ 
+
+00:04:22.659 --> 00:04:24.879 align:start position:0%
+ 
+ 
+
+00:04:24.879 --> 00:04:26.560 align:start position:0%
+ 
+ 
+
+00:04:26.560 --> 00:04:27.970 align:start position:0%
+ 
+ 
+
+00:04:27.970 --> 00:04:30.010 align:start position:0%
+ 
+ 
+
+00:04:30.010 --> 00:04:32.350 align:start position:0%
+ 
+ 
+
+00:04:32.350 --> 00:04:35.710 align:start position:0%
+ 
+ 
+
+00:04:35.710 --> 00:04:37.300 align:start position:0%
+ 
+ 
+
+00:04:37.300 --> 00:04:39.640 align:start position:0%
+ 
+ 
+
+00:04:39.640 --> 00:04:42.160 align:start position:0%
+ 
+ 
+
+00:04:42.160 --> 00:04:44.470 align:start position:0%
+ 
+ 
+
+00:04:44.470 --> 00:04:47.860 align:start position:0%
+ 
+ 
+
+00:04:47.860 --> 00:04:49.990 align:start position:0%
+ 
+ 
+
+00:04:49.990 --> 00:04:52.720 align:start position:0%
+ 
+ 
+
+00:04:52.720 --> 00:04:55.390 align:start position:0%
+ 
+ 
+
+00:04:55.390 --> 00:04:58.120 align:start position:0%
+ 
+ 
+
+00:04:58.120 --> 00:05:02.650 align:start position:0%
+ 
+ 
+
+00:05:02.650 --> 00:05:05.320 align:start position:0%
+ 
+ 
+
+00:05:05.320 --> 00:05:08.110 align:start position:0%
+ 
+ 
+
+00:05:08.110 --> 00:05:10.600 align:start position:0%
+ 
+ 
+
+00:05:10.600 --> 00:05:11.710 align:start position:0%
+ 
+ 
+
+00:05:11.710 --> 00:05:14.160 align:start position:0%
+ 
+ 
+
+00:05:14.160 --> 00:05:16.750 align:start position:0%
+ 
+ 
+
+00:05:16.750 --> 00:05:18.760 align:start position:0%
+ 
+ 
+
+00:05:18.760 --> 00:05:20.440 align:start position:0%
+ 
+ 
+
+00:05:20.440 --> 00:05:22.480 align:start position:0%
+ 
+ 
+
+00:05:22.480 --> 00:05:24.970 align:start position:0%
+ 
+ 
+
+00:05:24.970 --> 00:05:27.070 align:start position:0%
+ 
+ 
+
+00:05:27.070 --> 00:05:28.510 align:start position:0%
+ 
+ 
+
+00:05:28.510 --> 00:05:30.900 align:start position:0%
+ 
+ 
+
+00:05:30.900 --> 00:05:32.830 align:start position:0%
+ 
+ 
+
+00:05:32.830 --> 00:05:34.660 align:start position:0%
+ 
+ 
+
+00:05:34.660 --> 00:05:39.820 align:start position:0%
+ 
+ 
+
+00:05:39.820 --> 00:05:41.710 align:start position:0%
+ 
+ 
+
+00:05:41.710 --> 00:05:50.470 align:start position:0%
+ 
+ 
+
+00:05:50.470 --> 00:05:53.350 align:start position:0%
+ 
+ 
+
+00:05:53.350 --> 00:05:55.600 align:start position:0%
+ 
+ 
+
+00:05:55.600 --> 00:05:57.190 align:start position:0%
+ 
+ 
+
+00:05:57.190 --> 00:05:59.830 align:start position:0%
+ 
+ 
+
+00:05:59.830 --> 00:06:02.170 align:start position:0%
+ 
+ 
+
+00:06:02.170 --> 00:06:04.840 align:start position:0%
+ 
+ 
+
+00:06:04.840 --> 00:06:06.580 align:start position:0%
+ 
+ 
+
+00:06:06.580 --> 00:06:10.330 align:start position:0%
+ 
+ 
+
+00:06:10.330 --> 00:06:12.700 align:start position:0%
+ 
+ 
+
+00:06:12.700 --> 00:06:14.380 align:start position:0%
+ 
+ 
+
+00:06:14.380 --> 00:06:15.910 align:start position:0%
+ 
+ 
+
+00:06:15.910 --> 00:06:17.050 align:start position:0%
+ 
+ 
+
+00:06:17.050 --> 00:06:18.670 align:start position:0%
+ 
+ 
+
+00:06:18.670 --> 00:06:20.260 align:start position:0%
+ 
+ 
+
+00:06:20.260 --> 00:06:23.200 align:start position:0%
+ 
+ 
+
+00:06:23.200 --> 00:06:25.780 align:start position:0%
+ 
+ 
+
+00:06:25.780 --> 00:06:28.870 align:start position:0%
+ 
+ 
+
+00:06:28.870 --> 00:06:30.580 align:start position:0%
+ 
+ 
+
+00:06:30.580 --> 00:06:33.160 align:start position:0%
+ 
+ 
+
+00:06:33.160 --> 00:06:35.200 align:start position:0%
+ 
+ 
+
+00:06:35.200 --> 00:06:37.540 align:start position:0%
+ 
+ 
+
+00:06:37.540 --> 00:06:41.390 align:start position:0%
+ 
+ 
+
+00:06:41.390 --> 00:06:44.510 align:start position:0%
+ 
+ 
+
+00:06:44.510 --> 00:06:49.430 align:start position:0%
+ 
+ 
+
+00:06:49.430 --> 00:06:52.730 align:start position:0%
+ 
+ 
+
+00:06:52.730 --> 00:06:54.770 align:start position:0%
+ 
+ 
+
+00:06:54.770 --> 00:07:01.670 align:start position:0%
+ 
+ 
+
+00:07:01.670 --> 00:07:02.810 align:start position:0%
+ 
+ 
+
+00:07:02.810 --> 00:07:05.420 align:start position:0%
+ 
+ 
+
+00:07:05.420 --> 00:07:07.460 align:start position:0%
+ 
+ 
+
+00:07:07.460 --> 00:07:09.460 align:start position:0%
+ 
+ 
+
+00:07:09.460 --> 00:07:13.159 align:start position:0%
+ 
+ 
+
+00:07:13.159 --> 00:07:14.930 align:start position:0%
+ 
+ 
+
+00:07:14.930 --> 00:07:18.439 align:start position:0%
+ 
+ 
+
+00:07:18.439 --> 00:07:21.770 align:start position:0%
+ 
+ 
+
+00:07:21.770 --> 00:07:23.240 align:start position:0%
+ 
+ 
+
+00:07:23.240 --> 00:07:25.129 align:start position:0%
+ 
+ 
+
+00:07:25.129 --> 00:07:27.320 align:start position:0%
+ 
+ 
+
+00:07:27.320 --> 00:07:28.939 align:start position:0%
+ 
+ 
+
+00:07:28.939 --> 00:07:30.830 align:start position:0%
+ 
+ 
+
+00:07:30.830 --> 00:07:32.360 align:start position:0%
+ 
+ 
+
+00:07:32.360 --> 00:07:33.920 align:start position:0%
+ 
+ 
+
+00:07:33.920 --> 00:07:35.510 align:start position:0%
+ 
+ 
+
+00:07:35.510 --> 00:07:37.790 align:start position:0%
+ 
+ 
+
+00:07:37.790 --> 00:07:40.879 align:start position:0%
+ 
+ 
+
+00:07:40.879 --> 00:07:44.600 align:start position:0%
+ 
+ 
+
+00:07:44.600 --> 00:07:48.680 align:start position:0%
+ 
+ 
+
+00:07:48.680 --> 00:07:50.240 align:start position:0%
+ 
+ 
+
+00:07:50.240 --> 00:07:51.920 align:start position:0%
+ 
+ 
+
+00:07:51.920 --> 00:07:53.960 align:start position:0%
+ 
+ 
+
+00:07:53.960 --> 00:07:55.550 align:start position:0%
+ 
+ 
+
+00:07:55.550 --> 00:07:57.620 align:start position:0%
+ 
+ 
+
+00:07:57.620 --> 00:07:59.089 align:start position:0%
+ 
+ 
+
+00:07:59.089 --> 00:08:01.100 align:start position:0%
+ 
+ 
+
+00:08:01.100 --> 00:08:03.560 align:start position:0%
+ 
+ 
+
+00:08:03.560 --> 00:08:05.629 align:start position:0%
+ 
+ 
+
+00:08:05.629 --> 00:08:08.899 align:start position:0%
+ 
+ 
+
+00:08:08.899 --> 00:08:10.879 align:start position:0%
+ 
+ 
+
+00:08:10.879 --> 00:08:14.300 align:start position:0%
+ 
+ 
+
+00:08:14.300 --> 00:08:16.279 align:start position:0%
+ 
+ 
+
+00:08:16.279 --> 00:08:19.010 align:start position:0%
+ 
+ 
+
+00:08:19.010 --> 00:08:21.080 align:start position:0%
+ 
+ 
+
+00:08:21.080 --> 00:08:22.790 align:start position:0%
+ 
+ 
+
+00:08:22.790 --> 00:08:24.469 align:start position:0%
+ 
+ 
+
+00:08:24.469 --> 00:08:27.379 align:start position:0%
+ 
+ 
+
+00:08:27.379 --> 00:08:29.960 align:start position:0%
+ 
+ 
+
+00:08:29.960 --> 00:08:32.089 align:start position:0%
+ 
+ 
+
+00:08:32.089 --> 00:08:33.860 align:start position:0%
+ 
+ 
+
+00:08:33.860 --> 00:08:35.930 align:start position:0%
+ 
+ 
+
+00:08:35.930 --> 00:08:37.219 align:start position:0%
+ 
+ 
+
+00:08:37.219 --> 00:08:39.350 align:start position:0%
+ 
+ 
+
+00:08:39.350 --> 00:08:42.529 align:start position:0%
+ 
+ 
+
+00:08:42.529 --> 00:08:44.630 align:start position:0%
+ 
+ 
+
+00:08:44.630 --> 00:08:46.579 align:start position:0%
+ 
+ 
+
+00:08:46.579 --> 00:08:49.040 align:start position:0%
+ 
+ 
+
+00:08:49.040 --> 00:08:52.069 align:start position:0%
+ 
+ 
+
+00:08:52.069 --> 00:08:53.449 align:start position:0%
+ 
+ 
+
+00:08:53.449 --> 00:08:54.740 align:start position:0%
+ 
+ 
+
+00:08:54.740 --> 00:08:57.319 align:start position:0%
+ 
+ 
+
+00:08:57.319 --> 00:09:00.410 align:start position:0%
+ 
+ 
+
+00:09:00.410 --> 00:09:02.509 align:start position:0%
+ 
+ 
+
+00:09:02.509 --> 00:09:04.759 align:start position:0%
+ 
+ 
+
+00:09:04.759 --> 00:09:07.069 align:start position:0%
+ 
+ 
+
+00:09:07.069 --> 00:09:08.840 align:start position:0%
+ 
+ 
+
+00:09:08.840 --> 00:09:10.610 align:start position:0%
+ 
+ 
+
+00:09:10.610 --> 00:09:12.410 align:start position:0%
+ 
+ 
+
+00:09:12.410 --> 00:09:16.670 align:start position:0%
+ 
+ 
+
+00:09:16.670 --> 00:09:18.170 align:start position:0%
+ 
+ 
+
+00:09:18.170 --> 00:09:20.449 align:start position:0%
+ 
+ 
+
+00:09:20.449 --> 00:09:22.280 align:start position:0%
+ 
+ 
+
+00:09:22.280 --> 00:09:25.009 align:start position:0%
+ 
+ 
+
+00:09:25.009 --> 00:09:26.990 align:start position:0%
+ 
+ 
+
+00:09:26.990 --> 00:09:28.999 align:start position:0%
+ 
+ 
+
+00:09:28.999 --> 00:09:31.900 align:start position:0%
+ 
+ 
+
+00:09:31.900 --> 00:09:35.030 align:start position:0%
+ 
+ 
+
+00:09:35.030 --> 00:09:38.929 align:start position:0%
+ 
+ 
+
+00:09:38.929 --> 00:09:41.559 align:start position:0%
+ 
+ 
+
+00:09:41.559 --> 00:09:44.119 align:start position:0%
+ 
+ 
+
+00:09:44.119 --> 00:09:46.730 align:start position:0%
+ 
+ 
+
+00:09:46.730 --> 00:09:50.329 align:start position:0%
+ 
+ 
+
+00:09:50.329 --> 00:09:52.009 align:start position:0%
+ 
+ 
+
+00:09:52.009 --> 00:09:54.980 align:start position:0%
+ 
+ 
+
+00:09:54.980 --> 00:09:57.530 align:start position:0%
+ 
+ 
+
+00:09:57.530 --> 00:10:00.290 align:start position:0%
+ 
+ 
+
+00:10:00.290 --> 00:10:03.290 align:start position:0%
+ 
+ 
+
+00:10:03.290 --> 00:10:05.509 align:start position:0%
+ 
+ 
+
+00:10:05.509 --> 00:10:07.059 align:start position:0%
+ 
+ 
+
+00:10:07.059 --> 00:10:12.110 align:start position:0%
+ 
+ 
+
+00:10:12.110 --> 00:10:14.389 align:start position:0%
+ 
+ 
+
+00:10:14.389 --> 00:10:17.360 align:start position:0%
+ 
+ 
+
+00:10:17.360 --> 00:10:20.150 align:start position:0%
+ 
+ 
+
+00:10:20.150 --> 00:10:23.030 align:start position:0%
+ 
+ 
+
+00:10:23.030 --> 00:10:25.910 align:start position:0%
+ 
+ 
+
+00:10:25.910 --> 00:10:28.249 align:start position:0%
+ 
+ 
+
+00:10:28.249 --> 00:10:30.499 align:start position:0%
+ 
+ 
+
+00:10:30.499 --> 00:10:34.040 align:start position:0%
+ 
+ 
+
+00:10:34.040 --> 00:10:38.960 align:start position:0%
+ 
+ 
+
+00:10:38.960 --> 00:10:40.429 align:start position:0%
+ 
+ 
+
+00:10:40.429 --> 00:10:42.920 align:start position:0%
+ 
+ 
+
+00:10:42.920 --> 00:10:44.119 align:start position:0%
+ 
+ 
+
+00:10:44.119 --> 00:10:46.850 align:start position:0%
+ 
+ 
+
+00:10:46.850 --> 00:10:49.850 align:start position:0%
+ 
+ 
+
+00:10:49.850 --> 00:10:52.999 align:start position:0%
+ 
+ 
+
+00:10:52.999 --> 00:10:54.309 align:start position:0%
+ 
+ 
+
+00:10:54.309 --> 00:10:57.470 align:start position:0%
+ 
+ 
+
+00:10:57.470 --> 00:10:59.720 align:start position:0%
+ 
+ 
+
+00:10:59.720 --> 00:11:01.129 align:start position:0%
+ 
+ 
+
+00:11:01.129 --> 00:11:03.199 align:start position:0%
+ 
+ 
+
+00:11:03.199 --> 00:11:05.780 align:start position:0%
+ 
+ 
+
+00:11:05.780 --> 00:11:08.540 align:start position:0%
+ 
+ 
+
+00:11:08.540 --> 00:11:10.940 align:start position:0%
+ 
+ 
+
+00:11:10.940 --> 00:11:13.370 align:start position:0%
+ 
+ 
+
+00:11:13.370 --> 00:11:15.380 align:start position:0%
+ 
+ 
+
+00:11:15.380 --> 00:11:18.380 align:start position:0%
+ 
+ 
+
+00:11:18.380 --> 00:11:20.090 align:start position:0%
+ 
+ 
+
+00:11:20.090 --> 00:11:22.250 align:start position:0%
+ 
+ 
+
+00:11:22.250 --> 00:11:25.220 align:start position:0%
+ 
+ 
+
+00:11:25.220 --> 00:11:28.670 align:start position:0%
+ 
+ 
+
+00:11:28.670 --> 00:11:30.560 align:start position:0%
+ 
+ 
+
+00:11:30.560 --> 00:11:33.620 align:start position:0%
+ 
+ 
+
+00:11:33.620 --> 00:11:35.900 align:start position:0%
+ 
+ 
+
+00:11:35.900 --> 00:11:37.880 align:start position:0%
+ 
+ 
+
+00:11:37.880 --> 00:11:40.390 align:start position:0%
+ 
+ 
+
+00:11:40.390 --> 00:11:43.220 align:start position:0%
+ 
+ 
+
+00:11:43.220 --> 00:11:47.690 align:start position:0%
+ 
+ 
+
+00:11:47.690 --> 00:11:50.240 align:start position:0%
+ 
+ 
+
+00:11:50.240 --> 00:11:54.110 align:start position:0%
+ 
+ 
+
+00:11:54.110 --> 00:11:56.090 align:start position:0%
+ 
+ 
+
+00:11:56.090 --> 00:11:59.390 align:start position:0%
+ 
+ 
+
+00:11:59.390 --> 00:12:01.340 align:start position:0%
+ 
+ 
+
+00:12:01.340 --> 00:12:04.040 align:start position:0%
+ 
+ 
+
+00:12:04.040 --> 00:12:06.230 align:start position:0%
+ 
+ 
+
+00:12:06.230 --> 00:12:09.050 align:start position:0%
+ 
+ 
+
+00:12:09.050 --> 00:12:12.740 align:start position:0%
+ 
+ 
+
+00:12:12.740 --> 00:12:14.660 align:start position:0%
+ 
+ 
+
+00:12:14.660 --> 00:12:17.720 align:start position:0%
+ 
+ 
+
+00:12:17.720 --> 00:12:23.930 align:start position:0%
+ 
+ 
+
+00:12:23.930 --> 00:12:27.230 align:start position:0%
+ 
+ 
+
+00:12:27.230 --> 00:12:30.470 align:start position:0%
+ 
+ 
+
+00:12:30.470 --> 00:12:33.170 align:start position:0%
+ 
+ 
+
+00:12:33.170 --> 00:12:34.670 align:start position:0%
+ 
+ 
+
+00:12:34.670 --> 00:12:36.880 align:start position:0%
+ 
+ 
+
+00:12:36.880 --> 00:12:40.400 align:start position:0%
+ 
+ 
+
+00:12:40.400 --> 00:12:42.500 align:start position:0%
+ 
+ 
+
+00:12:42.500 --> 00:12:44.300 align:start position:0%
+ 
+ 
+
+00:12:44.300 --> 00:12:47.210 align:start position:0%
+ 
+ 
+
+00:12:47.210 --> 00:12:49.640 align:start position:0%
+ 
+ 
+
+00:12:49.640 --> 00:12:51.860 align:start position:0%
+ 
+ 
+
+00:12:51.860 --> 00:12:54.530 align:start position:0%
+ 
+ 
+
+00:12:54.530 --> 00:12:56.060 align:start position:0%
+ 
+ 
+
+00:12:56.060 --> 00:12:58.160 align:start position:0%
+ 
+ 
+
+00:12:58.160 --> 00:12:59.960 align:start position:0%
+ 
+ 
+
+00:12:59.960 --> 00:13:02.470 align:start position:0%
+ 
+ 
+
+00:13:02.470 --> 00:13:04.940 align:start position:0%
+ 
+ 
+
+00:13:04.940 --> 00:13:06.920 align:start position:0%
+ 
+ 
+
+00:13:06.920 --> 00:13:08.840 align:start position:0%
+ 
+ 
+
+00:13:08.840 --> 00:13:10.820 align:start position:0%
+ 
+ 
+
+00:13:10.820 --> 00:13:12.920 align:start position:0%
+ 
+ 
+
+00:13:12.920 --> 00:13:15.320 align:start position:0%
+ 
+ 
+
+00:13:15.320 --> 00:13:17.120 align:start position:0%
+ 
+ 
+
+00:13:17.120 --> 00:13:18.620 align:start position:0%
+ 
+ 
+
+00:13:18.620 --> 00:13:20.270 align:start position:0%
+ 
+ 
+
+00:13:20.270 --> 00:13:22.340 align:start position:0%
+ 
+ 
+
+00:13:22.340 --> 00:13:25.070 align:start position:0%
+ 
+ 
+
+00:13:25.070 --> 00:13:27.230 align:start position:0%
+ 
+ 
+
+00:13:27.230 --> 00:13:30.470 align:start position:0%
+ 
+ 
+
+00:13:30.470 --> 00:13:32.840 align:start position:0%
+ 
+ 
+
+00:13:32.840 --> 00:13:35.510 align:start position:0%
+ 
+ 
+
+00:13:35.510 --> 00:13:37.430 align:start position:0%
+ 
+ 
+
+00:13:37.430 --> 00:13:39.620 align:start position:0%
+ 
+ 
+
+00:13:39.620 --> 00:13:41.270 align:start position:0%
+ 
+ 
+
+00:13:41.270 --> 00:13:43.460 align:start position:0%
+ 
+ 
+
+00:13:43.460 --> 00:13:46.730 align:start position:0%
+ 
+ 
+
+00:13:46.730 --> 00:13:48.170 align:start position:0%
+ 
+ 
+
+00:13:48.170 --> 00:13:49.940 align:start position:0%
+ 
+ 
+
+00:13:49.940 --> 00:13:53.000 align:start position:0%
+ 
+ 
+
+00:13:53.000 --> 00:13:54.170 align:start position:0%
+ 
+ 
+
+00:13:54.170 --> 00:13:55.730 align:start position:0%
+ 
+ 
+
+00:13:55.730 --> 00:13:58.550 align:start position:0%
+ 
+ 
+
+00:13:58.550 --> 00:14:01.010 align:start position:0%
+ 
+ 
+
+00:14:01.010 --> 00:14:02.720 align:start position:0%
+ 
+ 
+
+00:14:02.720 --> 00:14:04.820 align:start position:0%
+ 
+ 
+
+00:14:04.820 --> 00:14:06.530 align:start position:0%
+ 
+ 
+
+00:14:06.530 --> 00:14:09.080 align:start position:0%
+ 
+ 
+
+00:14:09.080 --> 00:14:12.280 align:start position:0%
+ 
+ 
+
+00:14:12.280 --> 00:14:15.560 align:start position:0%
+ 
+ 
+
+00:14:15.560 --> 00:14:19.100 align:start position:0%
+ 
+ 
+
+00:14:19.100 --> 00:14:21.680 align:start position:0%
+ 
+ 
+
+00:14:21.680 --> 00:14:24.290 align:start position:0%
+ 
+ 
+
+00:14:24.290 --> 00:14:25.670 align:start position:0%
+ 
+ 
+
+00:14:25.670 --> 00:14:27.980 align:start position:0%
+ 
+ 
+
+00:14:27.980 --> 00:14:29.780 align:start position:0%
+ 
+ 
+
+00:14:29.780 --> 00:14:32.600 align:start position:0%
+ 
+ 
+
+00:14:32.600 --> 00:14:35.780 align:start position:0%
+ 
+ 
+
+00:14:35.780 --> 00:14:38.000 align:start position:0%
+ 
+ 
+
+00:14:38.000 --> 00:14:40.040 align:start position:0%
+ 
+ 
+
+00:14:40.040 --> 00:14:43.130 align:start position:0%
+ 
+ 
+
+00:14:43.130 --> 00:14:46.310 align:start position:0%
+ 
+ 
+
+00:14:46.310 --> 00:14:48.920 align:start position:0%
+ 
+ 
+
+00:14:48.920 --> 00:14:52.280 align:start position:0%
+ 
+ 
+
+00:14:52.280 --> 00:14:54.560 align:start position:0%
+ 
+ 
+
+00:14:54.560 --> 00:14:56.840 align:start position:0%
+ 
+ 
+
+00:14:56.840 --> 00:15:02.810 align:start position:0%
+ 
+ 
+
+00:15:02.810 --> 00:15:04.370 align:start position:0%
+ 
+ 
+
+00:15:04.370 --> 00:15:05.870 align:start position:0%
+ 
+ 
+
+00:15:05.870 --> 00:15:08.230 align:start position:0%
+ 
+ 
+
+00:15:08.230 --> 00:15:11.810 align:start position:0%
+ 
+ 
+
+00:15:11.810 --> 00:15:14.240 align:start position:0%
+ 
+ 
+
+00:15:14.240 --> 00:15:16.880 align:start position:0%
+ 
+ 
+
+00:15:16.880 --> 00:15:20.480 align:start position:0%
+ 
+ 
+
+00:15:20.480 --> 00:15:25.570 align:start position:0%
+ 
+ 
+
+00:15:25.570 --> 00:15:27.250 align:start position:0%
+ 
+ 
+
+00:15:27.250 --> 00:15:30.670 align:start position:0%
+ 
+ 
+
+00:15:30.670 --> 00:15:33.250 align:start position:0%
+ 
+ 
+
+00:15:33.250 --> 00:15:34.750 align:start position:0%
+ 
+ 
+
+00:15:34.750 --> 00:15:37.480 align:start position:0%
+ 
+ 
+
+00:15:37.480 --> 00:15:39.820 align:start position:0%
+ 
+ 
+
+00:15:39.820 --> 00:15:41.470 align:start position:0%
+ 
+ 
+
+00:15:41.470 --> 00:15:43.329 align:start position:0%
+ 
+ 
+
+00:15:43.329 --> 00:15:45.220 align:start position:0%
+ 
+ 
+
+00:15:45.220 --> 00:15:47.139 align:start position:0%
+ 
+ 
+
+00:15:47.139 --> 00:15:49.750 align:start position:0%
+ 
+ 
+
+00:15:49.750 --> 00:15:53.139 align:start position:0%
+ 
+ 
+
+00:15:53.139 --> 00:15:54.850 align:start position:0%
+ 
+ 
+
+00:15:54.850 --> 00:15:57.190 align:start position:0%
+ 
+ 
+
+00:15:57.190 --> 00:15:58.329 align:start position:0%
+ 
+ 
+
+00:15:58.329 --> 00:15:59.590 align:start position:0%
+ 
+ 
+
+00:15:59.590 --> 00:16:01.540 align:start position:0%
+ 
+ 
+
+00:16:01.540 --> 00:16:03.460 align:start position:0%
+ 
+ 
+
+00:16:03.460 --> 00:16:05.650 align:start position:0%
+ 
+ 
+
+00:16:05.650 --> 00:16:07.420 align:start position:0%
+ 
+ 
+
+00:16:07.420 --> 00:16:09.430 align:start position:0%
+ 
+ 
+
+00:16:09.430 --> 00:16:12.220 align:start position:0%
+ 
+ 
+
+00:16:12.220 --> 00:16:14.560 align:start position:0%
+ 
+ 
+
+00:16:14.560 --> 00:16:17.259 align:start position:0%
+ 
+ 
+
+00:16:17.259 --> 00:16:19.329 align:start position:0%
+ 
+ 
+
+00:16:19.329 --> 00:16:21.340 align:start position:0%
+ 
+ 
+
+00:16:21.340 --> 00:16:23.259 align:start position:0%
+ 
+ 
+
+00:16:23.259 --> 00:16:26.319 align:start position:0%
+ 
+ 
+
+00:16:26.319 --> 00:16:28.269 align:start position:0%
+ 
+ 
+
+00:16:28.269 --> 00:16:30.490 align:start position:0%
+ 
+ 
+
+00:16:30.490 --> 00:16:32.920 align:start position:0%
+ 
+ 
+
+00:16:32.920 --> 00:16:35.980 align:start position:0%
+ 
+ 
+
+00:16:35.980 --> 00:16:38.110 align:start position:0%
+ 
+ 
+
+00:16:38.110 --> 00:16:39.579 align:start position:0%
+ 
+ 
+
+00:16:39.579 --> 00:16:43.269 align:start position:0%
+ 
+ 
+
+00:16:43.269 --> 00:16:46.750 align:start position:0%
+ 
+ 
+
+00:16:46.750 --> 00:16:49.150 align:start position:0%
+ 
+ 
+
+00:16:49.150 --> 00:16:50.819 align:start position:0%
+ 
+ 
+
+00:16:50.819 --> 00:16:53.740 align:start position:0%
+ 
+ 
+
+00:16:53.740 --> 00:16:55.030 align:start position:0%
+ 
+ 
+
+00:16:55.030 --> 00:16:56.560 align:start position:0%
+ 
+ 
+
+00:16:56.560 --> 00:16:57.940 align:start position:0%
+ 
+ 
+
+00:16:57.940 --> 00:17:00.069 align:start position:0%
+ 
+ 
+
+00:17:00.069 --> 00:17:03.310 align:start position:0%
+ 
+ 
+
+00:17:03.310 --> 00:17:08.640 align:start position:0%
+ 
+ 
+
+00:17:08.640 --> 00:17:11.199 align:start position:0%
+ 
+ 
+
+00:17:11.199 --> 00:17:13.600 align:start position:0%
+ 
+ 
+
+00:17:13.600 --> 00:17:17.020 align:start position:0%
+ 
+ 
+
+00:17:17.020 --> 00:17:19.630 align:start position:0%
+ 
+ 
+
+00:17:19.630 --> 00:17:24.280 align:start position:0%
+ 
+ 
+
+00:17:24.280 --> 00:17:26.740 align:start position:0%
+ 
+ 
+
+00:17:26.740 --> 00:17:29.380 align:start position:0%
+ 
+ 
+
+00:17:29.380 --> 00:17:31.870 align:start position:0%
+ 
+ 
+
+00:17:31.870 --> 00:17:34.500 align:start position:0%
+ 
+ 
+
+00:17:34.500 --> 00:17:37.780 align:start position:0%
+ 
+ 
+
+00:17:37.780 --> 00:17:39.280 align:start position:0%
+ 
+ 
+
+00:17:39.280 --> 00:17:42.610 align:start position:0%
+ 
+ 
+
+00:17:42.610 --> 00:17:45.300 align:start position:0%
+ 
+ 
+
+00:17:45.300 --> 00:17:47.620 align:start position:0%
+ 
+ 
+
+00:17:47.620 --> 00:17:53.980 align:start position:0%
+ 
+ 
+
+00:17:53.980 --> 00:17:55.330 align:start position:0%
+ 
+ 
+
+00:17:55.330 --> 00:17:57.460 align:start position:0%
+ 
+ 
+
+00:17:57.460 --> 00:17:59.110 align:start position:0%
+ 
+ 
+
+00:17:59.110 --> 00:18:00.550 align:start position:0%
+ 
+ 
+
+00:18:00.550 --> 00:18:01.930 align:start position:0%
+ 
+ 
+
+00:18:01.930 --> 00:18:03.970 align:start position:0%
+ 
+ 
+
+00:18:03.970 --> 00:18:05.380 align:start position:0%
+ 
+ 
+
+00:18:05.380 --> 00:18:07.180 align:start position:0%
+ 
+ 
+
+00:18:07.180 --> 00:18:10.780 align:start position:0%
+ 
+ 
+
+00:18:10.780 --> 00:18:13.390 align:start position:0%
+ 
+ 
+
+00:18:13.390 --> 00:18:15.640 align:start position:0%
+ 
+ 
+
+00:18:15.640 --> 00:18:18.070 align:start position:0%
+ 
+ 
+
+00:18:18.070 --> 00:18:21.430 align:start position:0%
+ 
+ 
+
+00:18:21.430 --> 00:18:27.250 align:start position:0%
+ 
+ 
+
+00:18:27.250 --> 00:18:29.560 align:start position:0%
+ 
+ 
+
+00:18:29.560 --> 00:18:33.040 align:start position:0%
+ 
+ 
+
+00:18:33.040 --> 00:18:37.420 align:start position:0%
+ 
+ 
+
+00:18:37.420 --> 00:18:38.800 align:start position:0%
+ 
+ 
+
+00:18:38.800 --> 00:18:40.750 align:start position:0%
+ 
+ 
+
+00:18:40.750 --> 00:18:44.140 align:start position:0%
+ 
+ 
+
+00:18:44.140 --> 00:18:46.210 align:start position:0%
+ 
+ 
+
+00:18:46.210 --> 00:18:48.280 align:start position:0%
+ 
+ 
+
+00:18:48.280 --> 00:18:50.350 align:start position:0%
+ 
+ 
+
+00:18:50.350 --> 00:18:53.260 align:start position:0%
+ 
+ 
+
+00:18:53.260 --> 00:18:55.090 align:start position:0%
+ 
+ 
+
+00:18:55.090 --> 00:18:57.340 align:start position:0%
+ 
+ 
+
+00:18:57.340 --> 00:18:59.110 align:start position:0%
+ 
+ 
+
+00:18:59.110 --> 00:19:02.580 align:start position:0%
+ 
+ 
+
+00:19:02.580 --> 00:19:06.190 align:start position:0%
+ 
+ 
+
+00:19:06.190 --> 00:19:08.950 align:start position:0%
+ 
+ 
+
+00:19:08.950 --> 00:19:11.200 align:start position:0%
+ 
+ 
+
+00:19:11.200 --> 00:19:15.220 align:start position:0%
+ 
+ 
+
+00:19:15.220 --> 00:19:17.470 align:start position:0%
+ 
+ 
+
+00:19:17.470 --> 00:19:20.080 align:start position:0%
+ 
+ 
+
+00:19:20.080 --> 00:19:23.500 align:start position:0%
+ 
+ 
+
+00:19:23.500 --> 00:19:25.540 align:start position:0%
+ 
+ 
+
+00:19:25.540 --> 00:19:28.690 align:start position:0%
+ 
+ 
+
+00:19:28.690 --> 00:19:30.760 align:start position:0%
+ 
+ 
+
+00:19:30.760 --> 00:19:32.590 align:start position:0%
+ 
+ 
+
+00:19:32.590 --> 00:19:34.390 align:start position:0%
+ 
+ 
+
+00:19:34.390 --> 00:19:36.400 align:start position:0%
+ 
+ 
+
+00:19:36.400 --> 00:19:37.750 align:start position:0%
+ 
+ 
+
+00:19:37.750 --> 00:19:39.940 align:start position:0%
+ 
+ 
+
+00:19:39.940 --> 00:19:42.100 align:start position:0%
+ 
+ 
+
+00:19:42.100 --> 00:19:44.500 align:start position:0%
+ 
+ 
+
+00:19:44.500 --> 00:19:48.130 align:start position:0%
+ 
+ 
+
+00:19:48.130 --> 00:19:49.900 align:start position:0%
+ 
+ 
+
+00:19:49.900 --> 00:19:51.670 align:start position:0%
+ 
+ 
+
+00:19:51.670 --> 00:19:52.750 align:start position:0%
+ 
+ 
+
+00:19:52.750 --> 00:19:54.130 align:start position:0%
+ 
+ 
+
+00:19:54.130 --> 00:19:56.140 align:start position:0%
+ 
+ 
+
+00:19:56.140 --> 00:19:57.550 align:start position:0%
+ 
+ 
+
+00:19:57.550 --> 00:19:59.110 align:start position:0%
+ 
+ 
+
+00:19:59.110 --> 00:20:01.000 align:start position:0%
+ 
+ 
+
+00:20:01.000 --> 00:20:04.150 align:start position:0%
+ 
+ 
+
+00:20:04.150 --> 00:20:07.060 align:start position:0%
+ 
+ 
+
+00:20:07.060 --> 00:20:13.930 align:start position:0%
+ 
+ 
+
+00:20:13.930 --> 00:20:17.950 align:start position:0%
+ 
+ 
+
+00:20:17.950 --> 00:20:19.990 align:start position:0%
+ 
+ 
+
+00:20:19.990 --> 00:20:22.480 align:start position:0%
+ 
+ 
+
+00:20:22.480 --> 00:20:25.410 align:start position:0%
+ 
+ 
+
+00:20:25.410 --> 00:20:28.600 align:start position:0%
+ 
+ 
+
+00:20:28.600 --> 00:20:30.040 align:start position:0%
+ 
+ 
+
+00:20:30.040 --> 00:20:32.710 align:start position:0%
+ 
+ 
+
+00:20:32.710 --> 00:20:34.390 align:start position:0%
+ 
+ 
+
+00:20:34.390 --> 00:20:37.030 align:start position:0%
+ 
+ 
+
+00:20:37.030 --> 00:20:38.350 align:start position:0%
+ 
+ 
+
+00:20:38.350 --> 00:20:41.170 align:start position:0%
+ 
+ 
+
+00:20:41.170 --> 00:20:42.640 align:start position:0%
+ 
+ 
+
+00:20:42.640 --> 00:20:44.740 align:start position:0%
+ 
+ 
+
+00:20:44.740 --> 00:20:47.350 align:start position:0%
+ 
+ 
+
+00:20:47.350 --> 00:20:48.730 align:start position:0%
+ 
+ 
+
+00:20:48.730 --> 00:20:49.210 align:start position:0%
+ 
+ 
+
+00:20:49.210 --> 00:20:51.790 align:start position:0%
+ 
+ 
+
+00:20:51.790 --> 00:20:53.440 align:start position:0%
+ 
+ 
+
+00:20:53.440 --> 00:20:55.750 align:start position:0%
+ 
+ 
+
+00:20:55.750 --> 00:20:58.750 align:start position:0%
+ 
+ 
+
+00:20:58.750 --> 00:21:00.400 align:start position:0%
+ 
+ 
+
+00:21:00.400 --> 00:21:02.560 align:start position:0%
+ 
+ 
+
+00:21:02.560 --> 00:21:04.330 align:start position:0%
+ 
+ 
+
+00:21:04.330 --> 00:21:07.600 align:start position:0%
+ 
+ 
+
+00:21:07.600 --> 00:21:08.710 align:start position:0%
+ 
+ 
+
+00:21:08.710 --> 00:21:10.420 align:start position:0%
+ 
+ 
+
+00:21:10.420 --> 00:21:13.330 align:start position:0%
+ 
+ 
+
+00:21:13.330 --> 00:21:14.920 align:start position:0%
+ 
+ 
+
+00:21:14.920 --> 00:21:17.440 align:start position:0%
+ 
+ 
+
+00:21:17.440 --> 00:21:20.230 align:start position:0%
+ 
+ 
+
+00:21:20.230 --> 00:21:22.510 align:start position:0%
+ 
+ 
+
+00:21:22.510 --> 00:21:24.790 align:start position:0%
+ 
+ 
+
+00:21:24.790 --> 00:21:26.950 align:start position:0%
+ 
+ 
+
+00:21:26.950 --> 00:21:29.770 align:start position:0%
+ 
+ 
+
+00:21:29.770 --> 00:21:31.360 align:start position:0%
+ 
+ 
+
+00:21:31.360 --> 00:21:32.020 align:start position:0%
+ 
+ 
+
+00:21:32.020 --> 00:21:34.810 align:start position:0%
+ 
+ 
+
+00:21:34.810 --> 00:21:37.330 align:start position:0%
+ 
+ 
+
+00:21:37.330 --> 00:21:41.230 align:start position:0%
+ 
+ 
+
+00:21:41.230 --> 00:21:42.910 align:start position:0%
+ 
+ 
+
+00:21:42.910 --> 00:21:45.280 align:start position:0%
+ 
+ 
+
+00:21:45.280 --> 00:21:48.130 align:start position:0%
+ 
+ 
+
+00:21:48.130 --> 00:21:49.900 align:start position:0%
+ 
+ 
+
+00:21:49.900 --> 00:21:52.300 align:start position:0%
+ 
+ 
+
+00:21:52.300 --> 00:21:54.940 align:start position:0%
+ 
+ 
+
+00:21:54.940 --> 00:21:56.800 align:start position:0%
+ 
+ 
+
+00:21:56.800 --> 00:21:58.900 align:start position:0%
+ 
+ 
+
+00:21:58.900 --> 00:22:02.110 align:start position:0%
+ 
+ 
+
+00:22:02.110 --> 00:22:04.480 align:start position:0%
+ 
+ 
+
+00:22:04.480 --> 00:22:04.490 align:start position:0%
+ 
+ 
+
+00:22:04.490 --> 00:22:05.680 align:start position:0%
+ 
+
+
+00:22:05.680 --> 00:22:07.180 align:start position:0%
+ 
+ 
+
+00:22:07.180 --> 00:22:08.639 align:start position:0%
+ 
+ 
+
+00:22:08.639 --> 00:22:12.940 align:start position:0%
+ 
+ 
+
+00:22:12.940 --> 00:22:18.009 align:start position:0%
+ 
+ 
+
+00:22:18.009 --> 00:22:19.840 align:start position:0%
+ 
+ 
+
+00:22:19.840 --> 00:22:23.350 align:start position:0%
+ 
+ 
+
+00:22:23.350 --> 00:22:26.680 align:start position:0%
+ 
+ 
+
+00:22:26.680 --> 00:22:28.720 align:start position:0%
+ 
+ 
+
+00:22:28.720 --> 00:22:30.879 align:start position:0%
+ 
+ 
+
+00:22:30.879 --> 00:22:33.759 align:start position:0%
+ 
+ 
+
+00:22:33.759 --> 00:22:35.139 align:start position:0%
+ 
+ 
+
+00:22:35.139 --> 00:22:36.610 align:start position:0%
+ 
+ 
+
+00:22:36.610 --> 00:22:38.529 align:start position:0%
+ 
+ 
+
+00:22:38.529 --> 00:22:41.110 align:start position:0%
+ 
+ 
+
+00:22:41.110 --> 00:22:42.940 align:start position:0%
+ 
+ 
+
+00:22:42.940 --> 00:22:44.950 align:start position:0%
+ 
+ 
+
+00:22:44.950 --> 00:22:46.180 align:start position:0%
+ 
+ 
+
+00:22:46.180 --> 00:22:48.070 align:start position:0%
+ 
+ 
+
+00:22:48.070 --> 00:22:50.289 align:start position:0%
+ 
+ 
+
+00:22:50.289 --> 00:22:52.659 align:start position:0%
+ 
+ 
+
+00:22:52.659 --> 00:22:54.100 align:start position:0%
+ 
+ 
+
+00:22:54.100 --> 00:22:56.470 align:start position:0%
+ 
+ 
+
+00:22:56.470 --> 00:23:00.070 align:start position:0%
+ 
+ 
+
+00:23:00.070 --> 00:23:02.830 align:start position:0%
+ 
+ 
+
+00:23:02.830 --> 00:23:04.720 align:start position:0%
+ 
+ 
+
+00:23:04.720 --> 00:23:06.909 align:start position:0%
+ 
+ 
+
+00:23:06.909 --> 00:23:10.180 align:start position:0%
+ 
+ 
+
+00:23:10.180 --> 00:23:12.460 align:start position:0%
+ 
+ 
+
+00:23:12.460 --> 00:23:14.769 align:start position:0%
+ 
+ 
+
+00:23:14.769 --> 00:23:16.210 align:start position:0%
+ 
+ 
+
+00:23:16.210 --> 00:23:17.619 align:start position:0%
+ 
+ 
+
+00:23:17.619 --> 00:23:20.049 align:start position:0%
+ 
+ 
+
+00:23:20.049 --> 00:23:23.009 align:start position:0%
+ 
+ 
+
+00:23:23.009 --> 00:23:25.840 align:start position:0%
+ 
+ 
+
+00:23:25.840 --> 00:23:28.060 align:start position:0%
+ 
+ 
+
+00:23:28.060 --> 00:23:31.860 align:start position:0%
+ 
+ 
+
+00:23:31.860 --> 00:23:35.080 align:start position:0%
+ 
+ 
+
+00:23:35.080 --> 00:23:37.539 align:start position:0%
+ 
+ 
+
+00:23:37.539 --> 00:23:39.610 align:start position:0%
+ 
+ 
+
+00:23:39.610 --> 00:23:42.600 align:start position:0%
+ 
+ 
+
+00:23:42.600 --> 00:23:45.399 align:start position:0%
+ 
+ 
+
+00:23:45.399 --> 00:23:48.519 align:start position:0%
+ 
+ 
+
+00:23:48.519 --> 00:23:50.590 align:start position:0%
+ 
+ 
+
+00:23:50.590 --> 00:23:53.529 align:start position:0%
+ 
+ 
+
+00:23:53.529 --> 00:23:56.710 align:start position:0%
+ 
+ 
+
+00:23:56.710 --> 00:23:58.779 align:start position:0%
+ 
+ 
+
+00:23:58.779 --> 00:24:00.669 align:start position:0%
+ 
+ 
+
+00:24:00.669 --> 00:24:02.710 align:start position:0%
+ 
+ 
+
+00:24:02.710 --> 00:24:04.710 align:start position:0%
+ 
+ 
+
+00:24:04.710 --> 00:24:07.779 align:start position:0%
+ 
+ 
+
+00:24:07.779 --> 00:24:09.070 align:start position:0%
+ 
+ 
+
+00:24:09.070 --> 00:24:11.320 align:start position:0%
+ 
+ 
+
+00:24:11.320 --> 00:24:15.789 align:start position:0%
+ 
+ 
+
+00:24:15.789 --> 00:24:18.960 align:start position:0%
+ 
+ 
+
+00:24:18.960 --> 00:24:21.210 align:start position:0%
+ 
+ 
+
+00:24:21.210 --> 00:24:22.640 align:start position:0%
+ 
+ 
+
+00:24:22.640 --> 00:24:25.140 align:start position:0%
+ 
+ 
+
+00:24:25.140 --> 00:24:27.510 align:start position:0%
+ 
+ 
+
+00:24:27.510 --> 00:24:30.720 align:start position:0%
+ 
+ 
+
+00:24:30.720 --> 00:24:33.360 align:start position:0%
+ 
+ 
+
+00:24:33.360 --> 00:24:36.330 align:start position:0%
+ 
+ 
+
+00:24:36.330 --> 00:24:39.450 align:start position:0%
+ 
+ 
+
+00:24:39.450 --> 00:24:41.669 align:start position:0%
+ 
+ 
+
+00:24:41.669 --> 00:24:43.049 align:start position:0%
+ 
+ 
+
+00:24:43.049 --> 00:24:45.419 align:start position:0%
+ 
+ 
+
+00:24:45.419 --> 00:24:47.669 align:start position:0%
+ 
+ 
+
+00:24:47.669 --> 00:24:51.029 align:start position:0%
+ 
+ 
+
+00:24:51.029 --> 00:24:52.289 align:start position:0%
+ 
+ 
+
+00:24:52.289 --> 00:24:54.330 align:start position:0%
+ 
+ 
+
+00:24:54.330 --> 00:24:57.090 align:start position:0%
+ 
+ 
+
+00:24:57.090 --> 00:24:59.430 align:start position:0%
+ 
+ 
+
+00:24:59.430 --> 00:25:01.020 align:start position:0%
+ 
+ 
+
+00:25:01.020 --> 00:25:03.960 align:start position:0%
+ 
+ 
+
+00:25:03.960 --> 00:25:07.799 align:start position:0%
+ 
+ 
+
+00:25:07.799 --> 00:25:09.750 align:start position:0%
+ 
+ 
+
+00:25:09.750 --> 00:25:11.970 align:start position:0%
+ 
+ 
+
+00:25:11.970 --> 00:25:13.409 align:start position:0%
+ 
+ 
+
+00:25:13.409 --> 00:25:17.940 align:start position:0%
+ 
+ 
+
+00:25:17.940 --> 00:25:21.000 align:start position:0%
+ 
+ 
+
+00:25:21.000 --> 00:25:23.659 align:start position:0%
+ 
+ 
+
+00:25:23.659 --> 00:25:26.250 align:start position:0%
+ 
+ 
+
+00:25:26.250 --> 00:25:27.990 align:start position:0%
+ 
+ 
+
+00:25:27.990 --> 00:25:30.330 align:start position:0%
+ 
+ 
+
+00:25:30.330 --> 00:25:32.220 align:start position:0%
+ 
+ 
+
+00:25:32.220 --> 00:25:35.370 align:start position:0%
+ 
+ 
+
+00:25:35.370 --> 00:25:37.919 align:start position:0%
+ 
+ 
+
+00:25:37.919 --> 00:25:41.220 align:start position:0%
+ 
+ 
+
+00:25:41.220 --> 00:25:44.039 align:start position:0%
+ 
+ 
+
+00:25:44.039 --> 00:25:47.880 align:start position:0%
+ 
+ 
+
+00:25:47.880 --> 00:25:49.590 align:start position:0%
+ 
+ 
+
+00:25:49.590 --> 00:25:50.789 align:start position:0%
+ 
+ 
+
+00:25:50.789 --> 00:25:53.490 align:start position:0%
+ 
+ 
+
+00:25:53.490 --> 00:25:55.590 align:start position:0%
+ 
+ 
+
+00:25:55.590 --> 00:25:58.830 align:start position:0%
+ 
+ 
+
+00:25:58.830 --> 00:26:03.810 align:start position:0%
+ 
+ 
+
+00:26:03.810 --> 00:26:05.279 align:start position:0%
+ 
+ 
+
+00:26:05.279 --> 00:26:09.330 align:start position:0%
+ 
+ 
+
+00:26:09.330 --> 00:26:09.340 align:start position:0%
+ 
+ 
+
+00:26:09.340 --> 00:26:09.899 align:start position:0%
+ 
+
+
+00:26:09.899 --> 00:26:12.299 align:start position:0%
+ 
+ 
+
+00:26:12.299 --> 00:26:16.440 align:start position:0%
+ 
+ 
+
+00:26:16.440 --> 00:26:20.039 align:start position:0%
+ 
+ 
+
+00:26:20.039 --> 00:26:23.880 align:start position:0%
+ 
+ 
+
+00:26:23.880 --> 00:26:26.190 align:start position:0%
+ 
+ 
+
+00:26:26.190 --> 00:26:28.919 align:start position:0%
+ 
+ 
+
+00:26:28.919 --> 00:26:30.539 align:start position:0%
+ 
+ 
+
+00:26:30.539 --> 00:26:32.340 align:start position:0%
+ 
+ 
+
+00:26:32.340 --> 00:26:34.710 align:start position:0%
+ 
+ 
+
+00:26:34.710 --> 00:26:37.470 align:start position:0%
+ 
+ 
+
+00:26:37.470 --> 00:26:40.830 align:start position:0%
+ 
+ 
+
+00:26:40.830 --> 00:26:42.900 align:start position:0%
+ 
+ 
+
+00:26:42.900 --> 00:26:45.600 align:start position:0%
+ 
+ 
+
+00:26:45.600 --> 00:26:49.890 align:start position:0%
+ 
+ 
+
+00:26:49.890 --> 00:26:52.680 align:start position:0%
+ 
+ 
+
+00:26:52.680 --> 00:26:55.620 align:start position:0%
+ 
+ 
+
+00:26:55.620 --> 00:26:59.820 align:start position:0%
+ 
+ 
+
+00:26:59.820 --> 00:27:01.770 align:start position:0%
+ 
+ 
+
+00:27:01.770 --> 00:27:05.399 align:start position:0%
+ 
+ 
+
+00:27:05.399 --> 00:27:07.230 align:start position:0%
+ 
+ 
+
+00:27:07.230 --> 00:27:08.760 align:start position:0%
+ 
+ 
+
+00:27:08.760 --> 00:27:10.500 align:start position:0%
+ 
+ 
+
+00:27:10.500 --> 00:27:13.649 align:start position:0%
+ 
+ 
+
+00:27:13.649 --> 00:27:16.770 align:start position:0%
+ 
+ 
+
+00:27:16.770 --> 00:27:20.130 align:start position:0%
+ 
+ 
+
+00:27:20.130 --> 00:27:23.070 align:start position:0%
+ 
+ 
+
+00:27:23.070 --> 00:27:24.870 align:start position:0%
+ 
+ 
+
+00:27:24.870 --> 00:27:27.990 align:start position:0%
+ 
+ 
+
+00:27:27.990 --> 00:27:29.669 align:start position:0%
+ 
+ 
+
+00:27:29.669 --> 00:27:29.679 align:start position:0%
+ 
+ 
+
+00:27:29.679 --> 00:27:30.529 align:start position:0%
+ 
+
+
+00:27:30.529 --> 00:27:33.240 align:start position:0%
+ 
+ 
+
+00:27:33.240 --> 00:27:34.740 align:start position:0%
+ 
+ 
+
+00:27:34.740 --> 00:27:38.279 align:start position:0%
+ 
+ 
+
+00:27:38.279 --> 00:27:40.200 align:start position:0%
+ 
+ 
+
+00:27:40.200 --> 00:27:42.330 align:start position:0%
+ 
+ 
+
+00:27:42.330 --> 00:27:44.730 align:start position:0%
+ 
+ 
+
+00:27:44.730 --> 00:27:47.610 align:start position:0%
+ 
+ 
+
+00:27:47.610 --> 00:27:49.230 align:start position:0%
+ 
+ 
+
+00:27:49.230 --> 00:27:51.600 align:start position:0%
+ 
+ 
+
+00:27:51.600 --> 00:27:55.320 align:start position:0%
+ 
+ 
+
+00:27:55.320 --> 00:27:57.120 align:start position:0%
+ 
+ 
+
+00:27:57.120 --> 00:27:59.430 align:start position:0%
+ 
+ 
+
+00:27:59.430 --> 00:28:02.700 align:start position:0%
+ 
+ 
+
+00:28:02.700 --> 00:28:05.130 align:start position:0%
+ 
+ 
+
+00:28:05.130 --> 00:28:06.990 align:start position:0%
+ 
+ 
+
+00:28:06.990 --> 00:28:08.940 align:start position:0%
+ 
+ 
+
+00:28:08.940 --> 00:28:10.560 align:start position:0%
+ 
+ 
+
+00:28:10.560 --> 00:28:12.240 align:start position:0%
+ 
+ 
+
+00:28:12.240 --> 00:28:14.520 align:start position:0%
+ 
+ 
+
+00:28:14.520 --> 00:28:15.899 align:start position:0%
+ 
+ 
+
+00:28:15.899 --> 00:28:19.640 align:start position:0%
+ 
+ 
+
+00:28:19.640 --> 00:28:23.789 align:start position:0%
+ 
+ 
+
+00:28:23.789 --> 00:28:26.310 align:start position:0%
+ 
+ 
+
+00:28:26.310 --> 00:28:31.049 align:start position:0%
+ 
+ 
+
+00:28:31.049 --> 00:28:32.850 align:start position:0%
+ 
+ 
+
+00:28:32.850 --> 00:28:34.620 align:start position:0%
+ 
+ 
+
+00:28:34.620 --> 00:28:36.600 align:start position:0%
+ 
+ 
+
+00:28:36.600 --> 00:28:54.660 align:start position:0%
+ 
+ 
+
+00:28:54.660 --> 00:28:58.240 align:start position:0%
+ 
+ 
+
+00:28:58.240 --> 00:29:01.300 align:start position:0%
+ 
+ 
+
+00:29:01.300 --> 00:29:06.100 align:start position:0%
+ 
+ 
+
+00:29:06.100 --> 00:29:08.170 align:start position:0%
+ 
+ 
+
+00:29:08.170 --> 00:29:09.700 align:start position:0%
+ 
+ 
+
+00:29:09.700 --> 00:29:12.730 align:start position:0%
+ 
+ 
+
+00:29:12.730 --> 00:29:14.500 align:start position:0%
+ 
+ 
+
+00:29:14.500 --> 00:29:16.090 align:start position:0%
+ 
+ 
+
+00:29:16.090 --> 00:29:17.980 align:start position:0%
+ 
+ 
+
+00:29:17.980 --> 00:29:21.430 align:start position:0%
+ 
+ 
+
+00:29:21.430 --> 00:29:23.920 align:start position:0%
+ 
+ 
+
+00:29:23.920 --> 00:29:26.620 align:start position:0%
+ 
+ 
+
+00:29:26.620 --> 00:29:28.840 align:start position:0%
+ 
+ 
+
+00:29:28.840 --> 00:29:30.760 align:start position:0%
+ 
+ 
+
+00:29:30.760 --> 00:29:32.320 align:start position:0%
+ 
+ 
+
+00:29:32.320 --> 00:29:34.510 align:start position:0%
+ 
+ 
+
+00:29:34.510 --> 00:29:37.030 align:start position:0%
+ 
+ 
+
+00:29:37.030 --> 00:29:41.220 align:start position:0%
+ 
+ 
+
+00:29:41.220 --> 00:29:43.900 align:start position:0%
+ 
+ 
+
+00:29:43.900 --> 00:29:45.730 align:start position:0%
+ 
+ 
+
+00:29:45.730 --> 00:29:58.920 align:start position:0%
+ 
+ 
+
+00:29:58.920 --> 00:30:01.900 align:start position:0%
+ 
+ 
+
+00:30:01.900 --> 00:30:05.410 align:start position:0%
+ 
+ 
+
+00:30:05.410 --> 00:30:07.930 align:start position:0%
+ 
+ 
+
+00:30:07.930 --> 00:30:09.820 align:start position:0%
+ 
+ 
+
+00:30:09.820 --> 00:30:11.980 align:start position:0%
+ 
+ 
+
+00:30:11.980 --> 00:30:14.110 align:start position:0%
+ 
+ 
+
+00:30:14.110 --> 00:30:16.750 align:start position:0%
+ 
+ 
+
+00:30:16.750 --> 00:30:19.570 align:start position:0%
+ 
+ 
+
+00:30:19.570 --> 00:30:21.250 align:start position:0%
+ 
+ 
+
+00:30:21.250 --> 00:30:23.350 align:start position:0%
+ 
+ 
+
+00:30:23.350 --> 00:30:24.970 align:start position:0%
+ 
+ 
+
+00:30:24.970 --> 00:30:27.160 align:start position:0%
+ 
+ 
+
+00:30:27.160 --> 00:30:28.930 align:start position:0%
+ 
+ 
+
+00:30:28.930 --> 00:30:31.900 align:start position:0%
+ 
+ 
+
+00:30:31.900 --> 00:30:33.070 align:start position:0%
+ 
+ 
+
+00:30:33.070 --> 00:30:35.650 align:start position:0%
+ 
+ 
+
+00:30:35.650 --> 00:30:37.150 align:start position:0%
+ 
+ 
+
+00:30:37.150 --> 00:30:38.650 align:start position:0%
+ 
+ 
+
+00:30:38.650 --> 00:30:41.560 align:start position:0%
+ 
+ 
+
+00:30:41.560 --> 00:30:43.690 align:start position:0%
+ 
+ 
+
+00:30:43.690 --> 00:30:48.280 align:start position:0%
+ 
+ 
+
+00:30:48.280 --> 00:30:50.050 align:start position:0%
+ 
+ 
+
+00:30:50.050 --> 00:30:51.670 align:start position:0%
+ 
+ 
+
+00:30:51.670 --> 00:30:53.140 align:start position:0%
+ 
+ 
+
+00:30:53.140 --> 00:30:55.810 align:start position:0%
+ 
+ 
+
+00:30:55.810 --> 00:30:59.410 align:start position:0%
+ 
+ 
+
+00:30:59.410 --> 00:31:01.420 align:start position:0%
+ 
+ 
+
+00:31:01.420 --> 00:31:05.290 align:start position:0%
+ 
+ 
+
+00:31:05.290 --> 00:31:09.850 align:start position:0%
+ 
+ 
+
+00:31:09.850 --> 00:31:13.720 align:start position:0%
+ 
+ 
+
+00:31:13.720 --> 00:31:15.490 align:start position:0%
+ 
+ 
+
+00:31:15.490 --> 00:31:17.260 align:start position:0%
+ 
+ 
+
+00:31:17.260 --> 00:31:19.510 align:start position:0%
+ 
+ 
+
+00:31:19.510 --> 00:31:22.780 align:start position:0%
+ 
+ 
+
+00:31:22.780 --> 00:31:24.580 align:start position:0%
+ 
+ 
+
+00:31:24.580 --> 00:31:26.590 align:start position:0%
+ 
+ 
+
+00:31:26.590 --> 00:31:28.270 align:start position:0%
+ 
+ 
+
+00:31:28.270 --> 00:31:31.450 align:start position:0%
+ 
+ 
+
+00:31:31.450 --> 00:31:33.400 align:start position:0%
+ 
+ 
+
+00:31:33.400 --> 00:31:37.000 align:start position:0%
+ 
+ 
+
+00:31:37.000 --> 00:31:40.090 align:start position:0%
+ 
+ 
+
+00:31:40.090 --> 00:31:40.990 align:start position:0%
+ 
+ 
+
+00:31:40.990 --> 00:31:42.910 align:start position:0%
+ 
+ 
+
+00:31:42.910 --> 00:31:45.730 align:start position:0%
+ 
+ 
+
+00:31:45.730 --> 00:31:47.800 align:start position:0%
+ 
+ 
+
+00:31:47.800 --> 00:31:50.170 align:start position:0%
+ 
+ 
+
+00:31:50.170 --> 00:31:52.020 align:start position:0%
+ 
+ 
+
+00:31:52.020 --> 00:31:56.650 align:start position:0%
+ 
+ 
+
+00:31:56.650 --> 00:31:59.880 align:start position:0%
+ 
+ 
+
+00:31:59.880 --> 00:32:02.110 align:start position:0%
+ 
+ 
+
+00:32:02.110 --> 00:32:04.270 align:start position:0%
+ 
+ 
+
+00:32:04.270 --> 00:32:06.220 align:start position:0%
+ 
+ 
+
+00:32:06.220 --> 00:32:09.820 align:start position:0%
+ 
+ 
+
+00:32:09.820 --> 00:32:13.540 align:start position:0%
+ 
+ 
+
+00:32:13.540 --> 00:32:14.770 align:start position:0%
+ 
+ 
+
+00:32:14.770 --> 00:32:17.530 align:start position:0%
+ 
+ 
+
+00:32:17.530 --> 00:32:19.390 align:start position:0%
+ 
+ 
+
+00:32:19.390 --> 00:32:23.490 align:start position:0%
+ 
+ 
+
+00:32:23.490 --> 00:32:25.990 align:start position:0%
+ 
+ 
+
+00:32:25.990 --> 00:32:28.780 align:start position:0%
+ 
+ 
+
+00:32:28.780 --> 00:32:31.840 align:start position:0%
+ 
+ 
+
+00:32:31.840 --> 00:32:34.750 align:start position:0%
+ 
+ 
+
+00:32:34.750 --> 00:32:37.030 align:start position:0%
+ 
+ 
+
+00:32:37.030 --> 00:32:39.850 align:start position:0%
+ 
+ 
+
+00:32:39.850 --> 00:32:45.990 align:start position:0%
+ 
+ 
+
+00:32:45.990 --> 00:32:50.110 align:start position:0%
+ 
+ 
+
+00:32:50.110 --> 00:32:52.360 align:start position:0%
+ 
+ 
+
+00:32:52.360 --> 00:32:54.880 align:start position:0%
+ 
+ 
+
+00:32:54.880 --> 00:32:56.560 align:start position:0%
+ 
+ 
+
+00:32:56.560 --> 00:32:58.330 align:start position:0%
+ 
+ 
+
+00:32:58.330 --> 00:33:00.250 align:start position:0%
+ 
+ 
+
+00:33:00.250 --> 00:33:03.600 align:start position:0%
+ 
+ 
+
+00:33:03.600 --> 00:33:06.100 align:start position:0%
+ 
+ 
+
+00:33:06.100 --> 00:33:08.470 align:start position:0%
+ 
+ 
+
+00:33:08.470 --> 00:33:11.140 align:start position:0%
+ 
+ 
+
+00:33:11.140 --> 00:33:13.360 align:start position:0%
+ 
+ 
+
+00:33:13.360 --> 00:33:15.280 align:start position:0%
+ 
+ 
+
+00:33:15.280 --> 00:33:17.020 align:start position:0%
+ 
+ 
+
+00:33:17.020 --> 00:33:18.870 align:start position:0%
+ 
+ 
+
+00:33:18.870 --> 00:33:21.460 align:start position:0%
+ 
+ 
+
+00:33:21.460 --> 00:33:24.010 align:start position:0%
+ 
+ 
+
+00:33:24.010 --> 00:33:25.900 align:start position:0%
+ 
+ 
+
+00:33:25.900 --> 00:33:27.970 align:start position:0%
+ 
+ 
+
+00:33:27.970 --> 00:33:29.590 align:start position:0%
+ 
+ 
+
+00:33:29.590 --> 00:33:31.510 align:start position:0%
+ 
+ 
+
+00:33:31.510 --> 00:33:33.850 align:start position:0%
+ 
+ 
+
+00:33:33.850 --> 00:33:41.290 align:start position:0%
+ 
+ 
+
+00:33:41.290 --> 00:33:44.410 align:start position:0%
+ 
+ 
+
+00:33:44.410 --> 00:33:47.340 align:start position:0%
+ 
+ 
+
+00:33:47.340 --> 00:33:50.020 align:start position:0%
+ 
+ 
+
+00:33:50.020 --> 00:33:51.130 align:start position:0%
+ 
+ 
+
+00:33:51.130 --> 00:33:53.230 align:start position:0%
+ 
+ 
+
+00:33:53.230 --> 00:33:57.870 align:start position:0%
+ 
+ 
+
+00:33:57.870 --> 00:34:00.659 align:start position:0%
+ 
+ 
+
+00:34:00.659 --> 00:34:05.570 align:start position:0%
+ 
+ 
+
+00:34:05.570 --> 00:34:07.830 align:start position:0%
+ 
+ 
+
+00:34:07.830 --> 00:34:10.710 align:start position:0%
+ 
+ 
+
+00:34:10.710 --> 00:34:16.919 align:start position:0%
+ 
+ 
+
+00:34:16.919 --> 00:34:19.320 align:start position:0%
+ 
+ 
+
+00:34:19.320 --> 00:34:21.240 align:start position:0%
+ 
+ 
+
+00:34:21.240 --> 00:34:24.869 align:start position:0%
+ 
+ 
+
+00:34:24.869 --> 00:34:27.530 align:start position:0%
+ 
+ 
+
+00:34:27.530 --> 00:34:33.030 align:start position:0%
+ 
+ 
+
+00:34:33.030 --> 00:34:34.590 align:start position:0%
+ 
+ 
+
+00:34:34.590 --> 00:34:37.320 align:start position:0%
+ 
+ 
+
+00:34:37.320 --> 00:34:39.540 align:start position:0%
+ 
+ 
+
+00:34:39.540 --> 00:34:43.169 align:start position:0%
+ 
+ 
+
+00:34:43.169 --> 00:34:47.310 align:start position:0%
+ 
+ 
+
+00:34:47.310 --> 00:34:49.740 align:start position:0%
+ 
+ 
+
+00:34:49.740 --> 00:34:51.090 align:start position:0%
+ 
+ 
+
+00:34:51.090 --> 00:34:52.919 align:start position:0%
+ 
+ 
+
+00:34:52.919 --> 00:34:56.760 align:start position:0%
+ 
+ 
+
+00:34:56.760 --> 00:35:00.330 align:start position:0%
+ 
+ 
+
+00:35:00.330 --> 00:35:02.340 align:start position:0%
+ 
+ 
+
+00:35:02.340 --> 00:35:04.020 align:start position:0%
+ 
+ 
+
+00:35:04.020 --> 00:35:05.730 align:start position:0%
+ 
+ 
+
+00:35:05.730 --> 00:35:07.830 align:start position:0%
+ 
+ 
+
+00:35:07.830 --> 00:35:12.320 align:start position:0%
+ 
+ 
+
+00:35:12.320 --> 00:35:16.020 align:start position:0%
+ 
+ 
+
+00:35:16.020 --> 00:35:20.310 align:start position:0%
+ 
+ 
+
+00:35:20.310 --> 00:35:25.230 align:start position:0%
+ 
+ 
+
+00:35:25.230 --> 00:35:26.880 align:start position:0%
+ 
+ 
+
+00:35:26.880 --> 00:35:31.620 align:start position:0%
+ 
+ 
+
+00:35:31.620 --> 00:35:35.970 align:start position:0%
+ 
+ 
+
+00:35:35.970 --> 00:35:38.370 align:start position:0%
+ 
+ 
+
+00:35:38.370 --> 00:35:43.620 align:start position:0%
+ 
+ 
+
+00:35:43.620 --> 00:35:46.410 align:start position:0%
+ 
+ 
+
+00:35:46.410 --> 00:35:47.980 align:start position:0%
+ 
+ 
+
+00:35:47.980 --> 00:35:50.230 align:start position:0%
+ 
+ 
+
+00:35:50.230 --> 00:35:54.520 align:start position:0%
+ 
+ 
+
+00:35:54.520 --> 00:35:57.720 align:start position:0%
+ 
+ 
+
+00:35:57.720 --> 00:36:01.030 align:start position:0%
+ 
+ 
+
+00:36:01.030 --> 00:36:02.980 align:start position:0%
+ 
+ 
+
+00:36:02.980 --> 00:36:05.859 align:start position:0%
+ 
+ 
+
+00:36:05.859 --> 00:36:07.540 align:start position:0%
+ 
+ 
+
+00:36:07.540 --> 00:36:09.099 align:start position:0%
+ 
+ 
+
+00:36:09.099 --> 00:36:10.510 align:start position:0%
+ 
+ 
+
+00:36:10.510 --> 00:36:14.079 align:start position:0%
+ 
+ 
+
+00:36:14.079 --> 00:36:16.000 align:start position:0%
+ 
+ 
+
+00:36:16.000 --> 00:36:18.099 align:start position:0%
+ 
+ 
+
+00:36:18.099 --> 00:36:20.680 align:start position:0%
+ 
+ 
+
+00:36:20.680 --> 00:36:22.630 align:start position:0%
+ 
+ 
+
+00:36:22.630 --> 00:36:26.460 align:start position:0%
+ 
+ 
+
+00:36:26.460 --> 00:36:26.470 align:start position:0%
+ 
+ 
+
+00:36:26.470 --> 00:36:30.750 align:start position:0%
+ 
+
+

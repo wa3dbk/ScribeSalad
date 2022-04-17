@@ -1,0 +1,3412 @@
+WEBVTT
+Kind: captions
+Language: en
+
+00:00:04.870 --> 00:00:07.910 align:start position:0%
+ 
+good Maureen has everybody doing today  cool  my name is Kavya and today I'm here to  talk to you about data race detection  and more specifically my favorite rese  detector tool the go race detector now  like most of you in this room I think I  write code for a living and like many of  you in this room I think that involves  reasoning about and thinking and  building highly concurrent systems  actually just just real that warm fuzzy  we're all in this together feeling how  many people here are intimately familiar  with the pains and pleasures of  multi-threaded programming about  everybody well that's not surprising in  this day and age multicores power  everything from the i5s on your laptop  to the snapdragons or AAS on your cell  phones  everything's multi-core and we want to  write multi-threaded programs to take  advantage to leverage having these  multiple cores now obviously is the  number of multi-threaded programs being  written has gone up so too has the  number and the frequency of the related  bugs concurrency bugs like data races  and deadlocks now this talk is about the  former it's about data races and just to  make sure we're all on the same page  when I say data race I mean the  situation whereby two threads or two  which maybe userspace threads like Ingo  or system threads when they concurrently  access a shared memory location and one  of those accesses is a right so here's  an example of the of a simple probably  what is the most obvious data Rees  now why is this a data race this is a  data race because there is at least one  order of execution at least one ordering  of the events which results in the wrong  answer in this case for example if G  ones read or G ones write happens before  g 2s read we're good right we get the  right answer we get the expected answer  which is one at the the value of count  at the end of the program  however if they race to read and write  the count variable so they both read  count at the same time and then one  right happens before the other right we  get the wrong answer we get two and in  this case the excesses are concurrent  and this is a data race now this simple  example is going to be a running example  for the rest of the talk  now what's not a data race a race  condition a lot of people it's a common  misconception that data races and race  conditions are the same thing but they  are not the same thing here is an  example of not a data race right because  of the lock the accesses to the count  variable are synchronized  they will never be concurrent however  this is a race condition because if the  if the if your program depends on the  value of count we don't know  deterministically ahead of time whether  the final value of count is 1 or 2 so  this is a race condition so why do we  care about data races well in addition  to being relevant data races are  interesting because they're elusive they  are non-deterministic their timing  dependent and this means they are herds  to write tests for before they happen  and even harder to track down after the  fact and that makes them somewhat  fascinating in addition they have  undefined consequences right if your  program did something wild with the  value of count and the fact that count  had a value of 2 instead of 1 could  result and some really crazy things it's  important to point out that data races  can also result in unexpected  consequences like seg faults or crashes  because the compiler assumes race free  programs and based on that assumption  and makes a number of optimizations so  if your program breaks that rule if  you're a program is not race free then  all bets are off the less feature about  data races that make them interesting is  specific to language Lego and some other  languages like Python which is that it's  almost easy to unintentionally  and unknowingly introduced data races  the goal  map implementation for example in the  standard Lib is not safe for concurrent  access and a lot of new group go  programmers just don't know this so the  obvious question at this point is given  we want to write multi-threaded programs  how can we protect our systems from the  unknown consequences of these difficult  to track down data race bugs in a manner  that's reliable and scalable so the  tried and tested method is tearing  really hard at the code is not an option  it's neither reliable or scalable at the  other extreme protecting every single  memory access with a lock or some sort  of sync primitive is not scalable and  this is where data race detectors come  in swoop in and save the day  these cool cool tools analyze the given  program either statically that is based  on the source code or dynamically as the  program is running and produce a race  report that looks like this this is the  GU race detector output run on our  example racy count program it gives us a  hella lot of information it tells us the  the write and read accesses what lines  they occurred at all sorts of useful  things  now as the developer I can just go in  and like synchronize does that one  access that is racing um so are these  reliable are these tools scalable these  are good questions the answer is  absolutely yes which is why I'm here but  we'll come to the details at the end of  the talk the more interesting question  to me at least is the how is how do  these tools detect both memory accesses  and synchronization events and detect  data races that is the question I will  aim to answer in this talk using the go  race detector as a case study  how many golang developers do we have in  the house all right sweet I can skip  over the basics section then so the go  race detector was  in version 1.1 so it's fairly recent I  y'all must be familiar with it it's  available it's it's available in the  itch tips whip go so it's available as  part of the go tool train you can just  do go build install slash whatever and  pass in the race flag and you get an  example output now the go race detector  is a dynamic race detector and it's  based on a C C++ library called thread  sanitizer that is used widely in Google  if you're familiar with it and the  reason I chose this is my case study is  because it's extremely it's  battle-proven it's found a number of  bugs it's used in industrial used  on-the-go standard library and in google  and it's open source which is nice  alright then let's get started  so the rest of this talk is structured  as follows I will first go over the  fundamentals required the prerequisite  knowledge to understand the detector we  will then dive into the deep deep belly  of the giri's detector will then take a  step back with our understanding and try  and evaluate it and then I'll wrap up  and leave time for Q&amp;A so first things  first and very quickly since most of you  here are familiar with go concurrency  and go is available through goroutines  which are uses space threads and you use  them as you use threads in other  languages now the go memory model is  important to understand because it it  gives us the language guarantees about  our program execution so it says that  all the events executed by a go routine  all the memory access events are  guaranteed to happen in order but if you  have two or more go routines and they  can currently access some shared piece  of data then their access must be  synchronized otherwise all bets are off  so how do you synchronize go routines  you may use channels you may use mutexes  and go also has support for Atomics  which is neat alright so now that we  understand  what we need we have the background  knowledge that we need about go let's  talk about the next core concept  concurrency now if we go back to our  database example we see that one of the  requisites is this concurrent memory  access but how do you determine  concurrent memory accesses with our  simple example alone this is like this  is not an easy answer right if our  program gives us the wrong answer if it  gives us two then we know that that must  have been a data race but there are  other executions possible and now you  think about a larger program and this is  a difficult question so in order to  detect data races we need to be able to  answer the question how can we determine  concurrent memory accesses let's first  think about it intuitively so this is a  similar program to our race account  example - the goroutines is the read and  write of count can that ever be  concurrent no because they are executing  in the same goroutine right we don't  have any goroutines this is single  goroutines so they they cannot be  concurrent accesses ever what about this  example this is again similar to our  racy count example and that we spawn to  goroutines or two threads if you're that  that's the way you think about it except  the sinker the access to the if count  block is synchronized with a lock what  about in this case can a read of count  and a write of count from the two  different go routines ever be concurrent  no again we know the answer in this case  is no because we have a lock what the  lock essentially does is create a  dependency edge of sorts right only one  goroutine can acquire a lock at a time  it must release the lock before the next  go routine can acquire it and since the  right and the read urn  opposite sides of this edge we can we  can conclude that they will never be  concurrent that was easy now in the  literature our intuition about  concurrency is formalized into the  happens before relation don't let the  name scare you it's essentially the same  idea happens before simply gives us a  means to order all the events in our  system which may be memory access events  like reads and writes or synchronization  events like blocks and unlocks across  threads or across go routines so it's  simply it allows us to look at all the  events across threads like across the  entire program and order them now order  both happens before has a few rules in  order to say that one event happens  before the other if you observed their  results as such one of three things must  be true either one they happen in the  same goroutine or two there's  synchronization pair and by that I mean  they are like a lock unlock on the same  mutex object or a send receive on the  same channel or three by transitivity if  we can establish that one event happens  before the other and that event happened  before third then we can conclude that  the first and the third event and the  first event happened before the third  event if we can establish this we're  good but if we can't establish that one  happens before X happens before Y and  what happens before X then Retro their  concurrent let's apply this and make  sure it actually works cuz you know why  would you believe me this is our example  with the mutex with the lock we know  that happens before B because same girl  routine by the lock unlock on the same  object principle we know that B happens  before C and so we can conclude that  a happens before D and this is the same  conclusion we came to intuitively right  we said that the right happens before  the read of the next goroutine what  about if we apply this to our receipt  count example well let's see there are  no edges in this diagram we know that a  happens before B and C happens before D  but what about a and C what about seeing  a there's no edge between them and so we  conclude that they are concurrent  another useful way to visualize happens  before is as a graph if you're if you  think in math we can establish what  happens before path it happens before  relationship if there's a path between  them if not they are concurrent or we  get so far cool so now that we know that  for data races we need to determine  concurrency and we're going to determine  concurrency but happens before the next  obvious question is well how do you  implement how do you implement happens  before and again for this we turn to the  literature and the literature says use  vector clocks our folks here familiar  with vector clocks okay so so okay so  don't let the name scare you the  concepts pretty simple the idea behind  vector clocks is each actor in your  system each go routine or each thread  has its own vector clock and the vector  clock is simply an array of n clocks  where n is the number of threads or  goroutines so we'll work through an  example quickly and each clock  corresponds to one go routine right and  these aren't clocks in the sense of time  stamps you they're logical clocks or  scalar clocks you can think of them as  versions there's certain update rules  and to understand this let's just walk  through an example so these are the  vector clocks of our to go  Jeanne's this uses the count with a lock  example now at the beginning of the  world both of them add a vector clocks  are initialized to 0  now at each event a goroutine is going  to update its index in its vector clock  it's going to incremented by 1 so at the  lock this becomes 1 0 at the read this  becomes 2 0 at the right this becomes 3  0 and then there's an unlock and this  becomes 4 0 now the unlock is a special  event because it's an event that it's a  synchronization event it's going to  establish a happens before an edge so at  this point we call this like we call  this a send event because this is an  unlock once it unlocks it it can send  though the mutex over and at this point  it sends conceptually it sends its  vector clock over as well now goroutine  2 can receive the it can receive the  mutex so it sees one event and  increments its vector clock by 1 and  again since this is a special  synchronization event a received  synchronization event it performs the  special update it takes the max of every  element in the vector clock and updates  its value its entire vector clock to  that to that max so from 0 1 this  becomes 4 1 does that make sense  cool so vector clocks are supposed to  help us determine concurrency let's see  how that happens  so applied to our program 0 0 first  event second event third event fourth  event is the unlock so it's going to  send it over now this point goroutine 2  has an event and so it's vector clock is  4 1 and its second event  now our question is does a happen before  D and the answer is if is vector clock  is less than DS vector clock they happen  before each other it happens before D is  that true here well 3 is less than 4 0  is less than 2 so yes they happen before  each other now let's apply it to a  different example a more complicated  example here we've introduced a third go  routine and we're going to establish a  happens before edge between goroutine 1  and 3 so it's going to send something  over with that send it's going to send  its vector clock over to and our  question is is D does D happen before F  what do you think no right so we're  going to compare their vector clocks and  we see that every element in D is not  less than every element in F so they  don't happen before each other what  about F happens before D for the same  reason F does not happen before D and  since they don't happen before each  other this is a concurrent access so at  this point you're probably thinking well  cool Kavya now I know all about happens  before in vector clocks but why didn't  we just go back to grad school and the  answer is because this is what the girl  race detector does it determines if two  memory accesses are concurrent by a by  establishing this happens before  relationship and to do that it uses  vector clocks this method of race  detection is called a pure happens  before detection there are other types  of detection but this is the one we'll  talk about today all right everybody  with me so far  cool  it is now time to dive into the deep  deep belly of the go race detector and  look at how it's implemented so in order  to implement happens before using bec  two clocks  what would the go race detector need to  do well let's see it will have to create  vector clocks for goroutines at  goroutine creation it will then have to  update these vector clocks at each  memory access and synchronization events  and then at each memory access event it  has to compare these vector clocks to  decide if there's a data race now if you  stare really hard at these bullet points  and maybe the coloring will give you a  hint you will see that we can  essentially tease out two subproblems a  problem of event generation and a  problem if event consumption and we're  going to make it the program's  responsibility to handle the event  generation in that every time the event  every time the program performs a  goroutine creation or a memory access  it's going to report it and the race  detector is simply going to consume  these events and take care of updating  its state it's going to create the  vector clocks it's going to update the  vector clocks it's going to take care of  all of that at a high level this is how  the go race detector is implemented its  implemented conceptually as a state  machine whereby the program as it's  running generates events and the vector  the race detector keeps program state  vector clocks etc and it updates them  based on the events it receives but  problem does this mean that we have to  modify our programs so at every memory  access at every synchronization every  goroutine creation do we have to call  out to the race detector do we have to  modify our programs well no we just saw  that we can take our program and run the  detector on it so what's going on to  answer that question let's look at the  source  so this is our racy count program  compiled without the race without race  detection enabled this is what the  assembly for the increment count  function alone looks like and this is  uninteresting this looks pretty standard  the function is defined now if we  compile the program with race detection  enabled what is the output of that look  like well for one it looks longer but  there's something else there a number of  extra calls inserted there is a race  func enter there's a race read a race  right what's happened is that the go  compiler the GC compiler has essentially  transformed our program to look like  this whoops  to look like this right it's inserted  the calls out to the race detective for  us now the way the compiler does this is  pretty standard so I'm not going to go  over the details the idea is that if  race detection is enabled it adds an  extra instrumentation pass over the ir  so it essentially modifies the code tree  generated well this is awesome it means  that we don't have to modify our  programs to track memory accesses well  what about synchronization events and  goroutine creation for that let's look  at the source of the ghost standard  library this is mutex go this gives us  the mutex sync primitive and we see that  there is an if race enabled block which  essentially calls out to erase the  Tector function Reese acquire similarly  goroutines are created in proc go write  the new proc one function is what's  responsible for creating a new Gore  from the ghost standard library and we  see the same if race enabled block with  a function call add to the grease  detector cool so what did these race  detective what do these functions do for  that let's go to the fiercest and see  what's going on well ignore the fact  that it's an assembly file we can talk  about it later but what we notice is  that there's a call to T San read this  is a call to the thread sanitizer  library the C C++ race detection library  that we talked about the goriest  detector isn't just based on TCM it's  literally built on T standard calls into  T San so at this point we know two  things we know that one the program can  generate these events for us thanks to  compiler instrumentation and the ghost  standard lib and we know that the race  detector the the magic sauce that takes  care of all the state is T San so how  does T San work well T San implements  the happens before detection so what  does it need to do if we go back to our  checklist we see that it has to do  something with vector clocks right and  to do this it uses something called  thread state it needs to compute these  happen before edges and to do that it  uses those two data structures and  finally it needs to compare vector  clocks to detect data races rather than  talking about the details let's just  look at an example so this is our  program and we'll see what T San does at  each step so the first call to spawn a  goroutine  go increment count results in a call out  to t san as we saw and at this point t  san creates this thread state now thread  state simply  contains the vector clock for that  goroutine and it returns it to the  program so it can be stored on the  goroutine alright so check we have a  vector clock for our goal routine now  we're going to do we're going to perform  a read we're going to check count equal  to zero now at this point T sound has to  do two things it has to check if there's  a data race with the previous access and  if there isn't it has to stir  information about this access for future  detections let's look at two first to do  this TCN uses something called shadow  State it essentially creates a shadow  word to track each memory access and  this stores information about the access  like this like the thread ID the clock  the position like where the access  occurred and whether the access was a  read or write now these the shadow State  is directly mapped the details don't  matter now teason performs two  optimizations to the shadow State the  first is rather than storing one per  memory access because that would just  consume a lot of memory it stores a a  fixed number of Shetty's shadow cells in  the current implementation it's for for  a region of memory let's just see how  that works so if there is a read to the  first two bytes of an applications word  this is the this is the shadow word  created now if another goroutine comes  along and writes to the last four bytes  this is the next shadow word created  does this make sense cool  the second optimization is that teason  does not store the entire vector clock  it only stores the scalar clock which is  the accessors index in its vector clock  now these two optimizations may seem  surprising you know doesn't it caused a  loss in percent  in procession it turns out to not matter  as we will see so going back to our  program so the dog the read of count  translates to the creation of this  shadow word right we have it's the  thread ID we have its clock which is  zero we have the the region red and we  have a zero because it was a read now at  the count  there is another shadow word created  that looks like this and here's where it  gets interesting  g2 comes along and g2 performs a read  and this is what its shadow word looks  like right that's G 2 0 0 8 M 0 at this  point T sounds going to check if there's  a Reese let's let's see how that's done  ok the algorithm at this point is really  is beautifully simple all you have to do  is check the accessors vector clock that  is the full vector clock and the new  shadow word with the existing shadow  word let's see how this works so what  exactly are we checking for one do the  do the access locations overlap right  are they reading if shared oh sorry  are they accessing a shared memory  location yes they are are any of these  accesses are right why yes they are are  the T IDs different are these two  different goroutines why yes they are  and lastly can we establish a happens  before edge between them well let's see  we're going to use vector clocks right  that's why we learned about them so  we're going to take G to Ector clock and  compare it to the existing shadow words  clock in order to decide that the read  happened before the right we  the shadow words vector clock to be less  than the g20 clock right is that true in  this case well no it's not well for red  checkmarks what could that possibly mean  it's a race so this point we've seen how  T San implements race detection this was  the simplest example there are obviously  other there there's obviously a lot more  T sans this hell a huge C++ library but  a few a few important notes first T San  obviously must track synchronization  events as well right now these events  are important because they establish  that happens before edges and in order  to facilitate that transfer that  exchange of vector clocks T San uses  like a sinc var which is another data  structure but the interesting thing  about this data structure is its stores  of vector clock as well so when a sender  and receiver manipulate is the vector  clock is effectively transferred over  the other points note is that T sin  tracks file descriptor memory allocators  and all of that the goal of this being  that it is able to recognize implicitly  synchronized events to so not just  explicitly by a walk of art channel but  implicit synchronizations that may  happen through file descriptors the t  san recognizes that the goal of this is  so it doesn't report false positives  speaking of false positives let's  quickly answer our remaining two  questions we know how the how it works  but we still want to know is it reliable  is t s-- is the girl race detector via t  san scalable  well first question well  season or the giri's detector does not  report false positives so if it reports  a race there is a data race there is  some order of events in your program  that would result in a database but just  because it reports a data race it  doesn't mean that it's dangerous right  there is such a thing as benign data  races and that's up to you as the  programmer to decide though the  consequences of the data race it can  miss races though and this is important  this is a property of dynamic race  detectors that they depend on the  particular execution the particular  execution of the program that you run  them on right so for example if we ran  our example program an enough number of  times there would be at least one  execution where there wouldn't be a data  race and in that case the race detector  wouldn reporter 'yes so depends on the  actual events that occur and is it  reliable well yes it's battle-proven  like we said Google LLVM there are a  number of users out there a second  question is it's scalable oh not really  this is the program slowed down at the  execution time and that is the memory  usage overhead of using the go race  detector but is it scalable with  respects to finding data races well it's  more scalable than staring at your giant  codebase and it's certainly more  scalable with respects to your programs  performance than locking everything and  shipping that to production the  recommended use of the go race detector  is in E is in your testing environment  or on your staging environment or even  like a production cannery box and it  works well for those persons for those  purposes alright that brings us to the  end of the talk thank you all for coming  as you leave today I hope you walk away  with an appreciation for the fascinating  nature of the race detection the data  Ruiz detection problem and I hope you  learned about happens before and happens  before using vector clocks and I hope  you've learned about the the go race  detector and how that works by compiler  instrumentation and this hella cool T  San runtime library thank you  we have about five minutes for questions  yes  yes  right so I rushed over the optimization  sections we can go back to that yeah  that's a great question so the so this  is the simple scheme right where you  store one shadow word per memory acts  and per memory location per access and  we you can see how that would work but  the optimization that teason performs is  foreign applications for 8 bytes of the  application so for a word in a 64-bit  but for an entire word it's tracked only  for accesses to that entire region are  tracked ok and you might think if you  throw if you only keep the last four  accesses and evicts accesses this might  affect precision and that's true right  but the race detective doesn't claim to  not report it doesn't claim to be like  foolproof right yeah so that's okay now  let's see how this actually works so say  that there's an access a read access to  those two bytes this is the shadow word  created and we know that it's dos two  bytes that were accessed because of the  position and the offset which says 0 to  know if there's another access to this  region of memory like a write of the  last four bytes that that index is 4 8  so we know that it was to a different  region yeah if there was a if there was  another region like if there was another  block that would be tracked by another  set of 4 yes that's right and these the  shadow state is stored in whoops  yeah no it's not forever it's for per  eight bytes of the application Thanks  thanks that's a good question let me  pull up  yes yeah so an alternative to dynamic  race detection is static race detection  right so instead of this instead of  grease detection the race detector  analyzed the program source and the the  advantage of this is that only a single  pass of the program is required and and  and that single pass should report all  races and so it ends up it ends up being  more effective in that sense but the  problem with it is that you have to  change your source code of infrasonic  race detection you'd have to add these  annotations to call out to the race  detector and that's obviously for a  larger code bases that's not that's not  something that they'd want to do with  respect to the potential for it in a  language like oh well I don't know if a  good reason why it hasn't been  implemented I think the reason that the  go race detector is is what it is is  because go happen like go was created at  Google and T San was widely used at  Google so at the time it came down to  choosing a race detector I believe that  was like one of the leading factors in  the decision  mm-hmm yeah  any other questions  yes so tea Sam  so Tisa and requires like help from the  compiler to run right so the GCC  compiler and go so go has two compilers  the GCC compiler and the GCC go compiler  it's not supported by GCC go but the GCC  compiler supports this in addition you  can also use T San with the later  versions of are not late anymore but  with certain versions of LLVM LLVM is  clang and with GCC and that you would  use that for race detection in C C++  yes  yes yeah yeah it's pretty cool  the other neat thing about tea Sam is  that it allows it recognizes your  customs synchronization primitive via  dynamic annotations so if you created  your own class or like your own object  and you wanted that's to behave like a  synchronization primitive in that you  wanted that to establish these happens  before edges and not report data races  on that you can arrange for tea sand to  do that by dynamic annotations which is  yeah you're probably kid yeah yeah I  think so yeah  though so this comes back to like  happens before right in order to get a  partial ordering over all the events  across goroutines you you must be able  to recognize those edges because that  that's what establishes the ordering  yes yeah exactly it's to Trent it's to  facilitate that exchange of vector  clocks because what needs to happen is  when there's a synchronization event  Tisa needs to update the thread states  right to the vector clock stored in the  thread states to reflect the fact that  that was a synchronization event yes  oh I have not because its proprietary  you can't get access to it or I would  have used it I see sorry I should be  doing this the question was how does  this compare to the Intel Intel has a  race detector what what is it called  it's called system studio or something  like that but the question was how does  the go race detector compared to the  Intel race detector and I believe it  does something by injecting I see okay  nice cool alright thank you I believe  lunch is outside
+
+00:00:07.910 --> 00:00:07.920 align:start position:0%
+good Maureen has everybody doing today  cool  my name is Kavya and today I'm here to  talk to you about data race detection  and more specifically my favorite rese  detector tool the go race detector now  like most of you in this room I think I  write code for a living and like many of  you in this room I think that involves  reasoning about and thinking and  building highly concurrent systems  actually just just real that warm fuzzy  we're all in this together feeling how  many people here are intimately familiar  with the pains and pleasures of  multi-threaded programming about  everybody well that's not surprising in  this day and age multicores power  everything from the i5s on your laptop  to the snapdragons or AAS on your cell  phones  everything's multi-core and we want to  write multi-threaded programs to take  advantage to leverage having these  multiple cores now obviously is the  number of multi-threaded programs being  written has gone up so too has the  number and the frequency of the related  bugs concurrency bugs like data races  and deadlocks now this talk is about the  former it's about data races and just to  make sure we're all on the same page  when I say data race I mean the  situation whereby two threads or two  which maybe userspace threads like Ingo  or system threads when they concurrently  access a shared memory location and one  of those accesses is a right so here's  an example of the of a simple probably  what is the most obvious data Rees  now why is this a data race this is a  data race because there is at least one  order of execution at least one ordering  of the events which results in the wrong  answer in this case for example if G  ones read or G ones write happens before  g 2s read we're good right we get the  right answer we get the expected answer  which is one at the the value of count  at the end of the program  however if they race to read and write  the count variable so they both read  count at the same time and then one  right happens before the other right we  get the wrong answer we get two and in  this case the excesses are concurrent  and this is a data race now this simple  example is going to be a running example  for the rest of the talk  now what's not a data race a race  condition a lot of people it's a common  misconception that data races and race  conditions are the same thing but they  are not the same thing here is an  example of not a data race right because  of the lock the accesses to the count  variable are synchronized  they will never be concurrent however  this is a race condition because if the  if the if your program depends on the  value of count we don't know  deterministically ahead of time whether  the final value of count is 1 or 2 so  this is a race condition so why do we  care about data races well in addition  to being relevant data races are  interesting because they're elusive they  are non-deterministic their timing  dependent and this means they are herds  to write tests for before they happen  and even harder to track down after the  fact and that makes them somewhat  fascinating in addition they have  undefined consequences right if your  program did something wild with the  value of count and the fact that count  had a value of 2 instead of 1 could  result and some really crazy things it's  important to point out that data races  can also result in unexpected  consequences like seg faults or crashes  because the compiler assumes race free  programs and based on that assumption  and makes a number of optimizations so  if your program breaks that rule if  you're a program is not race free then  all bets are off the less feature about  data races that make them interesting is  specific to language Lego and some other  languages like Python which is that it's  almost easy to unintentionally  and unknowingly introduced data races  the goal  map implementation for example in the  standard Lib is not safe for concurrent  access and a lot of new group go  programmers just don't know this so the  obvious question at this point is given  we want to write multi-threaded programs  how can we protect our systems from the  unknown consequences of these difficult  to track down data race bugs in a manner  that's reliable and scalable so the  tried and tested method is tearing  really hard at the code is not an option  it's neither reliable or scalable at the  other extreme protecting every single  memory access with a lock or some sort  of sync primitive is not scalable and  this is where data race detectors come  in swoop in and save the day  these cool cool tools analyze the given  program either statically that is based  on the source code or dynamically as the  program is running and produce a race  report that looks like this this is the  GU race detector output run on our  example racy count program it gives us a  hella lot of information it tells us the  the write and read accesses what lines  they occurred at all sorts of useful  things  now as the developer I can just go in  and like synchronize does that one  access that is racing um so are these  reliable are these tools scalable these  are good questions the answer is  absolutely yes which is why I'm here but  we'll come to the details at the end of  the talk the more interesting question  to me at least is the how is how do  these tools detect both memory accesses  and synchronization events and detect  data races that is the question I will  aim to answer in this talk using the go  race detector as a case study  how many golang developers do we have in  the house all right sweet I can skip  over the basics section then so the go  race detector was  in version 1.1 so it's fairly recent I  y'all must be familiar with it it's  available it's it's available in the  itch tips whip go so it's available as  part of the go tool train you can just  do go build install slash whatever and  pass in the race flag and you get an  example output now the go race detector  is a dynamic race detector and it's  based on a C C++ library called thread  sanitizer that is used widely in Google  if you're familiar with it and the  reason I chose this is my case study is  because it's extremely it's  battle-proven it's found a number of  bugs it's used in industrial used  on-the-go standard library and in google  and it's open source which is nice  alright then let's get started  so the rest of this talk is structured  as follows I will first go over the  fundamentals required the prerequisite  knowledge to understand the detector we  will then dive into the deep deep belly  of the giri's detector will then take a  step back with our understanding and try  and evaluate it and then I'll wrap up  and leave time for Q&amp;A so first things  first and very quickly since most of you  here are familiar with go concurrency  and go is available through goroutines  which are uses space threads and you use  them as you use threads in other  languages now the go memory model is  important to understand because it it  gives us the language guarantees about  our program execution so it says that  all the events executed by a go routine  all the memory access events are  guaranteed to happen in order but if you  have two or more go routines and they  can currently access some shared piece  of data then their access must be  synchronized otherwise all bets are off  so how do you synchronize go routines  you may use channels you may use mutexes  and go also has support for Atomics  which is neat alright so now that we  understand  what we need we have the background  knowledge that we need about go let's  talk about the next core concept  concurrency now if we go back to our  database example we see that one of the  requisites is this concurrent memory  access but how do you determine  concurrent memory accesses with our  simple example alone this is like this  is not an easy answer right if our  program gives us the wrong answer if it  gives us two then we know that that must  have been a data race but there are  other executions possible and now you  think about a larger program and this is  a difficult question so in order to  detect data races we need to be able to  answer the question how can we determine  concurrent memory accesses let's first  think about it intuitively so this is a  similar program to our race account  example - the goroutines is the read and  write of count can that ever be  concurrent no because they are executing  in the same goroutine right we don't  have any goroutines this is single  goroutines so they they cannot be  concurrent accesses ever what about this  example this is again similar to our  racy count example and that we spawn to  goroutines or two threads if you're that  that's the way you think about it except  the sinker the access to the if count  block is synchronized with a lock what  about in this case can a read of count  and a write of count from the two  different go routines ever be concurrent  no again we know the answer in this case  is no because we have a lock what the  lock essentially does is create a  dependency edge of sorts right only one  goroutine can acquire a lock at a time  it must release the lock before the next  go routine can acquire it and since the  right and the read urn  opposite sides of this edge we can we  can conclude that they will never be  concurrent that was easy now in the  literature our intuition about  concurrency is formalized into the  happens before relation don't let the  name scare you it's essentially the same  idea happens before simply gives us a  means to order all the events in our  system which may be memory access events  like reads and writes or synchronization  events like blocks and unlocks across  threads or across go routines so it's  simply it allows us to look at all the  events across threads like across the  entire program and order them now order  both happens before has a few rules in  order to say that one event happens  before the other if you observed their  results as such one of three things must  be true either one they happen in the  same goroutine or two there's  synchronization pair and by that I mean  they are like a lock unlock on the same  mutex object or a send receive on the  same channel or three by transitivity if  we can establish that one event happens  before the other and that event happened  before third then we can conclude that  the first and the third event and the  first event happened before the third  event if we can establish this we're  good but if we can't establish that one  happens before X happens before Y and  what happens before X then Retro their  concurrent let's apply this and make  sure it actually works cuz you know why  would you believe me this is our example  with the mutex with the lock we know  that happens before B because same girl  routine by the lock unlock on the same  object principle we know that B happens  before C and so we can conclude that  a happens before D and this is the same  conclusion we came to intuitively right  we said that the right happens before  the read of the next goroutine what  about if we apply this to our receipt  count example well let's see there are  no edges in this diagram we know that a  happens before B and C happens before D  but what about a and C what about seeing  a there's no edge between them and so we  conclude that they are concurrent  another useful way to visualize happens  before is as a graph if you're if you  think in math we can establish what  happens before path it happens before  relationship if there's a path between  them if not they are concurrent or we  get so far cool so now that we know that  for data races we need to determine  concurrency and we're going to determine  concurrency but happens before the next  obvious question is well how do you  implement how do you implement happens  before and again for this we turn to the  literature and the literature says use  vector clocks our folks here familiar  with vector clocks okay so so okay so  don't let the name scare you the  concepts pretty simple the idea behind  vector clocks is each actor in your  system each go routine or each thread  has its own vector clock and the vector  clock is simply an array of n clocks  where n is the number of threads or  goroutines so we'll work through an  example quickly and each clock  corresponds to one go routine right and  these aren't clocks in the sense of time  stamps you they're logical clocks or  scalar clocks you can think of them as  versions there's certain update rules  and to understand this let's just walk  through an example so these are the  vector clocks of our to go  Jeanne's this uses the count with a lock  example now at the beginning of the  world both of them add a vector clocks  are initialized to 0  now at each event a goroutine is going  to update its index in its vector clock  it's going to incremented by 1 so at the  lock this becomes 1 0 at the read this  becomes 2 0 at the right this becomes 3  0 and then there's an unlock and this  becomes 4 0 now the unlock is a special  event because it's an event that it's a  synchronization event it's going to  establish a happens before an edge so at  this point we call this like we call  this a send event because this is an  unlock once it unlocks it it can send  though the mutex over and at this point  it sends conceptually it sends its  vector clock over as well now goroutine  2 can receive the it can receive the  mutex so it sees one event and  increments its vector clock by 1 and  again since this is a special  synchronization event a received  synchronization event it performs the  special update it takes the max of every  element in the vector clock and updates  its value its entire vector clock to  that to that max so from 0 1 this  becomes 4 1 does that make sense  cool so vector clocks are supposed to  help us determine concurrency let's see  how that happens  so applied to our program 0 0 first  event second event third event fourth  event is the unlock so it's going to  send it over now this point goroutine 2  has an event and so it's vector clock is  4 1 and its second event  now our question is does a happen before  D and the answer is if is vector clock  is less than DS vector clock they happen  before each other it happens before D is  that true here well 3 is less than 4 0  is less than 2 so yes they happen before  each other now let's apply it to a  different example a more complicated  example here we've introduced a third go  routine and we're going to establish a  happens before edge between goroutine 1  and 3 so it's going to send something  over with that send it's going to send  its vector clock over to and our  question is is D does D happen before F  what do you think no right so we're  going to compare their vector clocks and  we see that every element in D is not  less than every element in F so they  don't happen before each other what  about F happens before D for the same  reason F does not happen before D and  since they don't happen before each  other this is a concurrent access so at  this point you're probably thinking well  cool Kavya now I know all about happens  before in vector clocks but why didn't  we just go back to grad school and the  answer is because this is what the girl  race detector does it determines if two  memory accesses are concurrent by a by  establishing this happens before  relationship and to do that it uses  vector clocks this method of race  detection is called a pure happens  before detection there are other types  of detection but this is the one we'll  talk about today all right everybody  with me so far  cool  it is now time to dive into the deep  deep belly of the go race detector and  look at how it's implemented so in order  to implement happens before using bec  two clocks  what would the go race detector need to  do well let's see it will have to create  vector clocks for goroutines at  goroutine creation it will then have to  update these vector clocks at each  memory access and synchronization events  and then at each memory access event it  has to compare these vector clocks to  decide if there's a data race now if you  stare really hard at these bullet points  and maybe the coloring will give you a  hint you will see that we can  essentially tease out two subproblems a  problem of event generation and a  problem if event consumption and we're  going to make it the program's  responsibility to handle the event  generation in that every time the event  every time the program performs a  goroutine creation or a memory access  it's going to report it and the race  detector is simply going to consume  these events and take care of updating  its state it's going to create the  vector clocks it's going to update the  vector clocks it's going to take care of  all of that at a high level this is how  the go race detector is implemented its  implemented conceptually as a state  machine whereby the program as it's  running generates events and the vector  the race detector keeps program state  vector clocks etc and it updates them  based on the events it receives but  problem does this mean that we have to  modify our programs so at every memory  access at every synchronization every  goroutine creation do we have to call  out to the race detector do we have to  modify our programs well no we just saw  that we can take our program and run the  detector on it so what's going on to  answer that question let's look at the  source  so this is our racy count program  compiled without the race without race  detection enabled this is what the  assembly for the increment count  function alone looks like and this is  uninteresting this looks pretty standard  the function is defined now if we  compile the program with race detection  enabled what is the output of that look  like well for one it looks longer but  there's something else there a number of  extra calls inserted there is a race  func enter there's a race read a race  right what's happened is that the go  compiler the GC compiler has essentially  transformed our program to look like  this whoops  to look like this right it's inserted  the calls out to the race detective for  us now the way the compiler does this is  pretty standard so I'm not going to go  over the details the idea is that if  race detection is enabled it adds an  extra instrumentation pass over the ir  so it essentially modifies the code tree  generated well this is awesome it means  that we don't have to modify our  programs to track memory accesses well  what about synchronization events and  goroutine creation for that let's look  at the source of the ghost standard  library this is mutex go this gives us  the mutex sync primitive and we see that  there is an if race enabled block which  essentially calls out to erase the  Tector function Reese acquire similarly  goroutines are created in proc go write  the new proc one function is what's  responsible for creating a new Gore  from the ghost standard library and we  see the same if race enabled block with  a function call add to the grease  detector cool so what did these race  detective what do these functions do for  that let's go to the fiercest and see  what's going on well ignore the fact  that it's an assembly file we can talk  about it later but what we notice is  that there's a call to T San read this  is a call to the thread sanitizer  library the C C++ race detection library  that we talked about the goriest  detector isn't just based on TCM it's  literally built on T standard calls into  T San so at this point we know two  things we know that one the program can  generate these events for us thanks to  compiler instrumentation and the ghost  standard lib and we know that the race  detector the the magic sauce that takes  care of all the state is T San so how  does T San work well T San implements  the happens before detection so what  does it need to do if we go back to our  checklist we see that it has to do  something with vector clocks right and  to do this it uses something called  thread state it needs to compute these  happen before edges and to do that it  uses those two data structures and  finally it needs to compare vector  clocks to detect data races rather than  talking about the details let's just  look at an example so this is our  program and we'll see what T San does at  each step so the first call to spawn a  goroutine  go increment count results in a call out  to t san as we saw and at this point t  san creates this thread state now thread  state simply  contains the vector clock for that  goroutine and it returns it to the  program so it can be stored on the  goroutine alright so check we have a  vector clock for our goal routine now  we're going to do we're going to perform  a read we're going to check count equal  to zero now at this point T sound has to  do two things it has to check if there's  a data race with the previous access and  if there isn't it has to stir  information about this access for future  detections let's look at two first to do  this TCN uses something called shadow  State it essentially creates a shadow  word to track each memory access and  this stores information about the access  like this like the thread ID the clock  the position like where the access  occurred and whether the access was a  read or write now these the shadow State  is directly mapped the details don't  matter now teason performs two  optimizations to the shadow State the  first is rather than storing one per  memory access because that would just  consume a lot of memory it stores a a  fixed number of Shetty's shadow cells in  the current implementation it's for for  a region of memory let's just see how  that works so if there is a read to the  first two bytes of an applications word  this is the this is the shadow word  created now if another goroutine comes  along and writes to the last four bytes  this is the next shadow word created  does this make sense cool  the second optimization is that teason  does not store the entire vector clock  it only stores the scalar clock which is  the accessors index in its vector clock  now these two optimizations may seem  surprising you know doesn't it caused a  loss in percent  in procession it turns out to not matter  as we will see so going back to our  program so the dog the read of count  translates to the creation of this  shadow word right we have it's the  thread ID we have its clock which is  zero we have the the region red and we  have a zero because it was a read now at  the count  there is another shadow word created  that looks like this and here's where it  gets interesting  g2 comes along and g2 performs a read  and this is what its shadow word looks  like right that's G 2 0 0 8 M 0 at this  point T sounds going to check if there's  a Reese let's let's see how that's done  ok the algorithm at this point is really  is beautifully simple all you have to do  is check the accessors vector clock that  is the full vector clock and the new  shadow word with the existing shadow  word let's see how this works so what  exactly are we checking for one do the  do the access locations overlap right  are they reading if shared oh sorry  are they accessing a shared memory  location yes they are are any of these  accesses are right why yes they are are  the T IDs different are these two  different goroutines why yes they are  and lastly can we establish a happens  before edge between them well let's see  we're going to use vector clocks right  that's why we learned about them so  we're going to take G to Ector clock and  compare it to the existing shadow words  clock in order to decide that the read  happened before the right we  the shadow words vector clock to be less  than the g20 clock right is that true in  this case well no it's not well for red  checkmarks what could that possibly mean  it's a race so this point we've seen how  T San implements race detection this was  the simplest example there are obviously  other there there's obviously a lot more  T sans this hell a huge C++ library but  a few a few important notes first T San  obviously must track synchronization  events as well right now these events  are important because they establish  that happens before edges and in order  to facilitate that transfer that  exchange of vector clocks T San uses  like a sinc var which is another data  structure but the interesting thing  about this data structure is its stores  of vector clock as well so when a sender  and receiver manipulate is the vector  clock is effectively transferred over  the other points note is that T sin  tracks file descriptor memory allocators  and all of that the goal of this being  that it is able to recognize implicitly  synchronized events to so not just  explicitly by a walk of art channel but  implicit synchronizations that may  happen through file descriptors the t  san recognizes that the goal of this is  so it doesn't report false positives  speaking of false positives let's  quickly answer our remaining two  questions we know how the how it works  but we still want to know is it reliable  is t s-- is the girl race detector via t  san scalable  well first question well  season or the giri's detector does not  report false positives so if it reports  a race there is a data race there is  some order of events in your program  that would result in a database but just  because it reports a data race it  doesn't mean that it's dangerous right  there is such a thing as benign data  races and that's up to you as the  programmer to decide though the  consequences of the data race it can  miss races though and this is important  this is a property of dynamic race  detectors that they depend on the  particular execution the particular  execution of the program that you run  them on right so for example if we ran  our example program an enough number of  times there would be at least one  execution where there wouldn't be a data  race and in that case the race detector  wouldn reporter 'yes so depends on the  actual events that occur and is it  reliable well yes it's battle-proven  like we said Google LLVM there are a  number of users out there a second  question is it's scalable oh not really  this is the program slowed down at the  execution time and that is the memory  usage overhead of using the go race  detector but is it scalable with  respects to finding data races well it's  more scalable than staring at your giant  codebase and it's certainly more  scalable with respects to your programs  performance than locking everything and  shipping that to production the  recommended use of the go race detector  is in E is in your testing environment  or on your staging environment or even  like a production cannery box and it  works well for those persons for those  purposes alright that brings us to the  end of the talk thank you all for coming  as you leave today I hope you walk away  with an appreciation for the fascinating  nature of the race detection the data  Ruiz detection problem and I hope you  learned about happens before and happens  before using vector clocks and I hope  you've learned about the the go race  detector and how that works by compiler  instrumentation and this hella cool T  San runtime library thank you  we have about five minutes for questions  yes  yes  right so I rushed over the optimization  sections we can go back to that yeah  that's a great question so the so this  is the simple scheme right where you  store one shadow word per memory acts  and per memory location per access and  we you can see how that would work but  the optimization that teason performs is  foreign applications for 8 bytes of the  application so for a word in a 64-bit  but for an entire word it's tracked only  for accesses to that entire region are  tracked ok and you might think if you  throw if you only keep the last four  accesses and evicts accesses this might  affect precision and that's true right  but the race detective doesn't claim to  not report it doesn't claim to be like  foolproof right yeah so that's okay now  let's see how this actually works so say  that there's an access a read access to  those two bytes this is the shadow word  created and we know that it's dos two  bytes that were accessed because of the  position and the offset which says 0 to  know if there's another access to this  region of memory like a write of the  last four bytes that that index is 4 8  so we know that it was to a different  region yeah if there was a if there was  another region like if there was another  block that would be tracked by another  set of 4 yes that's right and these the  shadow state is stored in whoops  yeah no it's not forever it's for per  eight bytes of the application Thanks  thanks that's a good question let me  pull up  yes yeah so an alternative to dynamic  race detection is static race detection  right so instead of this instead of  grease detection the race detector  analyzed the program source and the the  advantage of this is that only a single  pass of the program is required and and  and that single pass should report all  races and so it ends up it ends up being  more effective in that sense but the  problem with it is that you have to  change your source code of infrasonic  race detection you'd have to add these  annotations to call out to the race  detector and that's obviously for a  larger code bases that's not that's not  something that they'd want to do with  respect to the potential for it in a  language like oh well I don't know if a  good reason why it hasn't been  implemented I think the reason that the  go race detector is is what it is is  because go happen like go was created at  Google and T San was widely used at  Google so at the time it came down to  choosing a race detector I believe that  was like one of the leading factors in  the decision  mm-hmm yeah  any other questions  yes so tea Sam  so Tisa and requires like help from the  compiler to run right so the GCC  compiler and go so go has two compilers  the GCC compiler and the GCC go compiler  it's not supported by GCC go but the GCC  compiler supports this in addition you  can also use T San with the later  versions of are not late anymore but  with certain versions of LLVM LLVM is  clang and with GCC and that you would  use that for race detection in C C++  yes  yes yeah yeah it's pretty cool  the other neat thing about tea Sam is  that it allows it recognizes your  customs synchronization primitive via  dynamic annotations so if you created  your own class or like your own object  and you wanted that's to behave like a  synchronization primitive in that you  wanted that to establish these happens  before edges and not report data races  on that you can arrange for tea sand to  do that by dynamic annotations which is  yeah you're probably kid yeah yeah I  think so yeah  though so this comes back to like  happens before right in order to get a  partial ordering over all the events  across goroutines you you must be able  to recognize those edges because that  that's what establishes the ordering  yes yeah exactly it's to Trent it's to  facilitate that exchange of vector  clocks because what needs to happen is  when there's a synchronization event  Tisa needs to update the thread states  right to the vector clock stored in the  thread states to reflect the fact that  that was a synchronization event yes  oh I have not because its proprietary  you can't get access to it or I would  have used it I see sorry I should be  doing this the question was how does  this compare to the Intel Intel has a  race detector what what is it called  it's called system studio or something  like that but the question was how does  the go race detector compared to the  Intel race detector and I believe it  does something by injecting I see okay  nice cool alright thank you I believe  lunch is outside
+ 
+
+00:00:07.920 --> 00:00:09.780 align:start position:0%
+good Maureen has everybody doing today  cool  my name is Kavya and today I'm here to  talk to you about data race detection  and more specifically my favorite rese  detector tool the go race detector now  like most of you in this room I think I  write code for a living and like many of  you in this room I think that involves  reasoning about and thinking and  building highly concurrent systems  actually just just real that warm fuzzy  we're all in this together feeling how  many people here are intimately familiar  with the pains and pleasures of  multi-threaded programming about  everybody well that's not surprising in  this day and age multicores power  everything from the i5s on your laptop  to the snapdragons or AAS on your cell  phones  everything's multi-core and we want to  write multi-threaded programs to take  advantage to leverage having these  multiple cores now obviously is the  number of multi-threaded programs being  written has gone up so too has the  number and the frequency of the related  bugs concurrency bugs like data races  and deadlocks now this talk is about the  former it's about data races and just to  make sure we're all on the same page  when I say data race I mean the  situation whereby two threads or two  which maybe userspace threads like Ingo  or system threads when they concurrently  access a shared memory location and one  of those accesses is a right so here's  an example of the of a simple probably  what is the most obvious data Rees  now why is this a data race this is a  data race because there is at least one  order of execution at least one ordering  of the events which results in the wrong  answer in this case for example if G  ones read or G ones write happens before  g 2s read we're good right we get the  right answer we get the expected answer  which is one at the the value of count  at the end of the program  however if they race to read and write  the count variable so they both read  count at the same time and then one  right happens before the other right we  get the wrong answer we get two and in  this case the excesses are concurrent  and this is a data race now this simple  example is going to be a running example  for the rest of the talk  now what's not a data race a race  condition a lot of people it's a common  misconception that data races and race  conditions are the same thing but they  are not the same thing here is an  example of not a data race right because  of the lock the accesses to the count  variable are synchronized  they will never be concurrent however  this is a race condition because if the  if the if your program depends on the  value of count we don't know  deterministically ahead of time whether  the final value of count is 1 or 2 so  this is a race condition so why do we  care about data races well in addition  to being relevant data races are  interesting because they're elusive they  are non-deterministic their timing  dependent and this means they are herds  to write tests for before they happen  and even harder to track down after the  fact and that makes them somewhat  fascinating in addition they have  undefined consequences right if your  program did something wild with the  value of count and the fact that count  had a value of 2 instead of 1 could  result and some really crazy things it's  important to point out that data races  can also result in unexpected  consequences like seg faults or crashes  because the compiler assumes race free  programs and based on that assumption  and makes a number of optimizations so  if your program breaks that rule if  you're a program is not race free then  all bets are off the less feature about  data races that make them interesting is  specific to language Lego and some other  languages like Python which is that it's  almost easy to unintentionally  and unknowingly introduced data races  the goal  map implementation for example in the  standard Lib is not safe for concurrent  access and a lot of new group go  programmers just don't know this so the  obvious question at this point is given  we want to write multi-threaded programs  how can we protect our systems from the  unknown consequences of these difficult  to track down data race bugs in a manner  that's reliable and scalable so the  tried and tested method is tearing  really hard at the code is not an option  it's neither reliable or scalable at the  other extreme protecting every single  memory access with a lock or some sort  of sync primitive is not scalable and  this is where data race detectors come  in swoop in and save the day  these cool cool tools analyze the given  program either statically that is based  on the source code or dynamically as the  program is running and produce a race  report that looks like this this is the  GU race detector output run on our  example racy count program it gives us a  hella lot of information it tells us the  the write and read accesses what lines  they occurred at all sorts of useful  things  now as the developer I can just go in  and like synchronize does that one  access that is racing um so are these  reliable are these tools scalable these  are good questions the answer is  absolutely yes which is why I'm here but  we'll come to the details at the end of  the talk the more interesting question  to me at least is the how is how do  these tools detect both memory accesses  and synchronization events and detect  data races that is the question I will  aim to answer in this talk using the go  race detector as a case study  how many golang developers do we have in  the house all right sweet I can skip  over the basics section then so the go  race detector was  in version 1.1 so it's fairly recent I  y'all must be familiar with it it's  available it's it's available in the  itch tips whip go so it's available as  part of the go tool train you can just  do go build install slash whatever and  pass in the race flag and you get an  example output now the go race detector  is a dynamic race detector and it's  based on a C C++ library called thread  sanitizer that is used widely in Google  if you're familiar with it and the  reason I chose this is my case study is  because it's extremely it's  battle-proven it's found a number of  bugs it's used in industrial used  on-the-go standard library and in google  and it's open source which is nice  alright then let's get started  so the rest of this talk is structured  as follows I will first go over the  fundamentals required the prerequisite  knowledge to understand the detector we  will then dive into the deep deep belly  of the giri's detector will then take a  step back with our understanding and try  and evaluate it and then I'll wrap up  and leave time for Q&amp;A so first things  first and very quickly since most of you  here are familiar with go concurrency  and go is available through goroutines  which are uses space threads and you use  them as you use threads in other  languages now the go memory model is  important to understand because it it  gives us the language guarantees about  our program execution so it says that  all the events executed by a go routine  all the memory access events are  guaranteed to happen in order but if you  have two or more go routines and they  can currently access some shared piece  of data then their access must be  synchronized otherwise all bets are off  so how do you synchronize go routines  you may use channels you may use mutexes  and go also has support for Atomics  which is neat alright so now that we  understand  what we need we have the background  knowledge that we need about go let's  talk about the next core concept  concurrency now if we go back to our  database example we see that one of the  requisites is this concurrent memory  access but how do you determine  concurrent memory accesses with our  simple example alone this is like this  is not an easy answer right if our  program gives us the wrong answer if it  gives us two then we know that that must  have been a data race but there are  other executions possible and now you  think about a larger program and this is  a difficult question so in order to  detect data races we need to be able to  answer the question how can we determine  concurrent memory accesses let's first  think about it intuitively so this is a  similar program to our race account  example - the goroutines is the read and  write of count can that ever be  concurrent no because they are executing  in the same goroutine right we don't  have any goroutines this is single  goroutines so they they cannot be  concurrent accesses ever what about this  example this is again similar to our  racy count example and that we spawn to  goroutines or two threads if you're that  that's the way you think about it except  the sinker the access to the if count  block is synchronized with a lock what  about in this case can a read of count  and a write of count from the two  different go routines ever be concurrent  no again we know the answer in this case  is no because we have a lock what the  lock essentially does is create a  dependency edge of sorts right only one  goroutine can acquire a lock at a time  it must release the lock before the next  go routine can acquire it and since the  right and the read urn  opposite sides of this edge we can we  can conclude that they will never be  concurrent that was easy now in the  literature our intuition about  concurrency is formalized into the  happens before relation don't let the  name scare you it's essentially the same  idea happens before simply gives us a  means to order all the events in our  system which may be memory access events  like reads and writes or synchronization  events like blocks and unlocks across  threads or across go routines so it's  simply it allows us to look at all the  events across threads like across the  entire program and order them now order  both happens before has a few rules in  order to say that one event happens  before the other if you observed their  results as such one of three things must  be true either one they happen in the  same goroutine or two there's  synchronization pair and by that I mean  they are like a lock unlock on the same  mutex object or a send receive on the  same channel or three by transitivity if  we can establish that one event happens  before the other and that event happened  before third then we can conclude that  the first and the third event and the  first event happened before the third  event if we can establish this we're  good but if we can't establish that one  happens before X happens before Y and  what happens before X then Retro their  concurrent let's apply this and make  sure it actually works cuz you know why  would you believe me this is our example  with the mutex with the lock we know  that happens before B because same girl  routine by the lock unlock on the same  object principle we know that B happens  before C and so we can conclude that  a happens before D and this is the same  conclusion we came to intuitively right  we said that the right happens before  the read of the next goroutine what  about if we apply this to our receipt  count example well let's see there are  no edges in this diagram we know that a  happens before B and C happens before D  but what about a and C what about seeing  a there's no edge between them and so we  conclude that they are concurrent  another useful way to visualize happens  before is as a graph if you're if you  think in math we can establish what  happens before path it happens before  relationship if there's a path between  them if not they are concurrent or we  get so far cool so now that we know that  for data races we need to determine  concurrency and we're going to determine  concurrency but happens before the next  obvious question is well how do you  implement how do you implement happens  before and again for this we turn to the  literature and the literature says use  vector clocks our folks here familiar  with vector clocks okay so so okay so  don't let the name scare you the  concepts pretty simple the idea behind  vector clocks is each actor in your  system each go routine or each thread  has its own vector clock and the vector  clock is simply an array of n clocks  where n is the number of threads or  goroutines so we'll work through an  example quickly and each clock  corresponds to one go routine right and  these aren't clocks in the sense of time  stamps you they're logical clocks or  scalar clocks you can think of them as  versions there's certain update rules  and to understand this let's just walk  through an example so these are the  vector clocks of our to go  Jeanne's this uses the count with a lock  example now at the beginning of the  world both of them add a vector clocks  are initialized to 0  now at each event a goroutine is going  to update its index in its vector clock  it's going to incremented by 1 so at the  lock this becomes 1 0 at the read this  becomes 2 0 at the right this becomes 3  0 and then there's an unlock and this  becomes 4 0 now the unlock is a special  event because it's an event that it's a  synchronization event it's going to  establish a happens before an edge so at  this point we call this like we call  this a send event because this is an  unlock once it unlocks it it can send  though the mutex over and at this point  it sends conceptually it sends its  vector clock over as well now goroutine  2 can receive the it can receive the  mutex so it sees one event and  increments its vector clock by 1 and  again since this is a special  synchronization event a received  synchronization event it performs the  special update it takes the max of every  element in the vector clock and updates  its value its entire vector clock to  that to that max so from 0 1 this  becomes 4 1 does that make sense  cool so vector clocks are supposed to  help us determine concurrency let's see  how that happens  so applied to our program 0 0 first  event second event third event fourth  event is the unlock so it's going to  send it over now this point goroutine 2  has an event and so it's vector clock is  4 1 and its second event  now our question is does a happen before  D and the answer is if is vector clock  is less than DS vector clock they happen  before each other it happens before D is  that true here well 3 is less than 4 0  is less than 2 so yes they happen before  each other now let's apply it to a  different example a more complicated  example here we've introduced a third go  routine and we're going to establish a  happens before edge between goroutine 1  and 3 so it's going to send something  over with that send it's going to send  its vector clock over to and our  question is is D does D happen before F  what do you think no right so we're  going to compare their vector clocks and  we see that every element in D is not  less than every element in F so they  don't happen before each other what  about F happens before D for the same  reason F does not happen before D and  since they don't happen before each  other this is a concurrent access so at  this point you're probably thinking well  cool Kavya now I know all about happens  before in vector clocks but why didn't  we just go back to grad school and the  answer is because this is what the girl  race detector does it determines if two  memory accesses are concurrent by a by  establishing this happens before  relationship and to do that it uses  vector clocks this method of race  detection is called a pure happens  before detection there are other types  of detection but this is the one we'll  talk about today all right everybody  with me so far  cool  it is now time to dive into the deep  deep belly of the go race detector and  look at how it's implemented so in order  to implement happens before using bec  two clocks  what would the go race detector need to  do well let's see it will have to create  vector clocks for goroutines at  goroutine creation it will then have to  update these vector clocks at each  memory access and synchronization events  and then at each memory access event it  has to compare these vector clocks to  decide if there's a data race now if you  stare really hard at these bullet points  and maybe the coloring will give you a  hint you will see that we can  essentially tease out two subproblems a  problem of event generation and a  problem if event consumption and we're  going to make it the program's  responsibility to handle the event  generation in that every time the event  every time the program performs a  goroutine creation or a memory access  it's going to report it and the race  detector is simply going to consume  these events and take care of updating  its state it's going to create the  vector clocks it's going to update the  vector clocks it's going to take care of  all of that at a high level this is how  the go race detector is implemented its  implemented conceptually as a state  machine whereby the program as it's  running generates events and the vector  the race detector keeps program state  vector clocks etc and it updates them  based on the events it receives but  problem does this mean that we have to  modify our programs so at every memory  access at every synchronization every  goroutine creation do we have to call  out to the race detector do we have to  modify our programs well no we just saw  that we can take our program and run the  detector on it so what's going on to  answer that question let's look at the  source  so this is our racy count program  compiled without the race without race  detection enabled this is what the  assembly for the increment count  function alone looks like and this is  uninteresting this looks pretty standard  the function is defined now if we  compile the program with race detection  enabled what is the output of that look  like well for one it looks longer but  there's something else there a number of  extra calls inserted there is a race  func enter there's a race read a race  right what's happened is that the go  compiler the GC compiler has essentially  transformed our program to look like  this whoops  to look like this right it's inserted  the calls out to the race detective for  us now the way the compiler does this is  pretty standard so I'm not going to go  over the details the idea is that if  race detection is enabled it adds an  extra instrumentation pass over the ir  so it essentially modifies the code tree  generated well this is awesome it means  that we don't have to modify our  programs to track memory accesses well  what about synchronization events and  goroutine creation for that let's look  at the source of the ghost standard  library this is mutex go this gives us  the mutex sync primitive and we see that  there is an if race enabled block which  essentially calls out to erase the  Tector function Reese acquire similarly  goroutines are created in proc go write  the new proc one function is what's  responsible for creating a new Gore  from the ghost standard library and we  see the same if race enabled block with  a function call add to the grease  detector cool so what did these race  detective what do these functions do for  that let's go to the fiercest and see  what's going on well ignore the fact  that it's an assembly file we can talk  about it later but what we notice is  that there's a call to T San read this  is a call to the thread sanitizer  library the C C++ race detection library  that we talked about the goriest  detector isn't just based on TCM it's  literally built on T standard calls into  T San so at this point we know two  things we know that one the program can  generate these events for us thanks to  compiler instrumentation and the ghost  standard lib and we know that the race  detector the the magic sauce that takes  care of all the state is T San so how  does T San work well T San implements  the happens before detection so what  does it need to do if we go back to our  checklist we see that it has to do  something with vector clocks right and  to do this it uses something called  thread state it needs to compute these  happen before edges and to do that it  uses those two data structures and  finally it needs to compare vector  clocks to detect data races rather than  talking about the details let's just  look at an example so this is our  program and we'll see what T San does at  each step so the first call to spawn a  goroutine  go increment count results in a call out  to t san as we saw and at this point t  san creates this thread state now thread  state simply  contains the vector clock for that  goroutine and it returns it to the  program so it can be stored on the  goroutine alright so check we have a  vector clock for our goal routine now  we're going to do we're going to perform  a read we're going to check count equal  to zero now at this point T sound has to  do two things it has to check if there's  a data race with the previous access and  if there isn't it has to stir  information about this access for future  detections let's look at two first to do  this TCN uses something called shadow  State it essentially creates a shadow  word to track each memory access and  this stores information about the access  like this like the thread ID the clock  the position like where the access  occurred and whether the access was a  read or write now these the shadow State  is directly mapped the details don't  matter now teason performs two  optimizations to the shadow State the  first is rather than storing one per  memory access because that would just  consume a lot of memory it stores a a  fixed number of Shetty's shadow cells in  the current implementation it's for for  a region of memory let's just see how  that works so if there is a read to the  first two bytes of an applications word  this is the this is the shadow word  created now if another goroutine comes  along and writes to the last four bytes  this is the next shadow word created  does this make sense cool  the second optimization is that teason  does not store the entire vector clock  it only stores the scalar clock which is  the accessors index in its vector clock  now these two optimizations may seem  surprising you know doesn't it caused a  loss in percent  in procession it turns out to not matter  as we will see so going back to our  program so the dog the read of count  translates to the creation of this  shadow word right we have it's the  thread ID we have its clock which is  zero we have the the region red and we  have a zero because it was a read now at  the count  there is another shadow word created  that looks like this and here's where it  gets interesting  g2 comes along and g2 performs a read  and this is what its shadow word looks  like right that's G 2 0 0 8 M 0 at this  point T sounds going to check if there's  a Reese let's let's see how that's done  ok the algorithm at this point is really  is beautifully simple all you have to do  is check the accessors vector clock that  is the full vector clock and the new  shadow word with the existing shadow  word let's see how this works so what  exactly are we checking for one do the  do the access locations overlap right  are they reading if shared oh sorry  are they accessing a shared memory  location yes they are are any of these  accesses are right why yes they are are  the T IDs different are these two  different goroutines why yes they are  and lastly can we establish a happens  before edge between them well let's see  we're going to use vector clocks right  that's why we learned about them so  we're going to take G to Ector clock and  compare it to the existing shadow words  clock in order to decide that the read  happened before the right we  the shadow words vector clock to be less  than the g20 clock right is that true in  this case well no it's not well for red  checkmarks what could that possibly mean  it's a race so this point we've seen how  T San implements race detection this was  the simplest example there are obviously  other there there's obviously a lot more  T sans this hell a huge C++ library but  a few a few important notes first T San  obviously must track synchronization  events as well right now these events  are important because they establish  that happens before edges and in order  to facilitate that transfer that  exchange of vector clocks T San uses  like a sinc var which is another data  structure but the interesting thing  about this data structure is its stores  of vector clock as well so when a sender  and receiver manipulate is the vector  clock is effectively transferred over  the other points note is that T sin  tracks file descriptor memory allocators  and all of that the goal of this being  that it is able to recognize implicitly  synchronized events to so not just  explicitly by a walk of art channel but  implicit synchronizations that may  happen through file descriptors the t  san recognizes that the goal of this is  so it doesn't report false positives  speaking of false positives let's  quickly answer our remaining two  questions we know how the how it works  but we still want to know is it reliable  is t s-- is the girl race detector via t  san scalable  well first question well  season or the giri's detector does not  report false positives so if it reports  a race there is a data race there is  some order of events in your program  that would result in a database but just  because it reports a data race it  doesn't mean that it's dangerous right  there is such a thing as benign data  races and that's up to you as the  programmer to decide though the  consequences of the data race it can  miss races though and this is important  this is a property of dynamic race  detectors that they depend on the  particular execution the particular  execution of the program that you run  them on right so for example if we ran  our example program an enough number of  times there would be at least one  execution where there wouldn't be a data  race and in that case the race detector  wouldn reporter 'yes so depends on the  actual events that occur and is it  reliable well yes it's battle-proven  like we said Google LLVM there are a  number of users out there a second  question is it's scalable oh not really  this is the program slowed down at the  execution time and that is the memory  usage overhead of using the go race  detector but is it scalable with  respects to finding data races well it's  more scalable than staring at your giant  codebase and it's certainly more  scalable with respects to your programs  performance than locking everything and  shipping that to production the  recommended use of the go race detector  is in E is in your testing environment  or on your staging environment or even  like a production cannery box and it  works well for those persons for those  purposes alright that brings us to the  end of the talk thank you all for coming  as you leave today I hope you walk away  with an appreciation for the fascinating  nature of the race detection the data  Ruiz detection problem and I hope you  learned about happens before and happens  before using vector clocks and I hope  you've learned about the the go race  detector and how that works by compiler  instrumentation and this hella cool T  San runtime library thank you  we have about five minutes for questions  yes  yes  right so I rushed over the optimization  sections we can go back to that yeah  that's a great question so the so this  is the simple scheme right where you  store one shadow word per memory acts  and per memory location per access and  we you can see how that would work but  the optimization that teason performs is  foreign applications for 8 bytes of the  application so for a word in a 64-bit  but for an entire word it's tracked only  for accesses to that entire region are  tracked ok and you might think if you  throw if you only keep the last four  accesses and evicts accesses this might  affect precision and that's true right  but the race detective doesn't claim to  not report it doesn't claim to be like  foolproof right yeah so that's okay now  let's see how this actually works so say  that there's an access a read access to  those two bytes this is the shadow word  created and we know that it's dos two  bytes that were accessed because of the  position and the offset which says 0 to  know if there's another access to this  region of memory like a write of the  last four bytes that that index is 4 8  so we know that it was to a different  region yeah if there was a if there was  another region like if there was another  block that would be tracked by another  set of 4 yes that's right and these the  shadow state is stored in whoops  yeah no it's not forever it's for per  eight bytes of the application Thanks  thanks that's a good question let me  pull up  yes yeah so an alternative to dynamic  race detection is static race detection  right so instead of this instead of  grease detection the race detector  analyzed the program source and the the  advantage of this is that only a single  pass of the program is required and and  and that single pass should report all  races and so it ends up it ends up being  more effective in that sense but the  problem with it is that you have to  change your source code of infrasonic  race detection you'd have to add these  annotations to call out to the race  detector and that's obviously for a  larger code bases that's not that's not  something that they'd want to do with  respect to the potential for it in a  language like oh well I don't know if a  good reason why it hasn't been  implemented I think the reason that the  go race detector is is what it is is  because go happen like go was created at  Google and T San was widely used at  Google so at the time it came down to  choosing a race detector I believe that  was like one of the leading factors in  the decision  mm-hmm yeah  any other questions  yes so tea Sam  so Tisa and requires like help from the  compiler to run right so the GCC  compiler and go so go has two compilers  the GCC compiler and the GCC go compiler  it's not supported by GCC go but the GCC  compiler supports this in addition you  can also use T San with the later  versions of are not late anymore but  with certain versions of LLVM LLVM is  clang and with GCC and that you would  use that for race detection in C C++  yes  yes yeah yeah it's pretty cool  the other neat thing about tea Sam is  that it allows it recognizes your  customs synchronization primitive via  dynamic annotations so if you created  your own class or like your own object  and you wanted that's to behave like a  synchronization primitive in that you  wanted that to establish these happens  before edges and not report data races  on that you can arrange for tea sand to  do that by dynamic annotations which is  yeah you're probably kid yeah yeah I  think so yeah  though so this comes back to like  happens before right in order to get a  partial ordering over all the events  across goroutines you you must be able  to recognize those edges because that  that's what establishes the ordering  yes yeah exactly it's to Trent it's to  facilitate that exchange of vector  clocks because what needs to happen is  when there's a synchronization event  Tisa needs to update the thread states  right to the vector clock stored in the  thread states to reflect the fact that  that was a synchronization event yes  oh I have not because its proprietary  you can't get access to it or I would  have used it I see sorry I should be  doing this the question was how does  this compare to the Intel Intel has a  race detector what what is it called  it's called system studio or something  like that but the question was how does  the go race detector compared to the  Intel race detector and I believe it  does something by injecting I see okay  nice cool alright thank you I believe  lunch is outside
+
+
+00:00:09.780 --> 00:00:12.330 align:start position:0%
+ 
+ 
+
+00:00:12.330 --> 00:00:14.370 align:start position:0%
+ 
+ 
+
+00:00:14.370 --> 00:00:16.830 align:start position:0%
+ 
+ 
+
+00:00:16.830 --> 00:00:20.310 align:start position:0%
+ 
+ 
+
+00:00:20.310 --> 00:00:22.439 align:start position:0%
+ 
+ 
+
+00:00:22.439 --> 00:00:25.380 align:start position:0%
+ 
+ 
+
+00:00:25.380 --> 00:00:27.420 align:start position:0%
+ 
+ 
+
+00:00:27.420 --> 00:00:29.310 align:start position:0%
+ 
+ 
+
+00:00:29.310 --> 00:00:32.030 align:start position:0%
+ 
+ 
+
+00:00:32.030 --> 00:00:34.650 align:start position:0%
+ 
+ 
+
+00:00:34.650 --> 00:00:37.470 align:start position:0%
+ 
+ 
+
+00:00:37.470 --> 00:00:39.210 align:start position:0%
+ 
+ 
+
+00:00:39.210 --> 00:00:41.420 align:start position:0%
+ 
+ 
+
+00:00:41.420 --> 00:00:44.490 align:start position:0%
+ 
+ 
+
+00:00:44.490 --> 00:00:47.459 align:start position:0%
+ 
+ 
+
+00:00:47.459 --> 00:00:50.040 align:start position:0%
+ 
+ 
+
+00:00:50.040 --> 00:00:52.350 align:start position:0%
+ 
+ 
+
+00:00:52.350 --> 00:00:54.900 align:start position:0%
+ 
+ 
+
+00:00:54.900 --> 00:00:54.910 align:start position:0%
+ 
+ 
+
+00:00:54.910 --> 00:00:55.319 align:start position:0%
+ 
+
+
+00:00:55.319 --> 00:00:58.290 align:start position:0%
+ 
+ 
+
+00:00:58.290 --> 00:01:00.450 align:start position:0%
+ 
+ 
+
+00:01:00.450 --> 00:01:02.310 align:start position:0%
+ 
+ 
+
+00:01:02.310 --> 00:01:04.829 align:start position:0%
+ 
+ 
+
+00:01:04.829 --> 00:01:06.900 align:start position:0%
+ 
+ 
+
+00:01:06.900 --> 00:01:08.940 align:start position:0%
+ 
+ 
+
+00:01:08.940 --> 00:01:11.340 align:start position:0%
+ 
+ 
+
+00:01:11.340 --> 00:01:14.309 align:start position:0%
+ 
+ 
+
+00:01:14.309 --> 00:01:18.330 align:start position:0%
+ 
+ 
+
+00:01:18.330 --> 00:01:21.330 align:start position:0%
+ 
+ 
+
+00:01:21.330 --> 00:01:22.800 align:start position:0%
+ 
+ 
+
+00:01:22.800 --> 00:01:25.919 align:start position:0%
+ 
+ 
+
+00:01:25.919 --> 00:01:29.010 align:start position:0%
+ 
+ 
+
+00:01:29.010 --> 00:01:31.350 align:start position:0%
+ 
+ 
+
+00:01:31.350 --> 00:01:34.410 align:start position:0%
+ 
+ 
+
+00:01:34.410 --> 00:01:37.859 align:start position:0%
+ 
+ 
+
+00:01:37.859 --> 00:01:41.430 align:start position:0%
+ 
+ 
+
+00:01:41.430 --> 00:01:44.130 align:start position:0%
+ 
+ 
+
+00:01:44.130 --> 00:01:46.290 align:start position:0%
+ 
+ 
+
+00:01:46.290 --> 00:01:49.199 align:start position:0%
+ 
+ 
+
+00:01:49.199 --> 00:01:52.370 align:start position:0%
+ 
+ 
+
+00:01:52.370 --> 00:01:55.949 align:start position:0%
+ 
+ 
+
+00:01:55.949 --> 00:01:59.370 align:start position:0%
+ 
+ 
+
+00:01:59.370 --> 00:02:04.650 align:start position:0%
+ 
+ 
+
+00:02:04.650 --> 00:02:08.639 align:start position:0%
+ 
+ 
+
+00:02:08.639 --> 00:02:12.420 align:start position:0%
+ 
+ 
+
+00:02:12.420 --> 00:02:14.130 align:start position:0%
+ 
+ 
+
+00:02:14.130 --> 00:02:16.649 align:start position:0%
+ 
+ 
+
+00:02:16.649 --> 00:02:18.309 align:start position:0%
+ 
+ 
+
+00:02:18.309 --> 00:02:21.160 align:start position:0%
+ 
+ 
+
+00:02:21.160 --> 00:02:23.110 align:start position:0%
+ 
+ 
+
+00:02:23.110 --> 00:02:25.539 align:start position:0%
+ 
+ 
+
+00:02:25.539 --> 00:02:27.250 align:start position:0%
+ 
+ 
+
+00:02:27.250 --> 00:02:30.369 align:start position:0%
+ 
+ 
+
+00:02:30.369 --> 00:02:32.140 align:start position:0%
+ 
+ 
+
+00:02:32.140 --> 00:02:34.660 align:start position:0%
+ 
+ 
+
+00:02:34.660 --> 00:02:37.000 align:start position:0%
+ 
+ 
+
+00:02:37.000 --> 00:02:38.849 align:start position:0%
+ 
+ 
+
+00:02:38.849 --> 00:02:42.910 align:start position:0%
+ 
+ 
+
+00:02:42.910 --> 00:02:46.809 align:start position:0%
+ 
+ 
+
+00:02:46.809 --> 00:02:48.819 align:start position:0%
+ 
+ 
+
+00:02:48.819 --> 00:02:50.289 align:start position:0%
+ 
+ 
+
+00:02:50.289 --> 00:02:52.030 align:start position:0%
+ 
+ 
+
+00:02:52.030 --> 00:02:54.970 align:start position:0%
+ 
+ 
+
+00:02:54.970 --> 00:02:57.909 align:start position:0%
+ 
+ 
+
+00:02:57.909 --> 00:02:59.409 align:start position:0%
+ 
+ 
+
+00:02:59.409 --> 00:03:01.839 align:start position:0%
+ 
+ 
+
+00:03:01.839 --> 00:03:06.250 align:start position:0%
+ 
+ 
+
+00:03:06.250 --> 00:03:08.229 align:start position:0%
+ 
+ 
+
+00:03:08.229 --> 00:03:09.849 align:start position:0%
+ 
+ 
+
+00:03:09.849 --> 00:03:11.890 align:start position:0%
+ 
+ 
+
+00:03:11.890 --> 00:03:14.530 align:start position:0%
+ 
+ 
+
+00:03:14.530 --> 00:03:18.220 align:start position:0%
+ 
+ 
+
+00:03:18.220 --> 00:03:21.640 align:start position:0%
+ 
+ 
+
+00:03:21.640 --> 00:03:24.249 align:start position:0%
+ 
+ 
+
+00:03:24.249 --> 00:03:26.589 align:start position:0%
+ 
+ 
+
+00:03:26.589 --> 00:03:28.629 align:start position:0%
+ 
+ 
+
+00:03:28.629 --> 00:03:30.759 align:start position:0%
+ 
+ 
+
+00:03:30.759 --> 00:03:32.710 align:start position:0%
+ 
+ 
+
+00:03:32.710 --> 00:03:34.809 align:start position:0%
+ 
+ 
+
+00:03:34.809 --> 00:03:36.429 align:start position:0%
+ 
+ 
+
+00:03:36.429 --> 00:03:38.979 align:start position:0%
+ 
+ 
+
+00:03:38.979 --> 00:03:42.129 align:start position:0%
+ 
+ 
+
+00:03:42.129 --> 00:03:44.740 align:start position:0%
+ 
+ 
+
+00:03:44.740 --> 00:03:47.319 align:start position:0%
+ 
+ 
+
+00:03:47.319 --> 00:03:49.330 align:start position:0%
+ 
+ 
+
+00:03:49.330 --> 00:03:53.020 align:start position:0%
+ 
+ 
+
+00:03:53.020 --> 00:03:55.629 align:start position:0%
+ 
+ 
+
+00:03:55.629 --> 00:03:57.719 align:start position:0%
+ 
+ 
+
+00:03:57.719 --> 00:04:00.629 align:start position:0%
+ 
+ 
+
+00:04:00.629 --> 00:04:03.640 align:start position:0%
+ 
+ 
+
+00:04:03.640 --> 00:04:06.009 align:start position:0%
+ 
+ 
+
+00:04:06.009 --> 00:04:08.559 align:start position:0%
+ 
+ 
+
+00:04:08.559 --> 00:04:11.949 align:start position:0%
+ 
+ 
+
+00:04:11.949 --> 00:04:14.589 align:start position:0%
+ 
+ 
+
+00:04:14.589 --> 00:04:19.209 align:start position:0%
+ 
+ 
+
+00:04:19.209 --> 00:04:21.939 align:start position:0%
+ 
+ 
+
+00:04:21.939 --> 00:04:24.820 align:start position:0%
+ 
+ 
+
+00:04:24.820 --> 00:04:26.830 align:start position:0%
+ 
+ 
+
+00:04:26.830 --> 00:04:29.390 align:start position:0%
+ 
+ 
+
+00:04:29.390 --> 00:04:31.719 align:start position:0%
+ 
+ 
+
+00:04:31.719 --> 00:04:33.200 align:start position:0%
+ 
+ 
+
+00:04:33.200 --> 00:04:35.150 align:start position:0%
+ 
+ 
+
+00:04:35.150 --> 00:04:37.640 align:start position:0%
+ 
+ 
+
+00:04:37.640 --> 00:04:39.920 align:start position:0%
+ 
+ 
+
+00:04:39.920 --> 00:04:43.879 align:start position:0%
+ 
+ 
+
+00:04:43.879 --> 00:04:46.700 align:start position:0%
+ 
+ 
+
+00:04:46.700 --> 00:04:48.830 align:start position:0%
+ 
+ 
+
+00:04:48.830 --> 00:04:52.400 align:start position:0%
+ 
+ 
+
+00:04:52.400 --> 00:04:55.490 align:start position:0%
+ 
+ 
+
+00:04:55.490 --> 00:04:58.550 align:start position:0%
+ 
+ 
+
+00:04:58.550 --> 00:05:02.480 align:start position:0%
+ 
+ 
+
+00:05:02.480 --> 00:05:04.520 align:start position:0%
+ 
+ 
+
+00:05:04.520 --> 00:05:06.680 align:start position:0%
+ 
+ 
+
+00:05:06.680 --> 00:05:09.290 align:start position:0%
+ 
+ 
+
+00:05:09.290 --> 00:05:11.779 align:start position:0%
+ 
+ 
+
+00:05:11.779 --> 00:05:13.850 align:start position:0%
+ 
+ 
+
+00:05:13.850 --> 00:05:16.180 align:start position:0%
+ 
+ 
+
+00:05:16.180 --> 00:05:20.000 align:start position:0%
+ 
+ 
+
+00:05:20.000 --> 00:05:21.710 align:start position:0%
+ 
+ 
+
+00:05:21.710 --> 00:05:25.550 align:start position:0%
+ 
+ 
+
+00:05:25.550 --> 00:05:28.129 align:start position:0%
+ 
+ 
+
+00:05:28.129 --> 00:05:30.350 align:start position:0%
+ 
+ 
+
+00:05:30.350 --> 00:05:33.860 align:start position:0%
+ 
+ 
+
+00:05:33.860 --> 00:05:36.320 align:start position:0%
+ 
+ 
+
+00:05:36.320 --> 00:05:38.240 align:start position:0%
+ 
+ 
+
+00:05:38.240 --> 00:05:41.420 align:start position:0%
+ 
+ 
+
+00:05:41.420 --> 00:05:43.850 align:start position:0%
+ 
+ 
+
+00:05:43.850 --> 00:05:46.100 align:start position:0%
+ 
+ 
+
+00:05:46.100 --> 00:05:47.839 align:start position:0%
+ 
+ 
+
+00:05:47.839 --> 00:05:47.849 align:start position:0%
+ 
+ 
+
+00:05:47.849 --> 00:05:48.439 align:start position:0%
+ 
+
+
+00:05:48.439 --> 00:05:51.050 align:start position:0%
+ 
+ 
+
+00:05:51.050 --> 00:05:53.420 align:start position:0%
+ 
+ 
+
+00:05:53.420 --> 00:05:58.250 align:start position:0%
+ 
+ 
+
+00:05:58.250 --> 00:06:02.120 align:start position:0%
+ 
+ 
+
+00:06:02.120 --> 00:06:04.010 align:start position:0%
+ 
+ 
+
+00:06:04.010 --> 00:06:06.830 align:start position:0%
+ 
+ 
+
+00:06:06.830 --> 00:06:08.360 align:start position:0%
+ 
+ 
+
+00:06:08.360 --> 00:06:11.089 align:start position:0%
+ 
+ 
+
+00:06:11.089 --> 00:06:14.750 align:start position:0%
+ 
+ 
+
+00:06:14.750 --> 00:06:17.870 align:start position:0%
+ 
+ 
+
+00:06:17.870 --> 00:06:21.350 align:start position:0%
+ 
+ 
+
+00:06:21.350 --> 00:06:25.010 align:start position:0%
+ 
+ 
+
+00:06:25.010 --> 00:06:27.589 align:start position:0%
+ 
+ 
+
+00:06:27.589 --> 00:06:30.350 align:start position:0%
+ 
+ 
+
+00:06:30.350 --> 00:06:32.899 align:start position:0%
+ 
+ 
+
+00:06:32.899 --> 00:06:36.260 align:start position:0%
+ 
+ 
+
+00:06:36.260 --> 00:06:40.339 align:start position:0%
+ 
+ 
+
+00:06:40.339 --> 00:06:41.610 align:start position:0%
+ 
+ 
+
+00:06:41.610 --> 00:06:46.220 align:start position:0%
+ 
+ 
+
+00:06:46.220 --> 00:06:49.260 align:start position:0%
+ 
+ 
+
+00:06:49.260 --> 00:06:51.720 align:start position:0%
+ 
+ 
+
+00:06:51.720 --> 00:06:53.610 align:start position:0%
+ 
+ 
+
+00:06:53.610 --> 00:06:55.620 align:start position:0%
+ 
+ 
+
+00:06:55.620 --> 00:06:58.110 align:start position:0%
+ 
+ 
+
+00:06:58.110 --> 00:07:00.750 align:start position:0%
+ 
+ 
+
+00:07:00.750 --> 00:07:03.480 align:start position:0%
+ 
+ 
+
+00:07:03.480 --> 00:07:06.540 align:start position:0%
+ 
+ 
+
+00:07:06.540 --> 00:07:09.990 align:start position:0%
+ 
+ 
+
+00:07:09.990 --> 00:07:13.140 align:start position:0%
+ 
+ 
+
+00:07:13.140 --> 00:07:16.170 align:start position:0%
+ 
+ 
+
+00:07:16.170 --> 00:07:18.300 align:start position:0%
+ 
+ 
+
+00:07:18.300 --> 00:07:20.940 align:start position:0%
+ 
+ 
+
+00:07:20.940 --> 00:07:23.160 align:start position:0%
+ 
+ 
+
+00:07:23.160 --> 00:07:25.290 align:start position:0%
+ 
+ 
+
+00:07:25.290 --> 00:07:27.810 align:start position:0%
+ 
+ 
+
+00:07:27.810 --> 00:07:32.000 align:start position:0%
+ 
+ 
+
+00:07:32.000 --> 00:07:36.300 align:start position:0%
+ 
+ 
+
+00:07:36.300 --> 00:07:38.550 align:start position:0%
+ 
+ 
+
+00:07:38.550 --> 00:07:40.680 align:start position:0%
+ 
+ 
+
+00:07:40.680 --> 00:07:43.050 align:start position:0%
+ 
+ 
+
+00:07:43.050 --> 00:07:45.720 align:start position:0%
+ 
+ 
+
+00:07:45.720 --> 00:07:47.700 align:start position:0%
+ 
+ 
+
+00:07:47.700 --> 00:07:50.250 align:start position:0%
+ 
+ 
+
+00:07:50.250 --> 00:07:52.050 align:start position:0%
+ 
+ 
+
+00:07:52.050 --> 00:07:54.570 align:start position:0%
+ 
+ 
+
+00:07:54.570 --> 00:07:58.380 align:start position:0%
+ 
+ 
+
+00:07:58.380 --> 00:08:01.890 align:start position:0%
+ 
+ 
+
+00:08:01.890 --> 00:08:04.170 align:start position:0%
+ 
+ 
+
+00:08:04.170 --> 00:08:06.240 align:start position:0%
+ 
+ 
+
+00:08:06.240 --> 00:08:09.840 align:start position:0%
+ 
+ 
+
+00:08:09.840 --> 00:08:11.940 align:start position:0%
+ 
+ 
+
+00:08:11.940 --> 00:08:14.700 align:start position:0%
+ 
+ 
+
+00:08:14.700 --> 00:08:18.270 align:start position:0%
+ 
+ 
+
+00:08:18.270 --> 00:08:20.040 align:start position:0%
+ 
+ 
+
+00:08:20.040 --> 00:08:22.740 align:start position:0%
+ 
+ 
+
+00:08:22.740 --> 00:08:25.310 align:start position:0%
+ 
+ 
+
+00:08:25.310 --> 00:08:27.780 align:start position:0%
+ 
+ 
+
+00:08:27.780 --> 00:08:30.870 align:start position:0%
+ 
+ 
+
+00:08:30.870 --> 00:08:33.390 align:start position:0%
+ 
+ 
+
+00:08:33.390 --> 00:08:35.430 align:start position:0%
+ 
+ 
+
+00:08:35.430 --> 00:08:37.590 align:start position:0%
+ 
+ 
+
+00:08:37.590 --> 00:08:40.700 align:start position:0%
+ 
+ 
+
+00:08:40.700 --> 00:08:43.170 align:start position:0%
+ 
+ 
+
+00:08:43.170 --> 00:08:46.740 align:start position:0%
+ 
+ 
+
+00:08:46.740 --> 00:08:50.130 align:start position:0%
+ 
+ 
+
+00:08:50.130 --> 00:08:54.720 align:start position:0%
+ 
+ 
+
+00:08:54.720 --> 00:08:54.730 align:start position:0%
+ 
+ 
+
+00:08:54.730 --> 00:08:55.420 align:start position:0%
+ 
+
+
+00:08:55.420 --> 00:08:57.460 align:start position:0%
+ 
+ 
+
+00:08:57.460 --> 00:09:00.100 align:start position:0%
+ 
+ 
+
+00:09:00.100 --> 00:09:02.490 align:start position:0%
+ 
+ 
+
+00:09:02.490 --> 00:09:05.980 align:start position:0%
+ 
+ 
+
+00:09:05.980 --> 00:09:08.920 align:start position:0%
+ 
+ 
+
+00:09:08.920 --> 00:09:12.460 align:start position:0%
+ 
+ 
+
+00:09:12.460 --> 00:09:14.910 align:start position:0%
+ 
+ 
+
+00:09:14.910 --> 00:09:18.160 align:start position:0%
+ 
+ 
+
+00:09:18.160 --> 00:09:22.060 align:start position:0%
+ 
+ 
+
+00:09:22.060 --> 00:09:24.610 align:start position:0%
+ 
+ 
+
+00:09:24.610 --> 00:09:26.650 align:start position:0%
+ 
+ 
+
+00:09:26.650 --> 00:09:28.510 align:start position:0%
+ 
+ 
+
+00:09:28.510 --> 00:09:31.120 align:start position:0%
+ 
+ 
+
+00:09:31.120 --> 00:09:33.130 align:start position:0%
+ 
+ 
+
+00:09:33.130 --> 00:09:35.019 align:start position:0%
+ 
+ 
+
+00:09:35.019 --> 00:09:38.199 align:start position:0%
+ 
+ 
+
+00:09:38.199 --> 00:09:41.139 align:start position:0%
+ 
+ 
+
+00:09:41.139 --> 00:09:44.470 align:start position:0%
+ 
+ 
+
+00:09:44.470 --> 00:09:48.790 align:start position:0%
+ 
+ 
+
+00:09:48.790 --> 00:09:53.470 align:start position:0%
+ 
+ 
+
+00:09:53.470 --> 00:09:56.320 align:start position:0%
+ 
+ 
+
+00:09:56.320 --> 00:10:00.940 align:start position:0%
+ 
+ 
+
+00:10:00.940 --> 00:10:03.220 align:start position:0%
+ 
+ 
+
+00:10:03.220 --> 00:10:10.480 align:start position:0%
+ 
+ 
+
+00:10:10.480 --> 00:10:12.280 align:start position:0%
+ 
+ 
+
+00:10:12.280 --> 00:10:13.870 align:start position:0%
+ 
+ 
+
+00:10:13.870 --> 00:10:16.570 align:start position:0%
+ 
+ 
+
+00:10:16.570 --> 00:10:19.690 align:start position:0%
+ 
+ 
+
+00:10:19.690 --> 00:10:22.360 align:start position:0%
+ 
+ 
+
+00:10:22.360 --> 00:10:25.690 align:start position:0%
+ 
+ 
+
+00:10:25.690 --> 00:10:28.660 align:start position:0%
+ 
+ 
+
+00:10:28.660 --> 00:10:32.590 align:start position:0%
+ 
+ 
+
+00:10:32.590 --> 00:10:35.199 align:start position:0%
+ 
+ 
+
+00:10:35.199 --> 00:10:37.930 align:start position:0%
+ 
+ 
+
+00:10:37.930 --> 00:10:40.120 align:start position:0%
+ 
+ 
+
+00:10:40.120 --> 00:10:42.160 align:start position:0%
+ 
+ 
+
+00:10:42.160 --> 00:10:44.460 align:start position:0%
+ 
+ 
+
+00:10:44.460 --> 00:10:48.190 align:start position:0%
+ 
+ 
+
+00:10:48.190 --> 00:10:51.760 align:start position:0%
+ 
+ 
+
+00:10:51.760 --> 00:10:54.300 align:start position:0%
+ 
+ 
+
+00:10:54.300 --> 00:10:58.240 align:start position:0%
+ 
+ 
+
+00:10:58.240 --> 00:11:00.100 align:start position:0%
+ 
+ 
+
+00:11:00.100 --> 00:11:02.829 align:start position:0%
+ 
+ 
+
+00:11:02.829 --> 00:11:05.230 align:start position:0%
+ 
+ 
+
+00:11:05.230 --> 00:11:06.750 align:start position:0%
+ 
+ 
+
+00:11:06.750 --> 00:11:09.870 align:start position:0%
+ 
+ 
+
+00:11:09.870 --> 00:11:11.550 align:start position:0%
+ 
+ 
+
+00:11:11.550 --> 00:11:17.100 align:start position:0%
+ 
+ 
+
+00:11:17.100 --> 00:11:20.130 align:start position:0%
+ 
+ 
+
+00:11:20.130 --> 00:11:23.790 align:start position:0%
+ 
+ 
+
+00:11:23.790 --> 00:11:26.430 align:start position:0%
+ 
+ 
+
+00:11:26.430 --> 00:11:28.140 align:start position:0%
+ 
+ 
+
+00:11:28.140 --> 00:11:31.980 align:start position:0%
+ 
+ 
+
+00:11:31.980 --> 00:11:34.890 align:start position:0%
+ 
+ 
+
+00:11:34.890 --> 00:11:37.950 align:start position:0%
+ 
+ 
+
+00:11:37.950 --> 00:11:40.530 align:start position:0%
+ 
+ 
+
+00:11:40.530 --> 00:11:43.620 align:start position:0%
+ 
+ 
+
+00:11:43.620 --> 00:11:46.320 align:start position:0%
+ 
+ 
+
+00:11:46.320 --> 00:11:48.990 align:start position:0%
+ 
+ 
+
+00:11:48.990 --> 00:11:51.270 align:start position:0%
+ 
+ 
+
+00:11:51.270 --> 00:11:54.450 align:start position:0%
+ 
+ 
+
+00:11:54.450 --> 00:11:57.950 align:start position:0%
+ 
+ 
+
+00:11:57.950 --> 00:12:00.810 align:start position:0%
+ 
+ 
+
+00:12:00.810 --> 00:12:04.200 align:start position:0%
+ 
+ 
+
+00:12:04.200 --> 00:12:08.070 align:start position:0%
+ 
+ 
+
+00:12:08.070 --> 00:12:10.980 align:start position:0%
+ 
+ 
+
+00:12:10.980 --> 00:12:14.370 align:start position:0%
+ 
+ 
+
+00:12:14.370 --> 00:12:16.710 align:start position:0%
+ 
+ 
+
+00:12:16.710 --> 00:12:19.710 align:start position:0%
+ 
+ 
+
+00:12:19.710 --> 00:12:21.990 align:start position:0%
+ 
+ 
+
+00:12:21.990 --> 00:12:26.010 align:start position:0%
+ 
+ 
+
+00:12:26.010 --> 00:12:30.240 align:start position:0%
+ 
+ 
+
+00:12:30.240 --> 00:12:33.030 align:start position:0%
+ 
+ 
+
+00:12:33.030 --> 00:12:35.400 align:start position:0%
+ 
+ 
+
+00:12:35.400 --> 00:12:36.900 align:start position:0%
+ 
+ 
+
+00:12:36.900 --> 00:12:38.520 align:start position:0%
+ 
+ 
+
+00:12:38.520 --> 00:12:42.060 align:start position:0%
+ 
+ 
+
+00:12:42.060 --> 00:12:46.020 align:start position:0%
+ 
+ 
+
+00:12:46.020 --> 00:12:48.480 align:start position:0%
+ 
+ 
+
+00:12:48.480 --> 00:12:52.680 align:start position:0%
+ 
+ 
+
+00:12:52.680 --> 00:12:55.860 align:start position:0%
+ 
+ 
+
+00:12:55.860 --> 00:12:57.870 align:start position:0%
+ 
+ 
+
+00:12:57.870 --> 00:13:02.820 align:start position:0%
+ 
+ 
+
+00:13:02.820 --> 00:13:06.270 align:start position:0%
+ 
+ 
+
+00:13:06.270 --> 00:13:09.540 align:start position:0%
+ 
+ 
+
+00:13:09.540 --> 00:13:12.870 align:start position:0%
+ 
+ 
+
+00:13:12.870 --> 00:13:15.750 align:start position:0%
+ 
+ 
+
+00:13:15.750 --> 00:13:19.759 align:start position:0%
+ 
+ 
+
+00:13:19.759 --> 00:13:23.030 align:start position:0%
+ 
+ 
+
+00:13:23.030 --> 00:13:25.160 align:start position:0%
+ 
+ 
+
+00:13:25.160 --> 00:13:28.549 align:start position:0%
+ 
+ 
+
+00:13:28.549 --> 00:13:32.989 align:start position:0%
+ 
+ 
+
+00:13:32.989 --> 00:13:35.179 align:start position:0%
+ 
+ 
+
+00:13:35.179 --> 00:13:42.410 align:start position:0%
+ 
+ 
+
+00:13:42.410 --> 00:13:45.650 align:start position:0%
+ 
+ 
+
+00:13:45.650 --> 00:13:48.590 align:start position:0%
+ 
+ 
+
+00:13:48.590 --> 00:13:52.220 align:start position:0%
+ 
+ 
+
+00:13:52.220 --> 00:13:55.009 align:start position:0%
+ 
+ 
+
+00:13:55.009 --> 00:13:57.759 align:start position:0%
+ 
+ 
+
+00:13:57.759 --> 00:14:00.590 align:start position:0%
+ 
+ 
+
+00:14:00.590 --> 00:14:03.979 align:start position:0%
+ 
+ 
+
+00:14:03.979 --> 00:14:07.850 align:start position:0%
+ 
+ 
+
+00:14:07.850 --> 00:14:09.499 align:start position:0%
+ 
+ 
+
+00:14:09.499 --> 00:14:11.179 align:start position:0%
+ 
+ 
+
+00:14:11.179 --> 00:14:15.769 align:start position:0%
+ 
+ 
+
+00:14:15.769 --> 00:14:20.150 align:start position:0%
+ 
+ 
+
+00:14:20.150 --> 00:14:22.309 align:start position:0%
+ 
+ 
+
+00:14:22.309 --> 00:14:24.590 align:start position:0%
+ 
+ 
+
+00:14:24.590 --> 00:14:27.619 align:start position:0%
+ 
+ 
+
+00:14:27.619 --> 00:14:30.679 align:start position:0%
+ 
+ 
+
+00:14:30.679 --> 00:14:33.079 align:start position:0%
+ 
+ 
+
+00:14:33.079 --> 00:14:36.919 align:start position:0%
+ 
+ 
+
+00:14:36.919 --> 00:14:39.650 align:start position:0%
+ 
+ 
+
+00:14:39.650 --> 00:14:43.039 align:start position:0%
+ 
+ 
+
+00:14:43.039 --> 00:14:46.699 align:start position:0%
+ 
+ 
+
+00:14:46.699 --> 00:14:48.470 align:start position:0%
+ 
+ 
+
+00:14:48.470 --> 00:14:50.689 align:start position:0%
+ 
+ 
+
+00:14:50.689 --> 00:14:54.259 align:start position:0%
+ 
+ 
+
+00:14:54.259 --> 00:14:56.299 align:start position:0%
+ 
+ 
+
+00:14:56.299 --> 00:14:59.150 align:start position:0%
+ 
+ 
+
+00:14:59.150 --> 00:15:02.900 align:start position:0%
+ 
+ 
+
+00:15:02.900 --> 00:15:06.139 align:start position:0%
+ 
+ 
+
+00:15:06.139 --> 00:15:08.840 align:start position:0%
+ 
+ 
+
+00:15:08.840 --> 00:15:12.379 align:start position:0%
+ 
+ 
+
+00:15:12.379 --> 00:15:14.960 align:start position:0%
+ 
+ 
+
+00:15:14.960 --> 00:15:17.269 align:start position:0%
+ 
+ 
+
+00:15:17.269 --> 00:15:20.090 align:start position:0%
+ 
+ 
+
+00:15:20.090 --> 00:15:21.650 align:start position:0%
+ 
+ 
+
+00:15:21.650 --> 00:15:25.189 align:start position:0%
+ 
+ 
+
+00:15:25.189 --> 00:15:27.319 align:start position:0%
+ 
+ 
+
+00:15:27.319 --> 00:15:30.710 align:start position:0%
+ 
+ 
+
+00:15:30.710 --> 00:15:32.889 align:start position:0%
+ 
+ 
+
+00:15:32.889 --> 00:15:36.489 align:start position:0%
+ 
+ 
+
+00:15:36.489 --> 00:15:39.009 align:start position:0%
+ 
+ 
+
+00:15:39.009 --> 00:15:41.710 align:start position:0%
+ 
+ 
+
+00:15:41.710 --> 00:15:43.799 align:start position:0%
+ 
+ 
+
+00:15:43.799 --> 00:15:47.829 align:start position:0%
+ 
+ 
+
+00:15:47.829 --> 00:15:50.980 align:start position:0%
+ 
+ 
+
+00:15:50.980 --> 00:15:54.970 align:start position:0%
+ 
+ 
+
+00:15:54.970 --> 00:15:58.809 align:start position:0%
+ 
+ 
+
+00:15:58.809 --> 00:16:03.429 align:start position:0%
+ 
+ 
+
+00:16:03.429 --> 00:16:06.040 align:start position:0%
+ 
+ 
+
+00:16:06.040 --> 00:16:10.600 align:start position:0%
+ 
+ 
+
+00:16:10.600 --> 00:16:12.879 align:start position:0%
+ 
+ 
+
+00:16:12.879 --> 00:16:14.559 align:start position:0%
+ 
+ 
+
+00:16:14.559 --> 00:16:18.129 align:start position:0%
+ 
+ 
+
+00:16:18.129 --> 00:16:21.249 align:start position:0%
+ 
+ 
+
+00:16:21.249 --> 00:16:23.829 align:start position:0%
+ 
+ 
+
+00:16:23.829 --> 00:16:26.439 align:start position:0%
+ 
+ 
+
+00:16:26.439 --> 00:16:29.290 align:start position:0%
+ 
+ 
+
+00:16:29.290 --> 00:16:32.259 align:start position:0%
+ 
+ 
+
+00:16:32.259 --> 00:16:36.400 align:start position:0%
+ 
+ 
+
+00:16:36.400 --> 00:16:39.669 align:start position:0%
+ 
+ 
+
+00:16:39.669 --> 00:16:42.879 align:start position:0%
+ 
+ 
+
+00:16:42.879 --> 00:16:45.429 align:start position:0%
+ 
+ 
+
+00:16:45.429 --> 00:16:47.400 align:start position:0%
+ 
+ 
+
+00:16:47.400 --> 00:16:50.650 align:start position:0%
+ 
+ 
+
+00:16:50.650 --> 00:16:53.079 align:start position:0%
+ 
+ 
+
+00:16:53.079 --> 00:16:57.100 align:start position:0%
+ 
+ 
+
+00:16:57.100 --> 00:17:00.100 align:start position:0%
+ 
+ 
+
+00:17:00.100 --> 00:17:03.129 align:start position:0%
+ 
+ 
+
+00:17:03.129 --> 00:17:07.029 align:start position:0%
+ 
+ 
+
+00:17:07.029 --> 00:17:10.350 align:start position:0%
+ 
+ 
+
+00:17:10.350 --> 00:17:14.769 align:start position:0%
+ 
+ 
+
+00:17:14.769 --> 00:17:18.460 align:start position:0%
+ 
+ 
+
+00:17:18.460 --> 00:17:19.980 align:start position:0%
+ 
+ 
+
+00:17:19.980 --> 00:17:25.809 align:start position:0%
+ 
+ 
+
+00:17:25.809 --> 00:17:30.519 align:start position:0%
+ 
+ 
+
+00:17:30.519 --> 00:17:32.799 align:start position:0%
+ 
+ 
+
+00:17:32.799 --> 00:17:35.950 align:start position:0%
+ 
+ 
+
+00:17:35.950 --> 00:17:39.430 align:start position:0%
+ 
+ 
+
+00:17:39.430 --> 00:17:43.140 align:start position:0%
+ 
+ 
+
+00:17:43.140 --> 00:17:48.520 align:start position:0%
+ 
+ 
+
+00:17:48.520 --> 00:17:54.550 align:start position:0%
+ 
+ 
+
+00:17:54.550 --> 00:17:57.910 align:start position:0%
+ 
+ 
+
+00:17:57.910 --> 00:18:00.570 align:start position:0%
+ 
+ 
+
+00:18:00.570 --> 00:18:04.120 align:start position:0%
+ 
+ 
+
+00:18:04.120 --> 00:18:06.970 align:start position:0%
+ 
+ 
+
+00:18:06.970 --> 00:18:11.290 align:start position:0%
+ 
+ 
+
+00:18:11.290 --> 00:18:14.170 align:start position:0%
+ 
+ 
+
+00:18:14.170 --> 00:18:17.620 align:start position:0%
+ 
+ 
+
+00:18:17.620 --> 00:18:20.470 align:start position:0%
+ 
+ 
+
+00:18:20.470 --> 00:18:23.410 align:start position:0%
+ 
+ 
+
+00:18:23.410 --> 00:18:27.190 align:start position:0%
+ 
+ 
+
+00:18:27.190 --> 00:18:30.220 align:start position:0%
+ 
+ 
+
+00:18:30.220 --> 00:18:32.950 align:start position:0%
+ 
+ 
+
+00:18:32.950 --> 00:18:37.360 align:start position:0%
+ 
+ 
+
+00:18:37.360 --> 00:18:43.540 align:start position:0%
+ 
+ 
+
+00:18:43.540 --> 00:18:45.600 align:start position:0%
+ 
+ 
+
+00:18:45.600 --> 00:18:49.300 align:start position:0%
+ 
+ 
+
+00:18:49.300 --> 00:18:52.900 align:start position:0%
+ 
+ 
+
+00:18:52.900 --> 00:18:56.050 align:start position:0%
+ 
+ 
+
+00:18:56.050 --> 00:19:00.310 align:start position:0%
+ 
+ 
+
+00:19:00.310 --> 00:19:03.300 align:start position:0%
+ 
+ 
+
+00:19:03.300 --> 00:19:05.620 align:start position:0%
+ 
+ 
+
+00:19:05.620 --> 00:19:10.360 align:start position:0%
+ 
+ 
+
+00:19:10.360 --> 00:19:12.490 align:start position:0%
+ 
+ 
+
+00:19:12.490 --> 00:19:16.390 align:start position:0%
+ 
+ 
+
+00:19:16.390 --> 00:19:18.310 align:start position:0%
+ 
+ 
+
+00:19:18.310 --> 00:19:20.800 align:start position:0%
+ 
+ 
+
+00:19:20.800 --> 00:19:23.620 align:start position:0%
+ 
+ 
+
+00:19:23.620 --> 00:19:27.310 align:start position:0%
+ 
+ 
+
+00:19:27.310 --> 00:19:30.940 align:start position:0%
+ 
+ 
+
+00:19:30.940 --> 00:19:32.740 align:start position:0%
+ 
+ 
+
+00:19:32.740 --> 00:19:35.290 align:start position:0%
+ 
+ 
+
+00:19:35.290 --> 00:19:38.380 align:start position:0%
+ 
+ 
+
+00:19:38.380 --> 00:19:40.840 align:start position:0%
+ 
+ 
+
+00:19:40.840 --> 00:19:43.780 align:start position:0%
+ 
+ 
+
+00:19:43.780 --> 00:19:45.640 align:start position:0%
+ 
+ 
+
+00:19:45.640 --> 00:19:50.290 align:start position:0%
+ 
+ 
+
+00:19:50.290 --> 00:19:51.040 align:start position:0%
+ 
+ 
+
+00:19:51.040 --> 00:19:51.050 align:start position:0%
+ 
+ 
+
+00:19:51.050 --> 00:19:52.840 align:start position:0%
+ 
+
+
+00:19:52.840 --> 00:19:55.810 align:start position:0%
+ 
+ 
+
+00:19:55.810 --> 00:19:57.700 align:start position:0%
+ 
+ 
+
+00:19:57.700 --> 00:20:02.320 align:start position:0%
+ 
+ 
+
+00:20:02.320 --> 00:20:05.140 align:start position:0%
+ 
+ 
+
+00:20:05.140 --> 00:20:05.800 align:start position:0%
+ 
+ 
+
+00:20:05.800 --> 00:20:08.140 align:start position:0%
+ 
+ 
+
+00:20:08.140 --> 00:20:12.360 align:start position:0%
+ 
+ 
+
+00:20:12.360 --> 00:20:15.090 align:start position:0%
+ 
+ 
+
+00:20:15.090 --> 00:20:18.610 align:start position:0%
+ 
+ 
+
+00:20:18.610 --> 00:20:20.920 align:start position:0%
+ 
+ 
+
+00:20:20.920 --> 00:20:23.500 align:start position:0%
+ 
+ 
+
+00:20:23.500 --> 00:20:26.770 align:start position:0%
+ 
+ 
+
+00:20:26.770 --> 00:20:29.530 align:start position:0%
+ 
+ 
+
+00:20:29.530 --> 00:20:34.480 align:start position:0%
+ 
+ 
+
+00:20:34.480 --> 00:20:36.460 align:start position:0%
+ 
+ 
+
+00:20:36.460 --> 00:20:38.080 align:start position:0%
+ 
+ 
+
+00:20:38.080 --> 00:20:41.220 align:start position:0%
+ 
+ 
+
+00:20:41.220 --> 00:20:45.040 align:start position:0%
+ 
+ 
+
+00:20:45.040 --> 00:20:48.310 align:start position:0%
+ 
+ 
+
+00:20:48.310 --> 00:20:51.010 align:start position:0%
+ 
+ 
+
+00:20:51.010 --> 00:20:52.920 align:start position:0%
+ 
+ 
+
+00:20:52.920 --> 00:20:56.760 align:start position:0%
+ 
+ 
+
+00:20:56.760 --> 00:20:59.740 align:start position:0%
+ 
+ 
+
+00:20:59.740 --> 00:21:02.590 align:start position:0%
+ 
+ 
+
+00:21:02.590 --> 00:21:05.530 align:start position:0%
+ 
+ 
+
+00:21:05.530 --> 00:21:08.680 align:start position:0%
+ 
+ 
+
+00:21:08.680 --> 00:21:10.510 align:start position:0%
+ 
+ 
+
+00:21:10.510 --> 00:21:13.300 align:start position:0%
+ 
+ 
+
+00:21:13.300 --> 00:21:14.590 align:start position:0%
+ 
+ 
+
+00:21:14.590 --> 00:21:16.030 align:start position:0%
+ 
+ 
+
+00:21:16.030 --> 00:21:17.440 align:start position:0%
+ 
+ 
+
+00:21:17.440 --> 00:21:20.470 align:start position:0%
+ 
+ 
+
+00:21:20.470 --> 00:21:23.080 align:start position:0%
+ 
+ 
+
+00:21:23.080 --> 00:21:25.570 align:start position:0%
+ 
+ 
+
+00:21:25.570 --> 00:21:29.050 align:start position:0%
+ 
+ 
+
+00:21:29.050 --> 00:21:33.190 align:start position:0%
+ 
+ 
+
+00:21:33.190 --> 00:21:36.550 align:start position:0%
+ 
+ 
+
+00:21:36.550 --> 00:21:39.190 align:start position:0%
+ 
+ 
+
+00:21:39.190 --> 00:21:43.120 align:start position:0%
+ 
+ 
+
+00:21:43.120 --> 00:21:46.630 align:start position:0%
+ 
+ 
+
+00:21:46.630 --> 00:21:49.690 align:start position:0%
+ 
+ 
+
+00:21:49.690 --> 00:21:53.320 align:start position:0%
+ 
+ 
+
+00:21:53.320 --> 00:21:54.970 align:start position:0%
+ 
+ 
+
+00:21:54.970 --> 00:21:56.860 align:start position:0%
+ 
+ 
+
+00:21:56.860 --> 00:22:00.310 align:start position:0%
+ 
+ 
+
+00:22:00.310 --> 00:22:02.290 align:start position:0%
+ 
+ 
+
+00:22:02.290 --> 00:22:06.310 align:start position:0%
+ 
+ 
+
+00:22:06.310 --> 00:22:08.920 align:start position:0%
+ 
+ 
+
+00:22:08.920 --> 00:22:08.930 align:start position:0%
+ 
+ 
+
+00:22:08.930 --> 00:22:10.350 align:start position:0%
+ 
+
+
+00:22:10.350 --> 00:22:15.570 align:start position:0%
+ 
+ 
+
+00:22:15.570 --> 00:22:18.550 align:start position:0%
+ 
+ 
+
+00:22:18.550 --> 00:22:20.890 align:start position:0%
+ 
+ 
+
+00:22:20.890 --> 00:22:22.390 align:start position:0%
+ 
+ 
+
+00:22:22.390 --> 00:22:24.370 align:start position:0%
+ 
+ 
+
+00:22:24.370 --> 00:22:26.640 align:start position:0%
+ 
+ 
+
+00:22:26.640 --> 00:22:31.300 align:start position:0%
+ 
+ 
+
+00:22:31.300 --> 00:22:33.670 align:start position:0%
+ 
+ 
+
+00:22:33.670 --> 00:22:35.890 align:start position:0%
+ 
+ 
+
+00:22:35.890 --> 00:22:40.060 align:start position:0%
+ 
+ 
+
+00:22:40.060 --> 00:22:43.330 align:start position:0%
+ 
+ 
+
+00:22:43.330 --> 00:22:46.840 align:start position:0%
+ 
+ 
+
+00:22:46.840 --> 00:22:49.270 align:start position:0%
+ 
+ 
+
+00:22:49.270 --> 00:22:52.630 align:start position:0%
+ 
+ 
+
+00:22:52.630 --> 00:22:55.540 align:start position:0%
+ 
+ 
+
+00:22:55.540 --> 00:22:58.320 align:start position:0%
+ 
+ 
+
+00:22:58.320 --> 00:23:03.990 align:start position:0%
+ 
+ 
+
+00:23:03.990 --> 00:23:07.890 align:start position:0%
+ 
+ 
+
+00:23:07.890 --> 00:23:10.870 align:start position:0%
+ 
+ 
+
+00:23:10.870 --> 00:23:14.260 align:start position:0%
+ 
+ 
+
+00:23:14.260 --> 00:23:16.060 align:start position:0%
+ 
+ 
+
+00:23:16.060 --> 00:23:18.670 align:start position:0%
+ 
+ 
+
+00:23:18.670 --> 00:23:21.340 align:start position:0%
+ 
+ 
+
+00:23:21.340 --> 00:23:23.830 align:start position:0%
+ 
+ 
+
+00:23:23.830 --> 00:23:26.470 align:start position:0%
+ 
+ 
+
+00:23:26.470 --> 00:23:31.750 align:start position:0%
+ 
+ 
+
+00:23:31.750 --> 00:23:33.310 align:start position:0%
+ 
+ 
+
+00:23:33.310 --> 00:23:37.360 align:start position:0%
+ 
+ 
+
+00:23:37.360 --> 00:23:39.550 align:start position:0%
+ 
+ 
+
+00:23:39.550 --> 00:23:43.270 align:start position:0%
+ 
+ 
+
+00:23:43.270 --> 00:23:45.670 align:start position:0%
+ 
+ 
+
+00:23:45.670 --> 00:23:51.550 align:start position:0%
+ 
+ 
+
+00:23:51.550 --> 00:23:54.670 align:start position:0%
+ 
+ 
+
+00:23:54.670 --> 00:23:58.360 align:start position:0%
+ 
+ 
+
+00:23:58.360 --> 00:24:01.600 align:start position:0%
+ 
+ 
+
+00:24:01.600 --> 00:24:05.020 align:start position:0%
+ 
+ 
+
+00:24:05.020 --> 00:24:09.100 align:start position:0%
+ 
+ 
+
+00:24:09.100 --> 00:24:11.380 align:start position:0%
+ 
+ 
+
+00:24:11.380 --> 00:24:13.170 align:start position:0%
+ 
+ 
+
+00:24:13.170 --> 00:24:15.540 align:start position:0%
+ 
+ 
+
+00:24:15.540 --> 00:24:17.970 align:start position:0%
+ 
+ 
+
+00:24:17.970 --> 00:24:20.010 align:start position:0%
+ 
+ 
+
+00:24:20.010 --> 00:24:25.890 align:start position:0%
+ 
+ 
+
+00:24:25.890 --> 00:24:28.980 align:start position:0%
+ 
+ 
+
+00:24:28.980 --> 00:24:31.140 align:start position:0%
+ 
+ 
+
+00:24:31.140 --> 00:24:33.690 align:start position:0%
+ 
+ 
+
+00:24:33.690 --> 00:24:36.840 align:start position:0%
+ 
+ 
+
+00:24:36.840 --> 00:24:40.170 align:start position:0%
+ 
+ 
+
+00:24:40.170 --> 00:24:45.450 align:start position:0%
+ 
+ 
+
+00:24:45.450 --> 00:24:47.910 align:start position:0%
+ 
+ 
+
+00:24:47.910 --> 00:24:52.410 align:start position:0%
+ 
+ 
+
+00:24:52.410 --> 00:24:54.900 align:start position:0%
+ 
+ 
+
+00:24:54.900 --> 00:24:57.960 align:start position:0%
+ 
+ 
+
+00:24:57.960 --> 00:25:00.630 align:start position:0%
+ 
+ 
+
+00:25:00.630 --> 00:25:03.930 align:start position:0%
+ 
+ 
+
+00:25:03.930 --> 00:25:07.110 align:start position:0%
+ 
+ 
+
+00:25:07.110 --> 00:25:09.570 align:start position:0%
+ 
+ 
+
+00:25:09.570 --> 00:25:13.920 align:start position:0%
+ 
+ 
+
+00:25:13.920 --> 00:25:16.110 align:start position:0%
+ 
+ 
+
+00:25:16.110 --> 00:25:19.830 align:start position:0%
+ 
+ 
+
+00:25:19.830 --> 00:25:25.380 align:start position:0%
+ 
+ 
+
+00:25:25.380 --> 00:25:30.000 align:start position:0%
+ 
+ 
+
+00:25:30.000 --> 00:25:32.130 align:start position:0%
+ 
+ 
+
+00:25:32.130 --> 00:25:35.520 align:start position:0%
+ 
+ 
+
+00:25:35.520 --> 00:25:38.280 align:start position:0%
+ 
+ 
+
+00:25:38.280 --> 00:25:40.830 align:start position:0%
+ 
+ 
+
+00:25:40.830 --> 00:25:43.350 align:start position:0%
+ 
+ 
+
+00:25:43.350 --> 00:25:47.850 align:start position:0%
+ 
+ 
+
+00:25:47.850 --> 00:25:50.280 align:start position:0%
+ 
+ 
+
+00:25:50.280 --> 00:25:53.060 align:start position:0%
+ 
+ 
+
+00:25:53.060 --> 00:25:55.680 align:start position:0%
+ 
+ 
+
+00:25:55.680 --> 00:25:58.890 align:start position:0%
+ 
+ 
+
+00:25:58.890 --> 00:26:01.110 align:start position:0%
+ 
+ 
+
+00:26:01.110 --> 00:26:04.860 align:start position:0%
+ 
+ 
+
+00:26:04.860 --> 00:26:07.230 align:start position:0%
+ 
+ 
+
+00:26:07.230 --> 00:26:11.250 align:start position:0%
+ 
+ 
+
+00:26:11.250 --> 00:26:11.260 align:start position:0%
+ 
+ 
+
+00:26:11.260 --> 00:26:11.880 align:start position:0%
+ 
+
+
+00:26:11.880 --> 00:26:17.190 align:start position:0%
+ 
+ 
+
+00:26:17.190 --> 00:26:20.640 align:start position:0%
+ 
+ 
+
+00:26:20.640 --> 00:26:23.970 align:start position:0%
+ 
+ 
+
+00:26:23.970 --> 00:26:25.120 align:start position:0%
+ 
+ 
+
+00:26:25.120 --> 00:26:27.130 align:start position:0%
+ 
+ 
+
+00:26:27.130 --> 00:26:29.620 align:start position:0%
+ 
+ 
+
+00:26:29.620 --> 00:26:31.300 align:start position:0%
+ 
+ 
+
+00:26:31.300 --> 00:26:34.000 align:start position:0%
+ 
+ 
+
+00:26:34.000 --> 00:26:37.180 align:start position:0%
+ 
+ 
+
+00:26:37.180 --> 00:26:39.280 align:start position:0%
+ 
+ 
+
+00:26:39.280 --> 00:26:42.100 align:start position:0%
+ 
+ 
+
+00:26:42.100 --> 00:26:46.630 align:start position:0%
+ 
+ 
+
+00:26:46.630 --> 00:26:49.510 align:start position:0%
+ 
+ 
+
+00:26:49.510 --> 00:26:52.690 align:start position:0%
+ 
+ 
+
+00:26:52.690 --> 00:26:54.490 align:start position:0%
+ 
+ 
+
+00:26:54.490 --> 00:26:56.770 align:start position:0%
+ 
+ 
+
+00:26:56.770 --> 00:27:01.990 align:start position:0%
+ 
+ 
+
+00:27:01.990 --> 00:27:04.150 align:start position:0%
+ 
+ 
+
+00:27:04.150 --> 00:27:08.020 align:start position:0%
+ 
+ 
+
+00:27:08.020 --> 00:27:11.130 align:start position:0%
+ 
+ 
+
+00:27:11.130 --> 00:27:14.110 align:start position:0%
+ 
+ 
+
+00:27:14.110 --> 00:27:18.270 align:start position:0%
+ 
+ 
+
+00:27:18.270 --> 00:27:21.850 align:start position:0%
+ 
+ 
+
+00:27:21.850 --> 00:27:23.950 align:start position:0%
+ 
+ 
+
+00:27:23.950 --> 00:27:27.910 align:start position:0%
+ 
+ 
+
+00:27:27.910 --> 00:27:29.890 align:start position:0%
+ 
+ 
+
+00:27:29.890 --> 00:27:33.940 align:start position:0%
+ 
+ 
+
+00:27:33.940 --> 00:27:37.960 align:start position:0%
+ 
+ 
+
+00:27:37.960 --> 00:27:42.010 align:start position:0%
+ 
+ 
+
+00:27:42.010 --> 00:27:43.900 align:start position:0%
+ 
+ 
+
+00:27:43.900 --> 00:27:47.650 align:start position:0%
+ 
+ 
+
+00:27:47.650 --> 00:27:50.680 align:start position:0%
+ 
+ 
+
+00:27:50.680 --> 00:27:53.230 align:start position:0%
+ 
+ 
+
+00:27:53.230 --> 00:27:55.510 align:start position:0%
+ 
+ 
+
+00:27:55.510 --> 00:27:58.390 align:start position:0%
+ 
+ 
+
+00:27:58.390 --> 00:28:02.040 align:start position:0%
+ 
+ 
+
+00:28:02.040 --> 00:28:05.080 align:start position:0%
+ 
+ 
+
+00:28:05.080 --> 00:28:07.780 align:start position:0%
+ 
+ 
+
+00:28:07.780 --> 00:28:10.300 align:start position:0%
+ 
+ 
+
+00:28:10.300 --> 00:28:13.180 align:start position:0%
+ 
+ 
+
+00:28:13.180 --> 00:28:17.260 align:start position:0%
+ 
+ 
+
+00:28:17.260 --> 00:28:20.560 align:start position:0%
+ 
+ 
+
+00:28:20.560 --> 00:28:24.390 align:start position:0%
+ 
+ 
+
+00:28:24.390 --> 00:28:27.850 align:start position:0%
+ 
+ 
+
+00:28:27.850 --> 00:28:31.200 align:start position:0%
+ 
+ 
+
+00:28:31.200 --> 00:28:34.110 align:start position:0%
+ 
+ 
+
+00:28:34.110 --> 00:28:36.670 align:start position:0%
+ 
+ 
+
+00:28:36.670 --> 00:28:37.680 align:start position:0%
+ 
+ 
+
+00:28:37.680 --> 00:28:40.169 align:start position:0%
+ 
+ 
+
+00:28:40.169 --> 00:28:43.980 align:start position:0%
+ 
+ 
+
+00:28:43.980 --> 00:28:50.879 align:start position:0%
+ 
+ 
+
+00:28:50.879 --> 00:28:53.879 align:start position:0%
+ 
+ 
+
+00:28:53.879 --> 00:28:56.909 align:start position:0%
+ 
+ 
+
+00:28:56.909 --> 00:29:00.869 align:start position:0%
+ 
+ 
+
+00:29:00.869 --> 00:29:03.810 align:start position:0%
+ 
+ 
+
+00:29:03.810 --> 00:29:07.049 align:start position:0%
+ 
+ 
+
+00:29:07.049 --> 00:29:07.769 align:start position:0%
+ 
+ 
+
+00:29:07.769 --> 00:29:10.139 align:start position:0%
+ 
+ 
+
+00:29:10.139 --> 00:29:13.860 align:start position:0%
+ 
+ 
+
+00:29:13.860 --> 00:29:15.049 align:start position:0%
+ 
+ 
+
+00:29:15.049 --> 00:29:18.690 align:start position:0%
+ 
+ 
+
+00:29:18.690 --> 00:29:21.570 align:start position:0%
+ 
+ 
+
+00:29:21.570 --> 00:29:27.869 align:start position:0%
+ 
+ 
+
+00:29:27.869 --> 00:29:30.389 align:start position:0%
+ 
+ 
+
+00:29:30.389 --> 00:29:35.450 align:start position:0%
+ 
+ 
+
+00:29:35.450 --> 00:29:39.629 align:start position:0%
+ 
+ 
+
+00:29:39.629 --> 00:29:42.539 align:start position:0%
+ 
+ 
+
+00:29:42.539 --> 00:29:45.210 align:start position:0%
+ 
+ 
+
+00:29:45.210 --> 00:29:47.610 align:start position:0%
+ 
+ 
+
+00:29:47.610 --> 00:29:50.070 align:start position:0%
+ 
+ 
+
+00:29:50.070 --> 00:29:54.389 align:start position:0%
+ 
+ 
+
+00:29:54.389 --> 00:29:57.990 align:start position:0%
+ 
+ 
+
+00:29:57.990 --> 00:30:00.840 align:start position:0%
+ 
+ 
+
+00:30:00.840 --> 00:30:02.879 align:start position:0%
+ 
+ 
+
+00:30:02.879 --> 00:30:04.440 align:start position:0%
+ 
+ 
+
+00:30:04.440 --> 00:30:09.299 align:start position:0%
+ 
+ 
+
+00:30:09.299 --> 00:30:14.730 align:start position:0%
+ 
+ 
+
+00:30:14.730 --> 00:30:17.220 align:start position:0%
+ 
+ 
+
+00:30:17.220 --> 00:30:20.310 align:start position:0%
+ 
+ 
+
+00:30:20.310 --> 00:30:24.749 align:start position:0%
+ 
+ 
+
+00:30:24.749 --> 00:30:30.619 align:start position:0%
+ 
+ 
+
+00:30:30.619 --> 00:30:32.970 align:start position:0%
+ 
+ 
+
+00:30:32.970 --> 00:30:35.070 align:start position:0%
+ 
+ 
+
+00:30:35.070 --> 00:30:38.119 align:start position:0%
+ 
+ 
+
+00:30:38.119 --> 00:30:40.830 align:start position:0%
+ 
+ 
+
+00:30:40.830 --> 00:30:47.609 align:start position:0%
+ 
+ 
+
+00:30:47.609 --> 00:30:50.430 align:start position:0%
+ 
+ 
+
+00:30:50.430 --> 00:30:53.070 align:start position:0%
+ 
+ 
+
+00:30:53.070 --> 00:31:00.389 align:start position:0%
+ 
+ 
+
+00:31:00.389 --> 00:31:06.060 align:start position:0%
+ 
+ 
+
+00:31:06.060 --> 00:31:09.139 align:start position:0%
+ 
+ 
+
+00:31:09.139 --> 00:31:16.019 align:start position:0%
+ 
+ 
+
+00:31:16.019 --> 00:31:19.379 align:start position:0%
+ 
+ 
+
+00:31:19.379 --> 00:31:22.379 align:start position:0%
+ 
+ 
+
+00:31:22.379 --> 00:31:24.629 align:start position:0%
+ 
+ 
+
+00:31:24.629 --> 00:31:28.950 align:start position:0%
+ 
+ 
+
+00:31:28.950 --> 00:31:35.310 align:start position:0%
+ 
+ 
+
+00:31:35.310 --> 00:31:37.710 align:start position:0%
+ 
+ 
+
+00:31:37.710 --> 00:31:40.409 align:start position:0%
+ 
+ 
+
+00:31:40.409 --> 00:31:43.710 align:start position:0%
+ 
+ 
+
+00:31:43.710 --> 00:31:46.830 align:start position:0%
+ 
+ 
+
+00:31:46.830 --> 00:31:49.139 align:start position:0%
+ 
+ 
+
+00:31:49.139 --> 00:31:52.230 align:start position:0%
+ 
+ 
+
+00:31:52.230 --> 00:31:55.139 align:start position:0%
+ 
+ 
+
+00:31:55.139 --> 00:31:57.149 align:start position:0%
+ 
+ 
+
+00:31:57.149 --> 00:31:59.129 align:start position:0%
+ 
+ 
+
+00:31:59.129 --> 00:32:01.860 align:start position:0%
+ 
+ 
+
+00:32:01.860 --> 00:32:04.230 align:start position:0%
+ 
+ 
+
+00:32:04.230 --> 00:32:07.909 align:start position:0%
+ 
+ 
+
+00:32:07.909 --> 00:32:10.980 align:start position:0%
+ 
+ 
+
+00:32:10.980 --> 00:32:13.379 align:start position:0%
+ 
+ 
+
+00:32:13.379 --> 00:32:15.720 align:start position:0%
+ 
+ 
+
+00:32:15.720 --> 00:32:18.930 align:start position:0%
+ 
+ 
+
+00:32:18.930 --> 00:32:20.879 align:start position:0%
+ 
+ 
+
+00:32:20.879 --> 00:32:24.210 align:start position:0%
+ 
+ 
+
+00:32:24.210 --> 00:32:25.980 align:start position:0%
+ 
+ 
+
+00:32:25.980 --> 00:32:28.470 align:start position:0%
+ 
+ 
+
+00:32:28.470 --> 00:32:31.560 align:start position:0%
+ 
+ 
+
+00:32:31.560 --> 00:32:36.080 align:start position:0%
+ 
+ 
+
+00:32:36.080 --> 00:32:38.639 align:start position:0%
+ 
+ 
+
+00:32:38.639 --> 00:32:42.299 align:start position:0%
+ 
+ 
+
+00:32:42.299 --> 00:32:45.169 align:start position:0%
+ 
+ 
+
+00:32:45.169 --> 00:32:48.840 align:start position:0%
+ 
+ 
+
+00:32:48.840 --> 00:32:51.990 align:start position:0%
+ 
+ 
+
+00:32:51.990 --> 00:32:53.369 align:start position:0%
+ 
+ 
+
+00:32:53.369 --> 00:32:59.680 align:start position:0%
+ 
+ 
+
+00:32:59.680 --> 00:33:02.810 align:start position:0%
+ 
+ 
+
+00:33:02.810 --> 00:33:05.210 align:start position:0%
+ 
+ 
+
+00:33:05.210 --> 00:33:06.980 align:start position:0%
+ 
+ 
+
+00:33:06.980 --> 00:33:08.749 align:start position:0%
+ 
+ 
+
+00:33:08.749 --> 00:33:12.289 align:start position:0%
+ 
+ 
+
+00:33:12.289 --> 00:33:13.820 align:start position:0%
+ 
+ 
+
+00:33:13.820 --> 00:33:15.919 align:start position:0%
+ 
+ 
+
+00:33:15.919 --> 00:33:17.779 align:start position:0%
+ 
+ 
+
+00:33:17.779 --> 00:33:19.430 align:start position:0%
+ 
+ 
+
+00:33:19.430 --> 00:33:21.049 align:start position:0%
+ 
+ 
+
+00:33:21.049 --> 00:33:24.499 align:start position:0%
+ 
+ 
+
+00:33:24.499 --> 00:33:26.749 align:start position:0%
+ 
+ 
+
+00:33:26.749 --> 00:33:29.659 align:start position:0%
+ 
+ 
+
+00:33:29.659 --> 00:33:33.980 align:start position:0%
+ 
+ 
+
+00:33:33.980 --> 00:33:36.320 align:start position:0%
+ 
+ 
+
+00:33:36.320 --> 00:33:37.970 align:start position:0%
+ 
+ 
+
+00:33:37.970 --> 00:33:41.600 align:start position:0%
+ 
+ 
+
+00:33:41.600 --> 00:33:44.210 align:start position:0%
+ 
+ 
+
+00:33:44.210 --> 00:33:45.830 align:start position:0%
+ 
+ 
+
+00:33:45.830 --> 00:33:47.930 align:start position:0%
+ 
+ 
+
+00:33:47.930 --> 00:33:50.480 align:start position:0%
+ 
+ 
+
+00:33:50.480 --> 00:33:52.580 align:start position:0%
+ 
+ 
+
+00:33:52.580 --> 00:33:56.359 align:start position:0%
+ 
+ 
+
+00:33:56.359 --> 00:33:58.220 align:start position:0%
+ 
+ 
+
+00:33:58.220 --> 00:34:01.639 align:start position:0%
+ 
+ 
+
+00:34:01.639 --> 00:34:05.570 align:start position:0%
+ 
+ 
+
+00:34:05.570 --> 00:34:11.740 align:start position:0%
+ 
+ 
+
+00:34:11.740 --> 00:34:16.309 align:start position:0%
+ 
+ 
+
+00:34:16.309 --> 00:34:19.369 align:start position:0%
+ 
+ 
+
+00:34:19.369 --> 00:34:22.849 align:start position:0%
+ 
+ 
+
+00:34:22.849 --> 00:34:25.970 align:start position:0%
+ 
+ 
+
+00:34:25.970 --> 00:34:28.609 align:start position:0%
+ 
+ 
+
+00:34:28.609 --> 00:34:31.339 align:start position:0%
+ 
+ 
+
+00:34:31.339 --> 00:34:34.940 align:start position:0%
+ 
+ 
+
+00:34:34.940 --> 00:34:37.040 align:start position:0%
+ 
+ 
+
+00:34:37.040 --> 00:34:39.079 align:start position:0%
+ 
+ 
+
+00:34:39.079 --> 00:34:41.569 align:start position:0%
+ 
+ 
+
+00:34:41.569 --> 00:34:43.940 align:start position:0%
+ 
+ 
+
+00:34:43.940 --> 00:34:46.010 align:start position:0%
+ 
+ 
+
+00:34:46.010 --> 00:34:48.710 align:start position:0%
+ 
+ 
+
+00:34:48.710 --> 00:34:51.829 align:start position:0%
+ 
+ 
+
+00:34:51.829 --> 00:34:53.720 align:start position:0%
+ 
+ 
+
+00:34:53.720 --> 00:34:58.550 align:start position:0%
+ 
+ 
+
+00:34:58.550 --> 00:35:03.170 align:start position:0%
+ 
+ 
+
+00:35:03.170 --> 00:35:07.430 align:start position:0%
+ 
+ 
+
+00:35:07.430 --> 00:35:11.090 align:start position:0%
+ 
+ 
+
+00:35:11.090 --> 00:35:14.090 align:start position:0%
+ 
+ 
+
+00:35:14.090 --> 00:35:17.180 align:start position:0%
+ 
+ 
+
+00:35:17.180 --> 00:35:21.560 align:start position:0%
+ 
+ 
+
+00:35:21.560 --> 00:35:24.350 align:start position:0%
+ 
+ 
+
+00:35:24.350 --> 00:35:27.380 align:start position:0%
+ 
+ 
+
+00:35:27.380 --> 00:35:30.230 align:start position:0%
+ 
+ 
+
+00:35:30.230 --> 00:35:35.030 align:start position:0%
+ 
+ 
+
+00:35:35.030 --> 00:35:45.620 align:start position:0%
+ 
+ 
+
+00:35:45.620 --> 00:35:47.980 align:start position:0%
+ 
+ 
+
+00:35:47.980 --> 00:35:47.990 align:start position:0%
+ 
+ 
+
+00:35:47.990 --> 00:35:58.750 align:start position:0%
+ 
+
+
+00:35:58.750 --> 00:35:58.760 align:start position:0%
+ 
+ 
+
+00:35:58.760 --> 00:36:04.720 align:start position:0%
+ 
+
+
+00:36:04.720 --> 00:36:08.950 align:start position:0%
+ 
+ 
+
+00:36:08.950 --> 00:36:16.240 align:start position:0%
+ 
+ 
+
+00:36:16.240 --> 00:36:19.839 align:start position:0%
+ 
+ 
+
+00:36:19.839 --> 00:36:21.940 align:start position:0%
+ 
+ 
+
+00:36:21.940 --> 00:36:24.190 align:start position:0%
+ 
+ 
+
+00:36:24.190 --> 00:36:27.030 align:start position:0%
+ 
+ 
+
+00:36:27.030 --> 00:36:30.250 align:start position:0%
+ 
+ 
+
+00:36:30.250 --> 00:36:33.000 align:start position:0%
+ 
+ 
+
+00:36:33.000 --> 00:36:35.740 align:start position:0%
+ 
+ 
+
+00:36:35.740 --> 00:36:39.930 align:start position:0%
+ 
+ 
+
+00:36:39.930 --> 00:36:43.750 align:start position:0%
+ 
+ 
+
+00:36:43.750 --> 00:36:46.480 align:start position:0%
+ 
+ 
+
+00:36:46.480 --> 00:36:49.180 align:start position:0%
+ 
+ 
+
+00:36:49.180 --> 00:36:51.430 align:start position:0%
+ 
+ 
+
+00:36:51.430 --> 00:36:53.950 align:start position:0%
+ 
+ 
+
+00:36:53.950 --> 00:36:56.650 align:start position:0%
+ 
+ 
+
+00:36:56.650 --> 00:36:58.720 align:start position:0%
+ 
+ 
+
+00:36:58.720 --> 00:37:02.770 align:start position:0%
+ 
+ 
+
+00:37:02.770 --> 00:37:05.859 align:start position:0%
+ 
+ 
+
+00:37:05.859 --> 00:37:08.079 align:start position:0%
+ 
+ 
+
+00:37:08.079 --> 00:37:11.079 align:start position:0%
+ 
+ 
+
+00:37:11.079 --> 00:37:13.630 align:start position:0%
+ 
+ 
+
+00:37:13.630 --> 00:37:16.599 align:start position:0%
+ 
+ 
+
+00:37:16.599 --> 00:37:18.550 align:start position:0%
+ 
+ 
+
+00:37:18.550 --> 00:37:21.240 align:start position:0%
+ 
+ 
+
+00:37:21.240 --> 00:37:23.920 align:start position:0%
+ 
+ 
+
+00:37:23.920 --> 00:37:29.260 align:start position:0%
+ 
+ 
+
+00:37:29.260 --> 00:37:33.220 align:start position:0%
+ 
+ 
+
+00:37:33.220 --> 00:37:35.230 align:start position:0%
+ 
+ 
+
+00:37:35.230 --> 00:37:37.780 align:start position:0%
+ 
+ 
+
+00:37:37.780 --> 00:37:39.190 align:start position:0%
+ 
+ 
+
+00:37:39.190 --> 00:37:41.800 align:start position:0%
+ 
+ 
+
+00:37:41.800 --> 00:37:46.569 align:start position:0%
+ 
+ 
+
+00:37:46.569 --> 00:37:54.700 align:start position:0%
+ 
+ 
+
+00:37:54.700 --> 00:37:58.010 align:start position:0%
+ 
+ 
+
+00:37:58.010 --> 00:38:02.450 align:start position:0%
+ 
+ 
+
+00:38:02.450 --> 00:38:11.720 align:start position:0%
+ 
+ 
+
+00:38:11.720 --> 00:38:18.050 align:start position:0%
+ 
+ 
+
+00:38:18.050 --> 00:38:22.760 align:start position:0%
+ 
+ 
+
+00:38:22.760 --> 00:38:24.710 align:start position:0%
+ 
+ 
+
+00:38:24.710 --> 00:38:27.530 align:start position:0%
+ 
+ 
+
+00:38:27.530 --> 00:38:30.110 align:start position:0%
+ 
+ 
+
+00:38:30.110 --> 00:38:33.710 align:start position:0%
+ 
+ 
+
+00:38:33.710 --> 00:38:35.630 align:start position:0%
+ 
+ 
+
+00:38:35.630 --> 00:38:41.540 align:start position:0%
+ 
+ 
+
+00:38:41.540 --> 00:38:43.790 align:start position:0%
+ 
+ 
+
+00:38:43.790 --> 00:38:49.220 align:start position:0%
+ 
+ 
+
+00:38:49.220 --> 00:38:52.670 align:start position:0%
+ 
+ 
+
+00:38:52.670 --> 00:38:54.200 align:start position:0%
+ 
+ 
+
+00:38:54.200 --> 00:38:56.840 align:start position:0%
+ 
+ 
+
+00:38:56.840 --> 00:39:00.310 align:start position:0%
+ 
+ 
+
+00:39:00.310 --> 00:39:02.660 align:start position:0%
+ 
+ 
+
+00:39:02.660 --> 00:39:08.720 align:start position:0%
+ 
+ 
+
+00:39:08.720 --> 00:39:11.630 align:start position:0%
+ 
+ 
+
+00:39:11.630 --> 00:39:14.360 align:start position:0%
+ 
+ 
+
+00:39:14.360 --> 00:39:16.670 align:start position:0%
+ 
+ 
+
+00:39:16.670 --> 00:39:19.280 align:start position:0%
+ 
+ 
+
+00:39:19.280 --> 00:39:21.020 align:start position:0%
+ 
+ 
+
+00:39:21.020 --> 00:39:23.450 align:start position:0%
+ 
+ 
+
+00:39:23.450 --> 00:39:27.710 align:start position:0%
+ 
+ 
+
+00:39:27.710 --> 00:39:30.680 align:start position:0%
+ 
+ 
+
+00:39:30.680 --> 00:39:34.010 align:start position:0%
+ 
+ 
+
+00:39:34.010 --> 00:39:36.040 align:start position:0%
+ 
+ 
+
+00:39:36.040 --> 00:39:39.230 align:start position:0%
+ 
+ 
+
+00:39:39.230 --> 00:39:40.730 align:start position:0%
+ 
+ 
+
+00:39:40.730 --> 00:39:48.030 align:start position:0%
+ 
+ 
+
+00:39:48.030 --> 00:39:52.560 align:start position:0%
+ 
+ 
+
+00:39:52.560 --> 00:40:03.390 align:start position:0%
+ 
+ 
+
+00:40:03.390 --> 00:40:06.450 align:start position:0%
+ 
+ 
+
+00:40:06.450 --> 00:40:08.519 align:start position:0%
+ 
+ 
+
+00:40:08.519 --> 00:40:11.130 align:start position:0%
+ 
+ 
+
+00:40:11.130 --> 00:40:13.200 align:start position:0%
+ 
+ 
+
+00:40:13.200 --> 00:40:15.989 align:start position:0%
+ 
+ 
+
+00:40:15.989 --> 00:40:19.349 align:start position:0%
+ 
+ 
+
+00:40:19.349 --> 00:40:22.980 align:start position:0%
+ 
+ 
+
+00:40:22.980 --> 00:40:25.650 align:start position:0%
+ 
+ 
+
+00:40:25.650 --> 00:40:27.870 align:start position:0%
+ 
+ 
+
+00:40:27.870 --> 00:40:30.779 align:start position:0%
+ 
+ 
+
+00:40:30.779 --> 00:40:35.009 align:start position:0%
+ 
+ 
+
+00:40:35.009 --> 00:40:46.790 align:start position:0%
+ 
+ 
+
+00:40:46.790 --> 00:40:46.800 align:start position:0%
+ 
+ 
+
+00:40:46.800 --> 00:40:49.250 align:start position:0%
+ 
+
+
+00:40:49.250 --> 00:40:52.700 align:start position:0%
+ 
+ 
+
+00:40:52.700 --> 00:40:56.030 align:start position:0%
+ 
+ 
+
+00:40:56.030 --> 00:41:00.200 align:start position:0%
+ 
+ 
+
+00:41:00.200 --> 00:41:02.359 align:start position:0%
+ 
+ 
+
+00:41:02.359 --> 00:41:04.910 align:start position:0%
+ 
+ 
+
+00:41:04.910 --> 00:41:07.670 align:start position:0%
+ 
+ 
+
+00:41:07.670 --> 00:41:10.849 align:start position:0%
+ 
+ 
+
+00:41:10.849 --> 00:41:12.800 align:start position:0%
+ 
+ 
+
+00:41:12.800 --> 00:41:14.599 align:start position:0%
+ 
+ 
+
+00:41:14.599 --> 00:41:18.830 align:start position:0%
+ 
+ 
+
+00:41:18.830 --> 00:41:20.720 align:start position:0%
+ 
+ 
+
+00:41:20.720 --> 00:41:30.010 align:start position:0%
+ 
+ 
+
+00:41:30.010 --> 00:41:35.620 align:start position:0%
+ 
+ 
+
+00:41:35.620 --> 00:42:00.710 align:start position:0%
+ 
+ 
+
+00:42:00.710 --> 00:42:04.670 align:start position:0%
+ 
+ 
+
+00:42:04.670 --> 00:42:08.809 align:start position:0%
+ 
+ 
+
+00:42:08.809 --> 00:42:12.230 align:start position:0%
+ 
+ 
+
+00:42:12.230 --> 00:42:16.370 align:start position:0%
+ 
+ 
+
+00:42:16.370 --> 00:42:18.319 align:start position:0%
+ 
+ 
+
+00:42:18.319 --> 00:42:39.620 align:start position:0%
+ 
+ 
+
+00:42:39.620 --> 00:42:43.160 align:start position:0%
+ 
+ 
+
+00:42:43.160 --> 00:42:45.270 align:start position:0%
+ 
+ 
+
+00:42:45.270 --> 00:42:46.980 align:start position:0%
+ 
+ 
+
+00:42:46.980 --> 00:42:48.720 align:start position:0%
+ 
+ 
+
+00:42:48.720 --> 00:42:51.510 align:start position:0%
+ 
+ 
+
+00:42:51.510 --> 00:42:55.080 align:start position:0%
+ 
+ 
+
+00:42:55.080 --> 00:42:56.940 align:start position:0%
+ 
+ 
+
+00:42:56.940 --> 00:43:13.290 align:start position:0%
+ 
+ 
+
+00:43:13.290 --> 00:43:16.500 align:start position:0%
+ 
+ 
+
+00:43:16.500 --> 00:43:18.900 align:start position:0%
+ 
+ 
+
+00:43:18.900 --> 00:43:29.340 align:start position:0%
+ 
+ 
+
+00:43:29.340 --> 00:43:31.740 align:start position:0%
+ 
+ 
+
+00:43:31.740 --> 00:43:34.080 align:start position:0%
+ 
+ 
+
+00:43:34.080 --> 00:43:37.080 align:start position:0%
+ 
+ 
+
+00:43:37.080 --> 00:43:40.320 align:start position:0%
+ 
+ 
+
+00:43:40.320 --> 00:43:42.330 align:start position:0%
+ 
+ 
+
+00:43:42.330 --> 00:43:45.870 align:start position:0%
+ 
+ 
+
+00:43:45.870 --> 00:43:49.260 align:start position:0%
+ 
+ 
+
+00:43:49.260 --> 00:44:00.660 align:start position:0%
+ 
+ 
+
+00:44:00.660 --> 00:44:06.059 align:start position:0%
+ 
+ 
+
+00:44:06.059 --> 00:44:08.819 align:start position:0%
+ 
+ 
+

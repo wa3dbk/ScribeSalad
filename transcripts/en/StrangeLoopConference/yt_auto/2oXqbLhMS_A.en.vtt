@@ -1,0 +1,3200 @@
+WEBVTT
+Kind: captions
+Language: en
+
+00:00:05.049 --> 00:00:08.940 align:start position:0%
+ 
+four years ago Netflix's traffic was  growing at an exponential rate but not  only was the number of subscribers  growing but the actual hours that each  subscriber was using the services was  growing similarly so this created a lot  of complexity the growing traffic the  diversity of all kinds of different  devices the growing amount of back-end  services and in order to create some  flexibility to handle this complexity we  build Zul if you're a fan of  ghostbusters you'll know that Zul is the  gatekeeper and that's exactly what a  dozen netflix Zul handles all the  traffic coming into netflix into AWS and  then primarily its biggest  responsibility is routing that traffic  where it needs to go but it also  provides us monitoring security  resiliency and flexibility for context  Zul sits between the AWS elastic load  balancers and our back-end services so  since it's the highest point of the  traffic coming in we have a very good  place to monitor traffic that's what  that's the kind of monitoring that  provides us as well as alerting and  anomaly detection and then it's also  responsible for security blocking  fraudulent traffic mitigating DDoS  attacks things like that and then  resiliency things like shielding origins  from excess traffic throttling and  finally flexibility with things like  self-serve routing and Canarian clusters  and features like that so we built Zul  using the standard java model it was  built on Tomcat running java servlets  with blocking requests so in a blocking  request cycle request comes in gets a  request thread does a little bit of work  maybe makes a network call blocks when  the network call completes unblocks  finishes whatever worker was doing and  then returns a response and if you want  parallel as  in that kind of paradigm you need to  have two of those things so each one of  these would be a thread and then you  would scale up to as many threads as you  need to handle the concurrent requests  that you want but when we looked at the  continually growing traffic the trends  of growth didn't stop right they kept  getting bigger and bigger  we knew that we already needed to start  thinking about the next version of Zul  so we looked around the landscape of  distributed systems and all the new  hotness was functional reactive non  blocking programming our colleagues and  Netflix were writing bleeding edge  software for this for this new paradigm  things like rx Java or XJS hystrix and  then others in the industry were really  big on event loop servers like Nettie so  the move seemed kind of like a  no-brainer right we're generally a proxy  so we send a request and then a wait for  a response so we should eliminate that  waiting time so we built a very  comprehensive test application and then  we ran some really thorough benchmarks  with that test application and you can  see that it was awesome right 73,000  requests per second that's great so  let's do it unfortunately the results  that we saw in the real world weren't  quite that good it turns out that the  performance between Zul one and Zul two  was roughly the same so you're probably  wondering was it worth it would we do it  again should you do it you do not do it  and the answer is something you've all  probably heard before  it depends there's actually a very long  list of pros and cons as you can imagine  and it's a it's a nuanced decision it's  not it's not that simple so today I'm  going to touch on how we rebuild Zul  using natty and rx Java  what it's been like operating Zul 2.0 in  the real world and finally when you  should go blocking when you should go  non blocking so the first step was  rebuilding Zul as I mentioned Zul  proxies all the traffic coming into AWS  and that traffic is global from all over  the world and it amounts to roughly tens  of billions of requests per day or  hundreds of terabytes transferred per  day our team is fairly small so given  this amount of traffic we like to keep  things as simple as possible and Zul 1.0  had a very simple architecture request  comes in hits a servlet the servlet runs  it through some pre filters it then gets  routed to an Origin blocks waits for a  response comes back hits the post  filters and then responds back to the  client  despite the simple architecture though  Zul has a lot of responsibilities it's  actually doing a lot more stuff than  just waiting for a response from the  origin so this kind of responsibility  and operational complexity was tough to  manage there's three key hotspots for us  first one was latency concurrent  connections the second one and lastly  thread count so in a blocking system if  our origin had even a minor latency  spike it would increase concurrent  connections significantly and then also  the thread count to deal with that kind  of uncertainty from our origins we use  history if you're unfamiliar with  hysterics it's an open source Netflix  framework and it does a lot of stuff but  primarily what we use it for is circuit  breaking so if a request is taking  longer than it should we'll cut it off  and return a reasonable fallback  that gave us some predictability in  terms of handling that latency another  potential scenario is you have a huge  spike in traffic and your concurrent  connections go up and then your thread  count goes up and the solution for that  is is something pretty common  we just throttle connections so at a  certain point once we hit a certain  number of connections we just don't  accept anymore and similarly with  requests if we're getting too many  requests we'll thrala requests and  reject any requests from coming in but  we can only throttle for so long at a  certain point even when we're throttling  our CPU will get maxed out a couple  instances will fall over a couple more  the remaining instances are not taking  way more traffic than they were before  they fall over and it accelerates until  finally Netflix is down and now that  we're international you can panic in  many languages so how can non blocking  help us here well first let's define  what I'm talking about when I say non  blocking non blocking is composed of  three main building blocks  the first one is non blocking i/o  primitives so you need a way to know  when a socket is ready to write to or to  read from without having to wait for it  and that's something that's provided to  you by your operating system generally  so on Linux you would have something  like a poll on BSD you would have KQ in  the JVM there's also niño and you need  those primitives in order to even do non  blocking in the first place once you  have those primitives in place you need  an asynchronous programming model to be  able to handle deferred execution so you  can use things like queues you could use  reactive extensions there's lots of  things you can do but you need some sort  of paradigm to handle that deferred  execution and still have a program that  makes sense and then lastly if you're  building a web server you need to put  those two things together and the most  common way to do that is with the event  loop pattern and the king of the event  loop pattern in Java is medi which is  what we used  so if you're unfamiliar with what an  event loop is it looks roughly like this  at least in a webserver it would look  roughly like this you'd get a request it  would get queued up and then scheduled  on to the event loop when the event loop  is ready it'll pick up that request do  some work maybe make a blocking call  that block and call would then get or  sorry not blocking call it a network  call in this case there would be non  blocking the network call would get  scheduled eventually it would return the  call back would then get scheduled in  the event loop comes back and then you  respond back to your your caller  so despite making light of the decision  to go in on blocking there are actually  some really strong benefits and for us  the two main ones were performance and  resiliency and our goal was to get  performance by increasing CPU  utilization and then get resiliency by  decoupling connections from requests  however we needed to embark on this  journey in an incremental fashion we  were still running Zul one and it was  taking a ton of traffic so we needed to  incrementally move this thing forward  it's kind of like changing out the  engine of your car while it's driving  down the highway so we call this middle  phase Azul one point five the first step  was switching Tomcat to the APR  connector and you can think of the APR  connector as just like a little event  loop server that runs in front of your  Tomcat instance and decouples  connections from requests and this is  mainly just a configuration change so it  didn't require any coding but it got us  a little bit of that resiliency game and  then the big chunk of work was changing  the way our filter chain worked so  instead of having synchronous filters we  have to create an asynchronous filter  chain part of the reason we wanted this  asynchronous filter chain is so that we  could run the same code in Tomcat and  nettie once we had this asynchronous  core we could execute it in either  container  and in order to do that we have to  change the interface from essentially  from an applied to an apply sink so  instead of returning an actual result it  would return an observable of that  result and then once we put those two  things together we ended up with this  really elegant observable filter chain  where a request comes in it gets mapped  through all the filters and then writes  a response out if there's an error we'll  write an error response and then on  every event we collect some metrics and  this is actually very similar to what  the code in Zul 2 looks like this is  made a little bit pretty but it's very  close so shipping Zul 1.5 gave us some  confidence that we could do this  incrementally and it set the stage for  us moving to Nettie's swapping out the  tomcat container for the neti container  now if you're not familiar with Nettie  I've overlaid Nettie nomenclature on top  of the event loop diagram that I showed  previously so in Eddie instead of having  a queue you would have a channel and you  can take of channel there's one to one  with connections so you would get a  channel queued up the channel will get a  read event the read event gets scheduled  onto the event loop does some work  writes a request out to an outbound  proxy channel reads that response when  it comes back and then sends out the  response back to the client so this is  this is exactly what Nettie does and  important to note this is all running on  a single thread so if you have four  cores you have four event loops so you  would preferably want to run one event  loop per thread the first step in the  netting migration was creating adapters  so we had to adapt our existing rx Java  filter chain and vanetti asynchronous  framework and this is a non-trivial task  you essentially have to send Nettie  events through your observable chain as  observables so instead of sending a byte  buff you would send an observable of  byte buff and you would  have to handle that content properly  which is particularly difficult if you  want to maintain the exact same  functionality and the exact same metrics  as you have in Tomcat and then the next  big step was rewriting the proxy client  so we can no longer block so we can't  use our existing Netflix blocking client  we had to write a brand new nettie  client to do the proxying and we had to  do all that while maintaining all the  same load balancing algorithms that we  had before but once that was done we  ended up with something that looks like  this  this is Zul 2.0 it looks fairly similar  but the difference is we have an Eddy  server fronting the request and we have  an Eddy client behind the requests and  sandwich between those two is the RX  Java filter chain so we're essentially  stitching a nettie incoming request  running it through some rxjava filters  creating a separate neti outbound  requests and then stitching the response  back through that same observable chain  so before we could deploy we ran into a  bunch of issues the first of which was  underlying assumptions made by our  dependent libraries the biggest one was  blocking a lot of our platform code  that's shared across the Netflix is  built with the assumption that we're  running in Tomcat so it's built with the  assumption that requests block so if  you're on a thread you can block that  thread and you're only gonna affect that  request and it's not a big deal and you  do whatever work you need to do and then  you move on  unfortunately with Nettie you can't do  that if you block and Nettie event loop  thread you're potentially pausing  hundreds of requests at the same time so  you can never ever block a Nettie thread  luckily for us there was a great  framework called reactive audit that  actually detected blocking at runtime  and sent us reports to let us know what  was happening and essentially just  throws a stacked  so it looks something like this you can  see we have an underlying library that's  calling thread dot sleep and it just  found it for us the alternative to this  would have been actually digging through  every piece of code and trying to find  some scenario where it might be blogging  so this was this was extremely useful  because we have hundreds of dependencies  that we pull in from other teams another  underlying assumption was thread locals  so again if you're assuming that you're  always going to be on the same thread  for the entirety of the request you can  actually set some state on that thread  and then a different library can pull  that state out and use it for its own  execution you can't do that in Eddy if  you set some state on a thread there  could be hundreds of requests that are  pulling that same state and if hundreds  of requests are setting and pulling the  same state it's basically useless it's  basically random so there was no great  tool for this unfortunately and we had  to do as much kind of manual inspection  and or trial and error to figure out  these kind of problems and as you'll see  later on we couldn't quite get all of  them another concern was was debugging  asynchronous requests so debugging  asynchronous code is just hard like it  just is it's it's much it's much harder  than debugging straightforward blocking  code tracing request failures is really  difficult comprehending stack traces  again they're not particularly useful or  thread dumps right thread dumps are  basically useless and another big  challenge we have is timing these  requests so we had to essentially create  a mapping of state changes and for that  we something inspired by Zach Hellman  who gave a talk on this at last year's  strange loop and it's called the request  passport so what we do is we set this  passport on the channel which is the  connection that's incoming and whenever  we change state whatever  Qwest changes state to you know doing  one thing doing another thing we set  that state and we set a time stamp and  then me when something failed or there's  an error or we just want to debug  something we can make these available so  that we can trace exactly what happened  in this failing request so an example  looks something like this we had an  issue where an ELB was timing out which  is unexpected because our timeouts on  Zul are much lower than the ELB time out  so we weren't quite sure why this is  happening and then we looked at this  passport example you can see the  highlighted lines the request comes in  the client channel becomes active which  means we're making an outbound request  to the origin the client Channel closes  with a read time out 45 seconds later  becomes active again and then about  another 15 seconds or so later the  server channel closes which means the  ELB is now closed that connection and  another 30 seconds or so later the  client channel again becomes inactive  with a retie map so what's happening  here is we're making a request its  timing out we're retrying that request  and before the retry can even get  halfway through the ELB is closing the  connection and it's pretty clear to see  in this timeline right but if we were to  trace this just using logs or stack  traces it would be impossible it would  be especially it would the amount of  traffic coming in it would be very very  difficult to trace these kind of errors  so this this request passport is  essential to debugging any sort of  request failure and we're super happy  with with how much easier is made our  life so once we got past the initial  slew of issues we went to production and  as you can guess there were some long  tail problems the first and kind of most  enduring one was direct memory leaks  so unlike Tomcat Neddie uses direct  memory to do its processing since its  using a pole it's actually running with  J&amp;I bindings it's running at a very low  level so it's it's not allocated on the  heap it's allocating direct memory and  which means you have to free that direct  memory and if you don't it's never gonna  be freed so what we would see is the  servers would slowly use more memory  over time especially clusters where the  instances wouldn't be recycled very fast  and then quietly they would just stop  serving traffic the RPS would go to zero  they wouldn't complain or anything they  just can't allocate any more memory so  it's done this is extremely difficult to  debug the tooling around direct memory  leak detection and Nettie is just not  great and we found the only thing we  could do is more or less trial and error  we'd look through the code we'd find  something that looked like maybe the  observable chain was breaking here and  we weren't closing the request put into  production okay to fix the leak or no it  didn't fix the leak and then it's back  to the drawing board so that was  unfortunate we still actually have some  of these issues but you know it's one of  those whack-a-mole type of situations  and as I mentioned analyzing async code  is hard and not only are we analyzing  async code for one framework we actually  have two asynchronous frameworks being  integrated so we have our X Java being  integrated with Nettie and those  integration points are extremely complex  and then when things go wrong you get  these beautiful stack traces they look  something like this there's a little bit  of our X and then maybe Nettie soon yeah  there's some Nettie stuff so not not  great not great  so aside from deep stacks being bad  it's just unreadable you can't really  make sense of that exception so we have  to actually modify our logger to be a  little bit smarter  so if we see repeating lines you know if  there's ten or twenty lines that are  just like our X observable all it'll  collapse them all into a single line and  just put a counter at the end of that  and that eliminates a lot of that  repetition that you're seeing and that  really deep call stack in our X and then  the other big thing we did that helped  our performance was we just stopped  filling stack traces and critical code  so if we know we're in a piece of code  that if we're getting hammered at 95%  CPU that code is just going to be  throwing exceptions over and over and  over again we just don't feel any stack  traces we log a line and that's it and  that'll help us degrade much more  gracefully because if you're spending  all your time generating these stack  traces and you're getting hammered by  requests you're just gonna fall over  just can't do anything about it the next  scenario is something we like to call  the Gio shuffle so imagine a request is  coming in to Netflix from San Francisco  and that request gets directed to a CDN  server in Siberia or maybe in India or  Brazil or South Africa it's probably not  optimal if you live in San Francisco you  probably don't want to stream your  content from Siberia so our CDN team was  alerted to location issues people are  being map to the wrong place we're  sending people across the globe for for  no reason what's going on so anybody  have any ideas what happened thoughts no  very close yeah thread locals  so as I mentioned this was a very  difficult issue to debug because a lot  of it happens in our underlying library  is not in our actual code so this  particular call which is a geo lookup  was getting set on a thread and then  basically any other request on that  event loop could pull that geo data so  if your request came in you could get a  signed geo data for a request from  Brazil or from you know Siberia or  whatever and suddenly you're getting a  CDN from Siberia so not optimal the  solution for this was we couldn't  rewrite all those dependent libraries  what we had to do is actually set the  thread locals correctly whenever we  entered the event loop so a neti you  have a channel pipeline where all your  channel handlers get executed and what  every time we enter that channel  pipeline we set the thread locals for  all the code for all the state that  potentially may run on that request and  we essentially copy that from the  channel the other scenario is if we go  into an rx thread and we come back we  also have to do the same thing and copy  the state onto the thread locals this is  annoying but unfortunately something we  just had to do otherwise you see these  kind of horrible shuffling issues but it  wasn't all bad  there were there were a lot of benefits  as well particularly around resiliency  so during a retry storm we continued  serving to hundreds even though we're at  max CPU what is a retry storm retry  storm looks something like this so we  have successful requests coming in and  then we have like a baseline rate of  errors and suddenly there's an error  spiked when this happens there's a retry  storm and the retry storm is actually  significantly higher than the error  spike the reason for this is Netflix  devices are by default  very aggressive at retrying because  during normal watching during normal  operations and everything's fine retries  solve almost every problem if there's a  network issue if your device has having  issues whatever it may be those devices  are set to retry very very aggressively  because it'll just keep things running  very smoothly but when there's an actual  error when there's something happens  where something breaks at Netflix those  devices retry multiple times they send  us error logs and the users probably  tapping the screen over and over so that  kind of thing creates this huge wave of  traffic and this time scale is roughly  10 minutes so this wave of traffic hits  really quickly much faster than we could  potentially auto-scale our cluster in  AWS so again normal CPU usage max CPU  when we were on Zul 1 and the only way  to survive this kind of retry storm was  to throttle very very aggressively so  not only would we throttle the retries  but we would actually throttle a lot of  the regular green successful traffic and  that's just to keep ourselves up just so  we don't go down but what we noticed was  a little - is that we could actually  weather the storm we could continue  serving that green line at the same rate  continue serving all the 200s and  actually serve most of the retries  without throttling the actual  degradation scenario between Tomcat and  Metis in particularly the one in Seoul -  is very different so it was a little -  we can handle way more RPS at max CPU  than we could with Zul one and the  biggest reason for this is latency Zul -  is actually doing a lot less work around  that kind of core connection context  switching although all the stuff that  the event loop improves less thread  contention that kind of stuff that stuff  matters a lot when you're at max CPU and  that's what creates this really smooth  latency breakdown which makes little to  handle that kind of degradation at max  CPU much better so this was a game  changer for us this this kind of  resiliency benefit was massive it  allowed us to shield our back-end  services from these huge storms and we  actually took it a step further if we  notice that our origin is airing or  throttling at a certain rate we just  throw away all the retries so if there's  a retry storm that origin won't even see  it  if it starts throttling at 5% or  whatever the number is all those retries  get tossed away and this has helped a  lot this has helped keep our back hands  up because they generally do a lot more  work than we do right we just kind of  pass the request along they actually do  the you know setting up your playback  session and giving you the right CDN to  go to and like all this stuff for giving  you the right movies to see so if we can  reduce the load on them that's a huge  game changer for us and it can keep them  up when potentially they may not have  been previously the other big benefit is  long live connections so with Neddie we  can scale to tens of thousands of  connections per instance which allows us  to go to millions of concurrent clients  and this is allowed us to implement  WebSockets support which we use for push  notifications and for other new features  that our partner teams can come up with  that implement WebSockets so this was  again a really huge improvement that  allowed us to actually push features  that we wouldn't have been able to push  otherwise and then lastly relaxed  latency constraints so we don't really  care how long a request takes because  it's not going to increase our thread  count and we don't really care how many  concurrent connections we have so our  timeouts don't need to be as strictly  guarded as they had to be in Zul 1 so  our origins and our devices can set  whatever timeout they want within reason  obviously and we don't necessarily need  hystrix anymore because the circuit  breaking again isn't critical the the  latency that that request takes doesn't  really matter because the event will  just move on to the other  quests that are not that are ready to be  you know read or written to get it  blocking so which one is right for you  should you go blocking should you go non  blocking so as I mentioned there was  only roughly a 10 to 20 percent gain in  throughput between Zul 2 and Zul 1 and  these numbers are just to clarify these  numbers are not from benchmarks this is  production numbers so same code running  side-by-side on two servers so the  reason for this is Zul has a lot of  responsibilities and fundamentally Zul  is a CPU bound service so we're not just  sitting there waiting for something to  happen we actually spend most of our  time in CPU not waiting for IO and you  can see some of the things on there like  authentication encryption and decryption  hashing there's there's some stuff in  there that's actually very  computationally expensive when you have  to do it for every single request and  response going in and out  so although we improved stuff like you  know context switching and handling  connections better and less thread pools  and all kinds of efficiency the amount  of work that each request takes didn't  actually change right we improved the  stuff around the edges but the core  functionality didn't get any smaller and  that's essentially why the performance  was roughly the same so if you're a CPU  bound service if you have highly CPU  bound workloads you probably don't need  to go non-blocking  it probably won't benefit you that much  and then you'll get other benefits  you'll have simpler operational model  you have way simpler development model  everything is gonna be linear and  particularly if you're running legacy  systems that are already blocking you  may not get any it may not be worthwhile  to rewrite those to be non-blocking  however if you're highly i/o bound you  should definitely go a non-blocking if  you send up a request and then don't  touch the CPU until that request comes  back you are i/o bound you should  probably go non-blocking if you have  long requests or large files where you  may have tons of connections coming in  and just waiting and streaming data you  should probably go in on blocking if  you're reading from a queue at your own  pace you should definitely go in on  blocking if you have massive amounts of  connections concurrently things like  chat room or WebSockets something like  that you should definitely go  non-blocking so some other things to  keep in mind  benchmark accuracy is important I know I  made a joke about it before but that  joke kind of stems from some amount of  reality right it's important to set up  realistic benchmarks so you set your  expectations correctly and you have to  simulate real-world workloads when  you're testing out these new frameworks  right so deciding when to go blocking or  not blocking  again it's not a trivial decision you  should actually verify that these  assumptions that I'm telling you right  now are correct you should run it  against your actual service because  every service is different and then you  have to account for the long-term costs  so going non-blocking has costs  associated with it as I mentioned  particularly apps are harder to debug  there's an ongoing maintenance of async  code that's more difficult than non  async code and then a support and  operations burden and ultimately you  need to ask yourself what critical  features do you really need are those  features worth the costs and what's your  answer to it depends if your answer to  it depends is I want to use this cool  shiny new tech then maybe you should  reconsider maybe you should run some  benchmarks maybe you should verify that  that shiny new tech is actually worth  those costs  so we jumped head in we learned some  hard lessons we learned that our code  base is more complicated than it was  before  we saw some memory leaks we had that geo  shuffle incident you know there's lots  of underlying assumptions from our  libraries that we have to work around  and handle we have to increase the debug  ability with the request passport but we  got huge resiliency gains we're now able  to ship features that we wouldn't have  been able to ship before with WebSockets  and we could configure our timeouts and  create flexibility for our partners so  for us it was definitely worth it and  for you if you decide to use Zul to in  the future and your service is i/o bound  unlike ours you could see some huge  benefits compared to Zul one thank you  [Applause]
+
+00:00:08.940 --> 00:00:13.110 align:start position:0%
+four years ago Netflix's traffic was  growing at an exponential rate but not  only was the number of subscribers  growing but the actual hours that each  subscriber was using the services was  growing similarly so this created a lot  of complexity the growing traffic the  diversity of all kinds of different  devices the growing amount of back-end  services and in order to create some  flexibility to handle this complexity we  build Zul if you're a fan of  ghostbusters you'll know that Zul is the  gatekeeper and that's exactly what a  dozen netflix Zul handles all the  traffic coming into netflix into AWS and  then primarily its biggest  responsibility is routing that traffic  where it needs to go but it also  provides us monitoring security  resiliency and flexibility for context  Zul sits between the AWS elastic load  balancers and our back-end services so  since it's the highest point of the  traffic coming in we have a very good  place to monitor traffic that's what  that's the kind of monitoring that  provides us as well as alerting and  anomaly detection and then it's also  responsible for security blocking  fraudulent traffic mitigating DDoS  attacks things like that and then  resiliency things like shielding origins  from excess traffic throttling and  finally flexibility with things like  self-serve routing and Canarian clusters  and features like that so we built Zul  using the standard java model it was  built on Tomcat running java servlets  with blocking requests so in a blocking  request cycle request comes in gets a  request thread does a little bit of work  maybe makes a network call blocks when  the network call completes unblocks  finishes whatever worker was doing and  then returns a response and if you want  parallel as  in that kind of paradigm you need to  have two of those things so each one of  these would be a thread and then you  would scale up to as many threads as you  need to handle the concurrent requests  that you want but when we looked at the  continually growing traffic the trends  of growth didn't stop right they kept  getting bigger and bigger  we knew that we already needed to start  thinking about the next version of Zul  so we looked around the landscape of  distributed systems and all the new  hotness was functional reactive non  blocking programming our colleagues and  Netflix were writing bleeding edge  software for this for this new paradigm  things like rx Java or XJS hystrix and  then others in the industry were really  big on event loop servers like Nettie so  the move seemed kind of like a  no-brainer right we're generally a proxy  so we send a request and then a wait for  a response so we should eliminate that  waiting time so we built a very  comprehensive test application and then  we ran some really thorough benchmarks  with that test application and you can  see that it was awesome right 73,000  requests per second that's great so  let's do it unfortunately the results  that we saw in the real world weren't  quite that good it turns out that the  performance between Zul one and Zul two  was roughly the same so you're probably  wondering was it worth it would we do it  again should you do it you do not do it  and the answer is something you've all  probably heard before  it depends there's actually a very long  list of pros and cons as you can imagine  and it's a it's a nuanced decision it's  not it's not that simple so today I'm  going to touch on how we rebuild Zul  using natty and rx Java  what it's been like operating Zul 2.0 in  the real world and finally when you  should go blocking when you should go  non blocking so the first step was  rebuilding Zul as I mentioned Zul  proxies all the traffic coming into AWS  and that traffic is global from all over  the world and it amounts to roughly tens  of billions of requests per day or  hundreds of terabytes transferred per  day our team is fairly small so given  this amount of traffic we like to keep  things as simple as possible and Zul 1.0  had a very simple architecture request  comes in hits a servlet the servlet runs  it through some pre filters it then gets  routed to an Origin blocks waits for a  response comes back hits the post  filters and then responds back to the  client  despite the simple architecture though  Zul has a lot of responsibilities it's  actually doing a lot more stuff than  just waiting for a response from the  origin so this kind of responsibility  and operational complexity was tough to  manage there's three key hotspots for us  first one was latency concurrent  connections the second one and lastly  thread count so in a blocking system if  our origin had even a minor latency  spike it would increase concurrent  connections significantly and then also  the thread count to deal with that kind  of uncertainty from our origins we use  history if you're unfamiliar with  hysterics it's an open source Netflix  framework and it does a lot of stuff but  primarily what we use it for is circuit  breaking so if a request is taking  longer than it should we'll cut it off  and return a reasonable fallback  that gave us some predictability in  terms of handling that latency another  potential scenario is you have a huge  spike in traffic and your concurrent  connections go up and then your thread  count goes up and the solution for that  is is something pretty common  we just throttle connections so at a  certain point once we hit a certain  number of connections we just don't  accept anymore and similarly with  requests if we're getting too many  requests we'll thrala requests and  reject any requests from coming in but  we can only throttle for so long at a  certain point even when we're throttling  our CPU will get maxed out a couple  instances will fall over a couple more  the remaining instances are not taking  way more traffic than they were before  they fall over and it accelerates until  finally Netflix is down and now that  we're international you can panic in  many languages so how can non blocking  help us here well first let's define  what I'm talking about when I say non  blocking non blocking is composed of  three main building blocks  the first one is non blocking i/o  primitives so you need a way to know  when a socket is ready to write to or to  read from without having to wait for it  and that's something that's provided to  you by your operating system generally  so on Linux you would have something  like a poll on BSD you would have KQ in  the JVM there's also niño and you need  those primitives in order to even do non  blocking in the first place once you  have those primitives in place you need  an asynchronous programming model to be  able to handle deferred execution so you  can use things like queues you could use  reactive extensions there's lots of  things you can do but you need some sort  of paradigm to handle that deferred  execution and still have a program that  makes sense and then lastly if you're  building a web server you need to put  those two things together and the most  common way to do that is with the event  loop pattern and the king of the event  loop pattern in Java is medi which is  what we used  so if you're unfamiliar with what an  event loop is it looks roughly like this  at least in a webserver it would look  roughly like this you'd get a request it  would get queued up and then scheduled  on to the event loop when the event loop  is ready it'll pick up that request do  some work maybe make a blocking call  that block and call would then get or  sorry not blocking call it a network  call in this case there would be non  blocking the network call would get  scheduled eventually it would return the  call back would then get scheduled in  the event loop comes back and then you  respond back to your your caller  so despite making light of the decision  to go in on blocking there are actually  some really strong benefits and for us  the two main ones were performance and  resiliency and our goal was to get  performance by increasing CPU  utilization and then get resiliency by  decoupling connections from requests  however we needed to embark on this  journey in an incremental fashion we  were still running Zul one and it was  taking a ton of traffic so we needed to  incrementally move this thing forward  it's kind of like changing out the  engine of your car while it's driving  down the highway so we call this middle  phase Azul one point five the first step  was switching Tomcat to the APR  connector and you can think of the APR  connector as just like a little event  loop server that runs in front of your  Tomcat instance and decouples  connections from requests and this is  mainly just a configuration change so it  didn't require any coding but it got us  a little bit of that resiliency game and  then the big chunk of work was changing  the way our filter chain worked so  instead of having synchronous filters we  have to create an asynchronous filter  chain part of the reason we wanted this  asynchronous filter chain is so that we  could run the same code in Tomcat and  nettie once we had this asynchronous  core we could execute it in either  container  and in order to do that we have to  change the interface from essentially  from an applied to an apply sink so  instead of returning an actual result it  would return an observable of that  result and then once we put those two  things together we ended up with this  really elegant observable filter chain  where a request comes in it gets mapped  through all the filters and then writes  a response out if there's an error we'll  write an error response and then on  every event we collect some metrics and  this is actually very similar to what  the code in Zul 2 looks like this is  made a little bit pretty but it's very  close so shipping Zul 1.5 gave us some  confidence that we could do this  incrementally and it set the stage for  us moving to Nettie's swapping out the  tomcat container for the neti container  now if you're not familiar with Nettie  I've overlaid Nettie nomenclature on top  of the event loop diagram that I showed  previously so in Eddie instead of having  a queue you would have a channel and you  can take of channel there's one to one  with connections so you would get a  channel queued up the channel will get a  read event the read event gets scheduled  onto the event loop does some work  writes a request out to an outbound  proxy channel reads that response when  it comes back and then sends out the  response back to the client so this is  this is exactly what Nettie does and  important to note this is all running on  a single thread so if you have four  cores you have four event loops so you  would preferably want to run one event  loop per thread the first step in the  netting migration was creating adapters  so we had to adapt our existing rx Java  filter chain and vanetti asynchronous  framework and this is a non-trivial task  you essentially have to send Nettie  events through your observable chain as  observables so instead of sending a byte  buff you would send an observable of  byte buff and you would  have to handle that content properly  which is particularly difficult if you  want to maintain the exact same  functionality and the exact same metrics  as you have in Tomcat and then the next  big step was rewriting the proxy client  so we can no longer block so we can't  use our existing Netflix blocking client  we had to write a brand new nettie  client to do the proxying and we had to  do all that while maintaining all the  same load balancing algorithms that we  had before but once that was done we  ended up with something that looks like  this  this is Zul 2.0 it looks fairly similar  but the difference is we have an Eddy  server fronting the request and we have  an Eddy client behind the requests and  sandwich between those two is the RX  Java filter chain so we're essentially  stitching a nettie incoming request  running it through some rxjava filters  creating a separate neti outbound  requests and then stitching the response  back through that same observable chain  so before we could deploy we ran into a  bunch of issues the first of which was  underlying assumptions made by our  dependent libraries the biggest one was  blocking a lot of our platform code  that's shared across the Netflix is  built with the assumption that we're  running in Tomcat so it's built with the  assumption that requests block so if  you're on a thread you can block that  thread and you're only gonna affect that  request and it's not a big deal and you  do whatever work you need to do and then  you move on  unfortunately with Nettie you can't do  that if you block and Nettie event loop  thread you're potentially pausing  hundreds of requests at the same time so  you can never ever block a Nettie thread  luckily for us there was a great  framework called reactive audit that  actually detected blocking at runtime  and sent us reports to let us know what  was happening and essentially just  throws a stacked  so it looks something like this you can  see we have an underlying library that's  calling thread dot sleep and it just  found it for us the alternative to this  would have been actually digging through  every piece of code and trying to find  some scenario where it might be blogging  so this was this was extremely useful  because we have hundreds of dependencies  that we pull in from other teams another  underlying assumption was thread locals  so again if you're assuming that you're  always going to be on the same thread  for the entirety of the request you can  actually set some state on that thread  and then a different library can pull  that state out and use it for its own  execution you can't do that in Eddy if  you set some state on a thread there  could be hundreds of requests that are  pulling that same state and if hundreds  of requests are setting and pulling the  same state it's basically useless it's  basically random so there was no great  tool for this unfortunately and we had  to do as much kind of manual inspection  and or trial and error to figure out  these kind of problems and as you'll see  later on we couldn't quite get all of  them another concern was was debugging  asynchronous requests so debugging  asynchronous code is just hard like it  just is it's it's much it's much harder  than debugging straightforward blocking  code tracing request failures is really  difficult comprehending stack traces  again they're not particularly useful or  thread dumps right thread dumps are  basically useless and another big  challenge we have is timing these  requests so we had to essentially create  a mapping of state changes and for that  we something inspired by Zach Hellman  who gave a talk on this at last year's  strange loop and it's called the request  passport so what we do is we set this  passport on the channel which is the  connection that's incoming and whenever  we change state whatever  Qwest changes state to you know doing  one thing doing another thing we set  that state and we set a time stamp and  then me when something failed or there's  an error or we just want to debug  something we can make these available so  that we can trace exactly what happened  in this failing request so an example  looks something like this we had an  issue where an ELB was timing out which  is unexpected because our timeouts on  Zul are much lower than the ELB time out  so we weren't quite sure why this is  happening and then we looked at this  passport example you can see the  highlighted lines the request comes in  the client channel becomes active which  means we're making an outbound request  to the origin the client Channel closes  with a read time out 45 seconds later  becomes active again and then about  another 15 seconds or so later the  server channel closes which means the  ELB is now closed that connection and  another 30 seconds or so later the  client channel again becomes inactive  with a retie map so what's happening  here is we're making a request its  timing out we're retrying that request  and before the retry can even get  halfway through the ELB is closing the  connection and it's pretty clear to see  in this timeline right but if we were to  trace this just using logs or stack  traces it would be impossible it would  be especially it would the amount of  traffic coming in it would be very very  difficult to trace these kind of errors  so this this request passport is  essential to debugging any sort of  request failure and we're super happy  with with how much easier is made our  life so once we got past the initial  slew of issues we went to production and  as you can guess there were some long  tail problems the first and kind of most  enduring one was direct memory leaks  so unlike Tomcat Neddie uses direct  memory to do its processing since its  using a pole it's actually running with  J&amp;I bindings it's running at a very low  level so it's it's not allocated on the  heap it's allocating direct memory and  which means you have to free that direct  memory and if you don't it's never gonna  be freed so what we would see is the  servers would slowly use more memory  over time especially clusters where the  instances wouldn't be recycled very fast  and then quietly they would just stop  serving traffic the RPS would go to zero  they wouldn't complain or anything they  just can't allocate any more memory so  it's done this is extremely difficult to  debug the tooling around direct memory  leak detection and Nettie is just not  great and we found the only thing we  could do is more or less trial and error  we'd look through the code we'd find  something that looked like maybe the  observable chain was breaking here and  we weren't closing the request put into  production okay to fix the leak or no it  didn't fix the leak and then it's back  to the drawing board so that was  unfortunate we still actually have some  of these issues but you know it's one of  those whack-a-mole type of situations  and as I mentioned analyzing async code  is hard and not only are we analyzing  async code for one framework we actually  have two asynchronous frameworks being  integrated so we have our X Java being  integrated with Nettie and those  integration points are extremely complex  and then when things go wrong you get  these beautiful stack traces they look  something like this there's a little bit  of our X and then maybe Nettie soon yeah  there's some Nettie stuff so not not  great not great  so aside from deep stacks being bad  it's just unreadable you can't really  make sense of that exception so we have  to actually modify our logger to be a  little bit smarter  so if we see repeating lines you know if  there's ten or twenty lines that are  just like our X observable all it'll  collapse them all into a single line and  just put a counter at the end of that  and that eliminates a lot of that  repetition that you're seeing and that  really deep call stack in our X and then  the other big thing we did that helped  our performance was we just stopped  filling stack traces and critical code  so if we know we're in a piece of code  that if we're getting hammered at 95%  CPU that code is just going to be  throwing exceptions over and over and  over again we just don't feel any stack  traces we log a line and that's it and  that'll help us degrade much more  gracefully because if you're spending  all your time generating these stack  traces and you're getting hammered by  requests you're just gonna fall over  just can't do anything about it the next  scenario is something we like to call  the Gio shuffle so imagine a request is  coming in to Netflix from San Francisco  and that request gets directed to a CDN  server in Siberia or maybe in India or  Brazil or South Africa it's probably not  optimal if you live in San Francisco you  probably don't want to stream your  content from Siberia so our CDN team was  alerted to location issues people are  being map to the wrong place we're  sending people across the globe for for  no reason what's going on so anybody  have any ideas what happened thoughts no  very close yeah thread locals  so as I mentioned this was a very  difficult issue to debug because a lot  of it happens in our underlying library  is not in our actual code so this  particular call which is a geo lookup  was getting set on a thread and then  basically any other request on that  event loop could pull that geo data so  if your request came in you could get a  signed geo data for a request from  Brazil or from you know Siberia or  whatever and suddenly you're getting a  CDN from Siberia so not optimal the  solution for this was we couldn't  rewrite all those dependent libraries  what we had to do is actually set the  thread locals correctly whenever we  entered the event loop so a neti you  have a channel pipeline where all your  channel handlers get executed and what  every time we enter that channel  pipeline we set the thread locals for  all the code for all the state that  potentially may run on that request and  we essentially copy that from the  channel the other scenario is if we go  into an rx thread and we come back we  also have to do the same thing and copy  the state onto the thread locals this is  annoying but unfortunately something we  just had to do otherwise you see these  kind of horrible shuffling issues but it  wasn't all bad  there were there were a lot of benefits  as well particularly around resiliency  so during a retry storm we continued  serving to hundreds even though we're at  max CPU what is a retry storm retry  storm looks something like this so we  have successful requests coming in and  then we have like a baseline rate of  errors and suddenly there's an error  spiked when this happens there's a retry  storm and the retry storm is actually  significantly higher than the error  spike the reason for this is Netflix  devices are by default  very aggressive at retrying because  during normal watching during normal  operations and everything's fine retries  solve almost every problem if there's a  network issue if your device has having  issues whatever it may be those devices  are set to retry very very aggressively  because it'll just keep things running  very smoothly but when there's an actual  error when there's something happens  where something breaks at Netflix those  devices retry multiple times they send  us error logs and the users probably  tapping the screen over and over so that  kind of thing creates this huge wave of  traffic and this time scale is roughly  10 minutes so this wave of traffic hits  really quickly much faster than we could  potentially auto-scale our cluster in  AWS so again normal CPU usage max CPU  when we were on Zul 1 and the only way  to survive this kind of retry storm was  to throttle very very aggressively so  not only would we throttle the retries  but we would actually throttle a lot of  the regular green successful traffic and  that's just to keep ourselves up just so  we don't go down but what we noticed was  a little - is that we could actually  weather the storm we could continue  serving that green line at the same rate  continue serving all the 200s and  actually serve most of the retries  without throttling the actual  degradation scenario between Tomcat and  Metis in particularly the one in Seoul -  is very different so it was a little -  we can handle way more RPS at max CPU  than we could with Zul one and the  biggest reason for this is latency Zul -  is actually doing a lot less work around  that kind of core connection context  switching although all the stuff that  the event loop improves less thread  contention that kind of stuff that stuff  matters a lot when you're at max CPU and  that's what creates this really smooth  latency breakdown which makes little to  handle that kind of degradation at max  CPU much better so this was a game  changer for us this this kind of  resiliency benefit was massive it  allowed us to shield our back-end  services from these huge storms and we  actually took it a step further if we  notice that our origin is airing or  throttling at a certain rate we just  throw away all the retries so if there's  a retry storm that origin won't even see  it  if it starts throttling at 5% or  whatever the number is all those retries  get tossed away and this has helped a  lot this has helped keep our back hands  up because they generally do a lot more  work than we do right we just kind of  pass the request along they actually do  the you know setting up your playback  session and giving you the right CDN to  go to and like all this stuff for giving  you the right movies to see so if we can  reduce the load on them that's a huge  game changer for us and it can keep them  up when potentially they may not have  been previously the other big benefit is  long live connections so with Neddie we  can scale to tens of thousands of  connections per instance which allows us  to go to millions of concurrent clients  and this is allowed us to implement  WebSockets support which we use for push  notifications and for other new features  that our partner teams can come up with  that implement WebSockets so this was  again a really huge improvement that  allowed us to actually push features  that we wouldn't have been able to push  otherwise and then lastly relaxed  latency constraints so we don't really  care how long a request takes because  it's not going to increase our thread  count and we don't really care how many  concurrent connections we have so our  timeouts don't need to be as strictly  guarded as they had to be in Zul 1 so  our origins and our devices can set  whatever timeout they want within reason  obviously and we don't necessarily need  hystrix anymore because the circuit  breaking again isn't critical the the  latency that that request takes doesn't  really matter because the event will  just move on to the other  quests that are not that are ready to be  you know read or written to get it  blocking so which one is right for you  should you go blocking should you go non  blocking so as I mentioned there was  only roughly a 10 to 20 percent gain in  throughput between Zul 2 and Zul 1 and  these numbers are just to clarify these  numbers are not from benchmarks this is  production numbers so same code running  side-by-side on two servers so the  reason for this is Zul has a lot of  responsibilities and fundamentally Zul  is a CPU bound service so we're not just  sitting there waiting for something to  happen we actually spend most of our  time in CPU not waiting for IO and you  can see some of the things on there like  authentication encryption and decryption  hashing there's there's some stuff in  there that's actually very  computationally expensive when you have  to do it for every single request and  response going in and out  so although we improved stuff like you  know context switching and handling  connections better and less thread pools  and all kinds of efficiency the amount  of work that each request takes didn't  actually change right we improved the  stuff around the edges but the core  functionality didn't get any smaller and  that's essentially why the performance  was roughly the same so if you're a CPU  bound service if you have highly CPU  bound workloads you probably don't need  to go non-blocking  it probably won't benefit you that much  and then you'll get other benefits  you'll have simpler operational model  you have way simpler development model  everything is gonna be linear and  particularly if you're running legacy  systems that are already blocking you  may not get any it may not be worthwhile  to rewrite those to be non-blocking  however if you're highly i/o bound you  should definitely go a non-blocking if  you send up a request and then don't  touch the CPU until that request comes  back you are i/o bound you should  probably go non-blocking if you have  long requests or large files where you  may have tons of connections coming in  and just waiting and streaming data you  should probably go in on blocking if  you're reading from a queue at your own  pace you should definitely go in on  blocking if you have massive amounts of  connections concurrently things like  chat room or WebSockets something like  that you should definitely go  non-blocking so some other things to  keep in mind  benchmark accuracy is important I know I  made a joke about it before but that  joke kind of stems from some amount of  reality right it's important to set up  realistic benchmarks so you set your  expectations correctly and you have to  simulate real-world workloads when  you're testing out these new frameworks  right so deciding when to go blocking or  not blocking  again it's not a trivial decision you  should actually verify that these  assumptions that I'm telling you right  now are correct you should run it  against your actual service because  every service is different and then you  have to account for the long-term costs  so going non-blocking has costs  associated with it as I mentioned  particularly apps are harder to debug  there's an ongoing maintenance of async  code that's more difficult than non  async code and then a support and  operations burden and ultimately you  need to ask yourself what critical  features do you really need are those  features worth the costs and what's your  answer to it depends if your answer to  it depends is I want to use this cool  shiny new tech then maybe you should  reconsider maybe you should run some  benchmarks maybe you should verify that  that shiny new tech is actually worth  those costs  so we jumped head in we learned some  hard lessons we learned that our code  base is more complicated than it was  before  we saw some memory leaks we had that geo  shuffle incident you know there's lots  of underlying assumptions from our  libraries that we have to work around  and handle we have to increase the debug  ability with the request passport but we  got huge resiliency gains we're now able  to ship features that we wouldn't have  been able to ship before with WebSockets  and we could configure our timeouts and  create flexibility for our partners so  for us it was definitely worth it and  for you if you decide to use Zul to in  the future and your service is i/o bound  unlike ours you could see some huge  benefits compared to Zul one thank you  [Applause]
+ 
+
+00:00:13.110 --> 00:00:14.310 align:start position:0%
+ 
+ 
+
+00:00:14.310 --> 00:00:17.700 align:start position:0%
+ 
+ 
+
+00:00:17.700 --> 00:00:20.730 align:start position:0%
+ 
+ 
+
+00:00:20.730 --> 00:00:25.259 align:start position:0%
+ 
+ 
+
+00:00:25.259 --> 00:00:27.359 align:start position:0%
+ 
+ 
+
+00:00:27.359 --> 00:00:28.919 align:start position:0%
+ 
+ 
+
+00:00:28.919 --> 00:00:31.499 align:start position:0%
+ 
+ 
+
+00:00:31.499 --> 00:00:33.869 align:start position:0%
+ 
+ 
+
+00:00:33.869 --> 00:00:37.799 align:start position:0%
+ 
+ 
+
+00:00:37.799 --> 00:00:41.700 align:start position:0%
+ 
+ 
+
+00:00:41.700 --> 00:00:45.420 align:start position:0%
+ 
+ 
+
+00:00:45.420 --> 00:00:48.090 align:start position:0%
+ 
+ 
+
+00:00:48.090 --> 00:00:50.460 align:start position:0%
+ 
+ 
+
+00:00:50.460 --> 00:00:54.560 align:start position:0%
+ 
+ 
+
+00:00:54.560 --> 00:00:57.179 align:start position:0%
+ 
+ 
+
+00:00:57.179 --> 00:00:59.219 align:start position:0%
+ 
+ 
+
+00:00:59.219 --> 00:01:01.320 align:start position:0%
+ 
+ 
+
+00:01:01.320 --> 00:01:04.160 align:start position:0%
+ 
+ 
+
+00:01:04.160 --> 00:01:08.609 align:start position:0%
+ 
+ 
+
+00:01:08.609 --> 00:01:12.630 align:start position:0%
+ 
+ 
+
+00:01:12.630 --> 00:01:16.230 align:start position:0%
+ 
+ 
+
+00:01:16.230 --> 00:01:18.029 align:start position:0%
+ 
+ 
+
+00:01:18.029 --> 00:01:19.770 align:start position:0%
+ 
+ 
+
+00:01:19.770 --> 00:01:21.419 align:start position:0%
+ 
+ 
+
+00:01:21.419 --> 00:01:22.410 align:start position:0%
+ 
+ 
+
+00:01:22.410 --> 00:01:24.599 align:start position:0%
+ 
+ 
+
+00:01:24.599 --> 00:01:27.929 align:start position:0%
+ 
+ 
+
+00:01:27.929 --> 00:01:30.090 align:start position:0%
+ 
+ 
+
+00:01:30.090 --> 00:01:32.580 align:start position:0%
+ 
+ 
+
+00:01:32.580 --> 00:01:35.160 align:start position:0%
+ 
+ 
+
+00:01:35.160 --> 00:01:37.830 align:start position:0%
+ 
+ 
+
+00:01:37.830 --> 00:01:40.130 align:start position:0%
+ 
+ 
+
+00:01:40.130 --> 00:01:42.359 align:start position:0%
+ 
+ 
+
+00:01:42.359 --> 00:01:44.899 align:start position:0%
+ 
+ 
+
+00:01:44.899 --> 00:01:49.709 align:start position:0%
+ 
+ 
+
+00:01:49.709 --> 00:01:53.010 align:start position:0%
+ 
+ 
+
+00:01:53.010 --> 00:01:56.399 align:start position:0%
+ 
+ 
+
+00:01:56.399 --> 00:02:00.629 align:start position:0%
+ 
+ 
+
+00:02:00.629 --> 00:02:03.929 align:start position:0%
+ 
+ 
+
+00:02:03.929 --> 00:02:05.660 align:start position:0%
+ 
+ 
+
+00:02:05.660 --> 00:02:10.830 align:start position:0%
+ 
+ 
+
+00:02:10.830 --> 00:02:12.630 align:start position:0%
+ 
+ 
+
+00:02:12.630 --> 00:02:14.460 align:start position:0%
+ 
+ 
+
+00:02:14.460 --> 00:02:18.180 align:start position:0%
+ 
+ 
+
+00:02:18.180 --> 00:02:18.899 align:start position:0%
+ 
+ 
+
+00:02:18.899 --> 00:02:21.479 align:start position:0%
+ 
+ 
+
+00:02:21.479 --> 00:02:24.569 align:start position:0%
+ 
+ 
+
+00:02:24.569 --> 00:02:27.149 align:start position:0%
+ 
+ 
+
+00:02:27.149 --> 00:02:28.709 align:start position:0%
+ 
+ 
+
+00:02:28.709 --> 00:02:30.330 align:start position:0%
+ 
+ 
+
+00:02:30.330 --> 00:02:35.550 align:start position:0%
+ 
+ 
+
+00:02:35.550 --> 00:02:38.670 align:start position:0%
+ 
+ 
+
+00:02:38.670 --> 00:02:40.709 align:start position:0%
+ 
+ 
+
+00:02:40.709 --> 00:02:41.910 align:start position:0%
+ 
+ 
+
+00:02:41.910 --> 00:02:44.550 align:start position:0%
+ 
+ 
+
+00:02:44.550 --> 00:02:48.050 align:start position:0%
+ 
+ 
+
+00:02:48.050 --> 00:02:52.770 align:start position:0%
+ 
+ 
+
+00:02:52.770 --> 00:02:55.319 align:start position:0%
+ 
+ 
+
+00:02:55.319 --> 00:02:57.869 align:start position:0%
+ 
+ 
+
+00:02:57.869 --> 00:03:01.050 align:start position:0%
+ 
+ 
+
+00:03:01.050 --> 00:03:02.459 align:start position:0%
+ 
+ 
+
+00:03:02.459 --> 00:03:04.740 align:start position:0%
+ 
+ 
+
+00:03:04.740 --> 00:03:09.149 align:start position:0%
+ 
+ 
+
+00:03:09.149 --> 00:03:11.099 align:start position:0%
+ 
+ 
+
+00:03:11.099 --> 00:03:15.330 align:start position:0%
+ 
+ 
+
+00:03:15.330 --> 00:03:16.319 align:start position:0%
+ 
+ 
+
+00:03:16.319 --> 00:03:18.629 align:start position:0%
+ 
+ 
+
+00:03:18.629 --> 00:03:20.759 align:start position:0%
+ 
+ 
+
+00:03:20.759 --> 00:03:22.770 align:start position:0%
+ 
+ 
+
+00:03:22.770 --> 00:03:27.449 align:start position:0%
+ 
+ 
+
+00:03:27.449 --> 00:03:32.969 align:start position:0%
+ 
+ 
+
+00:03:32.969 --> 00:03:35.159 align:start position:0%
+ 
+ 
+
+00:03:35.159 --> 00:03:37.740 align:start position:0%
+ 
+ 
+
+00:03:37.740 --> 00:03:39.929 align:start position:0%
+ 
+ 
+
+00:03:39.929 --> 00:03:43.110 align:start position:0%
+ 
+ 
+
+00:03:43.110 --> 00:03:49.080 align:start position:0%
+ 
+ 
+
+00:03:49.080 --> 00:03:51.149 align:start position:0%
+ 
+ 
+
+00:03:51.149 --> 00:03:55.770 align:start position:0%
+ 
+ 
+
+00:03:55.770 --> 00:03:57.780 align:start position:0%
+ 
+ 
+
+00:03:57.780 --> 00:04:02.490 align:start position:0%
+ 
+ 
+
+00:04:02.490 --> 00:04:05.309 align:start position:0%
+ 
+ 
+
+00:04:05.309 --> 00:04:08.099 align:start position:0%
+ 
+ 
+
+00:04:08.099 --> 00:04:11.849 align:start position:0%
+ 
+ 
+
+00:04:11.849 --> 00:04:14.209 align:start position:0%
+ 
+ 
+
+00:04:14.209 --> 00:04:19.259 align:start position:0%
+ 
+ 
+
+00:04:19.259 --> 00:04:22.140 align:start position:0%
+ 
+ 
+
+00:04:22.140 --> 00:04:24.180 align:start position:0%
+ 
+ 
+
+00:04:24.180 --> 00:04:28.379 align:start position:0%
+ 
+ 
+
+00:04:28.379 --> 00:04:30.029 align:start position:0%
+ 
+ 
+
+00:04:30.029 --> 00:04:32.499 align:start position:0%
+ 
+ 
+
+00:04:32.499 --> 00:04:35.330 align:start position:0%
+ 
+ 
+
+00:04:35.330 --> 00:04:39.439 align:start position:0%
+ 
+ 
+
+00:04:39.439 --> 00:04:41.689 align:start position:0%
+ 
+ 
+
+00:04:41.689 --> 00:04:46.010 align:start position:0%
+ 
+ 
+
+00:04:46.010 --> 00:04:51.350 align:start position:0%
+ 
+ 
+
+00:04:51.350 --> 00:04:53.390 align:start position:0%
+ 
+ 
+
+00:04:53.390 --> 00:04:57.170 align:start position:0%
+ 
+ 
+
+00:04:57.170 --> 00:05:00.050 align:start position:0%
+ 
+ 
+
+00:05:00.050 --> 00:05:02.020 align:start position:0%
+ 
+ 
+
+00:05:02.020 --> 00:05:04.730 align:start position:0%
+ 
+ 
+
+00:05:04.730 --> 00:05:09.379 align:start position:0%
+ 
+ 
+
+00:05:09.379 --> 00:05:10.640 align:start position:0%
+ 
+ 
+
+00:05:10.640 --> 00:05:14.120 align:start position:0%
+ 
+ 
+
+00:05:14.120 --> 00:05:18.230 align:start position:0%
+ 
+ 
+
+00:05:18.230 --> 00:05:22.250 align:start position:0%
+ 
+ 
+
+00:05:22.250 --> 00:05:24.920 align:start position:0%
+ 
+ 
+
+00:05:24.920 --> 00:05:26.900 align:start position:0%
+ 
+ 
+
+00:05:26.900 --> 00:05:29.659 align:start position:0%
+ 
+ 
+
+00:05:29.659 --> 00:05:31.550 align:start position:0%
+ 
+ 
+
+00:05:31.550 --> 00:05:31.560 align:start position:0%
+ 
+ 
+
+00:05:31.560 --> 00:05:34.779 align:start position:0%
+ 
+
+
+00:05:34.779 --> 00:05:37.360 align:start position:0%
+ 
+ 
+
+00:05:37.360 --> 00:05:40.550 align:start position:0%
+ 
+ 
+
+00:05:40.550 --> 00:05:42.650 align:start position:0%
+ 
+ 
+
+00:05:42.650 --> 00:05:44.420 align:start position:0%
+ 
+ 
+
+00:05:44.420 --> 00:05:50.899 align:start position:0%
+ 
+ 
+
+00:05:50.899 --> 00:05:54.800 align:start position:0%
+ 
+ 
+
+00:05:54.800 --> 00:05:58.990 align:start position:0%
+ 
+ 
+
+00:05:58.990 --> 00:06:04.460 align:start position:0%
+ 
+ 
+
+00:06:04.460 --> 00:06:06.080 align:start position:0%
+ 
+ 
+
+00:06:06.080 --> 00:06:11.110 align:start position:0%
+ 
+ 
+
+00:06:11.110 --> 00:06:14.510 align:start position:0%
+ 
+ 
+
+00:06:14.510 --> 00:06:17.689 align:start position:0%
+ 
+ 
+
+00:06:17.689 --> 00:06:20.500 align:start position:0%
+ 
+ 
+
+00:06:20.500 --> 00:06:24.320 align:start position:0%
+ 
+ 
+
+00:06:24.320 --> 00:06:27.890 align:start position:0%
+ 
+ 
+
+00:06:27.890 --> 00:06:30.439 align:start position:0%
+ 
+ 
+
+00:06:30.439 --> 00:06:33.500 align:start position:0%
+ 
+ 
+
+00:06:33.500 --> 00:06:36.439 align:start position:0%
+ 
+ 
+
+00:06:36.439 --> 00:06:38.870 align:start position:0%
+ 
+ 
+
+00:06:38.870 --> 00:06:41.029 align:start position:0%
+ 
+ 
+
+00:06:41.029 --> 00:06:43.100 align:start position:0%
+ 
+ 
+
+00:06:43.100 --> 00:06:45.790 align:start position:0%
+ 
+ 
+
+00:06:45.790 --> 00:06:48.110 align:start position:0%
+ 
+ 
+
+00:06:48.110 --> 00:06:51.740 align:start position:0%
+ 
+ 
+
+00:06:51.740 --> 00:06:54.440 align:start position:0%
+ 
+ 
+
+00:06:54.440 --> 00:06:56.630 align:start position:0%
+ 
+ 
+
+00:06:56.630 --> 00:06:58.910 align:start position:0%
+ 
+ 
+
+00:06:58.910 --> 00:07:02.660 align:start position:0%
+ 
+ 
+
+00:07:02.660 --> 00:07:04.730 align:start position:0%
+ 
+ 
+
+00:07:04.730 --> 00:07:06.260 align:start position:0%
+ 
+ 
+
+00:07:06.260 --> 00:07:07.220 align:start position:0%
+ 
+ 
+
+00:07:07.220 --> 00:07:08.450 align:start position:0%
+ 
+ 
+
+00:07:08.450 --> 00:07:11.120 align:start position:0%
+ 
+ 
+
+00:07:11.120 --> 00:07:13.010 align:start position:0%
+ 
+ 
+
+00:07:13.010 --> 00:07:14.930 align:start position:0%
+ 
+ 
+
+00:07:14.930 --> 00:07:18.350 align:start position:0%
+ 
+ 
+
+00:07:18.350 --> 00:07:21.980 align:start position:0%
+ 
+ 
+
+00:07:21.980 --> 00:07:23.450 align:start position:0%
+ 
+ 
+
+00:07:23.450 --> 00:07:26.480 align:start position:0%
+ 
+ 
+
+00:07:26.480 --> 00:07:28.790 align:start position:0%
+ 
+ 
+
+00:07:28.790 --> 00:07:31.010 align:start position:0%
+ 
+ 
+
+00:07:31.010 --> 00:07:32.410 align:start position:0%
+ 
+ 
+
+00:07:32.410 --> 00:07:35.900 align:start position:0%
+ 
+ 
+
+00:07:35.900 --> 00:07:40.700 align:start position:0%
+ 
+ 
+
+00:07:40.700 --> 00:07:42.200 align:start position:0%
+ 
+ 
+
+00:07:42.200 --> 00:07:48.920 align:start position:0%
+ 
+ 
+
+00:07:48.920 --> 00:07:52.220 align:start position:0%
+ 
+ 
+
+00:07:52.220 --> 00:07:54.290 align:start position:0%
+ 
+ 
+
+00:07:54.290 --> 00:07:57.860 align:start position:0%
+ 
+ 
+
+00:07:57.860 --> 00:08:00.050 align:start position:0%
+ 
+ 
+
+00:08:00.050 --> 00:08:03.200 align:start position:0%
+ 
+ 
+
+00:08:03.200 --> 00:08:06.170 align:start position:0%
+ 
+ 
+
+00:08:06.170 --> 00:08:09.200 align:start position:0%
+ 
+ 
+
+00:08:09.200 --> 00:08:10.910 align:start position:0%
+ 
+ 
+
+00:08:10.910 --> 00:08:12.530 align:start position:0%
+ 
+ 
+
+00:08:12.530 --> 00:08:14.270 align:start position:0%
+ 
+ 
+
+00:08:14.270 --> 00:08:16.250 align:start position:0%
+ 
+ 
+
+00:08:16.250 --> 00:08:18.980 align:start position:0%
+ 
+ 
+
+00:08:18.980 --> 00:08:21.830 align:start position:0%
+ 
+ 
+
+00:08:21.830 --> 00:08:24.380 align:start position:0%
+ 
+ 
+
+00:08:24.380 --> 00:08:26.870 align:start position:0%
+ 
+ 
+
+00:08:26.870 --> 00:08:29.120 align:start position:0%
+ 
+ 
+
+00:08:29.120 --> 00:08:30.980 align:start position:0%
+ 
+ 
+
+00:08:30.980 --> 00:08:33.500 align:start position:0%
+ 
+ 
+
+00:08:33.500 --> 00:08:35.390 align:start position:0%
+ 
+ 
+
+00:08:35.390 --> 00:08:38.000 align:start position:0%
+ 
+ 
+
+00:08:38.000 --> 00:08:39.980 align:start position:0%
+ 
+ 
+
+00:08:39.980 --> 00:08:41.870 align:start position:0%
+ 
+ 
+
+00:08:41.870 --> 00:08:43.520 align:start position:0%
+ 
+ 
+
+00:08:43.520 --> 00:08:47.180 align:start position:0%
+ 
+ 
+
+00:08:47.180 --> 00:08:49.100 align:start position:0%
+ 
+ 
+
+00:08:49.100 --> 00:08:51.890 align:start position:0%
+ 
+ 
+
+00:08:51.890 --> 00:08:53.450 align:start position:0%
+ 
+ 
+
+00:08:53.450 --> 00:08:55.730 align:start position:0%
+ 
+ 
+
+00:08:55.730 --> 00:08:58.550 align:start position:0%
+ 
+ 
+
+00:08:58.550 --> 00:08:59.920 align:start position:0%
+ 
+ 
+
+00:08:59.920 --> 00:09:02.450 align:start position:0%
+ 
+ 
+
+00:09:02.450 --> 00:09:05.120 align:start position:0%
+ 
+ 
+
+00:09:05.120 --> 00:09:07.460 align:start position:0%
+ 
+ 
+
+00:09:07.460 --> 00:09:10.640 align:start position:0%
+ 
+ 
+
+00:09:10.640 --> 00:09:12.590 align:start position:0%
+ 
+ 
+
+00:09:12.590 --> 00:09:13.940 align:start position:0%
+ 
+ 
+
+00:09:13.940 --> 00:09:16.430 align:start position:0%
+ 
+ 
+
+00:09:16.430 --> 00:09:19.360 align:start position:0%
+ 
+ 
+
+00:09:19.360 --> 00:09:21.650 align:start position:0%
+ 
+ 
+
+00:09:21.650 --> 00:09:22.940 align:start position:0%
+ 
+ 
+
+00:09:22.940 --> 00:09:25.310 align:start position:0%
+ 
+ 
+
+00:09:25.310 --> 00:09:27.710 align:start position:0%
+ 
+ 
+
+00:09:27.710 --> 00:09:31.460 align:start position:0%
+ 
+ 
+
+00:09:31.460 --> 00:09:32.690 align:start position:0%
+ 
+ 
+
+00:09:32.690 --> 00:09:35.390 align:start position:0%
+ 
+ 
+
+00:09:35.390 --> 00:09:37.930 align:start position:0%
+ 
+ 
+
+00:09:37.930 --> 00:09:42.560 align:start position:0%
+ 
+ 
+
+00:09:42.560 --> 00:09:44.570 align:start position:0%
+ 
+ 
+
+00:09:44.570 --> 00:09:48.800 align:start position:0%
+ 
+ 
+
+00:09:48.800 --> 00:09:51.530 align:start position:0%
+ 
+ 
+
+00:09:51.530 --> 00:09:54.500 align:start position:0%
+ 
+ 
+
+00:09:54.500 --> 00:09:57.530 align:start position:0%
+ 
+ 
+
+00:09:57.530 --> 00:10:01.850 align:start position:0%
+ 
+ 
+
+00:10:01.850 --> 00:10:06.700 align:start position:0%
+ 
+ 
+
+00:10:06.700 --> 00:10:09.320 align:start position:0%
+ 
+ 
+
+00:10:09.320 --> 00:10:11.840 align:start position:0%
+ 
+ 
+
+00:10:11.840 --> 00:10:13.550 align:start position:0%
+ 
+ 
+
+00:10:13.550 --> 00:10:17.710 align:start position:0%
+ 
+ 
+
+00:10:17.710 --> 00:10:19.490 align:start position:0%
+ 
+ 
+
+00:10:19.490 --> 00:10:22.010 align:start position:0%
+ 
+ 
+
+00:10:22.010 --> 00:10:23.329 align:start position:0%
+ 
+ 
+
+00:10:23.329 --> 00:10:26.150 align:start position:0%
+ 
+ 
+
+00:10:26.150 --> 00:10:29.030 align:start position:0%
+ 
+ 
+
+00:10:29.030 --> 00:10:31.940 align:start position:0%
+ 
+ 
+
+00:10:31.940 --> 00:10:33.980 align:start position:0%
+ 
+ 
+
+00:10:33.980 --> 00:10:36.230 align:start position:0%
+ 
+ 
+
+00:10:36.230 --> 00:10:38.030 align:start position:0%
+ 
+ 
+
+00:10:38.030 --> 00:10:40.310 align:start position:0%
+ 
+ 
+
+00:10:40.310 --> 00:10:42.320 align:start position:0%
+ 
+ 
+
+00:10:42.320 --> 00:10:44.000 align:start position:0%
+ 
+ 
+
+00:10:44.000 --> 00:10:45.980 align:start position:0%
+ 
+ 
+
+00:10:45.980 --> 00:10:48.010 align:start position:0%
+ 
+ 
+
+00:10:48.010 --> 00:10:52.190 align:start position:0%
+ 
+ 
+
+00:10:52.190 --> 00:10:54.260 align:start position:0%
+ 
+ 
+
+00:10:54.260 --> 00:10:56.270 align:start position:0%
+ 
+ 
+
+00:10:56.270 --> 00:10:57.980 align:start position:0%
+ 
+ 
+
+00:10:57.980 --> 00:11:03.200 align:start position:0%
+ 
+ 
+
+00:11:03.200 --> 00:11:04.910 align:start position:0%
+ 
+ 
+
+00:11:04.910 --> 00:11:07.579 align:start position:0%
+ 
+ 
+
+00:11:07.579 --> 00:11:09.350 align:start position:0%
+ 
+ 
+
+00:11:09.350 --> 00:11:11.480 align:start position:0%
+ 
+ 
+
+00:11:11.480 --> 00:11:11.490 align:start position:0%
+ 
+ 
+
+00:11:11.490 --> 00:11:12.450 align:start position:0%
+ 
+
+
+00:11:12.450 --> 00:11:14.400 align:start position:0%
+ 
+ 
+
+00:11:14.400 --> 00:11:16.200 align:start position:0%
+ 
+ 
+
+00:11:16.200 --> 00:11:18.389 align:start position:0%
+ 
+ 
+
+00:11:18.389 --> 00:11:20.880 align:start position:0%
+ 
+ 
+
+00:11:20.880 --> 00:11:22.829 align:start position:0%
+ 
+ 
+
+00:11:22.829 --> 00:11:27.090 align:start position:0%
+ 
+ 
+
+00:11:27.090 --> 00:11:29.820 align:start position:0%
+ 
+ 
+
+00:11:29.820 --> 00:11:32.460 align:start position:0%
+ 
+ 
+
+00:11:32.460 --> 00:11:35.220 align:start position:0%
+ 
+ 
+
+00:11:35.220 --> 00:11:37.110 align:start position:0%
+ 
+ 
+
+00:11:37.110 --> 00:11:39.840 align:start position:0%
+ 
+ 
+
+00:11:39.840 --> 00:11:41.699 align:start position:0%
+ 
+ 
+
+00:11:41.699 --> 00:11:43.530 align:start position:0%
+ 
+ 
+
+00:11:43.530 --> 00:11:46.800 align:start position:0%
+ 
+ 
+
+00:11:46.800 --> 00:11:49.670 align:start position:0%
+ 
+ 
+
+00:11:49.670 --> 00:11:52.170 align:start position:0%
+ 
+ 
+
+00:11:52.170 --> 00:11:57.930 align:start position:0%
+ 
+ 
+
+00:11:57.930 --> 00:11:59.070 align:start position:0%
+ 
+ 
+
+00:11:59.070 --> 00:12:01.320 align:start position:0%
+ 
+ 
+
+00:12:01.320 --> 00:12:03.600 align:start position:0%
+ 
+ 
+
+00:12:03.600 --> 00:12:06.230 align:start position:0%
+ 
+ 
+
+00:12:06.230 --> 00:12:08.540 align:start position:0%
+ 
+ 
+
+00:12:08.540 --> 00:12:11.880 align:start position:0%
+ 
+ 
+
+00:12:11.880 --> 00:12:13.410 align:start position:0%
+ 
+ 
+
+00:12:13.410 --> 00:12:16.920 align:start position:0%
+ 
+ 
+
+00:12:16.920 --> 00:12:18.449 align:start position:0%
+ 
+ 
+
+00:12:18.449 --> 00:12:19.769 align:start position:0%
+ 
+ 
+
+00:12:19.769 --> 00:12:23.250 align:start position:0%
+ 
+ 
+
+00:12:23.250 --> 00:12:25.320 align:start position:0%
+ 
+ 
+
+00:12:25.320 --> 00:12:28.560 align:start position:0%
+ 
+ 
+
+00:12:28.560 --> 00:12:30.650 align:start position:0%
+ 
+ 
+
+00:12:30.650 --> 00:12:33.750 align:start position:0%
+ 
+ 
+
+00:12:33.750 --> 00:12:37.260 align:start position:0%
+ 
+ 
+
+00:12:37.260 --> 00:12:38.730 align:start position:0%
+ 
+ 
+
+00:12:38.730 --> 00:12:41.280 align:start position:0%
+ 
+ 
+
+00:12:41.280 --> 00:12:43.130 align:start position:0%
+ 
+ 
+
+00:12:43.130 --> 00:12:45.960 align:start position:0%
+ 
+ 
+
+00:12:45.960 --> 00:12:48.240 align:start position:0%
+ 
+ 
+
+00:12:48.240 --> 00:12:50.970 align:start position:0%
+ 
+ 
+
+00:12:50.970 --> 00:12:52.949 align:start position:0%
+ 
+ 
+
+00:12:52.949 --> 00:12:58.920 align:start position:0%
+ 
+ 
+
+00:12:58.920 --> 00:13:01.110 align:start position:0%
+ 
+ 
+
+00:13:01.110 --> 00:13:05.060 align:start position:0%
+ 
+ 
+
+00:13:05.060 --> 00:13:08.579 align:start position:0%
+ 
+ 
+
+00:13:08.579 --> 00:13:12.150 align:start position:0%
+ 
+ 
+
+00:13:12.150 --> 00:13:14.819 align:start position:0%
+ 
+ 
+
+00:13:14.819 --> 00:13:19.500 align:start position:0%
+ 
+ 
+
+00:13:19.500 --> 00:13:21.480 align:start position:0%
+ 
+ 
+
+00:13:21.480 --> 00:13:24.180 align:start position:0%
+ 
+ 
+
+00:13:24.180 --> 00:13:25.350 align:start position:0%
+ 
+ 
+
+00:13:25.350 --> 00:13:27.410 align:start position:0%
+ 
+ 
+
+00:13:27.410 --> 00:13:30.240 align:start position:0%
+ 
+ 
+
+00:13:30.240 --> 00:13:31.500 align:start position:0%
+ 
+ 
+
+00:13:31.500 --> 00:13:33.780 align:start position:0%
+ 
+ 
+
+00:13:33.780 --> 00:13:39.060 align:start position:0%
+ 
+ 
+
+00:13:39.060 --> 00:13:42.090 align:start position:0%
+ 
+ 
+
+00:13:42.090 --> 00:13:44.130 align:start position:0%
+ 
+ 
+
+00:13:44.130 --> 00:13:46.610 align:start position:0%
+ 
+ 
+
+00:13:46.610 --> 00:13:49.139 align:start position:0%
+ 
+ 
+
+00:13:49.139 --> 00:13:52.139 align:start position:0%
+ 
+ 
+
+00:13:52.139 --> 00:13:53.550 align:start position:0%
+ 
+ 
+
+00:13:53.550 --> 00:13:55.290 align:start position:0%
+ 
+ 
+
+00:13:55.290 --> 00:13:58.889 align:start position:0%
+ 
+ 
+
+00:13:58.889 --> 00:14:00.600 align:start position:0%
+ 
+ 
+
+00:14:00.600 --> 00:14:00.610 align:start position:0%
+ 
+ 
+
+00:14:00.610 --> 00:14:01.139 align:start position:0%
+ 
+
+
+00:14:01.139 --> 00:14:05.180 align:start position:0%
+ 
+ 
+
+00:14:05.180 --> 00:14:07.920 align:start position:0%
+ 
+ 
+
+00:14:07.920 --> 00:14:10.110 align:start position:0%
+ 
+ 
+
+00:14:10.110 --> 00:14:11.990 align:start position:0%
+ 
+ 
+
+00:14:11.990 --> 00:14:15.389 align:start position:0%
+ 
+ 
+
+00:14:15.389 --> 00:14:18.750 align:start position:0%
+ 
+ 
+
+00:14:18.750 --> 00:14:21.269 align:start position:0%
+ 
+ 
+
+00:14:21.269 --> 00:14:23.509 align:start position:0%
+ 
+ 
+
+00:14:23.509 --> 00:14:25.920 align:start position:0%
+ 
+ 
+
+00:14:25.920 --> 00:14:27.480 align:start position:0%
+ 
+ 
+
+00:14:27.480 --> 00:14:34.759 align:start position:0%
+ 
+ 
+
+00:14:34.759 --> 00:14:37.829 align:start position:0%
+ 
+ 
+
+00:14:37.829 --> 00:14:42.290 align:start position:0%
+ 
+ 
+
+00:14:42.290 --> 00:14:45.560 align:start position:0%
+ 
+ 
+
+00:14:45.560 --> 00:14:50.790 align:start position:0%
+ 
+ 
+
+00:14:50.790 --> 00:14:53.310 align:start position:0%
+ 
+ 
+
+00:14:53.310 --> 00:14:55.590 align:start position:0%
+ 
+ 
+
+00:14:55.590 --> 00:14:57.240 align:start position:0%
+ 
+ 
+
+00:14:57.240 --> 00:14:59.759 align:start position:0%
+ 
+ 
+
+00:14:59.759 --> 00:15:03.810 align:start position:0%
+ 
+ 
+
+00:15:03.810 --> 00:15:06.480 align:start position:0%
+ 
+ 
+
+00:15:06.480 --> 00:15:07.740 align:start position:0%
+ 
+ 
+
+00:15:07.740 --> 00:15:09.389 align:start position:0%
+ 
+ 
+
+00:15:09.389 --> 00:15:10.800 align:start position:0%
+ 
+ 
+
+00:15:10.800 --> 00:15:12.050 align:start position:0%
+ 
+ 
+
+00:15:12.050 --> 00:15:14.610 align:start position:0%
+ 
+ 
+
+00:15:14.610 --> 00:15:17.040 align:start position:0%
+ 
+ 
+
+00:15:17.040 --> 00:15:19.319 align:start position:0%
+ 
+ 
+
+00:15:19.319 --> 00:15:22.290 align:start position:0%
+ 
+ 
+
+00:15:22.290 --> 00:15:25.130 align:start position:0%
+ 
+ 
+
+00:15:25.130 --> 00:15:27.329 align:start position:0%
+ 
+ 
+
+00:15:27.329 --> 00:15:30.150 align:start position:0%
+ 
+ 
+
+00:15:30.150 --> 00:15:33.300 align:start position:0%
+ 
+ 
+
+00:15:33.300 --> 00:15:36.720 align:start position:0%
+ 
+ 
+
+00:15:36.720 --> 00:15:38.010 align:start position:0%
+ 
+ 
+
+00:15:38.010 --> 00:15:38.830 align:start position:0%
+ 
+ 
+
+00:15:38.830 --> 00:15:41.710 align:start position:0%
+ 
+ 
+
+00:15:41.710 --> 00:15:43.450 align:start position:0%
+ 
+ 
+
+00:15:43.450 --> 00:15:45.940 align:start position:0%
+ 
+ 
+
+00:15:45.940 --> 00:15:48.310 align:start position:0%
+ 
+ 
+
+00:15:48.310 --> 00:15:50.530 align:start position:0%
+ 
+ 
+
+00:15:50.530 --> 00:15:51.970 align:start position:0%
+ 
+ 
+
+00:15:51.970 --> 00:15:54.040 align:start position:0%
+ 
+ 
+
+00:15:54.040 --> 00:15:55.480 align:start position:0%
+ 
+ 
+
+00:15:55.480 --> 00:15:57.010 align:start position:0%
+ 
+ 
+
+00:15:57.010 --> 00:16:03.100 align:start position:0%
+ 
+ 
+
+00:16:03.100 --> 00:16:05.620 align:start position:0%
+ 
+ 
+
+00:16:05.620 --> 00:16:08.380 align:start position:0%
+ 
+ 
+
+00:16:08.380 --> 00:16:09.790 align:start position:0%
+ 
+ 
+
+00:16:09.790 --> 00:16:12.340 align:start position:0%
+ 
+ 
+
+00:16:12.340 --> 00:16:14.200 align:start position:0%
+ 
+ 
+
+00:16:14.200 --> 00:16:17.650 align:start position:0%
+ 
+ 
+
+00:16:17.650 --> 00:16:19.710 align:start position:0%
+ 
+ 
+
+00:16:19.710 --> 00:16:25.240 align:start position:0%
+ 
+ 
+
+00:16:25.240 --> 00:16:27.519 align:start position:0%
+ 
+ 
+
+00:16:27.519 --> 00:16:29.320 align:start position:0%
+ 
+ 
+
+00:16:29.320 --> 00:16:31.120 align:start position:0%
+ 
+ 
+
+00:16:31.120 --> 00:16:32.410 align:start position:0%
+ 
+ 
+
+00:16:32.410 --> 00:16:34.870 align:start position:0%
+ 
+ 
+
+00:16:34.870 --> 00:16:39.910 align:start position:0%
+ 
+ 
+
+00:16:39.910 --> 00:16:43.660 align:start position:0%
+ 
+ 
+
+00:16:43.660 --> 00:16:46.660 align:start position:0%
+ 
+ 
+
+00:16:46.660 --> 00:16:50.050 align:start position:0%
+ 
+ 
+
+00:16:50.050 --> 00:16:52.270 align:start position:0%
+ 
+ 
+
+00:16:52.270 --> 00:16:54.490 align:start position:0%
+ 
+ 
+
+00:16:54.490 --> 00:17:00.970 align:start position:0%
+ 
+ 
+
+00:17:00.970 --> 00:17:03.130 align:start position:0%
+ 
+ 
+
+00:17:03.130 --> 00:17:05.470 align:start position:0%
+ 
+ 
+
+00:17:05.470 --> 00:17:09.069 align:start position:0%
+ 
+ 
+
+00:17:09.069 --> 00:17:11.410 align:start position:0%
+ 
+ 
+
+00:17:11.410 --> 00:17:14.650 align:start position:0%
+ 
+ 
+
+00:17:14.650 --> 00:17:18.040 align:start position:0%
+ 
+ 
+
+00:17:18.040 --> 00:17:20.230 align:start position:0%
+ 
+ 
+
+00:17:20.230 --> 00:17:21.550 align:start position:0%
+ 
+ 
+
+00:17:21.550 --> 00:17:24.040 align:start position:0%
+ 
+ 
+
+00:17:24.040 --> 00:17:25.329 align:start position:0%
+ 
+ 
+
+00:17:25.329 --> 00:17:28.720 align:start position:0%
+ 
+ 
+
+00:17:28.720 --> 00:17:32.890 align:start position:0%
+ 
+ 
+
+00:17:32.890 --> 00:17:35.830 align:start position:0%
+ 
+ 
+
+00:17:35.830 --> 00:17:37.480 align:start position:0%
+ 
+ 
+
+00:17:37.480 --> 00:17:40.300 align:start position:0%
+ 
+ 
+
+00:17:40.300 --> 00:17:43.000 align:start position:0%
+ 
+ 
+
+00:17:43.000 --> 00:17:45.820 align:start position:0%
+ 
+ 
+
+00:17:45.820 --> 00:17:48.460 align:start position:0%
+ 
+ 
+
+00:17:48.460 --> 00:17:50.200 align:start position:0%
+ 
+ 
+
+00:17:50.200 --> 00:17:52.510 align:start position:0%
+ 
+ 
+
+00:17:52.510 --> 00:17:54.610 align:start position:0%
+ 
+ 
+
+00:17:54.610 --> 00:17:56.380 align:start position:0%
+ 
+ 
+
+00:17:56.380 --> 00:17:59.830 align:start position:0%
+ 
+ 
+
+00:17:59.830 --> 00:18:01.450 align:start position:0%
+ 
+ 
+
+00:18:01.450 --> 00:18:03.490 align:start position:0%
+ 
+ 
+
+00:18:03.490 --> 00:18:05.260 align:start position:0%
+ 
+ 
+
+00:18:05.260 --> 00:18:08.610 align:start position:0%
+ 
+ 
+
+00:18:08.610 --> 00:18:11.680 align:start position:0%
+ 
+ 
+
+00:18:11.680 --> 00:18:15.070 align:start position:0%
+ 
+ 
+
+00:18:15.070 --> 00:18:18.070 align:start position:0%
+ 
+ 
+
+00:18:18.070 --> 00:18:20.019 align:start position:0%
+ 
+ 
+
+00:18:20.019 --> 00:18:22.090 align:start position:0%
+ 
+ 
+
+00:18:22.090 --> 00:18:23.860 align:start position:0%
+ 
+ 
+
+00:18:23.860 --> 00:18:26.169 align:start position:0%
+ 
+ 
+
+00:18:26.169 --> 00:18:28.810 align:start position:0%
+ 
+ 
+
+00:18:28.810 --> 00:18:31.000 align:start position:0%
+ 
+ 
+
+00:18:31.000 --> 00:18:32.320 align:start position:0%
+ 
+ 
+
+00:18:32.320 --> 00:18:35.860 align:start position:0%
+ 
+ 
+
+00:18:35.860 --> 00:18:40.019 align:start position:0%
+ 
+ 
+
+00:18:40.019 --> 00:18:42.940 align:start position:0%
+ 
+ 
+
+00:18:42.940 --> 00:18:45.760 align:start position:0%
+ 
+ 
+
+00:18:45.760 --> 00:18:47.740 align:start position:0%
+ 
+ 
+
+00:18:47.740 --> 00:18:50.769 align:start position:0%
+ 
+ 
+
+00:18:50.769 --> 00:18:53.230 align:start position:0%
+ 
+ 
+
+00:18:53.230 --> 00:18:54.639 align:start position:0%
+ 
+ 
+
+00:18:54.639 --> 00:18:58.299 align:start position:0%
+ 
+ 
+
+00:18:58.299 --> 00:19:01.480 align:start position:0%
+ 
+ 
+
+00:19:01.480 --> 00:19:04.240 align:start position:0%
+ 
+ 
+
+00:19:04.240 --> 00:19:07.120 align:start position:0%
+ 
+ 
+
+00:19:07.120 --> 00:19:09.880 align:start position:0%
+ 
+ 
+
+00:19:09.880 --> 00:19:11.409 align:start position:0%
+ 
+ 
+
+00:19:11.409 --> 00:19:14.230 align:start position:0%
+ 
+ 
+
+00:19:14.230 --> 00:19:16.510 align:start position:0%
+ 
+ 
+
+00:19:16.510 --> 00:19:18.820 align:start position:0%
+ 
+ 
+
+00:19:18.820 --> 00:19:20.590 align:start position:0%
+ 
+ 
+
+00:19:20.590 --> 00:19:22.180 align:start position:0%
+ 
+ 
+
+00:19:22.180 --> 00:19:23.740 align:start position:0%
+ 
+ 
+
+00:19:23.740 --> 00:19:26.139 align:start position:0%
+ 
+ 
+
+00:19:26.139 --> 00:19:28.120 align:start position:0%
+ 
+ 
+
+00:19:28.120 --> 00:19:30.970 align:start position:0%
+ 
+ 
+
+00:19:30.970 --> 00:19:32.680 align:start position:0%
+ 
+ 
+
+00:19:32.680 --> 00:19:40.590 align:start position:0%
+ 
+ 
+
+00:19:40.590 --> 00:19:46.500 align:start position:0%
+ 
+ 
+
+00:19:46.500 --> 00:19:48.970 align:start position:0%
+ 
+ 
+
+00:19:48.970 --> 00:19:54.190 align:start position:0%
+ 
+ 
+
+00:19:54.190 --> 00:19:57.960 align:start position:0%
+ 
+ 
+
+00:19:57.960 --> 00:20:01.690 align:start position:0%
+ 
+ 
+
+00:20:01.690 --> 00:20:04.029 align:start position:0%
+ 
+ 
+
+00:20:04.029 --> 00:20:06.430 align:start position:0%
+ 
+ 
+
+00:20:06.430 --> 00:20:08.049 align:start position:0%
+ 
+ 
+
+00:20:08.049 --> 00:20:09.909 align:start position:0%
+ 
+ 
+
+00:20:09.909 --> 00:20:13.239 align:start position:0%
+ 
+ 
+
+00:20:13.239 --> 00:20:15.519 align:start position:0%
+ 
+ 
+
+00:20:15.519 --> 00:20:18.159 align:start position:0%
+ 
+ 
+
+00:20:18.159 --> 00:20:20.680 align:start position:0%
+ 
+ 
+
+00:20:20.680 --> 00:20:22.349 align:start position:0%
+ 
+ 
+
+00:20:22.349 --> 00:20:25.450 align:start position:0%
+ 
+ 
+
+00:20:25.450 --> 00:20:27.310 align:start position:0%
+ 
+ 
+
+00:20:27.310 --> 00:20:30.609 align:start position:0%
+ 
+ 
+
+00:20:30.609 --> 00:20:32.859 align:start position:0%
+ 
+ 
+
+00:20:32.859 --> 00:20:34.450 align:start position:0%
+ 
+ 
+
+00:20:34.450 --> 00:20:35.979 align:start position:0%
+ 
+ 
+
+00:20:35.979 --> 00:20:39.909 align:start position:0%
+ 
+ 
+
+00:20:39.909 --> 00:20:43.690 align:start position:0%
+ 
+ 
+
+00:20:43.690 --> 00:20:45.279 align:start position:0%
+ 
+ 
+
+00:20:45.279 --> 00:20:47.799 align:start position:0%
+ 
+ 
+
+00:20:47.799 --> 00:20:50.469 align:start position:0%
+ 
+ 
+
+00:20:50.469 --> 00:20:52.419 align:start position:0%
+ 
+ 
+
+00:20:52.419 --> 00:20:54.339 align:start position:0%
+ 
+ 
+
+00:20:54.339 --> 00:20:55.869 align:start position:0%
+ 
+ 
+
+00:20:55.869 --> 00:20:57.999 align:start position:0%
+ 
+ 
+
+00:20:57.999 --> 00:21:01.419 align:start position:0%
+ 
+ 
+
+00:21:01.419 --> 00:21:02.560 align:start position:0%
+ 
+ 
+
+00:21:02.560 --> 00:21:05.200 align:start position:0%
+ 
+ 
+
+00:21:05.200 --> 00:21:06.669 align:start position:0%
+ 
+ 
+
+00:21:06.669 --> 00:21:10.029 align:start position:0%
+ 
+ 
+
+00:21:10.029 --> 00:21:14.399 align:start position:0%
+ 
+ 
+
+00:21:14.399 --> 00:21:18.399 align:start position:0%
+ 
+ 
+
+00:21:18.399 --> 00:21:21.430 align:start position:0%
+ 
+ 
+
+00:21:21.430 --> 00:21:23.680 align:start position:0%
+ 
+ 
+
+00:21:23.680 --> 00:21:26.499 align:start position:0%
+ 
+ 
+
+00:21:26.499 --> 00:21:29.739 align:start position:0%
+ 
+ 
+
+00:21:29.739 --> 00:21:32.889 align:start position:0%
+ 
+ 
+
+00:21:32.889 --> 00:21:36.249 align:start position:0%
+ 
+ 
+
+00:21:36.249 --> 00:21:41.379 align:start position:0%
+ 
+ 
+
+00:21:41.379 --> 00:21:45.310 align:start position:0%
+ 
+ 
+
+00:21:45.310 --> 00:21:50.320 align:start position:0%
+ 
+ 
+
+00:21:50.320 --> 00:21:57.820 align:start position:0%
+ 
+ 
+
+00:21:57.820 --> 00:22:03.070 align:start position:0%
+ 
+ 
+
+00:22:03.070 --> 00:22:05.489 align:start position:0%
+ 
+ 
+
+00:22:05.489 --> 00:22:09.310 align:start position:0%
+ 
+ 
+
+00:22:09.310 --> 00:22:10.749 align:start position:0%
+ 
+ 
+
+00:22:10.749 --> 00:22:12.849 align:start position:0%
+ 
+ 
+
+00:22:12.849 --> 00:22:15.009 align:start position:0%
+ 
+ 
+
+00:22:15.009 --> 00:22:16.420 align:start position:0%
+ 
+ 
+
+00:22:16.420 --> 00:22:19.000 align:start position:0%
+ 
+ 
+
+00:22:19.000 --> 00:22:20.170 align:start position:0%
+ 
+ 
+
+00:22:20.170 --> 00:22:23.050 align:start position:0%
+ 
+ 
+
+00:22:23.050 --> 00:22:24.550 align:start position:0%
+ 
+ 
+
+00:22:24.550 --> 00:22:25.660 align:start position:0%
+ 
+ 
+
+00:22:25.660 --> 00:22:27.910 align:start position:0%
+ 
+ 
+
+00:22:27.910 --> 00:22:29.290 align:start position:0%
+ 
+ 
+
+00:22:29.290 --> 00:22:32.710 align:start position:0%
+ 
+ 
+
+00:22:32.710 --> 00:22:34.480 align:start position:0%
+ 
+ 
+
+00:22:34.480 --> 00:22:36.730 align:start position:0%
+ 
+ 
+
+00:22:36.730 --> 00:22:38.500 align:start position:0%
+ 
+ 
+
+00:22:38.500 --> 00:22:40.720 align:start position:0%
+ 
+ 
+
+00:22:40.720 --> 00:22:43.390 align:start position:0%
+ 
+ 
+
+00:22:43.390 --> 00:22:44.920 align:start position:0%
+ 
+ 
+
+00:22:44.920 --> 00:22:46.270 align:start position:0%
+ 
+ 
+
+00:22:46.270 --> 00:22:48.580 align:start position:0%
+ 
+ 
+
+00:22:48.580 --> 00:22:50.490 align:start position:0%
+ 
+ 
+
+00:22:50.490 --> 00:22:52.570 align:start position:0%
+ 
+ 
+
+00:22:52.570 --> 00:22:54.910 align:start position:0%
+ 
+ 
+
+00:22:54.910 --> 00:22:56.500 align:start position:0%
+ 
+ 
+
+00:22:56.500 --> 00:22:58.570 align:start position:0%
+ 
+ 
+
+00:22:58.570 --> 00:23:00.040 align:start position:0%
+ 
+ 
+
+00:23:00.040 --> 00:23:04.960 align:start position:0%
+ 
+ 
+
+00:23:04.960 --> 00:23:08.650 align:start position:0%
+ 
+ 
+
+00:23:08.650 --> 00:23:12.730 align:start position:0%
+ 
+ 
+
+00:23:12.730 --> 00:23:15.750 align:start position:0%
+ 
+ 
+
+00:23:15.750 --> 00:23:20.680 align:start position:0%
+ 
+ 
+
+00:23:20.680 --> 00:23:28.750 align:start position:0%
+ 
+ 
+
+00:23:28.750 --> 00:23:33.520 align:start position:0%
+ 
+ 
+
+00:23:33.520 --> 00:23:35.710 align:start position:0%
+ 
+ 
+
+00:23:35.710 --> 00:23:36.490 align:start position:0%
+ 
+ 
+
+00:23:36.490 --> 00:23:42.640 align:start position:0%
+ 
+ 
+
+00:23:42.640 --> 00:23:46.000 align:start position:0%
+ 
+ 
+
+00:23:46.000 --> 00:23:48.910 align:start position:0%
+ 
+ 
+
+00:23:48.910 --> 00:23:50.920 align:start position:0%
+ 
+ 
+
+00:23:50.920 --> 00:23:53.560 align:start position:0%
+ 
+ 
+
+00:23:53.560 --> 00:24:00.690 align:start position:0%
+ 
+ 
+
+00:24:00.690 --> 00:24:04.580 align:start position:0%
+ 
+ 
+
+00:24:04.580 --> 00:24:06.680 align:start position:0%
+ 
+ 
+
+00:24:06.680 --> 00:24:08.989 align:start position:0%
+ 
+ 
+
+00:24:08.989 --> 00:24:10.580 align:start position:0%
+ 
+ 
+
+00:24:10.580 --> 00:24:14.090 align:start position:0%
+ 
+ 
+
+00:24:14.090 --> 00:24:15.889 align:start position:0%
+ 
+ 
+
+00:24:15.889 --> 00:24:19.389 align:start position:0%
+ 
+ 
+
+00:24:19.389 --> 00:24:21.799 align:start position:0%
+ 
+ 
+
+00:24:21.799 --> 00:24:24.200 align:start position:0%
+ 
+ 
+
+00:24:24.200 --> 00:24:25.970 align:start position:0%
+ 
+ 
+
+00:24:25.970 --> 00:24:27.289 align:start position:0%
+ 
+ 
+
+00:24:27.289 --> 00:24:29.360 align:start position:0%
+ 
+ 
+
+00:24:29.360 --> 00:24:31.639 align:start position:0%
+ 
+ 
+
+00:24:31.639 --> 00:24:36.769 align:start position:0%
+ 
+ 
+
+00:24:36.769 --> 00:24:40.220 align:start position:0%
+ 
+ 
+
+00:24:40.220 --> 00:24:42.049 align:start position:0%
+ 
+ 
+
+00:24:42.049 --> 00:24:44.119 align:start position:0%
+ 
+ 
+
+00:24:44.119 --> 00:24:46.489 align:start position:0%
+ 
+ 
+
+00:24:46.489 --> 00:24:49.129 align:start position:0%
+ 
+ 
+
+00:24:49.129 --> 00:24:50.779 align:start position:0%
+ 
+ 
+
+00:24:50.779 --> 00:24:53.629 align:start position:0%
+ 
+ 
+
+00:24:53.629 --> 00:24:55.220 align:start position:0%
+ 
+ 
+
+00:24:55.220 --> 00:24:57.710 align:start position:0%
+ 
+ 
+
+00:24:57.710 --> 00:24:59.749 align:start position:0%
+ 
+ 
+
+00:24:59.749 --> 00:25:02.269 align:start position:0%
+ 
+ 
+
+00:25:02.269 --> 00:25:04.489 align:start position:0%
+ 
+ 
+
+00:25:04.489 --> 00:25:07.999 align:start position:0%
+ 
+ 
+
+00:25:07.999 --> 00:25:11.869 align:start position:0%
+ 
+ 
+
+00:25:11.869 --> 00:25:13.789 align:start position:0%
+ 
+ 
+
+00:25:13.789 --> 00:25:16.639 align:start position:0%
+ 
+ 
+
+00:25:16.639 --> 00:25:19.700 align:start position:0%
+ 
+ 
+
+00:25:19.700 --> 00:25:21.649 align:start position:0%
+ 
+ 
+
+00:25:21.649 --> 00:25:28.220 align:start position:0%
+ 
+ 
+
+00:25:28.220 --> 00:25:30.700 align:start position:0%
+ 
+ 
+
+00:25:30.700 --> 00:25:33.259 align:start position:0%
+ 
+ 
+
+00:25:33.259 --> 00:25:37.359 align:start position:0%
+ 
+ 
+
+00:25:37.359 --> 00:25:42.769 align:start position:0%
+ 
+ 
+
+00:25:42.769 --> 00:25:44.509 align:start position:0%
+ 
+ 
+
+00:25:44.509 --> 00:25:49.970 align:start position:0%
+ 
+ 
+
+00:25:49.970 --> 00:25:52.730 align:start position:0%
+ 
+ 
+
+00:25:52.730 --> 00:25:54.680 align:start position:0%
+ 
+ 
+
+00:25:54.680 --> 00:25:55.970 align:start position:0%
+ 
+ 
+
+00:25:55.970 --> 00:25:59.509 align:start position:0%
+ 
+ 
+
+00:25:59.509 --> 00:26:06.919 align:start position:0%
+ 
+ 
+
+00:26:06.919 --> 00:26:09.619 align:start position:0%
+ 
+ 
+
+00:26:09.619 --> 00:26:11.720 align:start position:0%
+ 
+ 
+
+00:26:11.720 --> 00:26:15.470 align:start position:0%
+ 
+ 
+
+00:26:15.470 --> 00:26:18.380 align:start position:0%
+ 
+ 
+
+00:26:18.380 --> 00:26:20.180 align:start position:0%
+ 
+ 
+
+00:26:20.180 --> 00:26:22.640 align:start position:0%
+ 
+ 
+
+00:26:22.640 --> 00:26:24.920 align:start position:0%
+ 
+ 
+
+00:26:24.920 --> 00:26:27.740 align:start position:0%
+ 
+ 
+
+00:26:27.740 --> 00:26:30.170 align:start position:0%
+ 
+ 
+
+00:26:30.170 --> 00:26:32.360 align:start position:0%
+ 
+ 
+
+00:26:32.360 --> 00:26:34.370 align:start position:0%
+ 
+ 
+
+00:26:34.370 --> 00:26:36.470 align:start position:0%
+ 
+ 
+
+00:26:36.470 --> 00:26:40.310 align:start position:0%
+ 
+ 
+
+00:26:40.310 --> 00:26:42.080 align:start position:0%
+ 
+ 
+
+00:26:42.080 --> 00:26:45.980 align:start position:0%
+ 
+ 
+
+00:26:45.980 --> 00:26:48.740 align:start position:0%
+ 
+ 
+
+00:26:48.740 --> 00:26:51.290 align:start position:0%
+ 
+ 
+
+00:26:51.290 --> 00:26:54.560 align:start position:0%
+ 
+ 
+
+00:26:54.560 --> 00:26:56.210 align:start position:0%
+ 
+ 
+
+00:26:56.210 --> 00:26:58.940 align:start position:0%
+ 
+ 
+
+00:26:58.940 --> 00:27:01.490 align:start position:0%
+ 
+ 
+
+00:27:01.490 --> 00:27:03.290 align:start position:0%
+ 
+ 
+
+00:27:03.290 --> 00:27:05.420 align:start position:0%
+ 
+ 
+
+00:27:05.420 --> 00:27:16.450 align:start position:0%
+ 
+ 
+
+00:27:16.450 --> 00:27:21.740 align:start position:0%
+ 
+ 
+
+00:27:21.740 --> 00:27:23.570 align:start position:0%
+ 
+ 
+
+00:27:23.570 --> 00:27:26.090 align:start position:0%
+ 
+ 
+
+00:27:26.090 --> 00:27:27.710 align:start position:0%
+ 
+ 
+
+00:27:27.710 --> 00:27:29.810 align:start position:0%
+ 
+ 
+
+00:27:29.810 --> 00:27:33.620 align:start position:0%
+ 
+ 
+
+00:27:33.620 --> 00:27:36.110 align:start position:0%
+ 
+ 
+
+00:27:36.110 --> 00:27:38.780 align:start position:0%
+ 
+ 
+
+00:27:38.780 --> 00:27:40.730 align:start position:0%
+ 
+ 
+
+00:27:40.730 --> 00:27:42.740 align:start position:0%
+ 
+ 
+
+00:27:42.740 --> 00:27:44.810 align:start position:0%
+ 
+ 
+
+00:27:44.810 --> 00:27:47.260 align:start position:0%
+ 
+ 
+
+00:27:47.260 --> 00:27:49.760 align:start position:0%
+ 
+ 
+
+00:27:49.760 --> 00:27:55.040 align:start position:0%
+ 
+ 
+
+00:27:55.040 --> 00:27:58.700 align:start position:0%
+ 
+ 
+
+00:27:58.700 --> 00:28:00.860 align:start position:0%
+ 
+ 
+
+00:28:00.860 --> 00:28:04.010 align:start position:0%
+ 
+ 
+
+00:28:04.010 --> 00:28:06.620 align:start position:0%
+ 
+ 
+
+00:28:06.620 --> 00:28:09.680 align:start position:0%
+ 
+ 
+
+00:28:09.680 --> 00:28:12.380 align:start position:0%
+ 
+ 
+
+00:28:12.380 --> 00:28:14.750 align:start position:0%
+ 
+ 
+
+00:28:14.750 --> 00:28:18.440 align:start position:0%
+ 
+ 
+
+00:28:18.440 --> 00:28:20.390 align:start position:0%
+ 
+ 
+
+00:28:20.390 --> 00:28:23.330 align:start position:0%
+ 
+ 
+
+00:28:23.330 --> 00:28:26.480 align:start position:0%
+ 
+ 
+
+00:28:26.480 --> 00:28:29.230 align:start position:0%
+ 
+ 
+
+00:28:29.230 --> 00:28:31.790 align:start position:0%
+ 
+ 
+
+00:28:31.790 --> 00:28:34.990 align:start position:0%
+ 
+ 
+
+00:28:34.990 --> 00:28:37.760 align:start position:0%
+ 
+ 
+
+00:28:37.760 --> 00:28:41.420 align:start position:0%
+ 
+ 
+
+00:28:41.420 --> 00:28:42.680 align:start position:0%
+ 
+ 
+
+00:28:42.680 --> 00:28:46.000 align:start position:0%
+ 
+ 
+
+00:28:46.000 --> 00:28:48.290 align:start position:0%
+ 
+ 
+
+00:28:48.290 --> 00:28:51.680 align:start position:0%
+ 
+ 
+
+00:28:51.680 --> 00:28:54.050 align:start position:0%
+ 
+ 
+
+00:28:54.050 --> 00:28:57.350 align:start position:0%
+ 
+ 
+
+00:28:57.350 --> 00:28:59.540 align:start position:0%
+ 
+ 
+
+00:28:59.540 --> 00:29:01.760 align:start position:0%
+ 
+ 
+
+00:29:01.760 --> 00:29:03.560 align:start position:0%
+ 
+ 
+
+00:29:03.560 --> 00:29:03.570 align:start position:0%
+ 
+ 
+
+00:29:03.570 --> 00:29:03.830 align:start position:0%
+ 
+
+
+00:29:03.830 --> 00:29:05.630 align:start position:0%
+ 
+ 
+
+00:29:05.630 --> 00:29:07.880 align:start position:0%
+ 
+ 
+
+00:29:07.880 --> 00:29:10.010 align:start position:0%
+ 
+ 
+
+00:29:10.010 --> 00:29:12.530 align:start position:0%
+ 
+ 
+
+00:29:12.530 --> 00:29:14.780 align:start position:0%
+ 
+ 
+
+00:29:14.780 --> 00:29:16.400 align:start position:0%
+ 
+ 
+
+00:29:16.400 --> 00:29:18.830 align:start position:0%
+ 
+ 
+
+00:29:18.830 --> 00:29:20.930 align:start position:0%
+ 
+ 
+
+00:29:20.930 --> 00:29:23.000 align:start position:0%
+ 
+ 
+
+00:29:23.000 --> 00:29:24.650 align:start position:0%
+ 
+ 
+
+00:29:24.650 --> 00:29:27.890 align:start position:0%
+ 
+ 
+
+00:29:27.890 --> 00:29:29.660 align:start position:0%
+ 
+ 
+
+00:29:29.660 --> 00:29:31.250 align:start position:0%
+ 
+ 
+
+00:29:31.250 --> 00:29:33.410 align:start position:0%
+ 
+ 
+
+00:29:33.410 --> 00:29:39.160 align:start position:0%
+ 
+ 
+
+00:29:39.160 --> 00:29:43.640 align:start position:0%
+ 
+ 
+
+00:29:43.640 --> 00:29:44.990 align:start position:0%
+ 
+ 
+
+00:29:44.990 --> 00:29:47.450 align:start position:0%
+ 
+ 
+
+00:29:47.450 --> 00:29:50.720 align:start position:0%
+ 
+ 
+
+00:29:50.720 --> 00:29:53.030 align:start position:0%
+ 
+ 
+
+00:29:53.030 --> 00:29:55.370 align:start position:0%
+ 
+ 
+
+00:29:55.370 --> 00:29:58.280 align:start position:0%
+ 
+ 
+
+00:29:58.280 --> 00:29:59.630 align:start position:0%
+ 
+ 
+
+00:29:59.630 --> 00:30:01.880 align:start position:0%
+ 
+ 
+
+00:30:01.880 --> 00:30:03.890 align:start position:0%
+ 
+ 
+
+00:30:03.890 --> 00:30:05.600 align:start position:0%
+ 
+ 
+
+00:30:05.600 --> 00:30:06.680 align:start position:0%
+ 
+ 
+
+00:30:06.680 --> 00:30:12.800 align:start position:0%
+ 
+ 
+
+00:30:12.800 --> 00:30:15.200 align:start position:0%
+ 
+ 
+
+00:30:15.200 --> 00:30:16.940 align:start position:0%
+ 
+ 
+
+00:30:16.940 --> 00:30:18.020 align:start position:0%
+ 
+ 
+
+00:30:18.020 --> 00:30:19.430 align:start position:0%
+ 
+ 
+
+00:30:19.430 --> 00:30:22.370 align:start position:0%
+ 
+ 
+
+00:30:22.370 --> 00:30:24.020 align:start position:0%
+ 
+ 
+
+00:30:24.020 --> 00:30:26.570 align:start position:0%
+ 
+ 
+
+00:30:26.570 --> 00:30:28.880 align:start position:0%
+ 
+ 
+
+00:30:28.880 --> 00:30:31.100 align:start position:0%
+ 
+ 
+
+00:30:31.100 --> 00:30:35.300 align:start position:0%
+ 
+ 
+
+00:30:35.300 --> 00:30:37.550 align:start position:0%
+ 
+ 
+
+00:30:37.550 --> 00:30:39.710 align:start position:0%
+ 
+ 
+
+00:30:39.710 --> 00:30:41.540 align:start position:0%
+ 
+ 
+
+00:30:41.540 --> 00:30:42.680 align:start position:0%
+ 
+ 
+
+00:30:42.680 --> 00:30:43.710 align:start position:0%
+ 
+ 
+
+00:30:43.710 --> 00:30:45.600 align:start position:0%
+ 
+ 
+
+00:30:45.600 --> 00:30:54.000 align:start position:0%
+ 
+ 
+
+00:30:54.000 --> 00:30:59.730 align:start position:0%
+ 
+ 
+
+00:30:59.730 --> 00:31:03.390 align:start position:0%
+ 
+ 
+
+00:31:03.390 --> 00:31:09.270 align:start position:0%
+ 
+ 
+
+00:31:09.270 --> 00:31:12.890 align:start position:0%
+ 
+ 
+
+00:31:12.890 --> 00:31:19.230 align:start position:0%
+ 
+ 
+
+00:31:19.230 --> 00:31:21.000 align:start position:0%
+ 
+ 
+
+00:31:21.000 --> 00:31:22.830 align:start position:0%
+ 
+ 
+
+00:31:22.830 --> 00:31:24.690 align:start position:0%
+ 
+ 
+
+00:31:24.690 --> 00:31:30.360 align:start position:0%
+ 
+ 
+
+00:31:30.360 --> 00:31:33.450 align:start position:0%
+ 
+ 
+
+00:31:33.450 --> 00:31:36.870 align:start position:0%
+ 
+ 
+
+00:31:36.870 --> 00:31:39.510 align:start position:0%
+ 
+ 
+
+00:31:39.510 --> 00:31:41.190 align:start position:0%
+ 
+ 
+
+00:31:41.190 --> 00:31:43.169 align:start position:0%
+ 
+ 
+
+00:31:43.169 --> 00:31:46.950 align:start position:0%
+ 
+ 
+
+00:31:46.950 --> 00:31:48.299 align:start position:0%
+ 
+ 
+
+00:31:48.299 --> 00:31:49.950 align:start position:0%
+ 
+ 
+
+00:31:49.950 --> 00:31:51.810 align:start position:0%
+ 
+ 
+
+00:31:51.810 --> 00:31:53.520 align:start position:0%
+ 
+ 
+
+00:31:53.520 --> 00:31:55.080 align:start position:0%
+ 
+ 
+
+00:31:55.080 --> 00:31:56.970 align:start position:0%
+ 
+ 
+
+00:31:56.970 --> 00:31:59.570 align:start position:0%
+ 
+ 
+
+00:31:59.570 --> 00:32:02.490 align:start position:0%
+ 
+ 
+
+00:32:02.490 --> 00:32:04.770 align:start position:0%
+ 
+ 
+
+00:32:04.770 --> 00:32:06.510 align:start position:0%
+ 
+ 
+
+00:32:06.510 --> 00:32:10.380 align:start position:0%
+ 
+ 
+
+00:32:10.380 --> 00:32:12.840 align:start position:0%
+ 
+ 
+
+00:32:12.840 --> 00:32:16.500 align:start position:0%
+ 
+ 
+
+00:32:16.500 --> 00:32:18.270 align:start position:0%
+ 
+ 
+
+00:32:18.270 --> 00:32:21.799 align:start position:0%
+ 
+ 
+
+00:32:21.799 --> 00:32:24.630 align:start position:0%
+ 
+ 
+
+00:32:24.630 --> 00:32:28.560 align:start position:0%
+ 
+ 
+
+00:32:28.560 --> 00:32:30.360 align:start position:0%
+ 
+ 
+
+00:32:30.360 --> 00:32:34.110 align:start position:0%
+ 
+ 
+
+00:32:34.110 --> 00:32:34.980 align:start position:0%
+ 
+ 
+
+00:32:34.980 --> 00:32:37.320 align:start position:0%
+ 
+ 
+
+00:32:37.320 --> 00:32:39.630 align:start position:0%
+ 
+ 
+
+00:32:39.630 --> 00:32:42.330 align:start position:0%
+ 
+ 
+
+00:32:42.330 --> 00:32:44.700 align:start position:0%
+ 
+ 
+
+00:32:44.700 --> 00:32:47.390 align:start position:0%
+ 
+ 
+
+00:32:47.390 --> 00:32:49.560 align:start position:0%
+ 
+ 
+
+00:32:49.560 --> 00:32:51.960 align:start position:0%
+ 
+ 
+
+00:32:51.960 --> 00:32:53.820 align:start position:0%
+ 
+ 
+
+00:32:53.820 --> 00:32:57.460 align:start position:0%
+ 
+ 
+
+00:32:57.460 --> 00:33:03.590 align:start position:0%
+ 
+ 
+
+00:33:03.590 --> 00:33:06.230 align:start position:0%
+ 
+ 
+
+00:33:06.230 --> 00:33:07.940 align:start position:0%
+ 
+ 
+
+00:33:07.940 --> 00:33:09.650 align:start position:0%
+ 
+ 
+
+00:33:09.650 --> 00:33:12.680 align:start position:0%
+ 
+ 
+
+00:33:12.680 --> 00:33:15.170 align:start position:0%
+ 
+ 
+
+00:33:15.170 --> 00:33:17.570 align:start position:0%
+ 
+ 
+
+00:33:17.570 --> 00:33:19.190 align:start position:0%
+ 
+ 
+
+00:33:19.190 --> 00:33:21.650 align:start position:0%
+ 
+ 
+
+00:33:21.650 --> 00:33:24.710 align:start position:0%
+ 
+ 
+
+00:33:24.710 --> 00:33:26.240 align:start position:0%
+ 
+ 
+
+00:33:26.240 --> 00:33:29.000 align:start position:0%
+ 
+ 
+
+00:33:29.000 --> 00:33:31.340 align:start position:0%
+ 
+ 
+
+00:33:31.340 --> 00:33:34.100 align:start position:0%
+ 
+ 
+
+00:33:34.100 --> 00:33:37.400 align:start position:0%
+ 
+ 
+
+00:33:37.400 --> 00:33:39.410 align:start position:0%
+ 
+ 
+
+00:33:39.410 --> 00:33:43.190 align:start position:0%
+ 
+ 
+
+00:33:43.190 --> 00:33:44.140 align:start position:0%
+ 
+ 
+
+00:33:44.140 --> 00:33:47.030 align:start position:0%
+ 
+ 
+
+00:33:47.030 --> 00:33:49.040 align:start position:0%
+ 
+ 
+
+00:33:49.040 --> 00:33:51.110 align:start position:0%
+ 
+ 
+
+00:33:51.110 --> 00:33:53.810 align:start position:0%
+ 
+ 
+
+00:33:53.810 --> 00:33:55.280 align:start position:0%
+ 
+ 
+
+00:33:55.280 --> 00:33:58.250 align:start position:0%
+ 
+ 
+
+00:33:58.250 --> 00:34:01.490 align:start position:0%
+ 
+ 
+
+00:34:01.490 --> 00:34:02.840 align:start position:0%
+ 
+ 
+
+00:34:02.840 --> 00:34:05.090 align:start position:0%
+ 
+ 
+
+00:34:05.090 --> 00:34:05.690 align:start position:0%
+ 
+ 
+
+00:34:05.690 --> 00:34:07.550 align:start position:0%
+ 
+ 
+
+00:34:07.550 --> 00:34:09.980 align:start position:0%
+ 
+ 
+
+00:34:09.980 --> 00:34:11.240 align:start position:0%
+ 
+ 
+
+00:34:11.240 --> 00:34:13.369 align:start position:0%
+ 
+ 
+
+00:34:13.369 --> 00:34:14.840 align:start position:0%
+ 
+ 
+
+00:34:14.840 --> 00:34:21.740 align:start position:0%
+ 
+ 
+
+00:34:21.740 --> 00:34:23.240 align:start position:0%
+ 
+ 
+
+00:34:23.240 --> 00:34:25.190 align:start position:0%
+ 
+ 
+
+00:34:25.190 --> 00:34:26.540 align:start position:0%
+ 
+ 
+
+00:34:26.540 --> 00:34:29.320 align:start position:0%
+ 
+ 
+
+00:34:29.320 --> 00:34:31.639 align:start position:0%
+ 
+ 
+
+00:34:31.639 --> 00:34:32.990 align:start position:0%
+ 
+ 
+
+00:34:32.990 --> 00:34:35.000 align:start position:0%
+ 
+ 
+
+00:34:35.000 --> 00:34:39.619 align:start position:0%
+ 
+ 
+
+00:34:39.619 --> 00:34:41.030 align:start position:0%
+ 
+ 
+
+00:34:41.030 --> 00:34:45.680 align:start position:0%
+ 
+ 
+
+00:34:45.680 --> 00:34:49.669 align:start position:0%
+ 
+ 
+
+00:34:49.669 --> 00:34:52.879 align:start position:0%
+ 
+ 
+
+00:34:52.879 --> 00:34:55.250 align:start position:0%
+ 
+ 
+
+00:34:55.250 --> 00:34:58.130 align:start position:0%
+ 
+ 
+
+00:34:58.130 --> 00:34:59.480 align:start position:0%
+ 
+ 
+
+00:34:59.480 --> 00:35:02.000 align:start position:0%
+ 
+ 
+
+00:35:02.000 --> 00:35:04.100 align:start position:0%
+ 
+ 
+
+00:35:04.100 --> 00:35:09.349 align:start position:0%
+ 
+ 
+
+00:35:09.349 --> 00:35:13.770 align:start position:0%
+ 
+ 
+
+00:35:13.770 --> 00:35:19.260 align:start position:0%
+ 
+ 
+
+00:35:19.260 --> 00:35:20.910 align:start position:0%
+ 
+ 
+
+00:35:20.910 --> 00:35:20.920 align:start position:0%
+ 
+ 
+
+00:35:20.920 --> 00:35:22.290 align:start position:0%
+ 
+
+
+00:35:22.290 --> 00:35:25.230 align:start position:0%
+ 
+ 
+
+00:35:25.230 --> 00:35:27.630 align:start position:0%
+ 
+ 
+
+00:35:27.630 --> 00:35:28.710 align:start position:0%
+ 
+ 
+
+00:35:28.710 --> 00:35:29.819 align:start position:0%
+ 
+ 
+
+00:35:29.819 --> 00:35:31.890 align:start position:0%
+ 
+ 
+
+00:35:31.890 --> 00:35:34.710 align:start position:0%
+ 
+ 
+
+00:35:34.710 --> 00:35:37.559 align:start position:0%
+ 
+ 
+
+00:35:37.559 --> 00:35:38.760 align:start position:0%
+ 
+ 
+
+00:35:38.760 --> 00:35:40.380 align:start position:0%
+ 
+ 
+
+00:35:40.380 --> 00:35:43.589 align:start position:0%
+ 
+ 
+
+00:35:43.589 --> 00:35:46.740 align:start position:0%
+ 
+ 
+
+00:35:46.740 --> 00:35:49.099 align:start position:0%
+ 
+ 
+
+00:35:49.099 --> 00:35:51.809 align:start position:0%
+ 
+ 
+
+00:35:51.809 --> 00:35:54.660 align:start position:0%
+ 
+ 
+
+00:35:54.660 --> 00:35:56.940 align:start position:0%
+ 
+ 
+
+00:35:56.940 --> 00:36:02.720 align:start position:0%
+ 
+ 
+
+00:36:02.720 --> 00:36:02.730 align:start position:0%
+ 
+ 
+
+00:36:02.730 --> 00:36:06.579 align:start position:0%
+ 
+
+

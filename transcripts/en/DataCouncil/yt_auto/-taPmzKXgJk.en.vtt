@@ -1,0 +1,3736 @@
+WEBVTT
+Kind: captions
+Language: en
+
+00:00:00.250 --> 00:00:00.490 align:start position:0%
+ 
+you  [Music]  my name is Brian thank you Rick for  introducing me I've been doing data  engineering for about 10 years now  different industries  I contribute a little bit to hive back  in the day back when it was still M R  and a project called giraffe which many  of you probably haven't even heard of  but for now I work on the the artist  creators and tools team at Pandora so we  work with social media and the Pandora  data to try to create useful insights  for artists labels managers pretty much  everybody but the listeners so every day  we send the music labels a data set  containing song play Ament so what do I  mean by a song play a vent every time  somebody listens to a song on our  platform we report on that so we call  that a spin internally kind of makes  sense when you think about it but and  there's actually people from the labels  here and the data engineering teams that  receive that data so it's not expecting  that but the pressures on I guess so why  do we have to do this I mean the short  answer is we have to write okay but that  doesn't help why do we have to the long  answer so a bit of a history like  Pandora is got a reputation for a very  personalized music streaming service  right people like our recommenders but I  think the industry has proven out in the  last couple years especially that people  really want on-demand to like now that  that's possible and a lot of the legal  issues have been worked out and those  battles have been fought people like  that you know I don't even wager to  guess many people in this room probably  have a Spotify account or Apple music or  something other than Pandora even if  your app Android listener so they found  Pandora found that most of our users  were complimenting penned or with  something else and still do like they  hear a song they really like it and they  can't just listen to it again so even if  they're paying for it so they go to  youtube and they would look it up and  and we just didn't really want that so  now we actually have an on-demand  streaming tier there's different ways to  access it you can be a paying customer  and get access to that I won't go  through all that today but in terms of  actually so now that we support that we  have to report labels one reporting on  every single  in every single instance of the song  spinning for which they have rights do  so we have to send those datasets them  every day and it's not even a it's not  even a report per se like this song spun  X number of times they actually want a  structured event for each individual  spin event that happens so these get to  be big and we have to eat their external  data sets that were effectively  delivering over s3 every day and it's a  new requirement Pandora didn't always  have to do this we had kind of an  adversarial relationship with the labels  for years and that all had to change  very rapidly when we wanted to do  on-demand because they have the rights  that music so so what do these events  look like this is a very stripped-down  version there's about 20 22 different  structured fields but they go something  like this this kind of gets to the core  of it like what time did it play down to  the second right what's the name of the  track some others you could predict  right maybe the artists name I didn't  include here how long did the track play  when it's fun that's important and then  I one of the more interesting ones I  threw on here is the play source so that  gets that's a very complex field  internally that we managed how did the  user actually launch the song on the app  there's dozens of ways this can actually  happen maybe it was just a traditional  station spin from the recommenders maybe  it was they have like a premium playlist  and the playlist ended and so I  recommend errs kick in there too and  start it seeds everything off your  playlist and starts spitting out new  songs it just plays them or maybe they  were like a premium access thing where  they're not paying for it but they  wanted they were willing to listen to a  30-second video ad and then we give them  access to the song they search for that  ended up being wildly popular when we  launched that and so where does this  data come from big picture so there's  lots of Pandora's a huge hive shop we've  run all sorts of different Hortonworks  clusters completely isolated but not  totally firewalled off but the data that  we care about comes from one of our  primary analytics clusters so there's  there's a huge trough of partition spins  data all in Parque form that we generate  off of their raw data and then we have  metadata that we  build up to so I only included two  different tables here to show the  metadata but we consider all single  station ads every single station that a  user has as metadata across all our  users it's a big data set but we call it  metadata because relative to the spins  data and the the fact level data it's  not that big listener data and there's  others like artists track roles that  artists had in the track composers album  all of that stuff and listeners is an  important dimension to so that that  comes in every day from external sync  processes which my team doesn't have to  think about and we the whole pipeline  that I'll show is that we when we when  we detect that our transformation  succeeded on the island of cluster for a  given day and all this we just CP that  back to a private cluster that we can  control so we can rely on it to do this  reporting that we need to do and then  also I threw on here we do the Pandora  does we have Kafka queues where this  stuff all lives on to our our team has  not gone through the motions to actually  transform or update our report to  actually use that to do this reporting  just because we haven't gotten around to  it yet but we they do throw spins and  other things on the other metadata on  the Kafka queues we have we just our  team doesn't actually leverage that yet  but we plan to it would cut down the  latency so the first iteration of the  entire pipeline which I'll show in a  second it was pretty slow I mean it  would be to get data for like all the  spins that happened on a Tuesday over to  the labels would be take to like  Thursday and we just wanted to do better  than that so we wanted to improve the  overall latency of how we send these  files on s3 and to do that we took we  looked at two primary things one is the  obvious one it's like the runtime of  each individual step in the workflow how  could we improve that there were glaring  issues and then also the bigger one more  indirect was how do we recover from  issues that happen along each way like  if the disappea sales or something like  that we don't want to have to redo  upstream work and so we set out to break  out all those checkpoints  so there's you can see that I kind of  structured this whole presentation is  kind of like a war story form where I  actually cut out a lot of the like well  this is what we used to do and we didn't  like and I'm just going right to the  solution so I don't have a lot of like  before and after run times there's  plenty of time for questions I'm sure  some of that will come up but uh I don't  feel like it doesn't really help to brag  about those numbers either because it's  not that interesting to the people  outside the team but so what were issues  with the previous pipeline just just to  summarize we'll go we'll give it one  slide for that part  well there's upstream delays on the raw  data coming in to us we don't really  control a lot of the sync processes or  some of those other analytics teams and  what they do and and there's just a  natural delay because of how they're  working with daily partitions so some of  that's delayed and we just can't control  that but the data set generation RN once  we have it in that private cluster was  very slow and I won't get into a lot of  reasons why but it just was and so we  and then also part of our requirements  structure to the labels as we send a  single file per day and I've asked  around like why that is it just I just  accept that it is for now and so it's a  I know it's a bit of like a big data  anti-pattern right a lot of us we're  used to working with directories of  files or buckets of files that where all  the files represent everything in the  day and you get better parallelism that  way but we send a single file per day  for to each label for all the spins that  happen for tracks that they they have  rights to and then so part of the  problem was the steps two and three were  regenerated and we're making the single  file we're tightly coupled so any kind  of issues with either-or would scuttle  the entire thing  so the new pipeline follows kind of just  a series of linear steps upstream on the  analytics cluster we have we do some  transformations for both the raw and  metadata and I'll cover a little bit  more of that in detail like what that  means but we do that work directly on  the Pandora analytics clusters through  with high Montes so we we use it that  way once that data is prepared and those  partitions are active and we validated  them we just repeat that back to our  private cluster kind of in batch  and then once we detected the deceive  you the atomic deceive II is succeeded  we can begin building we use spark very  heavily on our team to generate this  data set is one of the uses for it was  one of our first uses of spark on our  team actually this delivery was so  important that we set out to we spark  was actually one of an early test cases  for it and then so once we have this  data set and the data set itself has  been validated we want to coalesce it  into a single file for the labels and  then we just have to push that up to s3  so in order to automate all this each we  kind of codify each level each step of  the workflow and then five point series  we use Python classes our team still  uses Luigi I know a lot of the mine  share in the data engineering space is  kind of moved over to air flow and other  frameworks are more popular but we still  really like Luigi on our team we feel  like it's lightweight and the visualizer  it works very well for us and I think  the most important part is the it force  when you define your tasks you it has a  contract where you really have to define  what it means for the task to be done  given parameters right it's not enough  in the past workflow tools that they  were considered done if it ran without  exception and that's really not good  enough anymore I'll get into kind of how  we we go around that and so the nice  thing too about a lot of these  frameworks are the supplies the workflow  and and kind of modeling your  dependencies in the dagger are  completely decoupled from what it's  actually doing to run it right we have  Scala SPARC jobs that run to CP Hadoop  commands that doesn't matter they're all  codified in Luigi and Python so these  Python the Luigi tasks form tags of  dependencies naturally when you wire  your requires in Luigi  we simply have parameters that we supply  on the command line where we launch  these and then the parameters that we're  necessary we propagate this down into  the requires dependency so I know some  of this is standard Luigi stuff for  people have used to used to working with  it most notable parameters are label so  when I say label I mean music label by  the way and then dates the date they're  active date that we're running out for  that label  and this lets us reuse certain tasks  across different labels and also where  tasks can be shared we just send the  date if there are not label specific  like the disk CP and then here's a  visualization of that graph kind of  rotated 90 degrees so that it can fit on  a PowerPoint slide left to right we're  trying to actually run the push tasks  that's what we actually launch we say  okay it's a new day push to s3 or cron  does and it's like well wait a minute  before I could do that I have to have a  single file okay well the single file  doesn't exist I need to generate it and  it just recursos all the way back until  it notices for the day that we're trying  to do that hasn't even transformed the  data yet and so in a bit more detail  each of these pipeline tasks we have to  do we have to code up our three things  all of which are mandatory right we have  to codify any dependencies it has what  what what upstream is necessary and we  need a function to evaluate when we're  done right we need a way to actually say  I have arrived at a state of  completeness and then most importantly  we need a function if it's not at that  state of completeness to generate some  artifact or external state so that it  now is at a state of completeness and  here's what some of the code looks like  this actually doesn't use the Luigi  parameter API just because it's I  thought it was easier to visualize it  here and just see it and rot by then but  the push task takes in a date and label  parameter because it's its label and  date specific and at first it requires  that there actually be a single file  that we've coalesced together with all  the data into it and so that requires  sending the date and label parameters  down the dag and do it and I kind of  commented or wrote comments for what the  run a complete would do right like the  run if there's not a single order of um  if it's not actually done yet  it means the runs gonna execute and we  just do the work of pushing that single  file up to an s3 bucket it's not  terribly complicated and then complete  this you might guess it's pretty  straightforward the push task is  complete if for a given label that  artifact exists already up in s3 for the  given date  and then here's how the labels are  here's how the parameters actually  propagate down the dag right the push  coalesced and generate stages are all  very label specific for the report we're  building but we can the dist CP and the  transform steps just need the date so  those get reused and so the scheduler  might be trying to kick this off  aggressively throughout the day maybe  the first attempt it gets it recurse is  down it sees the transform isn't done so  does that then disi piece exceeds but  then it gets to the point where it's  generated it's running the spark job and  let's say there's some errant error or  something some intermittent issue and it  fails right and we get some kind of  alert for that well we don't freak out  too much  the scheduler because this is all  scheduled to run automatically in cron  and we don't we don't run these by hand  the second Skaro temp for the day I can  pick up right where it left off because  the disk CP tasks do the work of  actually defining what it means for them  to be done right so the dag can kind of  reuse work from earlier executions  because it's just it just has functions  to kind of figure out where it was and  this is kind of the core the whole  presentation about how like we the  fault-tolerance helped with the overall  latency right like and you pass in teams  I've been on the past that a failure  like that would out you'd have to redo  everything maybe the disk CP would have  to be redone but yeah we can use the  scheduler to kind of aggressively work  off checkpoints and so this kind of  bottom-up execution pattern that  everyone's familiar with airflow in the  wedi it leads to not to checkpoint in  your work right it makes you it forces  you to think about what decoupling  points exist and where you can reuse and  where you can break off on and say at  least I'm done that for the day and you  can the most important thing is you can  schedule a daily tasks that you only  need to run once a day could be  scheduled to run even as aggressively as  every 10 minutes and that's how our  crontab we use we still use Chronos  still a little bit older but that's how  its set up as soon as the new day rolls  around cron is just an automatically  trying to do the latest the label  reports for that day but it can't it it  gets to a point where  because the data is not there yet but as  soon as it is available  it'll just launch I'll go through that  more we rely very heavily on the Luigi  scheduler to figure out what state the  pipeline is in right  is it ready to run is it not ready yet  because the data is not there yet  is it done already for the day we don't  want to redo it if it is so just to buy  just a simple thing is defining that  complete contract we get all this for  free which is the nice thing and that I  again it goes without saying if we're  gonna have a recursive bottom-up  pipeline like this we need a base case  for for defining this execution and in  our case like put in English our base  cases we need a way to detected the raw  data that we're transforming is  available on the base pend or analytic  clusters and our team my team in  particular has absolutely no control to  force that right we it's not as simple  as just writing a Luigi task and it'll  execute that those sources and all the  better completely outside our means in  our purview and we don't frankly want to  own that so we can just codify what it  means to have we can codify a task to  kind of check for us and then not blow  up if it's not ready but kind of  gracefully exit leaf nodes in the dag in  other words and this is our leaf node  per se we define it a little bit  differently than the traditional  external tasks for those familiar with  Luigi we use a bit of a different  pattern it takes in a date and a min ROS  parameter which is used for validation  it doesn't have any requirements it  doesn't require anything we're just  gonna run it right away it's not done  already and the job of it running is to  transform the events for the given day  in the form that we want the raw events  all the spins data and we look at  completeness as saying well we're gonna  do a count over that new partition and  if it's at least greater than some  threshold which we've we've done the  work offline to determine what what  makes sense then we'll know that it's  valid we'll know that it succeeded so  that does two if the partition failed to  generate the count will be zero if not  actually just blow up the query and even  if there's some kind of malformed issue  with the partition there's still this is  a very important defensive guard this  has saved us several times actually  since I've been on the team  where there was malformed data that came  in for whatever reason and I couldn't  even dream up and we just had these in  place and we've actually been in the  position of having to alert those teams  because of these these checks we can see  like okay something's wrong and we're  the ones to actually tell the team I'm  not trying to throw my other other teams  upend or under the bus but they have  pretty good alerting but this is act  that's actually happened where we were  just watching and noticed before them so  the task is done if it passes validation  of the Monroes check succeeds we're  pretty confident at that point and then  again you know these data delays happen  frequently it's not always their fault  they have complex syncs that have to  deal with this and they manage the kafka  rights now too so but we can use the  scheduler to not really care right we're  just going to aggressively schedule it  to run every X minutes  I think it's defined as like 30 minutes  in production for us and we supply the  current day we say oh every 30 minutes  just try to run this you know is it's in  human form it's like the I think about  is like from The Simpsons are we there  yet are we there yet  Homer Simpson always driving I didn't  put a meme up for that but I guess I  could have it's it's like but computers  don't mind being asked that right it's  annoying for us but we can just  constantly ask it hey are you ready to  run if why aren't you done yet and just  kind of annoy it and then but the nice  thing is once the data becomes available  for transformation and that complete  check passes we can launch the pipeline  right and it's completely automated so  let's just go through I'll go through  each stage not not code wise but I'll go  through kind of in English what each  done state is for each of those five  steps right we talked to have the  transform one already there's a lot of  Pandora hive tables a lot but we want to  narrow that down to just the spins that  we're interested in so we create our own  manage table my team for that  partitioned by day still but we do  certain things to their raw data like we  duplicate them they do some of that too  but we do our own deduplication just in  case we filter out certain properties of  songs like if it doesn't spin for longer  than 30 seconds the labels seem  uninterested in that maybe I could get  yelled at after this but I was told that  at least and then we have some other  joins we do to kind of  to kind of keep it sane we keep the same  partitioning structure we keep it by day  and then we do we do other things for  the metadata too so that way I described  that metadata and like listeners  stations it doesn't start that way we  have to kind of massage it down to that  very natural form how to denormalize it  so to speak so it's it's just easier to  build this data set form and then I most  noticeably like we just don't want to be  just seeing hundreds of tables to do it  on our side we'd rather take advantage  of their cluster and use we use hive on  tez it's very fast  to build out some of those partitions  and then we can just sync them back so  if it passes the Monroes checks we're  done we consider that valid for the  partitions we're actually considering  switching this out to just use snake  bite by level checks for sanity because  it's a little bit faster than having  actually issue a query even if it tez is  still like we don't really we could be  doing this in milliseconds with snake by  directory check bytes for the part files  we don't really need to issue a query so  you'd consider that if anyone was  thinking that and we might do that just  to make it better and then so once  that's done the disk C P stage is ready  to done we run in atomic disk CP nothing  really fancy we add it to the warehouse  and very obviously that stage is done if  the partitions exist in hive so we can  very easily build out that state and  then the generation stage kicks in we  use spark sequel for this so the legacy  report was kind of a high of M our job  and it was a natural transition just to  take a lot of that with a few minor  changes and just run that right as spark  sequel over hive within a hive session  they're all part K events so we get  pretty fast filtering just from that we  can filter when we're running the  generation now we're getting label  specific right so we give it the task is  gonna run with just a label and that  control that's fed to the Scala job in  terms of how we're going to filter it  down and we can actually do multiple  license or label reports and parallel  this way too and which is what we do so  and then as part of that spark sequel  thing all the metadata gets joined in  artists composers stations they want to  we want to create a sync for every  single spin we want to make it as rich  as possible  reported the labels for fields that  they've said they were interested in and  then the most important part is in the  driver directly we actually validate we  do an additional validation on the  number of rows that come out of that  stage and we have lower up and upper  bounds for this so it has to actually  fall within like an expected if there  were maybe issues of the metadata or  something like that even though we had  those defensive checks maybe still  something went wrong you can't be too  defensive so we check lower and upper  bound limits why do we do upper bound I  guess we actually did have one case  they're somehow new lines got introduced  into some of the fields and ever since  then we just like don't take any chances  why not but so if you want to throw off  the music industry's reporting you might  you could name your track or your band  character turn new line or something  they might not our reporting now so and  then we if this if it gets past this  stage we output multiple part files to  Hadoop to HDFS we still do a lot Colo  Khan Prem so we've run HDFS we don't we  don't actually do a lot of our  processing like in at s3 like that we  have bare-metal HDFS if anyone was  wondering I couldn't answer questions  about that later  for what I know so this is sort of what  this is part of the Scala job it's  really kind of uninteresting but it just  illustrates one point we run the the  hive query we run it as just raw sparks  equal text and that text gets  parameterize with string replace before  it gets sent to the session command and  we still call out of just habit like we  call persist memory and disk  even though cache as of spark 2 is just  the synonym for that if you look under  the hood we're so used to cache from  spark 1x days just calling storage level  memory and having to deal with that that  we we just still in this habit from our  our DD days but once we have that data  frame the results we can call count on  it feed it to the check row bounds  function and then that will actually  elevate an exception if it fails the  validation check and then the whole  pipeline heart fails and we get alerted  but if it doesn't if it passes it just  sort of silently returns and we can go  on to just saving those results to a  label on dates  specific HDFS location but the nice  thing too it's a really nice use of  spark it kind of illustrates the the  caching benefit because we can do a  validation step right and the spark  driver and because it's cached it  doesn't have to read materialize and  reevaluate everything - to do the save I  know this is spark 101 stuff but  sometimes the the benefits of the  caching aren't always obvious this is  tremendously Bennet and if it fails  validation there's nothing we have to  clean up right it's just an ephemeral  data frame just dies so then once all  these part files are written out  we need to coalesce them into a single  file some customers want compressed visa  others want gzip I'm not sure what which  one is the orchard of the check but we  have to handle both of those cases and  for bees if this is a little easier the  their output is already be zipped part  files and we can just binary cat those  together into a single file very  effortlessly with Hadoop copy merge and  then we get a single just a single B zip  file with there's even a nice flag to  just clean up the original files after  it's done  so if it succeeds atomically it deletes  those files as part of that action  I think atomically but then gzip is a  little bit more annoying but not too bad  we just have to write out uncompressed  files and they take up more space but we  can use copy merge on uncompressed files  and do the same thing wipe them out  after there's a single compressed file  and then just run that through gzip and  we get a single compressed file I put  this here because I didn't always  actually know I've been working with the  dupe for a while and I never even used  this this copy merge thing so there's  other people here that haven't used that  or didn't know about it it's really  handy and then the done state is this  predictably writing my guess we we  expect a single compressed file in HDFS  for the label and the date and if it's  there we're consider all ready  considered valid we validated all the  data at the part file level and the job  and we can operate off just that single  file the assumptions around that so the  s3 push stage kicks in and we just take  the single file put it up to a name the  labels all get their own individual  buckets right for Abby  reasons they don't want each others they  don't want to share their data with each  other it makes sense so they get their  own bucket and then we write out a new  path in that bucket for the for the  given date and then we can tell very  quickly if we're done with the s3 target  classes and the we'd you just is it  there or not so this is a short  presentation but just the takeaways of  this I guess if there's stuff to learn  out of this the we we built all this so  that it could be run very aggressively  from cron and it's a little confusing to  see daily tasks that operate with daily  granularity being run every ten minutes  and it does produce more logs and cabaña  and other things we have to deal with  finding the log that actually ran it can  be annoying but it's a small price to  pay for going to the self-healing aspect  and the automation that comes out of  just we don't even have to think about  how these are run if they fail it's  because there's a real issue with the  Pandora cluster or something or  something we did with like a patch that  we put in trying to make it better and  we've screwed up but we don't have to  guess when it's ready to run we just let  the code figure it out for us and we  just have cron try to just try over and  over again annoyingly and if there's an  issue it just picks up right at the at  the most natural Check Point where it  succeeded whoops so all of the tasks are  compiled I sound like a broken record I  guess but the tasks composition is  designed around these checkpoints right  we had to we had to think logically  about where I made sense to break these  off whereas the first iteration of the  pipeline didn't really do that it was it  would build the single-file wall it was  generating the report and that had  problems and it goes without saying like  the a lot of talked about about the  fault tolerance part of it because it's  less obvious but using the latest  frameworks kind of switching this over  to some of the latest using high montes  where we can and then spark where we  control it really helped for the parts  that we can control like using the  latest open source frameworks just  getting fast speed and execution so  there's any kind of issue with it  it doesn't take forever to run or  backfill we have to backfill more than  we would like but that's it are there  any questions about I didn't cover like  how it improved I know I made that a  professor  answer yeah just wondering he's not  using crown do you have some sort of  event cheaper that to trigger deadlines  we don't we could explore that that  would make it easier I guess that would  take the form of a task that was polling  the raw data but it's still it there's  less to be honest an inception point to  launch yeah I'd have to explore that  more maybe we certainly thought about  changing this from it's right now it's  kind of a poll model and it could be  more of a push but haven't explored that  that much it'll probably to be honest  with you but probably before that we'll  switch it out to will be accumulating  these directly off the kafka streams and  so the report that the datasets will be  generating throughout the day as spins  come in and then as soon as the day ends  we'll we'll be able to pipe it up yes  siree that's probably what will happen  first so we use them Luigi and basically  kick off the pie Spock job so I'm just  curious that you using a scholar Spock  essentially how does that sort of like  work in terms of calling you know you  know scholar Spock within some Luigi  because Luigi's in Python yeah so  there's in the Luigi contribute there is  a really nice spark submit task it's  actually Luigi could trib and I think  it's directly and like Luigi contribs  spark is the import spark submit task so  you can use that you it's really easy to  submit a scholar spark test it's a  little trickier we'd have PI spark tasks  as well it's just a little bit trickier  to use that I'll just say that the  contribute that they have like a PI  spark submit tasks that they've also  contributed and that's junk we don't we  don't use that but it's the the base one  that's been contributed makes it really  easy to do this so you just point it to  a jar and you give it the name of the  class in that jar and the Luigi tasks  only job is to make a spark to submit  command  and so you can actually see we print out  that command we see what it looks like  and it just runs  so using Luigi is just an easier way to  have not have to make a spark to submit  command by hand I think that's that's  all gains other questions for Brian you  mentioned you guys still use HDFS like  not relying on its third serenade reason  for not crossing the line were staying  where it is um there is I mean they've  been political reasons in the past we do  consider Amazon a competitor and there's  on people use Amazon music I don't  actually think those are the real  reasons and I can say that because we're  the next two years I think there's a  pretty aggressive plan to work out to go  into GCP the Google Cloud we're gonna  transition a lot to that and they are  still competitor there's Google music so  that thing I used to think that way for  a while and it's not that there's really  no I think it's just the the bare metal  we've always we've been kind of addicted  to the bare metal performance and we  have really great hops like sysadmin  people that are just really good with  Hadoop and it has if it got to be a  problem where we would we saw that is we  didn't have to worry about these issues  but we don't really have a lot of those  issues are a lot of our hiccups and come  from the application level like the data  engineers like myself right we screw up  something in however we made a patch to  the job that's producing all the  upstream raw data and that failed so so  you know I think it has to do with the  fact that they just haven't been big  woes  they haven't bitten us yet in ways that  have become huge time sinks  alright any other questions for Brian oh  we got one back here  I was just wondering what you like about  hive that you still keep it around  in addition like I know there's some  benefits but like what makes it worth it  to you to like support all that extra  infrastructure over just using spark for  everything yeah it's a good question I  know some of its outside not to defer  too much you know there's a lot of teams  at Penn where they wear heavy  Hortonworks users and Hortonworks has  gotten a lot behind hive in recent years  with ll AP and so if you live in the  whole Hortonworks environment you tend  to kind of go down the the pathways of  those tools we the the Pandora there's  there's all sorts of different the teams  and they're not that homogeneous in  terms of like this team uses hive only  and this there's there's all sorts of  different activity on these clusters and  spark hive on tez we have an Impala  cluster there's other warehouses so it's  like there's very few hive MapReduce  jobs left what I'll say it's we've what  we've gotten addicted to is kind of hive  is a catalog as the meta store the meta  store and hive is probably going to live  on way belong way past even many of  these frameworks that these execution  engines that are that are down in the  dirty with hive the meta stories just  will probably live on as a means of  cataloging it and so that's kind of what  Pandora has gotten addicted to but hive  itself in terms of the way we used to  think about it like when I contributed  to hive is it's totally different now  the people that use it in production how  I get like sub-second latency with hive  now because they're running they're  running press over the meta store and  Paulo Ortez or something and we're  sparks equal like we do so we it's just  not too much of a concern and we get  some nice properties out of it  you
+
+00:00:00.490 --> 00:00:00.500 align:start position:0%
+you  [Music]  my name is Brian thank you Rick for  introducing me I've been doing data  engineering for about 10 years now  different industries  I contribute a little bit to hive back  in the day back when it was still M R  and a project called giraffe which many  of you probably haven't even heard of  but for now I work on the the artist  creators and tools team at Pandora so we  work with social media and the Pandora  data to try to create useful insights  for artists labels managers pretty much  everybody but the listeners so every day  we send the music labels a data set  containing song play Ament so what do I  mean by a song play a vent every time  somebody listens to a song on our  platform we report on that so we call  that a spin internally kind of makes  sense when you think about it but and  there's actually people from the labels  here and the data engineering teams that  receive that data so it's not expecting  that but the pressures on I guess so why  do we have to do this I mean the short  answer is we have to write okay but that  doesn't help why do we have to the long  answer so a bit of a history like  Pandora is got a reputation for a very  personalized music streaming service  right people like our recommenders but I  think the industry has proven out in the  last couple years especially that people  really want on-demand to like now that  that's possible and a lot of the legal  issues have been worked out and those  battles have been fought people like  that you know I don't even wager to  guess many people in this room probably  have a Spotify account or Apple music or  something other than Pandora even if  your app Android listener so they found  Pandora found that most of our users  were complimenting penned or with  something else and still do like they  hear a song they really like it and they  can't just listen to it again so even if  they're paying for it so they go to  youtube and they would look it up and  and we just didn't really want that so  now we actually have an on-demand  streaming tier there's different ways to  access it you can be a paying customer  and get access to that I won't go  through all that today but in terms of  actually so now that we support that we  have to report labels one reporting on  every single  in every single instance of the song  spinning for which they have rights do  so we have to send those datasets them  every day and it's not even a it's not  even a report per se like this song spun  X number of times they actually want a  structured event for each individual  spin event that happens so these get to  be big and we have to eat their external  data sets that were effectively  delivering over s3 every day and it's a  new requirement Pandora didn't always  have to do this we had kind of an  adversarial relationship with the labels  for years and that all had to change  very rapidly when we wanted to do  on-demand because they have the rights  that music so so what do these events  look like this is a very stripped-down  version there's about 20 22 different  structured fields but they go something  like this this kind of gets to the core  of it like what time did it play down to  the second right what's the name of the  track some others you could predict  right maybe the artists name I didn't  include here how long did the track play  when it's fun that's important and then  I one of the more interesting ones I  threw on here is the play source so that  gets that's a very complex field  internally that we managed how did the  user actually launch the song on the app  there's dozens of ways this can actually  happen maybe it was just a traditional  station spin from the recommenders maybe  it was they have like a premium playlist  and the playlist ended and so I  recommend errs kick in there too and  start it seeds everything off your  playlist and starts spitting out new  songs it just plays them or maybe they  were like a premium access thing where  they're not paying for it but they  wanted they were willing to listen to a  30-second video ad and then we give them  access to the song they search for that  ended up being wildly popular when we  launched that and so where does this  data come from big picture so there's  lots of Pandora's a huge hive shop we've  run all sorts of different Hortonworks  clusters completely isolated but not  totally firewalled off but the data that  we care about comes from one of our  primary analytics clusters so there's  there's a huge trough of partition spins  data all in Parque form that we generate  off of their raw data and then we have  metadata that we  build up to so I only included two  different tables here to show the  metadata but we consider all single  station ads every single station that a  user has as metadata across all our  users it's a big data set but we call it  metadata because relative to the spins  data and the the fact level data it's  not that big listener data and there's  others like artists track roles that  artists had in the track composers album  all of that stuff and listeners is an  important dimension to so that that  comes in every day from external sync  processes which my team doesn't have to  think about and we the whole pipeline  that I'll show is that we when we when  we detect that our transformation  succeeded on the island of cluster for a  given day and all this we just CP that  back to a private cluster that we can  control so we can rely on it to do this  reporting that we need to do and then  also I threw on here we do the Pandora  does we have Kafka queues where this  stuff all lives on to our our team has  not gone through the motions to actually  transform or update our report to  actually use that to do this reporting  just because we haven't gotten around to  it yet but we they do throw spins and  other things on the other metadata on  the Kafka queues we have we just our  team doesn't actually leverage that yet  but we plan to it would cut down the  latency so the first iteration of the  entire pipeline which I'll show in a  second it was pretty slow I mean it  would be to get data for like all the  spins that happened on a Tuesday over to  the labels would be take to like  Thursday and we just wanted to do better  than that so we wanted to improve the  overall latency of how we send these  files on s3 and to do that we took we  looked at two primary things one is the  obvious one it's like the runtime of  each individual step in the workflow how  could we improve that there were glaring  issues and then also the bigger one more  indirect was how do we recover from  issues that happen along each way like  if the disappea sales or something like  that we don't want to have to redo  upstream work and so we set out to break  out all those checkpoints  so there's you can see that I kind of  structured this whole presentation is  kind of like a war story form where I  actually cut out a lot of the like well  this is what we used to do and we didn't  like and I'm just going right to the  solution so I don't have a lot of like  before and after run times there's  plenty of time for questions I'm sure  some of that will come up but uh I don't  feel like it doesn't really help to brag  about those numbers either because it's  not that interesting to the people  outside the team but so what were issues  with the previous pipeline just just to  summarize we'll go we'll give it one  slide for that part  well there's upstream delays on the raw  data coming in to us we don't really  control a lot of the sync processes or  some of those other analytics teams and  what they do and and there's just a  natural delay because of how they're  working with daily partitions so some of  that's delayed and we just can't control  that but the data set generation RN once  we have it in that private cluster was  very slow and I won't get into a lot of  reasons why but it just was and so we  and then also part of our requirements  structure to the labels as we send a  single file per day and I've asked  around like why that is it just I just  accept that it is for now and so it's a  I know it's a bit of like a big data  anti-pattern right a lot of us we're  used to working with directories of  files or buckets of files that where all  the files represent everything in the  day and you get better parallelism that  way but we send a single file per day  for to each label for all the spins that  happen for tracks that they they have  rights to and then so part of the  problem was the steps two and three were  regenerated and we're making the single  file we're tightly coupled so any kind  of issues with either-or would scuttle  the entire thing  so the new pipeline follows kind of just  a series of linear steps upstream on the  analytics cluster we have we do some  transformations for both the raw and  metadata and I'll cover a little bit  more of that in detail like what that  means but we do that work directly on  the Pandora analytics clusters through  with high Montes so we we use it that  way once that data is prepared and those  partitions are active and we validated  them we just repeat that back to our  private cluster kind of in batch  and then once we detected the deceive  you the atomic deceive II is succeeded  we can begin building we use spark very  heavily on our team to generate this  data set is one of the uses for it was  one of our first uses of spark on our  team actually this delivery was so  important that we set out to we spark  was actually one of an early test cases  for it and then so once we have this  data set and the data set itself has  been validated we want to coalesce it  into a single file for the labels and  then we just have to push that up to s3  so in order to automate all this each we  kind of codify each level each step of  the workflow and then five point series  we use Python classes our team still  uses Luigi I know a lot of the mine  share in the data engineering space is  kind of moved over to air flow and other  frameworks are more popular but we still  really like Luigi on our team we feel  like it's lightweight and the visualizer  it works very well for us and I think  the most important part is the it force  when you define your tasks you it has a  contract where you really have to define  what it means for the task to be done  given parameters right it's not enough  in the past workflow tools that they  were considered done if it ran without  exception and that's really not good  enough anymore I'll get into kind of how  we we go around that and so the nice  thing too about a lot of these  frameworks are the supplies the workflow  and and kind of modeling your  dependencies in the dagger are  completely decoupled from what it's  actually doing to run it right we have  Scala SPARC jobs that run to CP Hadoop  commands that doesn't matter they're all  codified in Luigi and Python so these  Python the Luigi tasks form tags of  dependencies naturally when you wire  your requires in Luigi  we simply have parameters that we supply  on the command line where we launch  these and then the parameters that we're  necessary we propagate this down into  the requires dependency so I know some  of this is standard Luigi stuff for  people have used to used to working with  it most notable parameters are label so  when I say label I mean music label by  the way and then dates the date they're  active date that we're running out for  that label  and this lets us reuse certain tasks  across different labels and also where  tasks can be shared we just send the  date if there are not label specific  like the disk CP and then here's a  visualization of that graph kind of  rotated 90 degrees so that it can fit on  a PowerPoint slide left to right we're  trying to actually run the push tasks  that's what we actually launch we say  okay it's a new day push to s3 or cron  does and it's like well wait a minute  before I could do that I have to have a  single file okay well the single file  doesn't exist I need to generate it and  it just recursos all the way back until  it notices for the day that we're trying  to do that hasn't even transformed the  data yet and so in a bit more detail  each of these pipeline tasks we have to  do we have to code up our three things  all of which are mandatory right we have  to codify any dependencies it has what  what what upstream is necessary and we  need a function to evaluate when we're  done right we need a way to actually say  I have arrived at a state of  completeness and then most importantly  we need a function if it's not at that  state of completeness to generate some  artifact or external state so that it  now is at a state of completeness and  here's what some of the code looks like  this actually doesn't use the Luigi  parameter API just because it's I  thought it was easier to visualize it  here and just see it and rot by then but  the push task takes in a date and label  parameter because it's its label and  date specific and at first it requires  that there actually be a single file  that we've coalesced together with all  the data into it and so that requires  sending the date and label parameters  down the dag and do it and I kind of  commented or wrote comments for what the  run a complete would do right like the  run if there's not a single order of um  if it's not actually done yet  it means the runs gonna execute and we  just do the work of pushing that single  file up to an s3 bucket it's not  terribly complicated and then complete  this you might guess it's pretty  straightforward the push task is  complete if for a given label that  artifact exists already up in s3 for the  given date  and then here's how the labels are  here's how the parameters actually  propagate down the dag right the push  coalesced and generate stages are all  very label specific for the report we're  building but we can the dist CP and the  transform steps just need the date so  those get reused and so the scheduler  might be trying to kick this off  aggressively throughout the day maybe  the first attempt it gets it recurse is  down it sees the transform isn't done so  does that then disi piece exceeds but  then it gets to the point where it's  generated it's running the spark job and  let's say there's some errant error or  something some intermittent issue and it  fails right and we get some kind of  alert for that well we don't freak out  too much  the scheduler because this is all  scheduled to run automatically in cron  and we don't we don't run these by hand  the second Skaro temp for the day I can  pick up right where it left off because  the disk CP tasks do the work of  actually defining what it means for them  to be done right so the dag can kind of  reuse work from earlier executions  because it's just it just has functions  to kind of figure out where it was and  this is kind of the core the whole  presentation about how like we the  fault-tolerance helped with the overall  latency right like and you pass in teams  I've been on the past that a failure  like that would out you'd have to redo  everything maybe the disk CP would have  to be redone but yeah we can use the  scheduler to kind of aggressively work  off checkpoints and so this kind of  bottom-up execution pattern that  everyone's familiar with airflow in the  wedi it leads to not to checkpoint in  your work right it makes you it forces  you to think about what decoupling  points exist and where you can reuse and  where you can break off on and say at  least I'm done that for the day and you  can the most important thing is you can  schedule a daily tasks that you only  need to run once a day could be  scheduled to run even as aggressively as  every 10 minutes and that's how our  crontab we use we still use Chronos  still a little bit older but that's how  its set up as soon as the new day rolls  around cron is just an automatically  trying to do the latest the label  reports for that day but it can't it it  gets to a point where  because the data is not there yet but as  soon as it is available  it'll just launch I'll go through that  more we rely very heavily on the Luigi  scheduler to figure out what state the  pipeline is in right  is it ready to run is it not ready yet  because the data is not there yet  is it done already for the day we don't  want to redo it if it is so just to buy  just a simple thing is defining that  complete contract we get all this for  free which is the nice thing and that I  again it goes without saying if we're  gonna have a recursive bottom-up  pipeline like this we need a base case  for for defining this execution and in  our case like put in English our base  cases we need a way to detected the raw  data that we're transforming is  available on the base pend or analytic  clusters and our team my team in  particular has absolutely no control to  force that right we it's not as simple  as just writing a Luigi task and it'll  execute that those sources and all the  better completely outside our means in  our purview and we don't frankly want to  own that so we can just codify what it  means to have we can codify a task to  kind of check for us and then not blow  up if it's not ready but kind of  gracefully exit leaf nodes in the dag in  other words and this is our leaf node  per se we define it a little bit  differently than the traditional  external tasks for those familiar with  Luigi we use a bit of a different  pattern it takes in a date and a min ROS  parameter which is used for validation  it doesn't have any requirements it  doesn't require anything we're just  gonna run it right away it's not done  already and the job of it running is to  transform the events for the given day  in the form that we want the raw events  all the spins data and we look at  completeness as saying well we're gonna  do a count over that new partition and  if it's at least greater than some  threshold which we've we've done the  work offline to determine what what  makes sense then we'll know that it's  valid we'll know that it succeeded so  that does two if the partition failed to  generate the count will be zero if not  actually just blow up the query and even  if there's some kind of malformed issue  with the partition there's still this is  a very important defensive guard this  has saved us several times actually  since I've been on the team  where there was malformed data that came  in for whatever reason and I couldn't  even dream up and we just had these in  place and we've actually been in the  position of having to alert those teams  because of these these checks we can see  like okay something's wrong and we're  the ones to actually tell the team I'm  not trying to throw my other other teams  upend or under the bus but they have  pretty good alerting but this is act  that's actually happened where we were  just watching and noticed before them so  the task is done if it passes validation  of the Monroes check succeeds we're  pretty confident at that point and then  again you know these data delays happen  frequently it's not always their fault  they have complex syncs that have to  deal with this and they manage the kafka  rights now too so but we can use the  scheduler to not really care right we're  just going to aggressively schedule it  to run every X minutes  I think it's defined as like 30 minutes  in production for us and we supply the  current day we say oh every 30 minutes  just try to run this you know is it's in  human form it's like the I think about  is like from The Simpsons are we there  yet are we there yet  Homer Simpson always driving I didn't  put a meme up for that but I guess I  could have it's it's like but computers  don't mind being asked that right it's  annoying for us but we can just  constantly ask it hey are you ready to  run if why aren't you done yet and just  kind of annoy it and then but the nice  thing is once the data becomes available  for transformation and that complete  check passes we can launch the pipeline  right and it's completely automated so  let's just go through I'll go through  each stage not not code wise but I'll go  through kind of in English what each  done state is for each of those five  steps right we talked to have the  transform one already there's a lot of  Pandora hive tables a lot but we want to  narrow that down to just the spins that  we're interested in so we create our own  manage table my team for that  partitioned by day still but we do  certain things to their raw data like we  duplicate them they do some of that too  but we do our own deduplication just in  case we filter out certain properties of  songs like if it doesn't spin for longer  than 30 seconds the labels seem  uninterested in that maybe I could get  yelled at after this but I was told that  at least and then we have some other  joins we do to kind of  to kind of keep it sane we keep the same  partitioning structure we keep it by day  and then we do we do other things for  the metadata too so that way I described  that metadata and like listeners  stations it doesn't start that way we  have to kind of massage it down to that  very natural form how to denormalize it  so to speak so it's it's just easier to  build this data set form and then I most  noticeably like we just don't want to be  just seeing hundreds of tables to do it  on our side we'd rather take advantage  of their cluster and use we use hive on  tez it's very fast  to build out some of those partitions  and then we can just sync them back so  if it passes the Monroes checks we're  done we consider that valid for the  partitions we're actually considering  switching this out to just use snake  bite by level checks for sanity because  it's a little bit faster than having  actually issue a query even if it tez is  still like we don't really we could be  doing this in milliseconds with snake by  directory check bytes for the part files  we don't really need to issue a query so  you'd consider that if anyone was  thinking that and we might do that just  to make it better and then so once  that's done the disk C P stage is ready  to done we run in atomic disk CP nothing  really fancy we add it to the warehouse  and very obviously that stage is done if  the partitions exist in hive so we can  very easily build out that state and  then the generation stage kicks in we  use spark sequel for this so the legacy  report was kind of a high of M our job  and it was a natural transition just to  take a lot of that with a few minor  changes and just run that right as spark  sequel over hive within a hive session  they're all part K events so we get  pretty fast filtering just from that we  can filter when we're running the  generation now we're getting label  specific right so we give it the task is  gonna run with just a label and that  control that's fed to the Scala job in  terms of how we're going to filter it  down and we can actually do multiple  license or label reports and parallel  this way too and which is what we do so  and then as part of that spark sequel  thing all the metadata gets joined in  artists composers stations they want to  we want to create a sync for every  single spin we want to make it as rich  as possible  reported the labels for fields that  they've said they were interested in and  then the most important part is in the  driver directly we actually validate we  do an additional validation on the  number of rows that come out of that  stage and we have lower up and upper  bounds for this so it has to actually  fall within like an expected if there  were maybe issues of the metadata or  something like that even though we had  those defensive checks maybe still  something went wrong you can't be too  defensive so we check lower and upper  bound limits why do we do upper bound I  guess we actually did have one case  they're somehow new lines got introduced  into some of the fields and ever since  then we just like don't take any chances  why not but so if you want to throw off  the music industry's reporting you might  you could name your track or your band  character turn new line or something  they might not our reporting now so and  then we if this if it gets past this  stage we output multiple part files to  Hadoop to HDFS we still do a lot Colo  Khan Prem so we've run HDFS we don't we  don't actually do a lot of our  processing like in at s3 like that we  have bare-metal HDFS if anyone was  wondering I couldn't answer questions  about that later  for what I know so this is sort of what  this is part of the Scala job it's  really kind of uninteresting but it just  illustrates one point we run the the  hive query we run it as just raw sparks  equal text and that text gets  parameterize with string replace before  it gets sent to the session command and  we still call out of just habit like we  call persist memory and disk  even though cache as of spark 2 is just  the synonym for that if you look under  the hood we're so used to cache from  spark 1x days just calling storage level  memory and having to deal with that that  we we just still in this habit from our  our DD days but once we have that data  frame the results we can call count on  it feed it to the check row bounds  function and then that will actually  elevate an exception if it fails the  validation check and then the whole  pipeline heart fails and we get alerted  but if it doesn't if it passes it just  sort of silently returns and we can go  on to just saving those results to a  label on dates  specific HDFS location but the nice  thing too it's a really nice use of  spark it kind of illustrates the the  caching benefit because we can do a  validation step right and the spark  driver and because it's cached it  doesn't have to read materialize and  reevaluate everything - to do the save I  know this is spark 101 stuff but  sometimes the the benefits of the  caching aren't always obvious this is  tremendously Bennet and if it fails  validation there's nothing we have to  clean up right it's just an ephemeral  data frame just dies so then once all  these part files are written out  we need to coalesce them into a single  file some customers want compressed visa  others want gzip I'm not sure what which  one is the orchard of the check but we  have to handle both of those cases and  for bees if this is a little easier the  their output is already be zipped part  files and we can just binary cat those  together into a single file very  effortlessly with Hadoop copy merge and  then we get a single just a single B zip  file with there's even a nice flag to  just clean up the original files after  it's done  so if it succeeds atomically it deletes  those files as part of that action  I think atomically but then gzip is a  little bit more annoying but not too bad  we just have to write out uncompressed  files and they take up more space but we  can use copy merge on uncompressed files  and do the same thing wipe them out  after there's a single compressed file  and then just run that through gzip and  we get a single compressed file I put  this here because I didn't always  actually know I've been working with the  dupe for a while and I never even used  this this copy merge thing so there's  other people here that haven't used that  or didn't know about it it's really  handy and then the done state is this  predictably writing my guess we we  expect a single compressed file in HDFS  for the label and the date and if it's  there we're consider all ready  considered valid we validated all the  data at the part file level and the job  and we can operate off just that single  file the assumptions around that so the  s3 push stage kicks in and we just take  the single file put it up to a name the  labels all get their own individual  buckets right for Abby  reasons they don't want each others they  don't want to share their data with each  other it makes sense so they get their  own bucket and then we write out a new  path in that bucket for the for the  given date and then we can tell very  quickly if we're done with the s3 target  classes and the we'd you just is it  there or not so this is a short  presentation but just the takeaways of  this I guess if there's stuff to learn  out of this the we we built all this so  that it could be run very aggressively  from cron and it's a little confusing to  see daily tasks that operate with daily  granularity being run every ten minutes  and it does produce more logs and cabaña  and other things we have to deal with  finding the log that actually ran it can  be annoying but it's a small price to  pay for going to the self-healing aspect  and the automation that comes out of  just we don't even have to think about  how these are run if they fail it's  because there's a real issue with the  Pandora cluster or something or  something we did with like a patch that  we put in trying to make it better and  we've screwed up but we don't have to  guess when it's ready to run we just let  the code figure it out for us and we  just have cron try to just try over and  over again annoyingly and if there's an  issue it just picks up right at the at  the most natural Check Point where it  succeeded whoops so all of the tasks are  compiled I sound like a broken record I  guess but the tasks composition is  designed around these checkpoints right  we had to we had to think logically  about where I made sense to break these  off whereas the first iteration of the  pipeline didn't really do that it was it  would build the single-file wall it was  generating the report and that had  problems and it goes without saying like  the a lot of talked about about the  fault tolerance part of it because it's  less obvious but using the latest  frameworks kind of switching this over  to some of the latest using high montes  where we can and then spark where we  control it really helped for the parts  that we can control like using the  latest open source frameworks just  getting fast speed and execution so  there's any kind of issue with it  it doesn't take forever to run or  backfill we have to backfill more than  we would like but that's it are there  any questions about I didn't cover like  how it improved I know I made that a  professor  answer yeah just wondering he's not  using crown do you have some sort of  event cheaper that to trigger deadlines  we don't we could explore that that  would make it easier I guess that would  take the form of a task that was polling  the raw data but it's still it there's  less to be honest an inception point to  launch yeah I'd have to explore that  more maybe we certainly thought about  changing this from it's right now it's  kind of a poll model and it could be  more of a push but haven't explored that  that much it'll probably to be honest  with you but probably before that we'll  switch it out to will be accumulating  these directly off the kafka streams and  so the report that the datasets will be  generating throughout the day as spins  come in and then as soon as the day ends  we'll we'll be able to pipe it up yes  siree that's probably what will happen  first so we use them Luigi and basically  kick off the pie Spock job so I'm just  curious that you using a scholar Spock  essentially how does that sort of like  work in terms of calling you know you  know scholar Spock within some Luigi  because Luigi's in Python yeah so  there's in the Luigi contribute there is  a really nice spark submit task it's  actually Luigi could trib and I think  it's directly and like Luigi contribs  spark is the import spark submit task so  you can use that you it's really easy to  submit a scholar spark test it's a  little trickier we'd have PI spark tasks  as well it's just a little bit trickier  to use that I'll just say that the  contribute that they have like a PI  spark submit tasks that they've also  contributed and that's junk we don't we  don't use that but it's the the base one  that's been contributed makes it really  easy to do this so you just point it to  a jar and you give it the name of the  class in that jar and the Luigi tasks  only job is to make a spark to submit  command  and so you can actually see we print out  that command we see what it looks like  and it just runs  so using Luigi is just an easier way to  have not have to make a spark to submit  command by hand I think that's that's  all gains other questions for Brian you  mentioned you guys still use HDFS like  not relying on its third serenade reason  for not crossing the line were staying  where it is um there is I mean they've  been political reasons in the past we do  consider Amazon a competitor and there's  on people use Amazon music I don't  actually think those are the real  reasons and I can say that because we're  the next two years I think there's a  pretty aggressive plan to work out to go  into GCP the Google Cloud we're gonna  transition a lot to that and they are  still competitor there's Google music so  that thing I used to think that way for  a while and it's not that there's really  no I think it's just the the bare metal  we've always we've been kind of addicted  to the bare metal performance and we  have really great hops like sysadmin  people that are just really good with  Hadoop and it has if it got to be a  problem where we would we saw that is we  didn't have to worry about these issues  but we don't really have a lot of those  issues are a lot of our hiccups and come  from the application level like the data  engineers like myself right we screw up  something in however we made a patch to  the job that's producing all the  upstream raw data and that failed so so  you know I think it has to do with the  fact that they just haven't been big  woes  they haven't bitten us yet in ways that  have become huge time sinks  alright any other questions for Brian oh  we got one back here  I was just wondering what you like about  hive that you still keep it around  in addition like I know there's some  benefits but like what makes it worth it  to you to like support all that extra  infrastructure over just using spark for  everything yeah it's a good question I  know some of its outside not to defer  too much you know there's a lot of teams  at Penn where they wear heavy  Hortonworks users and Hortonworks has  gotten a lot behind hive in recent years  with ll AP and so if you live in the  whole Hortonworks environment you tend  to kind of go down the the pathways of  those tools we the the Pandora there's  there's all sorts of different the teams  and they're not that homogeneous in  terms of like this team uses hive only  and this there's there's all sorts of  different activity on these clusters and  spark hive on tez we have an Impala  cluster there's other warehouses so it's  like there's very few hive MapReduce  jobs left what I'll say it's we've what  we've gotten addicted to is kind of hive  is a catalog as the meta store the meta  store and hive is probably going to live  on way belong way past even many of  these frameworks that these execution  engines that are that are down in the  dirty with hive the meta stories just  will probably live on as a means of  cataloging it and so that's kind of what  Pandora has gotten addicted to but hive  itself in terms of the way we used to  think about it like when I contributed  to hive is it's totally different now  the people that use it in production how  I get like sub-second latency with hive  now because they're running they're  running press over the meta store and  Paulo Ortez or something and we're  sparks equal like we do so we it's just  not too much of a concern and we get  some nice properties out of it  you
+ 
+
+00:00:00.500 --> 00:00:10.460 align:start position:0%
+you  [Music]  my name is Brian thank you Rick for  introducing me I've been doing data  engineering for about 10 years now  different industries  I contribute a little bit to hive back  in the day back when it was still M R  and a project called giraffe which many  of you probably haven't even heard of  but for now I work on the the artist  creators and tools team at Pandora so we  work with social media and the Pandora  data to try to create useful insights  for artists labels managers pretty much  everybody but the listeners so every day  we send the music labels a data set  containing song play Ament so what do I  mean by a song play a vent every time  somebody listens to a song on our  platform we report on that so we call  that a spin internally kind of makes  sense when you think about it but and  there's actually people from the labels  here and the data engineering teams that  receive that data so it's not expecting  that but the pressures on I guess so why  do we have to do this I mean the short  answer is we have to write okay but that  doesn't help why do we have to the long  answer so a bit of a history like  Pandora is got a reputation for a very  personalized music streaming service  right people like our recommenders but I  think the industry has proven out in the  last couple years especially that people  really want on-demand to like now that  that's possible and a lot of the legal  issues have been worked out and those  battles have been fought people like  that you know I don't even wager to  guess many people in this room probably  have a Spotify account or Apple music or  something other than Pandora even if  your app Android listener so they found  Pandora found that most of our users  were complimenting penned or with  something else and still do like they  hear a song they really like it and they  can't just listen to it again so even if  they're paying for it so they go to  youtube and they would look it up and  and we just didn't really want that so  now we actually have an on-demand  streaming tier there's different ways to  access it you can be a paying customer  and get access to that I won't go  through all that today but in terms of  actually so now that we support that we  have to report labels one reporting on  every single  in every single instance of the song  spinning for which they have rights do  so we have to send those datasets them  every day and it's not even a it's not  even a report per se like this song spun  X number of times they actually want a  structured event for each individual  spin event that happens so these get to  be big and we have to eat their external  data sets that were effectively  delivering over s3 every day and it's a  new requirement Pandora didn't always  have to do this we had kind of an  adversarial relationship with the labels  for years and that all had to change  very rapidly when we wanted to do  on-demand because they have the rights  that music so so what do these events  look like this is a very stripped-down  version there's about 20 22 different  structured fields but they go something  like this this kind of gets to the core  of it like what time did it play down to  the second right what's the name of the  track some others you could predict  right maybe the artists name I didn't  include here how long did the track play  when it's fun that's important and then  I one of the more interesting ones I  threw on here is the play source so that  gets that's a very complex field  internally that we managed how did the  user actually launch the song on the app  there's dozens of ways this can actually  happen maybe it was just a traditional  station spin from the recommenders maybe  it was they have like a premium playlist  and the playlist ended and so I  recommend errs kick in there too and  start it seeds everything off your  playlist and starts spitting out new  songs it just plays them or maybe they  were like a premium access thing where  they're not paying for it but they  wanted they were willing to listen to a  30-second video ad and then we give them  access to the song they search for that  ended up being wildly popular when we  launched that and so where does this  data come from big picture so there's  lots of Pandora's a huge hive shop we've  run all sorts of different Hortonworks  clusters completely isolated but not  totally firewalled off but the data that  we care about comes from one of our  primary analytics clusters so there's  there's a huge trough of partition spins  data all in Parque form that we generate  off of their raw data and then we have  metadata that we  build up to so I only included two  different tables here to show the  metadata but we consider all single  station ads every single station that a  user has as metadata across all our  users it's a big data set but we call it  metadata because relative to the spins  data and the the fact level data it's  not that big listener data and there's  others like artists track roles that  artists had in the track composers album  all of that stuff and listeners is an  important dimension to so that that  comes in every day from external sync  processes which my team doesn't have to  think about and we the whole pipeline  that I'll show is that we when we when  we detect that our transformation  succeeded on the island of cluster for a  given day and all this we just CP that  back to a private cluster that we can  control so we can rely on it to do this  reporting that we need to do and then  also I threw on here we do the Pandora  does we have Kafka queues where this  stuff all lives on to our our team has  not gone through the motions to actually  transform or update our report to  actually use that to do this reporting  just because we haven't gotten around to  it yet but we they do throw spins and  other things on the other metadata on  the Kafka queues we have we just our  team doesn't actually leverage that yet  but we plan to it would cut down the  latency so the first iteration of the  entire pipeline which I'll show in a  second it was pretty slow I mean it  would be to get data for like all the  spins that happened on a Tuesday over to  the labels would be take to like  Thursday and we just wanted to do better  than that so we wanted to improve the  overall latency of how we send these  files on s3 and to do that we took we  looked at two primary things one is the  obvious one it's like the runtime of  each individual step in the workflow how  could we improve that there were glaring  issues and then also the bigger one more  indirect was how do we recover from  issues that happen along each way like  if the disappea sales or something like  that we don't want to have to redo  upstream work and so we set out to break  out all those checkpoints  so there's you can see that I kind of  structured this whole presentation is  kind of like a war story form where I  actually cut out a lot of the like well  this is what we used to do and we didn't  like and I'm just going right to the  solution so I don't have a lot of like  before and after run times there's  plenty of time for questions I'm sure  some of that will come up but uh I don't  feel like it doesn't really help to brag  about those numbers either because it's  not that interesting to the people  outside the team but so what were issues  with the previous pipeline just just to  summarize we'll go we'll give it one  slide for that part  well there's upstream delays on the raw  data coming in to us we don't really  control a lot of the sync processes or  some of those other analytics teams and  what they do and and there's just a  natural delay because of how they're  working with daily partitions so some of  that's delayed and we just can't control  that but the data set generation RN once  we have it in that private cluster was  very slow and I won't get into a lot of  reasons why but it just was and so we  and then also part of our requirements  structure to the labels as we send a  single file per day and I've asked  around like why that is it just I just  accept that it is for now and so it's a  I know it's a bit of like a big data  anti-pattern right a lot of us we're  used to working with directories of  files or buckets of files that where all  the files represent everything in the  day and you get better parallelism that  way but we send a single file per day  for to each label for all the spins that  happen for tracks that they they have  rights to and then so part of the  problem was the steps two and three were  regenerated and we're making the single  file we're tightly coupled so any kind  of issues with either-or would scuttle  the entire thing  so the new pipeline follows kind of just  a series of linear steps upstream on the  analytics cluster we have we do some  transformations for both the raw and  metadata and I'll cover a little bit  more of that in detail like what that  means but we do that work directly on  the Pandora analytics clusters through  with high Montes so we we use it that  way once that data is prepared and those  partitions are active and we validated  them we just repeat that back to our  private cluster kind of in batch  and then once we detected the deceive  you the atomic deceive II is succeeded  we can begin building we use spark very  heavily on our team to generate this  data set is one of the uses for it was  one of our first uses of spark on our  team actually this delivery was so  important that we set out to we spark  was actually one of an early test cases  for it and then so once we have this  data set and the data set itself has  been validated we want to coalesce it  into a single file for the labels and  then we just have to push that up to s3  so in order to automate all this each we  kind of codify each level each step of  the workflow and then five point series  we use Python classes our team still  uses Luigi I know a lot of the mine  share in the data engineering space is  kind of moved over to air flow and other  frameworks are more popular but we still  really like Luigi on our team we feel  like it's lightweight and the visualizer  it works very well for us and I think  the most important part is the it force  when you define your tasks you it has a  contract where you really have to define  what it means for the task to be done  given parameters right it's not enough  in the past workflow tools that they  were considered done if it ran without  exception and that's really not good  enough anymore I'll get into kind of how  we we go around that and so the nice  thing too about a lot of these  frameworks are the supplies the workflow  and and kind of modeling your  dependencies in the dagger are  completely decoupled from what it's  actually doing to run it right we have  Scala SPARC jobs that run to CP Hadoop  commands that doesn't matter they're all  codified in Luigi and Python so these  Python the Luigi tasks form tags of  dependencies naturally when you wire  your requires in Luigi  we simply have parameters that we supply  on the command line where we launch  these and then the parameters that we're  necessary we propagate this down into  the requires dependency so I know some  of this is standard Luigi stuff for  people have used to used to working with  it most notable parameters are label so  when I say label I mean music label by  the way and then dates the date they're  active date that we're running out for  that label  and this lets us reuse certain tasks  across different labels and also where  tasks can be shared we just send the  date if there are not label specific  like the disk CP and then here's a  visualization of that graph kind of  rotated 90 degrees so that it can fit on  a PowerPoint slide left to right we're  trying to actually run the push tasks  that's what we actually launch we say  okay it's a new day push to s3 or cron  does and it's like well wait a minute  before I could do that I have to have a  single file okay well the single file  doesn't exist I need to generate it and  it just recursos all the way back until  it notices for the day that we're trying  to do that hasn't even transformed the  data yet and so in a bit more detail  each of these pipeline tasks we have to  do we have to code up our three things  all of which are mandatory right we have  to codify any dependencies it has what  what what upstream is necessary and we  need a function to evaluate when we're  done right we need a way to actually say  I have arrived at a state of  completeness and then most importantly  we need a function if it's not at that  state of completeness to generate some  artifact or external state so that it  now is at a state of completeness and  here's what some of the code looks like  this actually doesn't use the Luigi  parameter API just because it's I  thought it was easier to visualize it  here and just see it and rot by then but  the push task takes in a date and label  parameter because it's its label and  date specific and at first it requires  that there actually be a single file  that we've coalesced together with all  the data into it and so that requires  sending the date and label parameters  down the dag and do it and I kind of  commented or wrote comments for what the  run a complete would do right like the  run if there's not a single order of um  if it's not actually done yet  it means the runs gonna execute and we  just do the work of pushing that single  file up to an s3 bucket it's not  terribly complicated and then complete  this you might guess it's pretty  straightforward the push task is  complete if for a given label that  artifact exists already up in s3 for the  given date  and then here's how the labels are  here's how the parameters actually  propagate down the dag right the push  coalesced and generate stages are all  very label specific for the report we're  building but we can the dist CP and the  transform steps just need the date so  those get reused and so the scheduler  might be trying to kick this off  aggressively throughout the day maybe  the first attempt it gets it recurse is  down it sees the transform isn't done so  does that then disi piece exceeds but  then it gets to the point where it's  generated it's running the spark job and  let's say there's some errant error or  something some intermittent issue and it  fails right and we get some kind of  alert for that well we don't freak out  too much  the scheduler because this is all  scheduled to run automatically in cron  and we don't we don't run these by hand  the second Skaro temp for the day I can  pick up right where it left off because  the disk CP tasks do the work of  actually defining what it means for them  to be done right so the dag can kind of  reuse work from earlier executions  because it's just it just has functions  to kind of figure out where it was and  this is kind of the core the whole  presentation about how like we the  fault-tolerance helped with the overall  latency right like and you pass in teams  I've been on the past that a failure  like that would out you'd have to redo  everything maybe the disk CP would have  to be redone but yeah we can use the  scheduler to kind of aggressively work  off checkpoints and so this kind of  bottom-up execution pattern that  everyone's familiar with airflow in the  wedi it leads to not to checkpoint in  your work right it makes you it forces  you to think about what decoupling  points exist and where you can reuse and  where you can break off on and say at  least I'm done that for the day and you  can the most important thing is you can  schedule a daily tasks that you only  need to run once a day could be  scheduled to run even as aggressively as  every 10 minutes and that's how our  crontab we use we still use Chronos  still a little bit older but that's how  its set up as soon as the new day rolls  around cron is just an automatically  trying to do the latest the label  reports for that day but it can't it it  gets to a point where  because the data is not there yet but as  soon as it is available  it'll just launch I'll go through that  more we rely very heavily on the Luigi  scheduler to figure out what state the  pipeline is in right  is it ready to run is it not ready yet  because the data is not there yet  is it done already for the day we don't  want to redo it if it is so just to buy  just a simple thing is defining that  complete contract we get all this for  free which is the nice thing and that I  again it goes without saying if we're  gonna have a recursive bottom-up  pipeline like this we need a base case  for for defining this execution and in  our case like put in English our base  cases we need a way to detected the raw  data that we're transforming is  available on the base pend or analytic  clusters and our team my team in  particular has absolutely no control to  force that right we it's not as simple  as just writing a Luigi task and it'll  execute that those sources and all the  better completely outside our means in  our purview and we don't frankly want to  own that so we can just codify what it  means to have we can codify a task to  kind of check for us and then not blow  up if it's not ready but kind of  gracefully exit leaf nodes in the dag in  other words and this is our leaf node  per se we define it a little bit  differently than the traditional  external tasks for those familiar with  Luigi we use a bit of a different  pattern it takes in a date and a min ROS  parameter which is used for validation  it doesn't have any requirements it  doesn't require anything we're just  gonna run it right away it's not done  already and the job of it running is to  transform the events for the given day  in the form that we want the raw events  all the spins data and we look at  completeness as saying well we're gonna  do a count over that new partition and  if it's at least greater than some  threshold which we've we've done the  work offline to determine what what  makes sense then we'll know that it's  valid we'll know that it succeeded so  that does two if the partition failed to  generate the count will be zero if not  actually just blow up the query and even  if there's some kind of malformed issue  with the partition there's still this is  a very important defensive guard this  has saved us several times actually  since I've been on the team  where there was malformed data that came  in for whatever reason and I couldn't  even dream up and we just had these in  place and we've actually been in the  position of having to alert those teams  because of these these checks we can see  like okay something's wrong and we're  the ones to actually tell the team I'm  not trying to throw my other other teams  upend or under the bus but they have  pretty good alerting but this is act  that's actually happened where we were  just watching and noticed before them so  the task is done if it passes validation  of the Monroes check succeeds we're  pretty confident at that point and then  again you know these data delays happen  frequently it's not always their fault  they have complex syncs that have to  deal with this and they manage the kafka  rights now too so but we can use the  scheduler to not really care right we're  just going to aggressively schedule it  to run every X minutes  I think it's defined as like 30 minutes  in production for us and we supply the  current day we say oh every 30 minutes  just try to run this you know is it's in  human form it's like the I think about  is like from The Simpsons are we there  yet are we there yet  Homer Simpson always driving I didn't  put a meme up for that but I guess I  could have it's it's like but computers  don't mind being asked that right it's  annoying for us but we can just  constantly ask it hey are you ready to  run if why aren't you done yet and just  kind of annoy it and then but the nice  thing is once the data becomes available  for transformation and that complete  check passes we can launch the pipeline  right and it's completely automated so  let's just go through I'll go through  each stage not not code wise but I'll go  through kind of in English what each  done state is for each of those five  steps right we talked to have the  transform one already there's a lot of  Pandora hive tables a lot but we want to  narrow that down to just the spins that  we're interested in so we create our own  manage table my team for that  partitioned by day still but we do  certain things to their raw data like we  duplicate them they do some of that too  but we do our own deduplication just in  case we filter out certain properties of  songs like if it doesn't spin for longer  than 30 seconds the labels seem  uninterested in that maybe I could get  yelled at after this but I was told that  at least and then we have some other  joins we do to kind of  to kind of keep it sane we keep the same  partitioning structure we keep it by day  and then we do we do other things for  the metadata too so that way I described  that metadata and like listeners  stations it doesn't start that way we  have to kind of massage it down to that  very natural form how to denormalize it  so to speak so it's it's just easier to  build this data set form and then I most  noticeably like we just don't want to be  just seeing hundreds of tables to do it  on our side we'd rather take advantage  of their cluster and use we use hive on  tez it's very fast  to build out some of those partitions  and then we can just sync them back so  if it passes the Monroes checks we're  done we consider that valid for the  partitions we're actually considering  switching this out to just use snake  bite by level checks for sanity because  it's a little bit faster than having  actually issue a query even if it tez is  still like we don't really we could be  doing this in milliseconds with snake by  directory check bytes for the part files  we don't really need to issue a query so  you'd consider that if anyone was  thinking that and we might do that just  to make it better and then so once  that's done the disk C P stage is ready  to done we run in atomic disk CP nothing  really fancy we add it to the warehouse  and very obviously that stage is done if  the partitions exist in hive so we can  very easily build out that state and  then the generation stage kicks in we  use spark sequel for this so the legacy  report was kind of a high of M our job  and it was a natural transition just to  take a lot of that with a few minor  changes and just run that right as spark  sequel over hive within a hive session  they're all part K events so we get  pretty fast filtering just from that we  can filter when we're running the  generation now we're getting label  specific right so we give it the task is  gonna run with just a label and that  control that's fed to the Scala job in  terms of how we're going to filter it  down and we can actually do multiple  license or label reports and parallel  this way too and which is what we do so  and then as part of that spark sequel  thing all the metadata gets joined in  artists composers stations they want to  we want to create a sync for every  single spin we want to make it as rich  as possible  reported the labels for fields that  they've said they were interested in and  then the most important part is in the  driver directly we actually validate we  do an additional validation on the  number of rows that come out of that  stage and we have lower up and upper  bounds for this so it has to actually  fall within like an expected if there  were maybe issues of the metadata or  something like that even though we had  those defensive checks maybe still  something went wrong you can't be too  defensive so we check lower and upper  bound limits why do we do upper bound I  guess we actually did have one case  they're somehow new lines got introduced  into some of the fields and ever since  then we just like don't take any chances  why not but so if you want to throw off  the music industry's reporting you might  you could name your track or your band  character turn new line or something  they might not our reporting now so and  then we if this if it gets past this  stage we output multiple part files to  Hadoop to HDFS we still do a lot Colo  Khan Prem so we've run HDFS we don't we  don't actually do a lot of our  processing like in at s3 like that we  have bare-metal HDFS if anyone was  wondering I couldn't answer questions  about that later  for what I know so this is sort of what  this is part of the Scala job it's  really kind of uninteresting but it just  illustrates one point we run the the  hive query we run it as just raw sparks  equal text and that text gets  parameterize with string replace before  it gets sent to the session command and  we still call out of just habit like we  call persist memory and disk  even though cache as of spark 2 is just  the synonym for that if you look under  the hood we're so used to cache from  spark 1x days just calling storage level  memory and having to deal with that that  we we just still in this habit from our  our DD days but once we have that data  frame the results we can call count on  it feed it to the check row bounds  function and then that will actually  elevate an exception if it fails the  validation check and then the whole  pipeline heart fails and we get alerted  but if it doesn't if it passes it just  sort of silently returns and we can go  on to just saving those results to a  label on dates  specific HDFS location but the nice  thing too it's a really nice use of  spark it kind of illustrates the the  caching benefit because we can do a  validation step right and the spark  driver and because it's cached it  doesn't have to read materialize and  reevaluate everything - to do the save I  know this is spark 101 stuff but  sometimes the the benefits of the  caching aren't always obvious this is  tremendously Bennet and if it fails  validation there's nothing we have to  clean up right it's just an ephemeral  data frame just dies so then once all  these part files are written out  we need to coalesce them into a single  file some customers want compressed visa  others want gzip I'm not sure what which  one is the orchard of the check but we  have to handle both of those cases and  for bees if this is a little easier the  their output is already be zipped part  files and we can just binary cat those  together into a single file very  effortlessly with Hadoop copy merge and  then we get a single just a single B zip  file with there's even a nice flag to  just clean up the original files after  it's done  so if it succeeds atomically it deletes  those files as part of that action  I think atomically but then gzip is a  little bit more annoying but not too bad  we just have to write out uncompressed  files and they take up more space but we  can use copy merge on uncompressed files  and do the same thing wipe them out  after there's a single compressed file  and then just run that through gzip and  we get a single compressed file I put  this here because I didn't always  actually know I've been working with the  dupe for a while and I never even used  this this copy merge thing so there's  other people here that haven't used that  or didn't know about it it's really  handy and then the done state is this  predictably writing my guess we we  expect a single compressed file in HDFS  for the label and the date and if it's  there we're consider all ready  considered valid we validated all the  data at the part file level and the job  and we can operate off just that single  file the assumptions around that so the  s3 push stage kicks in and we just take  the single file put it up to a name the  labels all get their own individual  buckets right for Abby  reasons they don't want each others they  don't want to share their data with each  other it makes sense so they get their  own bucket and then we write out a new  path in that bucket for the for the  given date and then we can tell very  quickly if we're done with the s3 target  classes and the we'd you just is it  there or not so this is a short  presentation but just the takeaways of  this I guess if there's stuff to learn  out of this the we we built all this so  that it could be run very aggressively  from cron and it's a little confusing to  see daily tasks that operate with daily  granularity being run every ten minutes  and it does produce more logs and cabaña  and other things we have to deal with  finding the log that actually ran it can  be annoying but it's a small price to  pay for going to the self-healing aspect  and the automation that comes out of  just we don't even have to think about  how these are run if they fail it's  because there's a real issue with the  Pandora cluster or something or  something we did with like a patch that  we put in trying to make it better and  we've screwed up but we don't have to  guess when it's ready to run we just let  the code figure it out for us and we  just have cron try to just try over and  over again annoyingly and if there's an  issue it just picks up right at the at  the most natural Check Point where it  succeeded whoops so all of the tasks are  compiled I sound like a broken record I  guess but the tasks composition is  designed around these checkpoints right  we had to we had to think logically  about where I made sense to break these  off whereas the first iteration of the  pipeline didn't really do that it was it  would build the single-file wall it was  generating the report and that had  problems and it goes without saying like  the a lot of talked about about the  fault tolerance part of it because it's  less obvious but using the latest  frameworks kind of switching this over  to some of the latest using high montes  where we can and then spark where we  control it really helped for the parts  that we can control like using the  latest open source frameworks just  getting fast speed and execution so  there's any kind of issue with it  it doesn't take forever to run or  backfill we have to backfill more than  we would like but that's it are there  any questions about I didn't cover like  how it improved I know I made that a  professor  answer yeah just wondering he's not  using crown do you have some sort of  event cheaper that to trigger deadlines  we don't we could explore that that  would make it easier I guess that would  take the form of a task that was polling  the raw data but it's still it there's  less to be honest an inception point to  launch yeah I'd have to explore that  more maybe we certainly thought about  changing this from it's right now it's  kind of a poll model and it could be  more of a push but haven't explored that  that much it'll probably to be honest  with you but probably before that we'll  switch it out to will be accumulating  these directly off the kafka streams and  so the report that the datasets will be  generating throughout the day as spins  come in and then as soon as the day ends  we'll we'll be able to pipe it up yes  siree that's probably what will happen  first so we use them Luigi and basically  kick off the pie Spock job so I'm just  curious that you using a scholar Spock  essentially how does that sort of like  work in terms of calling you know you  know scholar Spock within some Luigi  because Luigi's in Python yeah so  there's in the Luigi contribute there is  a really nice spark submit task it's  actually Luigi could trib and I think  it's directly and like Luigi contribs  spark is the import spark submit task so  you can use that you it's really easy to  submit a scholar spark test it's a  little trickier we'd have PI spark tasks  as well it's just a little bit trickier  to use that I'll just say that the  contribute that they have like a PI  spark submit tasks that they've also  contributed and that's junk we don't we  don't use that but it's the the base one  that's been contributed makes it really  easy to do this so you just point it to  a jar and you give it the name of the  class in that jar and the Luigi tasks  only job is to make a spark to submit  command  and so you can actually see we print out  that command we see what it looks like  and it just runs  so using Luigi is just an easier way to  have not have to make a spark to submit  command by hand I think that's that's  all gains other questions for Brian you  mentioned you guys still use HDFS like  not relying on its third serenade reason  for not crossing the line were staying  where it is um there is I mean they've  been political reasons in the past we do  consider Amazon a competitor and there's  on people use Amazon music I don't  actually think those are the real  reasons and I can say that because we're  the next two years I think there's a  pretty aggressive plan to work out to go  into GCP the Google Cloud we're gonna  transition a lot to that and they are  still competitor there's Google music so  that thing I used to think that way for  a while and it's not that there's really  no I think it's just the the bare metal  we've always we've been kind of addicted  to the bare metal performance and we  have really great hops like sysadmin  people that are just really good with  Hadoop and it has if it got to be a  problem where we would we saw that is we  didn't have to worry about these issues  but we don't really have a lot of those  issues are a lot of our hiccups and come  from the application level like the data  engineers like myself right we screw up  something in however we made a patch to  the job that's producing all the  upstream raw data and that failed so so  you know I think it has to do with the  fact that they just haven't been big  woes  they haven't bitten us yet in ways that  have become huge time sinks  alright any other questions for Brian oh  we got one back here  I was just wondering what you like about  hive that you still keep it around  in addition like I know there's some  benefits but like what makes it worth it  to you to like support all that extra  infrastructure over just using spark for  everything yeah it's a good question I  know some of its outside not to defer  too much you know there's a lot of teams  at Penn where they wear heavy  Hortonworks users and Hortonworks has  gotten a lot behind hive in recent years  with ll AP and so if you live in the  whole Hortonworks environment you tend  to kind of go down the the pathways of  those tools we the the Pandora there's  there's all sorts of different the teams  and they're not that homogeneous in  terms of like this team uses hive only  and this there's there's all sorts of  different activity on these clusters and  spark hive on tez we have an Impala  cluster there's other warehouses so it's  like there's very few hive MapReduce  jobs left what I'll say it's we've what  we've gotten addicted to is kind of hive  is a catalog as the meta store the meta  store and hive is probably going to live  on way belong way past even many of  these frameworks that these execution  engines that are that are down in the  dirty with hive the meta stories just  will probably live on as a means of  cataloging it and so that's kind of what  Pandora has gotten addicted to but hive  itself in terms of the way we used to  think about it like when I contributed  to hive is it's totally different now  the people that use it in production how  I get like sub-second latency with hive  now because they're running they're  running press over the meta store and  Paulo Ortez or something and we're  sparks equal like we do so we it's just  not too much of a concern and we get  some nice properties out of it  you
+
+
+00:00:10.460 --> 00:00:12.350 align:start position:0%
+ 
+ 
+
+00:00:12.350 --> 00:00:14.660 align:start position:0%
+ 
+ 
+
+00:00:14.660 --> 00:00:16.039 align:start position:0%
+ 
+ 
+
+00:00:16.039 --> 00:00:18.380 align:start position:0%
+ 
+ 
+
+00:00:18.380 --> 00:00:20.450 align:start position:0%
+ 
+ 
+
+00:00:20.450 --> 00:00:22.310 align:start position:0%
+ 
+ 
+
+00:00:22.310 --> 00:00:26.390 align:start position:0%
+ 
+ 
+
+00:00:26.390 --> 00:00:27.409 align:start position:0%
+ 
+ 
+
+00:00:27.409 --> 00:00:30.830 align:start position:0%
+ 
+ 
+
+00:00:30.830 --> 00:00:33.440 align:start position:0%
+ 
+ 
+
+00:00:33.440 --> 00:00:35.420 align:start position:0%
+ 
+ 
+
+00:00:35.420 --> 00:00:37.610 align:start position:0%
+ 
+ 
+
+00:00:37.610 --> 00:00:40.400 align:start position:0%
+ 
+ 
+
+00:00:40.400 --> 00:00:47.990 align:start position:0%
+ 
+ 
+
+00:00:47.990 --> 00:00:50.090 align:start position:0%
+ 
+ 
+
+00:00:50.090 --> 00:00:52.130 align:start position:0%
+ 
+ 
+
+00:00:52.130 --> 00:00:54.560 align:start position:0%
+ 
+ 
+
+00:00:54.560 --> 00:00:55.760 align:start position:0%
+ 
+ 
+
+00:00:55.760 --> 00:00:58.010 align:start position:0%
+ 
+ 
+
+00:00:58.010 --> 00:01:00.380 align:start position:0%
+ 
+ 
+
+00:01:00.380 --> 00:01:03.860 align:start position:0%
+ 
+ 
+
+00:01:03.860 --> 00:01:05.359 align:start position:0%
+ 
+ 
+
+00:01:05.359 --> 00:01:06.800 align:start position:0%
+ 
+ 
+
+00:01:06.800 --> 00:01:08.870 align:start position:0%
+ 
+ 
+
+00:01:08.870 --> 00:01:14.330 align:start position:0%
+ 
+ 
+
+00:01:14.330 --> 00:01:17.120 align:start position:0%
+ 
+ 
+
+00:01:17.120 --> 00:01:20.719 align:start position:0%
+ 
+ 
+
+00:01:20.719 --> 00:01:22.700 align:start position:0%
+ 
+ 
+
+00:01:22.700 --> 00:01:25.730 align:start position:0%
+ 
+ 
+
+00:01:25.730 --> 00:01:27.770 align:start position:0%
+ 
+ 
+
+00:01:27.770 --> 00:01:29.450 align:start position:0%
+ 
+ 
+
+00:01:29.450 --> 00:01:31.819 align:start position:0%
+ 
+ 
+
+00:01:31.819 --> 00:01:34.129 align:start position:0%
+ 
+ 
+
+00:01:34.129 --> 00:01:36.260 align:start position:0%
+ 
+ 
+
+00:01:36.260 --> 00:01:38.389 align:start position:0%
+ 
+ 
+
+00:01:38.389 --> 00:01:40.370 align:start position:0%
+ 
+ 
+
+00:01:40.370 --> 00:01:41.809 align:start position:0%
+ 
+ 
+
+00:01:41.809 --> 00:01:43.580 align:start position:0%
+ 
+ 
+
+00:01:43.580 --> 00:01:45.080 align:start position:0%
+ 
+ 
+
+00:01:45.080 --> 00:01:46.580 align:start position:0%
+ 
+ 
+
+00:01:46.580 --> 00:01:49.219 align:start position:0%
+ 
+ 
+
+00:01:49.219 --> 00:01:51.139 align:start position:0%
+ 
+ 
+
+00:01:51.139 --> 00:01:53.359 align:start position:0%
+ 
+ 
+
+00:01:53.359 --> 00:01:55.940 align:start position:0%
+ 
+ 
+
+00:01:55.940 --> 00:01:57.440 align:start position:0%
+ 
+ 
+
+00:01:57.440 --> 00:01:58.819 align:start position:0%
+ 
+ 
+
+00:01:58.819 --> 00:02:00.559 align:start position:0%
+ 
+ 
+
+00:02:00.559 --> 00:02:02.959 align:start position:0%
+ 
+ 
+
+00:02:02.959 --> 00:02:04.550 align:start position:0%
+ 
+ 
+
+00:02:04.550 --> 00:02:06.050 align:start position:0%
+ 
+ 
+
+00:02:06.050 --> 00:02:07.849 align:start position:0%
+ 
+ 
+
+00:02:07.849 --> 00:02:09.020 align:start position:0%
+ 
+ 
+
+00:02:09.020 --> 00:02:12.020 align:start position:0%
+ 
+ 
+
+00:02:12.020 --> 00:02:13.460 align:start position:0%
+ 
+ 
+
+00:02:13.460 --> 00:02:15.710 align:start position:0%
+ 
+ 
+
+00:02:15.710 --> 00:02:17.690 align:start position:0%
+ 
+ 
+
+00:02:17.690 --> 00:02:19.820 align:start position:0%
+ 
+ 
+
+00:02:19.820 --> 00:02:22.910 align:start position:0%
+ 
+ 
+
+00:02:22.910 --> 00:02:24.030 align:start position:0%
+ 
+ 
+
+00:02:24.030 --> 00:02:26.160 align:start position:0%
+ 
+ 
+
+00:02:26.160 --> 00:02:28.140 align:start position:0%
+ 
+ 
+
+00:02:28.140 --> 00:02:29.910 align:start position:0%
+ 
+ 
+
+00:02:29.910 --> 00:02:31.500 align:start position:0%
+ 
+ 
+
+00:02:31.500 --> 00:02:33.780 align:start position:0%
+ 
+ 
+
+00:02:33.780 --> 00:02:35.339 align:start position:0%
+ 
+ 
+
+00:02:35.339 --> 00:02:38.429 align:start position:0%
+ 
+ 
+
+00:02:38.429 --> 00:02:40.470 align:start position:0%
+ 
+ 
+
+00:02:40.470 --> 00:02:43.050 align:start position:0%
+ 
+ 
+
+00:02:43.050 --> 00:02:44.309 align:start position:0%
+ 
+ 
+
+00:02:44.309 --> 00:02:48.899 align:start position:0%
+ 
+ 
+
+00:02:48.899 --> 00:02:50.250 align:start position:0%
+ 
+ 
+
+00:02:50.250 --> 00:02:51.750 align:start position:0%
+ 
+ 
+
+00:02:51.750 --> 00:02:53.429 align:start position:0%
+ 
+ 
+
+00:02:53.429 --> 00:02:55.530 align:start position:0%
+ 
+ 
+
+00:02:55.530 --> 00:02:57.300 align:start position:0%
+ 
+ 
+
+00:02:57.300 --> 00:02:58.440 align:start position:0%
+ 
+ 
+
+00:02:58.440 --> 00:03:01.649 align:start position:0%
+ 
+ 
+
+00:03:01.649 --> 00:03:03.690 align:start position:0%
+ 
+ 
+
+00:03:03.690 --> 00:03:05.670 align:start position:0%
+ 
+ 
+
+00:03:05.670 --> 00:03:08.580 align:start position:0%
+ 
+ 
+
+00:03:08.580 --> 00:03:09.899 align:start position:0%
+ 
+ 
+
+00:03:09.899 --> 00:03:12.149 align:start position:0%
+ 
+ 
+
+00:03:12.149 --> 00:03:14.550 align:start position:0%
+ 
+ 
+
+00:03:14.550 --> 00:03:15.960 align:start position:0%
+ 
+ 
+
+00:03:15.960 --> 00:03:17.490 align:start position:0%
+ 
+ 
+
+00:03:17.490 --> 00:03:19.559 align:start position:0%
+ 
+ 
+
+00:03:19.559 --> 00:03:23.339 align:start position:0%
+ 
+ 
+
+00:03:23.339 --> 00:03:24.629 align:start position:0%
+ 
+ 
+
+00:03:24.629 --> 00:03:27.089 align:start position:0%
+ 
+ 
+
+00:03:27.089 --> 00:03:28.439 align:start position:0%
+ 
+ 
+
+00:03:28.439 --> 00:03:30.390 align:start position:0%
+ 
+ 
+
+00:03:30.390 --> 00:03:32.039 align:start position:0%
+ 
+ 
+
+00:03:32.039 --> 00:03:34.020 align:start position:0%
+ 
+ 
+
+00:03:34.020 --> 00:03:36.210 align:start position:0%
+ 
+ 
+
+00:03:36.210 --> 00:03:40.050 align:start position:0%
+ 
+ 
+
+00:03:40.050 --> 00:03:42.539 align:start position:0%
+ 
+ 
+
+00:03:42.539 --> 00:03:44.129 align:start position:0%
+ 
+ 
+
+00:03:44.129 --> 00:03:45.689 align:start position:0%
+ 
+ 
+
+00:03:45.689 --> 00:03:47.879 align:start position:0%
+ 
+ 
+
+00:03:47.879 --> 00:03:49.710 align:start position:0%
+ 
+ 
+
+00:03:49.710 --> 00:03:52.289 align:start position:0%
+ 
+ 
+
+00:03:52.289 --> 00:03:53.759 align:start position:0%
+ 
+ 
+
+00:03:53.759 --> 00:03:54.960 align:start position:0%
+ 
+ 
+
+00:03:54.960 --> 00:03:56.220 align:start position:0%
+ 
+ 
+
+00:03:56.220 --> 00:03:58.229 align:start position:0%
+ 
+ 
+
+00:03:58.229 --> 00:04:00.210 align:start position:0%
+ 
+ 
+
+00:04:00.210 --> 00:04:02.520 align:start position:0%
+ 
+ 
+
+00:04:02.520 --> 00:04:09.270 align:start position:0%
+ 
+ 
+
+00:04:09.270 --> 00:04:11.939 align:start position:0%
+ 
+ 
+
+00:04:11.939 --> 00:04:15.539 align:start position:0%
+ 
+ 
+
+00:04:15.539 --> 00:04:16.860 align:start position:0%
+ 
+ 
+
+00:04:16.860 --> 00:04:19.680 align:start position:0%
+ 
+ 
+
+00:04:19.680 --> 00:04:22.529 align:start position:0%
+ 
+ 
+
+00:04:22.529 --> 00:04:23.610 align:start position:0%
+ 
+ 
+
+00:04:23.610 --> 00:04:26.219 align:start position:0%
+ 
+ 
+
+00:04:26.219 --> 00:04:28.230 align:start position:0%
+ 
+ 
+
+00:04:28.230 --> 00:04:32.719 align:start position:0%
+ 
+ 
+
+00:04:32.719 --> 00:04:36.330 align:start position:0%
+ 
+ 
+
+00:04:36.330 --> 00:04:37.679 align:start position:0%
+ 
+ 
+
+00:04:37.679 --> 00:04:39.899 align:start position:0%
+ 
+ 
+
+00:04:39.899 --> 00:04:41.699 align:start position:0%
+ 
+ 
+
+00:04:41.699 --> 00:04:44.429 align:start position:0%
+ 
+ 
+
+00:04:44.429 --> 00:04:46.199 align:start position:0%
+ 
+ 
+
+00:04:46.199 --> 00:04:48.089 align:start position:0%
+ 
+ 
+
+00:04:48.089 --> 00:04:50.309 align:start position:0%
+ 
+ 
+
+00:04:50.309 --> 00:04:52.350 align:start position:0%
+ 
+ 
+
+00:04:52.350 --> 00:04:53.999 align:start position:0%
+ 
+ 
+
+00:04:53.999 --> 00:04:56.459 align:start position:0%
+ 
+ 
+
+00:04:56.459 --> 00:04:58.799 align:start position:0%
+ 
+ 
+
+00:04:58.799 --> 00:05:01.169 align:start position:0%
+ 
+ 
+
+00:05:01.169 --> 00:05:05.669 align:start position:0%
+ 
+ 
+
+00:05:05.669 --> 00:05:08.459 align:start position:0%
+ 
+ 
+
+00:05:08.459 --> 00:05:10.739 align:start position:0%
+ 
+ 
+
+00:05:10.739 --> 00:05:12.299 align:start position:0%
+ 
+ 
+
+00:05:12.299 --> 00:05:16.259 align:start position:0%
+ 
+ 
+
+00:05:16.259 --> 00:05:18.569 align:start position:0%
+ 
+ 
+
+00:05:18.569 --> 00:05:19.859 align:start position:0%
+ 
+ 
+
+00:05:19.859 --> 00:05:21.419 align:start position:0%
+ 
+ 
+
+00:05:21.419 --> 00:05:23.459 align:start position:0%
+ 
+ 
+
+00:05:23.459 --> 00:05:25.469 align:start position:0%
+ 
+ 
+
+00:05:25.469 --> 00:05:27.329 align:start position:0%
+ 
+ 
+
+00:05:27.329 --> 00:05:30.839 align:start position:0%
+ 
+ 
+
+00:05:30.839 --> 00:05:33.269 align:start position:0%
+ 
+ 
+
+00:05:33.269 --> 00:05:34.829 align:start position:0%
+ 
+ 
+
+00:05:34.829 --> 00:05:37.049 align:start position:0%
+ 
+ 
+
+00:05:37.049 --> 00:05:38.969 align:start position:0%
+ 
+ 
+
+00:05:38.969 --> 00:05:41.609 align:start position:0%
+ 
+ 
+
+00:05:41.609 --> 00:05:43.609 align:start position:0%
+ 
+ 
+
+00:05:43.609 --> 00:05:45.540 align:start position:0%
+ 
+ 
+
+00:05:45.540 --> 00:05:48.929 align:start position:0%
+ 
+ 
+
+00:05:48.929 --> 00:05:51.179 align:start position:0%
+ 
+ 
+
+00:05:51.179 --> 00:05:52.799 align:start position:0%
+ 
+ 
+
+00:05:52.799 --> 00:05:54.179 align:start position:0%
+ 
+ 
+
+00:05:54.179 --> 00:05:57.779 align:start position:0%
+ 
+ 
+
+00:05:57.779 --> 00:06:01.979 align:start position:0%
+ 
+ 
+
+00:06:01.979 --> 00:06:03.419 align:start position:0%
+ 
+ 
+
+00:06:03.419 --> 00:06:06.779 align:start position:0%
+ 
+ 
+
+00:06:06.779 --> 00:06:08.879 align:start position:0%
+ 
+ 
+
+00:06:08.879 --> 00:06:10.499 align:start position:0%
+ 
+ 
+
+00:06:10.499 --> 00:06:11.819 align:start position:0%
+ 
+ 
+
+00:06:11.819 --> 00:06:14.369 align:start position:0%
+ 
+ 
+
+00:06:14.369 --> 00:06:16.109 align:start position:0%
+ 
+ 
+
+00:06:16.109 --> 00:06:17.699 align:start position:0%
+ 
+ 
+
+00:06:17.699 --> 00:06:21.269 align:start position:0%
+ 
+ 
+
+00:06:21.269 --> 00:06:22.709 align:start position:0%
+ 
+ 
+
+00:06:22.709 --> 00:06:24.329 align:start position:0%
+ 
+ 
+
+00:06:24.329 --> 00:06:27.119 align:start position:0%
+ 
+ 
+
+00:06:27.119 --> 00:06:29.009 align:start position:0%
+ 
+ 
+
+00:06:29.009 --> 00:06:31.709 align:start position:0%
+ 
+ 
+
+00:06:31.709 --> 00:06:33.359 align:start position:0%
+ 
+ 
+
+00:06:33.359 --> 00:06:35.129 align:start position:0%
+ 
+ 
+
+00:06:35.129 --> 00:06:37.229 align:start position:0%
+ 
+ 
+
+00:06:37.229 --> 00:06:38.429 align:start position:0%
+ 
+ 
+
+00:06:38.429 --> 00:06:41.879 align:start position:0%
+ 
+ 
+
+00:06:41.879 --> 00:06:47.340 align:start position:0%
+ 
+ 
+
+00:06:47.340 --> 00:06:49.750 align:start position:0%
+ 
+ 
+
+00:06:49.750 --> 00:06:51.100 align:start position:0%
+ 
+ 
+
+00:06:51.100 --> 00:06:52.900 align:start position:0%
+ 
+ 
+
+00:06:52.900 --> 00:06:54.790 align:start position:0%
+ 
+ 
+
+00:06:54.790 --> 00:06:56.650 align:start position:0%
+ 
+ 
+
+00:06:56.650 --> 00:06:57.820 align:start position:0%
+ 
+ 
+
+00:06:57.820 --> 00:07:00.129 align:start position:0%
+ 
+ 
+
+00:07:00.129 --> 00:07:01.780 align:start position:0%
+ 
+ 
+
+00:07:01.780 --> 00:07:03.460 align:start position:0%
+ 
+ 
+
+00:07:03.460 --> 00:07:05.800 align:start position:0%
+ 
+ 
+
+00:07:05.800 --> 00:07:07.240 align:start position:0%
+ 
+ 
+
+00:07:07.240 --> 00:07:08.530 align:start position:0%
+ 
+ 
+
+00:07:08.530 --> 00:07:10.480 align:start position:0%
+ 
+ 
+
+00:07:10.480 --> 00:07:14.050 align:start position:0%
+ 
+ 
+
+00:07:14.050 --> 00:07:15.550 align:start position:0%
+ 
+ 
+
+00:07:15.550 --> 00:07:17.110 align:start position:0%
+ 
+ 
+
+00:07:17.110 --> 00:07:18.760 align:start position:0%
+ 
+ 
+
+00:07:18.760 --> 00:07:21.250 align:start position:0%
+ 
+ 
+
+00:07:21.250 --> 00:07:22.629 align:start position:0%
+ 
+ 
+
+00:07:22.629 --> 00:07:24.550 align:start position:0%
+ 
+ 
+
+00:07:24.550 --> 00:07:26.770 align:start position:0%
+ 
+ 
+
+00:07:26.770 --> 00:07:28.240 align:start position:0%
+ 
+ 
+
+00:07:28.240 --> 00:07:30.610 align:start position:0%
+ 
+ 
+
+00:07:30.610 --> 00:07:33.430 align:start position:0%
+ 
+ 
+
+00:07:33.430 --> 00:07:35.020 align:start position:0%
+ 
+ 
+
+00:07:35.020 --> 00:07:38.290 align:start position:0%
+ 
+ 
+
+00:07:38.290 --> 00:07:39.730 align:start position:0%
+ 
+ 
+
+00:07:39.730 --> 00:07:42.280 align:start position:0%
+ 
+ 
+
+00:07:42.280 --> 00:07:45.430 align:start position:0%
+ 
+ 
+
+00:07:45.430 --> 00:07:47.469 align:start position:0%
+ 
+ 
+
+00:07:47.469 --> 00:07:49.330 align:start position:0%
+ 
+ 
+
+00:07:49.330 --> 00:07:52.480 align:start position:0%
+ 
+ 
+
+00:07:52.480 --> 00:07:54.370 align:start position:0%
+ 
+ 
+
+00:07:54.370 --> 00:07:57.730 align:start position:0%
+ 
+ 
+
+00:07:57.730 --> 00:07:59.020 align:start position:0%
+ 
+ 
+
+00:07:59.020 --> 00:08:00.580 align:start position:0%
+ 
+ 
+
+00:08:00.580 --> 00:08:02.650 align:start position:0%
+ 
+ 
+
+00:08:02.650 --> 00:08:04.750 align:start position:0%
+ 
+ 
+
+00:08:04.750 --> 00:08:06.010 align:start position:0%
+ 
+ 
+
+00:08:06.010 --> 00:08:07.900 align:start position:0%
+ 
+ 
+
+00:08:07.900 --> 00:08:10.779 align:start position:0%
+ 
+ 
+
+00:08:10.779 --> 00:08:13.120 align:start position:0%
+ 
+ 
+
+00:08:13.120 --> 00:08:14.710 align:start position:0%
+ 
+ 
+
+00:08:14.710 --> 00:08:17.080 align:start position:0%
+ 
+ 
+
+00:08:17.080 --> 00:08:19.060 align:start position:0%
+ 
+ 
+
+00:08:19.060 --> 00:08:20.740 align:start position:0%
+ 
+ 
+
+00:08:20.740 --> 00:08:22.719 align:start position:0%
+ 
+ 
+
+00:08:22.719 --> 00:08:25.240 align:start position:0%
+ 
+ 
+
+00:08:25.240 --> 00:08:28.290 align:start position:0%
+ 
+ 
+
+00:08:28.290 --> 00:08:31.300 align:start position:0%
+ 
+ 
+
+00:08:31.300 --> 00:08:34.810 align:start position:0%
+ 
+ 
+
+00:08:34.810 --> 00:08:36.430 align:start position:0%
+ 
+ 
+
+00:08:36.430 --> 00:08:38.110 align:start position:0%
+ 
+ 
+
+00:08:38.110 --> 00:08:39.670 align:start position:0%
+ 
+ 
+
+00:08:39.670 --> 00:08:41.110 align:start position:0%
+ 
+ 
+
+00:08:41.110 --> 00:08:42.940 align:start position:0%
+ 
+ 
+
+00:08:42.940 --> 00:08:47.079 align:start position:0%
+ 
+ 
+
+00:08:47.079 --> 00:08:49.990 align:start position:0%
+ 
+ 
+
+00:08:49.990 --> 00:08:53.110 align:start position:0%
+ 
+ 
+
+00:08:53.110 --> 00:08:56.050 align:start position:0%
+ 
+ 
+
+00:08:56.050 --> 00:08:57.490 align:start position:0%
+ 
+ 
+
+00:08:57.490 --> 00:08:59.769 align:start position:0%
+ 
+ 
+
+00:08:59.769 --> 00:09:02.259 align:start position:0%
+ 
+ 
+
+00:09:02.259 --> 00:09:03.999 align:start position:0%
+ 
+ 
+
+00:09:03.999 --> 00:09:06.249 align:start position:0%
+ 
+ 
+
+00:09:06.249 --> 00:09:07.809 align:start position:0%
+ 
+ 
+
+00:09:07.809 --> 00:09:10.809 align:start position:0%
+ 
+ 
+
+00:09:10.809 --> 00:09:12.519 align:start position:0%
+ 
+ 
+
+00:09:12.519 --> 00:09:15.309 align:start position:0%
+ 
+ 
+
+00:09:15.309 --> 00:09:17.710 align:start position:0%
+ 
+ 
+
+00:09:17.710 --> 00:09:19.090 align:start position:0%
+ 
+ 
+
+00:09:19.090 --> 00:09:22.720 align:start position:0%
+ 
+ 
+
+00:09:22.720 --> 00:09:24.220 align:start position:0%
+ 
+ 
+
+00:09:24.220 --> 00:09:25.840 align:start position:0%
+ 
+ 
+
+00:09:25.840 --> 00:09:27.910 align:start position:0%
+ 
+ 
+
+00:09:27.910 --> 00:09:33.150 align:start position:0%
+ 
+ 
+
+00:09:33.150 --> 00:09:36.610 align:start position:0%
+ 
+ 
+
+00:09:36.610 --> 00:09:39.189 align:start position:0%
+ 
+ 
+
+00:09:39.189 --> 00:09:40.809 align:start position:0%
+ 
+ 
+
+00:09:40.809 --> 00:09:43.299 align:start position:0%
+ 
+ 
+
+00:09:43.299 --> 00:09:44.920 align:start position:0%
+ 
+ 
+
+00:09:44.920 --> 00:09:47.319 align:start position:0%
+ 
+ 
+
+00:09:47.319 --> 00:09:48.699 align:start position:0%
+ 
+ 
+
+00:09:48.699 --> 00:09:50.920 align:start position:0%
+ 
+ 
+
+00:09:50.920 --> 00:09:52.569 align:start position:0%
+ 
+ 
+
+00:09:52.569 --> 00:09:54.040 align:start position:0%
+ 
+ 
+
+00:09:54.040 --> 00:09:57.759 align:start position:0%
+ 
+ 
+
+00:09:57.759 --> 00:10:00.699 align:start position:0%
+ 
+ 
+
+00:10:00.699 --> 00:10:02.499 align:start position:0%
+ 
+ 
+
+00:10:02.499 --> 00:10:03.999 align:start position:0%
+ 
+ 
+
+00:10:03.999 --> 00:10:05.319 align:start position:0%
+ 
+ 
+
+00:10:05.319 --> 00:10:07.720 align:start position:0%
+ 
+ 
+
+00:10:07.720 --> 00:10:10.389 align:start position:0%
+ 
+ 
+
+00:10:10.389 --> 00:10:11.889 align:start position:0%
+ 
+ 
+
+00:10:11.889 --> 00:10:13.420 align:start position:0%
+ 
+ 
+
+00:10:13.420 --> 00:10:16.150 align:start position:0%
+ 
+ 
+
+00:10:16.150 --> 00:10:19.629 align:start position:0%
+ 
+ 
+
+00:10:19.629 --> 00:10:20.710 align:start position:0%
+ 
+ 
+
+00:10:20.710 --> 00:10:23.170 align:start position:0%
+ 
+ 
+
+00:10:23.170 --> 00:10:25.090 align:start position:0%
+ 
+ 
+
+00:10:25.090 --> 00:10:26.559 align:start position:0%
+ 
+ 
+
+00:10:26.559 --> 00:10:27.999 align:start position:0%
+ 
+ 
+
+00:10:27.999 --> 00:10:30.610 align:start position:0%
+ 
+ 
+
+00:10:30.610 --> 00:10:32.860 align:start position:0%
+ 
+ 
+
+00:10:32.860 --> 00:10:34.240 align:start position:0%
+ 
+ 
+
+00:10:34.240 --> 00:10:39.160 align:start position:0%
+ 
+ 
+
+00:10:39.160 --> 00:10:41.799 align:start position:0%
+ 
+ 
+
+00:10:41.799 --> 00:10:43.360 align:start position:0%
+ 
+ 
+
+00:10:43.360 --> 00:10:45.460 align:start position:0%
+ 
+ 
+
+00:10:45.460 --> 00:10:47.439 align:start position:0%
+ 
+ 
+
+00:10:47.439 --> 00:10:48.699 align:start position:0%
+ 
+ 
+
+00:10:48.699 --> 00:10:52.629 align:start position:0%
+ 
+ 
+
+00:10:52.629 --> 00:10:54.669 align:start position:0%
+ 
+ 
+
+00:10:54.669 --> 00:10:56.290 align:start position:0%
+ 
+ 
+
+00:10:56.290 --> 00:10:57.819 align:start position:0%
+ 
+ 
+
+00:10:57.819 --> 00:10:59.439 align:start position:0%
+ 
+ 
+
+00:10:59.439 --> 00:11:03.400 align:start position:0%
+ 
+ 
+
+00:11:03.400 --> 00:11:05.199 align:start position:0%
+ 
+ 
+
+00:11:05.199 --> 00:11:08.079 align:start position:0%
+ 
+ 
+
+00:11:08.079 --> 00:11:09.460 align:start position:0%
+ 
+ 
+
+00:11:09.460 --> 00:11:09.940 align:start position:0%
+ 
+ 
+
+00:11:09.940 --> 00:11:12.550 align:start position:0%
+ 
+ 
+
+00:11:12.550 --> 00:11:15.220 align:start position:0%
+ 
+ 
+
+00:11:15.220 --> 00:11:16.780 align:start position:0%
+ 
+ 
+
+00:11:16.780 --> 00:11:18.430 align:start position:0%
+ 
+ 
+
+00:11:18.430 --> 00:11:24.900 align:start position:0%
+ 
+ 
+
+00:11:24.900 --> 00:11:26.980 align:start position:0%
+ 
+ 
+
+00:11:26.980 --> 00:11:29.170 align:start position:0%
+ 
+ 
+
+00:11:29.170 --> 00:11:33.160 align:start position:0%
+ 
+ 
+
+00:11:33.160 --> 00:11:35.110 align:start position:0%
+ 
+ 
+
+00:11:35.110 --> 00:11:37.060 align:start position:0%
+ 
+ 
+
+00:11:37.060 --> 00:11:39.670 align:start position:0%
+ 
+ 
+
+00:11:39.670 --> 00:11:41.920 align:start position:0%
+ 
+ 
+
+00:11:41.920 --> 00:11:43.000 align:start position:0%
+ 
+ 
+
+00:11:43.000 --> 00:11:45.400 align:start position:0%
+ 
+ 
+
+00:11:45.400 --> 00:11:47.050 align:start position:0%
+ 
+ 
+
+00:11:47.050 --> 00:11:48.490 align:start position:0%
+ 
+ 
+
+00:11:48.490 --> 00:11:50.170 align:start position:0%
+ 
+ 
+
+00:11:50.170 --> 00:11:52.030 align:start position:0%
+ 
+ 
+
+00:11:52.030 --> 00:11:58.120 align:start position:0%
+ 
+ 
+
+00:11:58.120 --> 00:12:00.009 align:start position:0%
+ 
+ 
+
+00:12:00.009 --> 00:12:01.329 align:start position:0%
+ 
+ 
+
+00:12:01.329 --> 00:12:03.790 align:start position:0%
+ 
+ 
+
+00:12:03.790 --> 00:12:06.009 align:start position:0%
+ 
+ 
+
+00:12:06.009 --> 00:12:08.740 align:start position:0%
+ 
+ 
+
+00:12:08.740 --> 00:12:10.660 align:start position:0%
+ 
+ 
+
+00:12:10.660 --> 00:12:12.519 align:start position:0%
+ 
+ 
+
+00:12:12.519 --> 00:12:14.829 align:start position:0%
+ 
+ 
+
+00:12:14.829 --> 00:12:18.340 align:start position:0%
+ 
+ 
+
+00:12:18.340 --> 00:12:19.660 align:start position:0%
+ 
+ 
+
+00:12:19.660 --> 00:12:21.670 align:start position:0%
+ 
+ 
+
+00:12:21.670 --> 00:12:23.560 align:start position:0%
+ 
+ 
+
+00:12:23.560 --> 00:12:29.889 align:start position:0%
+ 
+ 
+
+00:12:29.889 --> 00:12:31.689 align:start position:0%
+ 
+ 
+
+00:12:31.689 --> 00:12:33.160 align:start position:0%
+ 
+ 
+
+00:12:33.160 --> 00:12:34.750 align:start position:0%
+ 
+ 
+
+00:12:34.750 --> 00:12:37.030 align:start position:0%
+ 
+ 
+
+00:12:37.030 --> 00:12:38.650 align:start position:0%
+ 
+ 
+
+00:12:38.650 --> 00:12:42.400 align:start position:0%
+ 
+ 
+
+00:12:42.400 --> 00:12:43.990 align:start position:0%
+ 
+ 
+
+00:12:43.990 --> 00:12:46.449 align:start position:0%
+ 
+ 
+
+00:12:46.449 --> 00:12:47.949 align:start position:0%
+ 
+ 
+
+00:12:47.949 --> 00:12:49.720 align:start position:0%
+ 
+ 
+
+00:12:49.720 --> 00:12:51.910 align:start position:0%
+ 
+ 
+
+00:12:51.910 --> 00:12:53.620 align:start position:0%
+ 
+ 
+
+00:12:53.620 --> 00:12:56.680 align:start position:0%
+ 
+ 
+
+00:12:56.680 --> 00:12:59.290 align:start position:0%
+ 
+ 
+
+00:12:59.290 --> 00:13:01.449 align:start position:0%
+ 
+ 
+
+00:13:01.449 --> 00:13:03.340 align:start position:0%
+ 
+ 
+
+00:13:03.340 --> 00:13:05.559 align:start position:0%
+ 
+ 
+
+00:13:05.559 --> 00:13:07.559 align:start position:0%
+ 
+ 
+
+00:13:07.559 --> 00:13:09.850 align:start position:0%
+ 
+ 
+
+00:13:09.850 --> 00:13:12.100 align:start position:0%
+ 
+ 
+
+00:13:12.100 --> 00:13:14.530 align:start position:0%
+ 
+ 
+
+00:13:14.530 --> 00:13:15.939 align:start position:0%
+ 
+ 
+
+00:13:15.939 --> 00:13:17.290 align:start position:0%
+ 
+ 
+
+00:13:17.290 --> 00:13:19.630 align:start position:0%
+ 
+ 
+
+00:13:19.630 --> 00:13:22.449 align:start position:0%
+ 
+ 
+
+00:13:22.449 --> 00:13:25.440 align:start position:0%
+ 
+ 
+
+00:13:25.440 --> 00:13:29.680 align:start position:0%
+ 
+ 
+
+00:13:29.680 --> 00:13:30.850 align:start position:0%
+ 
+ 
+
+00:13:30.850 --> 00:13:32.980 align:start position:0%
+ 
+ 
+
+00:13:32.980 --> 00:13:34.840 align:start position:0%
+ 
+ 
+
+00:13:34.840 --> 00:13:37.030 align:start position:0%
+ 
+ 
+
+00:13:37.030 --> 00:13:39.340 align:start position:0%
+ 
+ 
+
+00:13:39.340 --> 00:13:42.280 align:start position:0%
+ 
+ 
+
+00:13:42.280 --> 00:13:47.860 align:start position:0%
+ 
+ 
+
+00:13:47.860 --> 00:13:49.000 align:start position:0%
+ 
+ 
+
+00:13:49.000 --> 00:13:50.680 align:start position:0%
+ 
+ 
+
+00:13:50.680 --> 00:13:52.480 align:start position:0%
+ 
+ 
+
+00:13:52.480 --> 00:13:54.850 align:start position:0%
+ 
+ 
+
+00:13:54.850 --> 00:13:57.640 align:start position:0%
+ 
+ 
+
+00:13:57.640 --> 00:13:58.660 align:start position:0%
+ 
+ 
+
+00:13:58.660 --> 00:14:00.340 align:start position:0%
+ 
+ 
+
+00:14:00.340 --> 00:14:01.840 align:start position:0%
+ 
+ 
+
+00:14:01.840 --> 00:14:05.020 align:start position:0%
+ 
+ 
+
+00:14:05.020 --> 00:14:06.790 align:start position:0%
+ 
+ 
+
+00:14:06.790 --> 00:14:09.280 align:start position:0%
+ 
+ 
+
+00:14:09.280 --> 00:14:09.810 align:start position:0%
+ 
+ 
+
+00:14:09.810 --> 00:14:12.280 align:start position:0%
+ 
+ 
+
+00:14:12.280 --> 00:14:13.840 align:start position:0%
+ 
+ 
+
+00:14:13.840 --> 00:14:15.610 align:start position:0%
+ 
+ 
+
+00:14:15.610 --> 00:14:18.880 align:start position:0%
+ 
+ 
+
+00:14:18.880 --> 00:14:20.530 align:start position:0%
+ 
+ 
+
+00:14:20.530 --> 00:14:22.270 align:start position:0%
+ 
+ 
+
+00:14:22.270 --> 00:14:23.590 align:start position:0%
+ 
+ 
+
+00:14:23.590 --> 00:14:26.890 align:start position:0%
+ 
+ 
+
+00:14:26.890 --> 00:14:28.960 align:start position:0%
+ 
+ 
+
+00:14:28.960 --> 00:14:30.520 align:start position:0%
+ 
+ 
+
+00:14:30.520 --> 00:14:33.280 align:start position:0%
+ 
+ 
+
+00:14:33.280 --> 00:14:35.170 align:start position:0%
+ 
+ 
+
+00:14:35.170 --> 00:14:37.030 align:start position:0%
+ 
+ 
+
+00:14:37.030 --> 00:14:38.500 align:start position:0%
+ 
+ 
+
+00:14:38.500 --> 00:14:41.530 align:start position:0%
+ 
+ 
+
+00:14:41.530 --> 00:14:43.270 align:start position:0%
+ 
+ 
+
+00:14:43.270 --> 00:14:44.530 align:start position:0%
+ 
+ 
+
+00:14:44.530 --> 00:14:46.000 align:start position:0%
+ 
+ 
+
+00:14:46.000 --> 00:14:50.770 align:start position:0%
+ 
+ 
+
+00:14:50.770 --> 00:14:52.630 align:start position:0%
+ 
+ 
+
+00:14:52.630 --> 00:14:55.990 align:start position:0%
+ 
+ 
+
+00:14:55.990 --> 00:14:57.490 align:start position:0%
+ 
+ 
+
+00:14:57.490 --> 00:14:59.350 align:start position:0%
+ 
+ 
+
+00:14:59.350 --> 00:15:02.380 align:start position:0%
+ 
+ 
+
+00:15:02.380 --> 00:15:04.570 align:start position:0%
+ 
+ 
+
+00:15:04.570 --> 00:15:05.830 align:start position:0%
+ 
+ 
+
+00:15:05.830 --> 00:15:08.200 align:start position:0%
+ 
+ 
+
+00:15:08.200 --> 00:15:10.030 align:start position:0%
+ 
+ 
+
+00:15:10.030 --> 00:15:12.820 align:start position:0%
+ 
+ 
+
+00:15:12.820 --> 00:15:14.470 align:start position:0%
+ 
+ 
+
+00:15:14.470 --> 00:15:16.750 align:start position:0%
+ 
+ 
+
+00:15:16.750 --> 00:15:18.100 align:start position:0%
+ 
+ 
+
+00:15:18.100 --> 00:15:19.960 align:start position:0%
+ 
+ 
+
+00:15:19.960 --> 00:15:22.690 align:start position:0%
+ 
+ 
+
+00:15:22.690 --> 00:15:25.030 align:start position:0%
+ 
+ 
+
+00:15:25.030 --> 00:15:27.850 align:start position:0%
+ 
+ 
+
+00:15:27.850 --> 00:15:29.650 align:start position:0%
+ 
+ 
+
+00:15:29.650 --> 00:15:31.180 align:start position:0%
+ 
+ 
+
+00:15:31.180 --> 00:15:32.800 align:start position:0%
+ 
+ 
+
+00:15:32.800 --> 00:15:36.520 align:start position:0%
+ 
+ 
+
+00:15:36.520 --> 00:15:37.390 align:start position:0%
+ 
+ 
+
+00:15:37.390 --> 00:15:39.430 align:start position:0%
+ 
+ 
+
+00:15:39.430 --> 00:15:40.570 align:start position:0%
+ 
+ 
+
+00:15:40.570 --> 00:15:42.160 align:start position:0%
+ 
+ 
+
+00:15:42.160 --> 00:15:44.530 align:start position:0%
+ 
+ 
+
+00:15:44.530 --> 00:15:46.390 align:start position:0%
+ 
+ 
+
+00:15:46.390 --> 00:15:47.470 align:start position:0%
+ 
+ 
+
+00:15:47.470 --> 00:15:50.170 align:start position:0%
+ 
+ 
+
+00:15:50.170 --> 00:15:51.640 align:start position:0%
+ 
+ 
+
+00:15:51.640 --> 00:15:53.770 align:start position:0%
+ 
+ 
+
+00:15:53.770 --> 00:15:56.950 align:start position:0%
+ 
+ 
+
+00:15:56.950 --> 00:15:58.840 align:start position:0%
+ 
+ 
+
+00:15:58.840 --> 00:16:00.520 align:start position:0%
+ 
+ 
+
+00:16:00.520 --> 00:16:03.790 align:start position:0%
+ 
+ 
+
+00:16:03.790 --> 00:16:05.050 align:start position:0%
+ 
+ 
+
+00:16:05.050 --> 00:16:06.370 align:start position:0%
+ 
+ 
+
+00:16:06.370 --> 00:16:08.170 align:start position:0%
+ 
+ 
+
+00:16:08.170 --> 00:16:11.080 align:start position:0%
+ 
+ 
+
+00:16:11.080 --> 00:16:12.730 align:start position:0%
+ 
+ 
+
+00:16:12.730 --> 00:16:14.860 align:start position:0%
+ 
+ 
+
+00:16:14.860 --> 00:16:16.300 align:start position:0%
+ 
+ 
+
+00:16:16.300 --> 00:16:19.060 align:start position:0%
+ 
+ 
+
+00:16:19.060 --> 00:16:23.530 align:start position:0%
+ 
+ 
+
+00:16:23.530 --> 00:16:25.300 align:start position:0%
+ 
+ 
+
+00:16:25.300 --> 00:16:26.560 align:start position:0%
+ 
+ 
+
+00:16:26.560 --> 00:16:28.270 align:start position:0%
+ 
+ 
+
+00:16:28.270 --> 00:16:31.300 align:start position:0%
+ 
+ 
+
+00:16:31.300 --> 00:16:32.890 align:start position:0%
+ 
+ 
+
+00:16:32.890 --> 00:16:34.510 align:start position:0%
+ 
+ 
+
+00:16:34.510 --> 00:16:37.210 align:start position:0%
+ 
+ 
+
+00:16:37.210 --> 00:16:38.950 align:start position:0%
+ 
+ 
+
+00:16:38.950 --> 00:16:40.570 align:start position:0%
+ 
+ 
+
+00:16:40.570 --> 00:16:42.520 align:start position:0%
+ 
+ 
+
+00:16:42.520 --> 00:16:47.320 align:start position:0%
+ 
+ 
+
+00:16:47.320 --> 00:16:51.520 align:start position:0%
+ 
+ 
+
+00:16:51.520 --> 00:16:53.140 align:start position:0%
+ 
+ 
+
+00:16:53.140 --> 00:16:54.340 align:start position:0%
+ 
+ 
+
+00:16:54.340 --> 00:16:56.050 align:start position:0%
+ 
+ 
+
+00:16:56.050 --> 00:16:58.270 align:start position:0%
+ 
+ 
+
+00:16:58.270 --> 00:17:00.640 align:start position:0%
+ 
+ 
+
+00:17:00.640 --> 00:17:02.740 align:start position:0%
+ 
+ 
+
+00:17:02.740 --> 00:17:04.690 align:start position:0%
+ 
+ 
+
+00:17:04.690 --> 00:17:05.620 align:start position:0%
+ 
+ 
+
+00:17:05.620 --> 00:17:07.420 align:start position:0%
+ 
+ 
+
+00:17:07.420 --> 00:17:09.970 align:start position:0%
+ 
+ 
+
+00:17:09.970 --> 00:17:11.770 align:start position:0%
+ 
+ 
+
+00:17:11.770 --> 00:17:14.680 align:start position:0%
+ 
+ 
+
+00:17:14.680 --> 00:17:17.650 align:start position:0%
+ 
+ 
+
+00:17:17.650 --> 00:17:20.290 align:start position:0%
+ 
+ 
+
+00:17:20.290 --> 00:17:22.560 align:start position:0%
+ 
+ 
+
+00:17:22.560 --> 00:17:25.090 align:start position:0%
+ 
+ 
+
+00:17:25.090 --> 00:17:26.829 align:start position:0%
+ 
+ 
+
+00:17:26.829 --> 00:17:28.420 align:start position:0%
+ 
+ 
+
+00:17:28.420 --> 00:17:32.530 align:start position:0%
+ 
+ 
+
+00:17:32.530 --> 00:17:34.540 align:start position:0%
+ 
+ 
+
+00:17:34.540 --> 00:17:36.220 align:start position:0%
+ 
+ 
+
+00:17:36.220 --> 00:17:38.620 align:start position:0%
+ 
+ 
+
+00:17:38.620 --> 00:17:42.100 align:start position:0%
+ 
+ 
+
+00:17:42.100 --> 00:17:43.480 align:start position:0%
+ 
+ 
+
+00:17:43.480 --> 00:17:45.070 align:start position:0%
+ 
+ 
+
+00:17:45.070 --> 00:17:46.660 align:start position:0%
+ 
+ 
+
+00:17:46.660 --> 00:17:48.370 align:start position:0%
+ 
+ 
+
+00:17:48.370 --> 00:17:49.320 align:start position:0%
+ 
+ 
+
+00:17:49.320 --> 00:17:51.419 align:start position:0%
+ 
+ 
+
+00:17:51.419 --> 00:17:53.100 align:start position:0%
+ 
+ 
+
+00:17:53.100 --> 00:17:55.799 align:start position:0%
+ 
+ 
+
+00:17:55.799 --> 00:17:58.110 align:start position:0%
+ 
+ 
+
+00:17:58.110 --> 00:17:59.610 align:start position:0%
+ 
+ 
+
+00:17:59.610 --> 00:18:02.039 align:start position:0%
+ 
+ 
+
+00:18:02.039 --> 00:18:04.139 align:start position:0%
+ 
+ 
+
+00:18:04.139 --> 00:18:06.480 align:start position:0%
+ 
+ 
+
+00:18:06.480 --> 00:18:08.220 align:start position:0%
+ 
+ 
+
+00:18:08.220 --> 00:18:10.230 align:start position:0%
+ 
+ 
+
+00:18:10.230 --> 00:18:11.549 align:start position:0%
+ 
+ 
+
+00:18:11.549 --> 00:18:12.840 align:start position:0%
+ 
+ 
+
+00:18:12.840 --> 00:18:16.500 align:start position:0%
+ 
+ 
+
+00:18:16.500 --> 00:18:18.750 align:start position:0%
+ 
+ 
+
+00:18:18.750 --> 00:18:21.180 align:start position:0%
+ 
+ 
+
+00:18:21.180 --> 00:18:23.549 align:start position:0%
+ 
+ 
+
+00:18:23.549 --> 00:18:24.899 align:start position:0%
+ 
+ 
+
+00:18:24.899 --> 00:18:26.250 align:start position:0%
+ 
+ 
+
+00:18:26.250 --> 00:18:27.960 align:start position:0%
+ 
+ 
+
+00:18:27.960 --> 00:18:29.850 align:start position:0%
+ 
+ 
+
+00:18:29.850 --> 00:18:33.779 align:start position:0%
+ 
+ 
+
+00:18:33.779 --> 00:18:35.639 align:start position:0%
+ 
+ 
+
+00:18:35.639 --> 00:18:36.990 align:start position:0%
+ 
+ 
+
+00:18:36.990 --> 00:18:38.310 align:start position:0%
+ 
+ 
+
+00:18:38.310 --> 00:18:39.930 align:start position:0%
+ 
+ 
+
+00:18:39.930 --> 00:18:42.570 align:start position:0%
+ 
+ 
+
+00:18:42.570 --> 00:18:44.789 align:start position:0%
+ 
+ 
+
+00:18:44.789 --> 00:18:47.580 align:start position:0%
+ 
+ 
+
+00:18:47.580 --> 00:18:49.200 align:start position:0%
+ 
+ 
+
+00:18:49.200 --> 00:18:50.759 align:start position:0%
+ 
+ 
+
+00:18:50.759 --> 00:18:51.629 align:start position:0%
+ 
+ 
+
+00:18:51.629 --> 00:18:54.210 align:start position:0%
+ 
+ 
+
+00:18:54.210 --> 00:18:56.340 align:start position:0%
+ 
+ 
+
+00:18:56.340 --> 00:18:58.259 align:start position:0%
+ 
+ 
+
+00:18:58.259 --> 00:19:00.000 align:start position:0%
+ 
+ 
+
+00:19:00.000 --> 00:19:02.190 align:start position:0%
+ 
+ 
+
+00:19:02.190 --> 00:19:04.169 align:start position:0%
+ 
+ 
+
+00:19:04.169 --> 00:19:05.940 align:start position:0%
+ 
+ 
+
+00:19:05.940 --> 00:19:08.039 align:start position:0%
+ 
+ 
+
+00:19:08.039 --> 00:19:09.509 align:start position:0%
+ 
+ 
+
+00:19:09.509 --> 00:19:11.580 align:start position:0%
+ 
+ 
+
+00:19:11.580 --> 00:19:14.310 align:start position:0%
+ 
+ 
+
+00:19:14.310 --> 00:19:19.139 align:start position:0%
+ 
+ 
+
+00:19:19.139 --> 00:19:20.490 align:start position:0%
+ 
+ 
+
+00:19:20.490 --> 00:19:22.590 align:start position:0%
+ 
+ 
+
+00:19:22.590 --> 00:19:25.169 align:start position:0%
+ 
+ 
+
+00:19:25.169 --> 00:19:26.549 align:start position:0%
+ 
+ 
+
+00:19:26.549 --> 00:19:27.810 align:start position:0%
+ 
+ 
+
+00:19:27.810 --> 00:19:30.690 align:start position:0%
+ 
+ 
+
+00:19:30.690 --> 00:19:33.240 align:start position:0%
+ 
+ 
+
+00:19:33.240 --> 00:19:34.950 align:start position:0%
+ 
+ 
+
+00:19:34.950 --> 00:19:36.750 align:start position:0%
+ 
+ 
+
+00:19:36.750 --> 00:19:38.779 align:start position:0%
+ 
+ 
+
+00:19:38.779 --> 00:19:41.220 align:start position:0%
+ 
+ 
+
+00:19:41.220 --> 00:19:42.840 align:start position:0%
+ 
+ 
+
+00:19:42.840 --> 00:19:45.539 align:start position:0%
+ 
+ 
+
+00:19:45.539 --> 00:19:47.490 align:start position:0%
+ 
+ 
+
+00:19:47.490 --> 00:19:49.919 align:start position:0%
+ 
+ 
+
+00:19:49.919 --> 00:19:51.750 align:start position:0%
+ 
+ 
+
+00:19:51.750 --> 00:19:53.879 align:start position:0%
+ 
+ 
+
+00:19:53.879 --> 00:19:55.470 align:start position:0%
+ 
+ 
+
+00:19:55.470 --> 00:19:58.950 align:start position:0%
+ 
+ 
+
+00:19:58.950 --> 00:20:00.930 align:start position:0%
+ 
+ 
+
+00:20:00.930 --> 00:20:02.680 align:start position:0%
+ 
+ 
+
+00:20:02.680 --> 00:20:05.440 align:start position:0%
+ 
+ 
+
+00:20:05.440 --> 00:20:06.790 align:start position:0%
+ 
+ 
+
+00:20:06.790 --> 00:20:08.410 align:start position:0%
+ 
+ 
+
+00:20:08.410 --> 00:20:10.210 align:start position:0%
+ 
+ 
+
+00:20:10.210 --> 00:20:11.530 align:start position:0%
+ 
+ 
+
+00:20:11.530 --> 00:20:13.960 align:start position:0%
+ 
+ 
+
+00:20:13.960 --> 00:20:15.550 align:start position:0%
+ 
+ 
+
+00:20:15.550 --> 00:20:18.580 align:start position:0%
+ 
+ 
+
+00:20:18.580 --> 00:20:20.380 align:start position:0%
+ 
+ 
+
+00:20:20.380 --> 00:20:23.620 align:start position:0%
+ 
+ 
+
+00:20:23.620 --> 00:20:25.030 align:start position:0%
+ 
+ 
+
+00:20:25.030 --> 00:20:27.070 align:start position:0%
+ 
+ 
+
+00:20:27.070 --> 00:20:28.570 align:start position:0%
+ 
+ 
+
+00:20:28.570 --> 00:20:30.340 align:start position:0%
+ 
+ 
+
+00:20:30.340 --> 00:20:32.040 align:start position:0%
+ 
+ 
+
+00:20:32.040 --> 00:20:34.330 align:start position:0%
+ 
+ 
+
+00:20:34.330 --> 00:20:36.100 align:start position:0%
+ 
+ 
+
+00:20:36.100 --> 00:20:39.490 align:start position:0%
+ 
+ 
+
+00:20:39.490 --> 00:20:41.710 align:start position:0%
+ 
+ 
+
+00:20:41.710 --> 00:20:43.360 align:start position:0%
+ 
+ 
+
+00:20:43.360 --> 00:20:46.180 align:start position:0%
+ 
+ 
+
+00:20:46.180 --> 00:20:48.220 align:start position:0%
+ 
+ 
+
+00:20:48.220 --> 00:20:50.170 align:start position:0%
+ 
+ 
+
+00:20:50.170 --> 00:20:52.150 align:start position:0%
+ 
+ 
+
+00:20:52.150 --> 00:20:53.980 align:start position:0%
+ 
+ 
+
+00:20:53.980 --> 00:20:56.110 align:start position:0%
+ 
+ 
+
+00:20:56.110 --> 00:20:58.240 align:start position:0%
+ 
+ 
+
+00:20:58.240 --> 00:21:00.580 align:start position:0%
+ 
+ 
+
+00:21:00.580 --> 00:21:02.380 align:start position:0%
+ 
+ 
+
+00:21:02.380 --> 00:21:05.110 align:start position:0%
+ 
+ 
+
+00:21:05.110 --> 00:21:08.350 align:start position:0%
+ 
+ 
+
+00:21:08.350 --> 00:21:09.790 align:start position:0%
+ 
+ 
+
+00:21:09.790 --> 00:21:12.100 align:start position:0%
+ 
+ 
+
+00:21:12.100 --> 00:21:13.510 align:start position:0%
+ 
+ 
+
+00:21:13.510 --> 00:21:17.620 align:start position:0%
+ 
+ 
+
+00:21:17.620 --> 00:21:20.020 align:start position:0%
+ 
+ 
+
+00:21:20.020 --> 00:21:23.250 align:start position:0%
+ 
+ 
+
+00:21:23.250 --> 00:21:27.370 align:start position:0%
+ 
+ 
+
+00:21:27.370 --> 00:21:29.080 align:start position:0%
+ 
+ 
+
+00:21:29.080 --> 00:21:31.120 align:start position:0%
+ 
+ 
+
+00:21:31.120 --> 00:21:35.920 align:start position:0%
+ 
+ 
+
+00:21:35.920 --> 00:21:37.210 align:start position:0%
+ 
+ 
+
+00:21:37.210 --> 00:21:38.860 align:start position:0%
+ 
+ 
+
+00:21:38.860 --> 00:21:41.700 align:start position:0%
+ 
+ 
+
+00:21:41.700 --> 00:21:44.950 align:start position:0%
+ 
+ 
+
+00:21:44.950 --> 00:21:46.690 align:start position:0%
+ 
+ 
+
+00:21:46.690 --> 00:21:48.040 align:start position:0%
+ 
+ 
+
+00:21:48.040 --> 00:21:49.360 align:start position:0%
+ 
+ 
+
+00:21:49.360 --> 00:21:52.300 align:start position:0%
+ 
+ 
+
+00:21:52.300 --> 00:21:53.560 align:start position:0%
+ 
+ 
+
+00:21:53.560 --> 00:21:55.900 align:start position:0%
+ 
+ 
+
+00:21:55.900 --> 00:21:57.490 align:start position:0%
+ 
+ 
+
+00:21:57.490 --> 00:22:00.250 align:start position:0%
+ 
+ 
+
+00:22:00.250 --> 00:22:02.440 align:start position:0%
+ 
+ 
+
+00:22:02.440 --> 00:22:05.620 align:start position:0%
+ 
+ 
+
+00:22:05.620 --> 00:22:07.690 align:start position:0%
+ 
+ 
+
+00:22:07.690 --> 00:22:09.220 align:start position:0%
+ 
+ 
+
+00:22:09.220 --> 00:22:11.770 align:start position:0%
+ 
+ 
+
+00:22:11.770 --> 00:22:13.210 align:start position:0%
+ 
+ 
+
+00:22:13.210 --> 00:22:15.370 align:start position:0%
+ 
+ 
+
+00:22:15.370 --> 00:22:16.220 align:start position:0%
+ 
+ 
+
+00:22:16.220 --> 00:22:18.320 align:start position:0%
+ 
+ 
+
+00:22:18.320 --> 00:22:19.640 align:start position:0%
+ 
+ 
+
+00:22:19.640 --> 00:22:22.190 align:start position:0%
+ 
+ 
+
+00:22:22.190 --> 00:22:24.260 align:start position:0%
+ 
+ 
+
+00:22:24.260 --> 00:22:26.150 align:start position:0%
+ 
+ 
+
+00:22:26.150 --> 00:22:27.530 align:start position:0%
+ 
+ 
+
+00:22:27.530 --> 00:22:30.230 align:start position:0%
+ 
+ 
+
+00:22:30.230 --> 00:22:32.900 align:start position:0%
+ 
+ 
+
+00:22:32.900 --> 00:22:35.360 align:start position:0%
+ 
+ 
+
+00:22:35.360 --> 00:22:36.950 align:start position:0%
+ 
+ 
+
+00:22:36.950 --> 00:22:38.210 align:start position:0%
+ 
+ 
+
+00:22:38.210 --> 00:22:39.740 align:start position:0%
+ 
+ 
+
+00:22:39.740 --> 00:22:41.299 align:start position:0%
+ 
+ 
+
+00:22:41.299 --> 00:22:43.909 align:start position:0%
+ 
+ 
+
+00:22:43.909 --> 00:22:46.130 align:start position:0%
+ 
+ 
+
+00:22:46.130 --> 00:22:47.690 align:start position:0%
+ 
+ 
+
+00:22:47.690 --> 00:22:50.150 align:start position:0%
+ 
+ 
+
+00:22:50.150 --> 00:22:52.850 align:start position:0%
+ 
+ 
+
+00:22:52.850 --> 00:22:54.140 align:start position:0%
+ 
+ 
+
+00:22:54.140 --> 00:22:58.190 align:start position:0%
+ 
+ 
+
+00:22:58.190 --> 00:23:00.169 align:start position:0%
+ 
+ 
+
+00:23:00.169 --> 00:23:01.700 align:start position:0%
+ 
+ 
+
+00:23:01.700 --> 00:23:03.620 align:start position:0%
+ 
+ 
+
+00:23:03.620 --> 00:23:08.270 align:start position:0%
+ 
+ 
+
+00:23:08.270 --> 00:23:10.400 align:start position:0%
+ 
+ 
+
+00:23:10.400 --> 00:23:12.590 align:start position:0%
+ 
+ 
+
+00:23:12.590 --> 00:23:18.560 align:start position:0%
+ 
+ 
+
+00:23:18.560 --> 00:23:20.780 align:start position:0%
+ 
+ 
+
+00:23:20.780 --> 00:23:21.830 align:start position:0%
+ 
+ 
+
+00:23:21.830 --> 00:23:24.919 align:start position:0%
+ 
+ 
+
+00:23:24.919 --> 00:23:26.720 align:start position:0%
+ 
+ 
+
+00:23:26.720 --> 00:23:28.310 align:start position:0%
+ 
+ 
+
+00:23:28.310 --> 00:23:29.049 align:start position:0%
+ 
+ 
+
+00:23:29.049 --> 00:23:33.530 align:start position:0%
+ 
+ 
+
+00:23:33.530 --> 00:23:34.909 align:start position:0%
+ 
+ 
+
+00:23:34.909 --> 00:23:36.470 align:start position:0%
+ 
+ 
+
+00:23:36.470 --> 00:23:39.500 align:start position:0%
+ 
+ 
+
+00:23:39.500 --> 00:23:41.720 align:start position:0%
+ 
+ 
+
+00:23:41.720 --> 00:23:43.970 align:start position:0%
+ 
+ 
+
+00:23:43.970 --> 00:23:45.590 align:start position:0%
+ 
+ 
+
+00:23:45.590 --> 00:23:48.230 align:start position:0%
+ 
+ 
+
+00:23:48.230 --> 00:23:50.539 align:start position:0%
+ 
+ 
+
+00:23:50.539 --> 00:23:52.430 align:start position:0%
+ 
+ 
+
+00:23:52.430 --> 00:23:54.740 align:start position:0%
+ 
+ 
+
+00:23:54.740 --> 00:23:56.870 align:start position:0%
+ 
+ 
+
+00:23:56.870 --> 00:23:58.730 align:start position:0%
+ 
+ 
+
+00:23:58.730 --> 00:24:01.610 align:start position:0%
+ 
+ 
+
+00:24:01.610 --> 00:24:03.620 align:start position:0%
+ 
+ 
+
+00:24:03.620 --> 00:24:06.590 align:start position:0%
+ 
+ 
+
+00:24:06.590 --> 00:24:09.919 align:start position:0%
+ 
+ 
+
+00:24:09.919 --> 00:24:13.190 align:start position:0%
+ 
+ 
+
+00:24:13.190 --> 00:24:15.530 align:start position:0%
+ 
+ 
+
+00:24:15.530 --> 00:24:16.760 align:start position:0%
+ 
+ 
+
+00:24:16.760 --> 00:24:18.590 align:start position:0%
+ 
+ 
+
+00:24:18.590 --> 00:24:20.150 align:start position:0%
+ 
+ 
+
+00:24:20.150 --> 00:24:22.990 align:start position:0%
+ 
+ 
+
+00:24:22.990 --> 00:24:25.640 align:start position:0%
+ 
+ 
+
+00:24:25.640 --> 00:24:27.409 align:start position:0%
+ 
+ 
+
+00:24:27.409 --> 00:24:28.970 align:start position:0%
+ 
+ 
+
+00:24:28.970 --> 00:24:29.779 align:start position:0%
+ 
+ 
+
+00:24:29.779 --> 00:24:32.570 align:start position:0%
+ 
+ 
+
+00:24:32.570 --> 00:24:33.979 align:start position:0%
+ 
+ 
+
+00:24:33.979 --> 00:24:37.219 align:start position:0%
+ 
+ 
+
+00:24:37.219 --> 00:24:38.690 align:start position:0%
+ 
+ 
+
+00:24:38.690 --> 00:24:40.489 align:start position:0%
+ 
+ 
+
+00:24:40.489 --> 00:24:42.830 align:start position:0%
+ 
+ 
+
+00:24:42.830 --> 00:24:44.210 align:start position:0%
+ 
+ 
+
+00:24:44.210 --> 00:24:46.580 align:start position:0%
+ 
+ 
+
+00:24:46.580 --> 00:24:48.499 align:start position:0%
+ 
+ 
+
+00:24:48.499 --> 00:24:50.119 align:start position:0%
+ 
+ 
+
+00:24:50.119 --> 00:24:52.279 align:start position:0%
+ 
+ 
+
+00:24:52.279 --> 00:24:53.749 align:start position:0%
+ 
+ 
+
+00:24:53.749 --> 00:24:54.859 align:start position:0%
+ 
+ 
+
+00:24:54.859 --> 00:24:56.359 align:start position:0%
+ 
+ 
+
+00:24:56.359 --> 00:25:02.539 align:start position:0%
+ 
+ 
+
+00:25:02.539 --> 00:25:04.099 align:start position:0%
+ 
+ 
+
+00:25:04.099 --> 00:25:06.289 align:start position:0%
+ 
+ 
+
+00:25:06.289 --> 00:25:09.369 align:start position:0%
+ 
+ 
+
+00:25:09.369 --> 00:25:11.930 align:start position:0%
+ 
+ 
+
+00:25:11.930 --> 00:25:16.549 align:start position:0%
+ 
+ 
+
+00:25:16.549 --> 00:25:18.139 align:start position:0%
+ 
+ 
+
+00:25:18.139 --> 00:25:21.109 align:start position:0%
+ 
+ 
+
+00:25:21.109 --> 00:25:24.499 align:start position:0%
+ 
+ 
+
+00:25:24.499 --> 00:25:26.029 align:start position:0%
+ 
+ 
+
+00:25:26.029 --> 00:25:27.469 align:start position:0%
+ 
+ 
+
+00:25:27.469 --> 00:25:30.249 align:start position:0%
+ 
+ 
+
+00:25:30.249 --> 00:25:33.080 align:start position:0%
+ 
+ 
+
+00:25:33.080 --> 00:25:35.149 align:start position:0%
+ 
+ 
+
+00:25:35.149 --> 00:25:37.009 align:start position:0%
+ 
+ 
+
+00:25:37.009 --> 00:25:37.609 align:start position:0%
+ 
+ 
+
+00:25:37.609 --> 00:25:40.159 align:start position:0%
+ 
+ 
+
+00:25:40.159 --> 00:25:41.749 align:start position:0%
+ 
+ 
+
+00:25:41.749 --> 00:25:44.869 align:start position:0%
+ 
+ 
+
+00:25:44.869 --> 00:25:47.539 align:start position:0%
+ 
+ 
+
+00:25:47.539 --> 00:25:49.129 align:start position:0%
+ 
+ 
+
+00:25:49.129 --> 00:25:51.649 align:start position:0%
+ 
+ 
+
+00:25:51.649 --> 00:25:53.419 align:start position:0%
+ 
+ 
+
+00:25:53.419 --> 00:25:55.099 align:start position:0%
+ 
+ 
+
+00:25:55.099 --> 00:25:56.570 align:start position:0%
+ 
+ 
+
+00:25:56.570 --> 00:25:58.820 align:start position:0%
+ 
+ 
+
+00:25:58.820 --> 00:26:02.239 align:start position:0%
+ 
+ 
+
+00:26:02.239 --> 00:26:03.200 align:start position:0%
+ 
+ 
+
+00:26:03.200 --> 00:26:04.759 align:start position:0%
+ 
+ 
+
+00:26:04.759 --> 00:26:05.930 align:start position:0%
+ 
+ 
+
+00:26:05.930 --> 00:26:07.820 align:start position:0%
+ 
+ 
+
+00:26:07.820 --> 00:26:09.919 align:start position:0%
+ 
+ 
+
+00:26:09.919 --> 00:26:11.119 align:start position:0%
+ 
+ 
+
+00:26:11.119 --> 00:26:15.919 align:start position:0%
+ 
+ 
+
+00:26:15.919 --> 00:26:18.379 align:start position:0%
+ 
+ 
+
+00:26:18.379 --> 00:26:21.200 align:start position:0%
+ 
+ 
+
+00:26:21.200 --> 00:26:23.690 align:start position:0%
+ 
+ 
+
+00:26:23.690 --> 00:26:24.830 align:start position:0%
+ 
+ 
+
+00:26:24.830 --> 00:26:26.659 align:start position:0%
+ 
+ 
+
+00:26:26.659 --> 00:26:28.190 align:start position:0%
+ 
+ 
+
+00:26:28.190 --> 00:26:30.440 align:start position:0%
+ 
+ 
+
+00:26:30.440 --> 00:26:35.719 align:start position:0%
+ 
+ 
+
+00:26:35.719 --> 00:26:38.960 align:start position:0%
+ 
+ 
+
+00:26:38.960 --> 00:26:41.060 align:start position:0%
+ 
+ 
+
+00:26:41.060 --> 00:26:42.529 align:start position:0%
+ 
+ 
+
+00:26:42.529 --> 00:26:43.610 align:start position:0%
+ 
+ 
+
+00:26:43.610 --> 00:26:46.130 align:start position:0%
+ 
+ 
+
+00:26:46.130 --> 00:26:47.720 align:start position:0%
+ 
+ 
+
+00:26:47.720 --> 00:26:50.660 align:start position:0%
+ 
+ 
+
+00:26:50.660 --> 00:26:52.160 align:start position:0%
+ 
+ 
+
+00:26:52.160 --> 00:26:53.990 align:start position:0%
+ 
+ 
+
+00:26:53.990 --> 00:26:56.330 align:start position:0%
+ 
+ 
+
+00:26:56.330 --> 00:26:58.370 align:start position:0%
+ 
+ 
+
+00:26:58.370 --> 00:27:00.560 align:start position:0%
+ 
+ 
+
+00:27:00.560 --> 00:27:05.390 align:start position:0%
+ 
+ 
+
+00:27:05.390 --> 00:27:06.980 align:start position:0%
+ 
+ 
+
+00:27:06.980 --> 00:27:09.020 align:start position:0%
+ 
+ 
+
+00:27:09.020 --> 00:27:13.310 align:start position:0%
+ 
+ 
+
+00:27:13.310 --> 00:27:14.750 align:start position:0%
+ 
+ 
+
+00:27:14.750 --> 00:27:16.430 align:start position:0%
+ 
+ 
+
+00:27:16.430 --> 00:27:19.280 align:start position:0%
+ 
+ 
+
+00:27:19.280 --> 00:27:20.960 align:start position:0%
+ 
+ 
+
+00:27:20.960 --> 00:27:23.419 align:start position:0%
+ 
+ 
+
+00:27:23.419 --> 00:27:25.720 align:start position:0%
+ 
+ 
+
+00:27:25.720 --> 00:27:28.370 align:start position:0%
+ 
+ 
+
+00:27:28.370 --> 00:27:30.740 align:start position:0%
+ 
+ 
+
+00:27:30.740 --> 00:27:32.720 align:start position:0%
+ 
+ 
+
+00:27:32.720 --> 00:27:34.250 align:start position:0%
+ 
+ 
+
+00:27:34.250 --> 00:27:36.200 align:start position:0%
+ 
+ 
+
+00:27:36.200 --> 00:27:38.870 align:start position:0%
+ 
+ 
+
+00:27:38.870 --> 00:27:40.280 align:start position:0%
+ 
+ 
+
+00:27:40.280 --> 00:27:41.510 align:start position:0%
+ 
+ 
+
+00:27:41.510 --> 00:27:43.460 align:start position:0%
+ 
+ 
+
+00:27:43.460 --> 00:27:45.049 align:start position:0%
+ 
+ 
+
+00:27:45.049 --> 00:27:46.940 align:start position:0%
+ 
+ 
+
+00:27:46.940 --> 00:27:48.890 align:start position:0%
+ 
+ 
+
+00:27:48.890 --> 00:27:50.510 align:start position:0%
+ 
+ 
+
+00:27:50.510 --> 00:27:52.430 align:start position:0%
+ 
+ 
+
+00:27:52.430 --> 00:27:55.549 align:start position:0%
+ 
+ 
+
+00:27:55.549 --> 00:27:57.500 align:start position:0%
+ 
+ 
+
+00:27:57.500 --> 00:27:58.910 align:start position:0%
+ 
+ 
+
+00:27:58.910 --> 00:28:03.410 align:start position:0%
+ 
+ 
+
+00:28:03.410 --> 00:28:05.180 align:start position:0%
+ 
+ 
+
+00:28:05.180 --> 00:28:06.500 align:start position:0%
+ 
+ 
+
+00:28:06.500 --> 00:28:08.210 align:start position:0%
+ 
+ 
+
+00:28:08.210 --> 00:28:10.070 align:start position:0%
+ 
+ 
+
+00:28:10.070 --> 00:28:11.480 align:start position:0%
+ 
+ 
+
+00:28:11.480 --> 00:28:14.150 align:start position:0%
+ 
+ 
+
+00:28:14.150 --> 00:28:15.919 align:start position:0%
+ 
+ 
+
+00:28:15.919 --> 00:28:17.570 align:start position:0%
+ 
+ 
+
+00:28:17.570 --> 00:28:19.549 align:start position:0%
+ 
+ 
+
+00:28:19.549 --> 00:28:21.980 align:start position:0%
+ 
+ 
+
+00:28:21.980 --> 00:28:25.880 align:start position:0%
+ 
+ 
+
+00:28:25.880 --> 00:28:27.320 align:start position:0%
+ 
+ 
+
+00:28:27.320 --> 00:28:29.540 align:start position:0%
+ 
+ 
+
+00:28:29.540 --> 00:28:31.070 align:start position:0%
+ 
+ 
+
+00:28:31.070 --> 00:28:32.990 align:start position:0%
+ 
+ 
+
+00:28:32.990 --> 00:28:35.270 align:start position:0%
+ 
+ 
+
+00:28:35.270 --> 00:28:37.580 align:start position:0%
+ 
+ 
+
+00:28:37.580 --> 00:28:38.960 align:start position:0%
+ 
+ 
+
+00:28:38.960 --> 00:28:40.970 align:start position:0%
+ 
+ 
+
+00:28:40.970 --> 00:28:42.680 align:start position:0%
+ 
+ 
+
+00:28:42.680 --> 00:28:44.090 align:start position:0%
+ 
+ 
+
+00:28:44.090 --> 00:28:45.500 align:start position:0%
+ 
+ 
+
+00:28:45.500 --> 00:28:47.870 align:start position:0%
+ 
+ 
+
+00:28:47.870 --> 00:28:51.560 align:start position:0%
+ 
+ 
+
+00:28:51.560 --> 00:28:53.390 align:start position:0%
+ 
+ 
+
+00:28:53.390 --> 00:28:55.790 align:start position:0%
+ 
+ 
+
+00:28:55.790 --> 00:28:55.800 align:start position:0%
+ 
+ 
+
+00:28:55.800 --> 00:28:57.010 align:start position:0%
+ 
+
+
+00:28:57.010 --> 00:29:06.310 align:start position:0%
+ 
+ 
+
+00:29:06.310 --> 00:29:08.140 align:start position:0%
+ 
+ 
+
+00:29:08.140 --> 00:29:14.670 align:start position:0%
+ 
+ 
+
+00:29:14.670 --> 00:29:17.800 align:start position:0%
+ 
+ 
+
+00:29:17.800 --> 00:29:21.040 align:start position:0%
+ 
+ 
+
+00:29:21.040 --> 00:29:22.720 align:start position:0%
+ 
+ 
+
+00:29:22.720 --> 00:29:25.270 align:start position:0%
+ 
+ 
+
+00:29:25.270 --> 00:29:27.190 align:start position:0%
+ 
+ 
+
+00:29:27.190 --> 00:29:31.150 align:start position:0%
+ 
+ 
+
+00:29:31.150 --> 00:29:33.760 align:start position:0%
+ 
+ 
+
+00:29:33.760 --> 00:29:35.230 align:start position:0%
+ 
+ 
+
+00:29:35.230 --> 00:29:37.390 align:start position:0%
+ 
+ 
+
+00:29:37.390 --> 00:29:40.570 align:start position:0%
+ 
+ 
+
+00:29:40.570 --> 00:29:43.660 align:start position:0%
+ 
+ 
+
+00:29:43.660 --> 00:29:44.950 align:start position:0%
+ 
+ 
+
+00:29:44.950 --> 00:29:46.930 align:start position:0%
+ 
+ 
+
+00:29:46.930 --> 00:29:48.820 align:start position:0%
+ 
+ 
+
+00:29:48.820 --> 00:29:51.340 align:start position:0%
+ 
+ 
+
+00:29:51.340 --> 00:29:54.040 align:start position:0%
+ 
+ 
+
+00:29:54.040 --> 00:29:55.930 align:start position:0%
+ 
+ 
+
+00:29:55.930 --> 00:29:58.090 align:start position:0%
+ 
+ 
+
+00:29:58.090 --> 00:29:59.260 align:start position:0%
+ 
+ 
+
+00:29:59.260 --> 00:30:07.020 align:start position:0%
+ 
+ 
+
+00:30:07.020 --> 00:30:10.240 align:start position:0%
+ 
+ 
+
+00:30:10.240 --> 00:30:13.780 align:start position:0%
+ 
+ 
+
+00:30:13.780 --> 00:30:15.640 align:start position:0%
+ 
+ 
+
+00:30:15.640 --> 00:30:20.410 align:start position:0%
+ 
+ 
+
+00:30:20.410 --> 00:30:23.710 align:start position:0%
+ 
+ 
+
+00:30:23.710 --> 00:30:26.200 align:start position:0%
+ 
+ 
+
+00:30:26.200 --> 00:30:28.600 align:start position:0%
+ 
+ 
+
+00:30:28.600 --> 00:30:30.910 align:start position:0%
+ 
+ 
+
+00:30:30.910 --> 00:30:34.510 align:start position:0%
+ 
+ 
+
+00:30:34.510 --> 00:30:36.160 align:start position:0%
+ 
+ 
+
+00:30:36.160 --> 00:30:38.350 align:start position:0%
+ 
+ 
+
+00:30:38.350 --> 00:30:40.930 align:start position:0%
+ 
+ 
+
+00:30:40.930 --> 00:30:42.670 align:start position:0%
+ 
+ 
+
+00:30:42.670 --> 00:30:44.560 align:start position:0%
+ 
+ 
+
+00:30:44.560 --> 00:30:47.770 align:start position:0%
+ 
+ 
+
+00:30:47.770 --> 00:30:49.840 align:start position:0%
+ 
+ 
+
+00:30:49.840 --> 00:30:51.340 align:start position:0%
+ 
+ 
+
+00:30:51.340 --> 00:30:52.900 align:start position:0%
+ 
+ 
+
+00:30:52.900 --> 00:30:55.240 align:start position:0%
+ 
+ 
+
+00:30:55.240 --> 00:30:58.090 align:start position:0%
+ 
+ 
+
+00:30:58.090 --> 00:30:59.410 align:start position:0%
+ 
+ 
+
+00:30:59.410 --> 00:31:01.480 align:start position:0%
+ 
+ 
+
+00:31:01.480 --> 00:31:02.830 align:start position:0%
+ 
+ 
+
+00:31:02.830 --> 00:31:05.350 align:start position:0%
+ 
+ 
+
+00:31:05.350 --> 00:31:07.420 align:start position:0%
+ 
+ 
+
+00:31:07.420 --> 00:31:07.430 align:start position:0%
+ 
+ 
+
+00:31:07.430 --> 00:31:08.080 align:start position:0%
+ 
+
+
+00:31:08.080 --> 00:31:10.029 align:start position:0%
+ 
+ 
+
+00:31:10.029 --> 00:31:11.409 align:start position:0%
+ 
+ 
+
+00:31:11.409 --> 00:31:12.610 align:start position:0%
+ 
+ 
+
+00:31:12.610 --> 00:31:15.549 align:start position:0%
+ 
+ 
+
+00:31:15.549 --> 00:31:17.649 align:start position:0%
+ 
+ 
+
+00:31:17.649 --> 00:31:19.899 align:start position:0%
+ 
+ 
+
+00:31:19.899 --> 00:31:30.970 align:start position:0%
+ 
+ 
+
+00:31:30.970 --> 00:31:34.210 align:start position:0%
+ 
+ 
+
+00:31:34.210 --> 00:31:36.940 align:start position:0%
+ 
+ 
+
+00:31:36.940 --> 00:31:40.090 align:start position:0%
+ 
+ 
+
+00:31:40.090 --> 00:31:45.850 align:start position:0%
+ 
+ 
+
+00:31:45.850 --> 00:31:48.220 align:start position:0%
+ 
+ 
+
+00:31:48.220 --> 00:31:51.940 align:start position:0%
+ 
+ 
+
+00:31:51.940 --> 00:31:54.100 align:start position:0%
+ 
+ 
+
+00:31:54.100 --> 00:31:55.120 align:start position:0%
+ 
+ 
+
+00:31:55.120 --> 00:31:58.149 align:start position:0%
+ 
+ 
+
+00:31:58.149 --> 00:31:59.799 align:start position:0%
+ 
+ 
+
+00:31:59.799 --> 00:32:02.320 align:start position:0%
+ 
+ 
+
+00:32:02.320 --> 00:32:04.600 align:start position:0%
+ 
+ 
+
+00:32:04.600 --> 00:32:06.310 align:start position:0%
+ 
+ 
+
+00:32:06.310 --> 00:32:08.460 align:start position:0%
+ 
+ 
+
+00:32:08.460 --> 00:32:10.990 align:start position:0%
+ 
+ 
+
+00:32:10.990 --> 00:32:13.779 align:start position:0%
+ 
+ 
+
+00:32:13.779 --> 00:32:15.909 align:start position:0%
+ 
+ 
+
+00:32:15.909 --> 00:32:17.409 align:start position:0%
+ 
+ 
+
+00:32:17.409 --> 00:32:20.260 align:start position:0%
+ 
+ 
+
+00:32:20.260 --> 00:32:23.080 align:start position:0%
+ 
+ 
+
+00:32:23.080 --> 00:32:25.450 align:start position:0%
+ 
+ 
+
+00:32:25.450 --> 00:32:27.789 align:start position:0%
+ 
+ 
+
+00:32:27.789 --> 00:32:29.889 align:start position:0%
+ 
+ 
+
+00:32:29.889 --> 00:32:30.850 align:start position:0%
+ 
+ 
+
+00:32:30.850 --> 00:32:32.680 align:start position:0%
+ 
+ 
+
+00:32:32.680 --> 00:32:35.380 align:start position:0%
+ 
+ 
+
+00:32:35.380 --> 00:32:37.600 align:start position:0%
+ 
+ 
+
+00:32:37.600 --> 00:32:39.490 align:start position:0%
+ 
+ 
+
+00:32:39.490 --> 00:32:42.669 align:start position:0%
+ 
+ 
+
+00:32:42.669 --> 00:32:44.289 align:start position:0%
+ 
+ 
+
+00:32:44.289 --> 00:32:46.680 align:start position:0%
+ 
+ 
+
+00:32:46.680 --> 00:32:49.870 align:start position:0%
+ 
+ 
+
+00:32:49.870 --> 00:32:52.120 align:start position:0%
+ 
+ 
+
+00:32:52.120 --> 00:32:52.130 align:start position:0%
+ 
+ 
+
+00:32:52.130 --> 00:32:52.750 align:start position:0%
+ 
+
+
+00:32:52.750 --> 00:32:54.399 align:start position:0%
+ 
+ 
+
+00:32:54.399 --> 00:32:59.880 align:start position:0%
+ 
+ 
+
+00:32:59.880 --> 00:33:03.810 align:start position:0%
+ 
+ 
+
+00:33:03.810 --> 00:33:09.289 align:start position:0%
+ 
+ 
+
+00:33:09.289 --> 00:33:12.269 align:start position:0%
+ 
+ 
+
+00:33:12.269 --> 00:33:15.389 align:start position:0%
+ 
+ 
+
+00:33:15.389 --> 00:33:18.690 align:start position:0%
+ 
+ 
+
+00:33:18.690 --> 00:33:21.360 align:start position:0%
+ 
+ 
+
+00:33:21.360 --> 00:33:24.570 align:start position:0%
+ 
+ 
+
+00:33:24.570 --> 00:33:26.940 align:start position:0%
+ 
+ 
+
+00:33:26.940 --> 00:33:32.370 align:start position:0%
+ 
+ 
+
+00:33:32.370 --> 00:33:34.710 align:start position:0%
+ 
+ 
+
+00:33:34.710 --> 00:33:36.180 align:start position:0%
+ 
+ 
+
+00:33:36.180 --> 00:33:38.279 align:start position:0%
+ 
+ 
+
+00:33:38.279 --> 00:33:40.289 align:start position:0%
+ 
+ 
+
+00:33:40.289 --> 00:33:42.299 align:start position:0%
+ 
+ 
+
+00:33:42.299 --> 00:33:44.430 align:start position:0%
+ 
+ 
+
+00:33:44.430 --> 00:33:47.490 align:start position:0%
+ 
+ 
+
+00:33:47.490 --> 00:33:49.500 align:start position:0%
+ 
+ 
+
+00:33:49.500 --> 00:33:52.889 align:start position:0%
+ 
+ 
+
+00:33:52.889 --> 00:33:55.110 align:start position:0%
+ 
+ 
+
+00:33:55.110 --> 00:33:56.789 align:start position:0%
+ 
+ 
+
+00:33:56.789 --> 00:33:58.860 align:start position:0%
+ 
+ 
+
+00:33:58.860 --> 00:34:00.840 align:start position:0%
+ 
+ 
+
+00:34:00.840 --> 00:34:02.580 align:start position:0%
+ 
+ 
+
+00:34:02.580 --> 00:34:04.529 align:start position:0%
+ 
+ 
+
+00:34:04.529 --> 00:34:07.350 align:start position:0%
+ 
+ 
+
+00:34:07.350 --> 00:34:11.280 align:start position:0%
+ 
+ 
+
+00:34:11.280 --> 00:34:15.000 align:start position:0%
+ 
+ 
+
+00:34:15.000 --> 00:34:16.530 align:start position:0%
+ 
+ 
+
+00:34:16.530 --> 00:34:19.470 align:start position:0%
+ 
+ 
+
+00:34:19.470 --> 00:34:21.000 align:start position:0%
+ 
+ 
+
+00:34:21.000 --> 00:34:24.030 align:start position:0%
+ 
+ 
+
+00:34:24.030 --> 00:34:25.740 align:start position:0%
+ 
+ 
+
+00:34:25.740 --> 00:34:27.780 align:start position:0%
+ 
+ 
+
+00:34:27.780 --> 00:34:29.700 align:start position:0%
+ 
+ 
+
+00:34:29.700 --> 00:34:31.649 align:start position:0%
+ 
+ 
+
+00:34:31.649 --> 00:34:33.510 align:start position:0%
+ 
+ 
+
+00:34:33.510 --> 00:34:36.270 align:start position:0%
+ 
+ 
+
+00:34:36.270 --> 00:34:38.040 align:start position:0%
+ 
+ 
+
+00:34:38.040 --> 00:34:39.570 align:start position:0%
+ 
+ 
+
+00:34:39.570 --> 00:34:41.070 align:start position:0%
+ 
+ 
+
+00:34:41.070 --> 00:34:44.369 align:start position:0%
+ 
+ 
+
+00:34:44.369 --> 00:34:46.169 align:start position:0%
+ 
+ 
+
+00:34:46.169 --> 00:34:47.579 align:start position:0%
+ 
+ 
+
+00:34:47.579 --> 00:34:49.230 align:start position:0%
+ 
+ 
+
+00:34:49.230 --> 00:34:51.060 align:start position:0%
+ 
+ 
+
+00:34:51.060 --> 00:34:53.730 align:start position:0%
+ 
+ 
+
+00:34:53.730 --> 00:34:56.430 align:start position:0%
+ 
+ 
+
+00:34:56.430 --> 00:35:00.160 align:start position:0%
+ 
+ 
+
+00:35:00.160 --> 00:35:00.170 align:start position:0%
+ 
+ 
+
+00:35:00.170 --> 00:35:02.230 align:start position:0%
+ 
+
+
