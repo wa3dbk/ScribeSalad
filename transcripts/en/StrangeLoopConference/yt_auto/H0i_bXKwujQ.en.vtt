@@ -1,0 +1,4224 @@
+WEBVTT
+Kind: captions
+Language: en
+
+00:00:04.870 --> 00:00:06.610 align:start position:0%
+ 
+I'm gonna talk to you guys this  afternoon about building scalable  stateful services okay  so um I'm kidding McCaffrey if you don't  know me I'm a distributed systems  engineer I currently work at Twitter and  I'm the tech lead for observability  there and then prior to that in a former  life I spent a really long time working  in the games industry on a variety of  different games building out services  that powered those experiences so what  I'm going to talk to you guys today is  some lessons learned in building  stateful services and not databases and  caches but actually bringing state into  our actual services and the benefits and  why we may want to do that and why it's  beneficial moving forward oh that's like  me on the Internet I will talk to you on  the Internet so if you want to do that  hit me up so we've been in this paradigm  of programming state less services and  this has worked really well for about  the last five to ten years and we like  your service is stateless and so then as  you get more clients or customers or  users of your API you just add another  service and you scale out horizontally  and this works pretty well and we use  these databases that we talk to to store  the canonical source of truth to be our  history to be like the you know the the  rock and are in our system that stored  all of our states so that our services  didn't have to think about it and this  works okay and did for a while but the  problem is is like our services do have  state the applications we're building  have state and we've been you relying on  this abstraction if it's all like  covered in this database and that gave  us really strong consistency but we  started to hit these limits where one  database doesn't cut it anymore and so  we've gone into this no sequel world or  we were or were sharding you know  relational databases and we're giving up  some of these more strongly consistent  properties and this abstraction of all  of the data living and being taken care  of by the database is leaky now it's  leaking into our services because what  we're actually doing when we have these  states we have state that we're using in  stateless services is we have a client  making a request in the data shipping  paradigm and so I go to the database and  it sends me some data back and then I  answer the request and then I'm going to  return  the result and then this data that I  transferred over the network is just  gonna go away and then the next time the  client makes a similar request operating  on a similar set of data it's gonna do  the exact same thing but it got load  balance to a different machine this time  and so now we've like God and pulled the  same data across the network onto a  different machine to answer the request  for the same user and then it gets  thrown away again and so this can keep  going on and on and so for applications  where we have these chatty clients that  are operating over a session over a  duration or a period of time like think  in games think in any of these  applications where it's doing something  for you like ordering a car or tracking  your fitness workout or your like  communication something about your state  or your location to the service you're  mostly just talking about yourself  because we all like to talk about  ourselves and so these applications are  operating on the same set of state and  like pulling them into all these  different services load balancing  between can be pretty wasteful so I'm  going to talk to you about how you might  want to think about building state full  services and some of the benefits you  can get from them and I'm gonna caveat  this upfront this is not like a magic  panacea that you want to use all the  time stateless services are still  incredibly effective in horizontal  scalability is something that you still  want to be able to do but you can get  some really nice benefits well then talk  about how you want to go and build these  and start thinking about the trade-offs  you're gonna have to make while building  them and then we'll give you some  real-world examples of some cool systems  they're actually running in production  today and doing very well that have  become a stateful for a variety of  different reasons and then I'll give you  a quick cautionary like road map of  things you might want to watch out for  that are different than building state  less services so if you try to do this  at home these are things that pop up  that you may not think about okay so the  big benefit I see in state full services  is you have data locality so data  locality is this idea that you ship the  request to the machine that holds the  data to operate on it and I want to do  this for a couple reasons one I get low  latency I don't have to go and hit the  database which is the canonical source  of truth still probably at a service  every single time I just have to hit it  whenever I don't happen to have the  state I need on  machine and then so it's providing lower  latency because we're doing less Network  calls it's also really great for data  intensive applications where a client  needs to operate over a bunch of data  and like have very quick response times  so this is relying on the function  shipping paradigms this is the idea of  if a client makes a request or starts a  session we still have to go to the  database the first time to get the data  and it moves into our service but then  once that request has been handled we  leave that data on the service and then  the next time the client makes a very  similar request which is gonna operate  on that data it just has to talk to the  same machine that it just that it  already pulled the data on to and then  this way I don't have to go to my  database I'm not actually adding extra  latency image my databases down I can  still handle this request right and then  the same thing happens like over and  over again as long as I keep not needing  to go back to the database as long as I  can talk to the same machine that my  data already lives on this is a nice  world to live in another benefit of  stateful services if you build them  using sticky connections is you can get  more available consistency models and  I'll sort of walk through this so I  think we're all pretty familiar with the  cap theorem this is the idea that you  have consistency availability and  partition tolerance pick two you don't  not get to pick partition tolerance  because physics and so in a in this  world when we have different levels of  consistency that we operate against some  are not available or not highly  available right like they have our CP  systems they are only on offered under  CP systems and then if we want to have  highly available forms of consistency  you basically get right from reading  monotonic read and monotonic right this  is sort of like an induction tree but if  we have sticky connections where the  data for from a single user and like in  the single model is always talking to  the same machine then you can have these  other consistency models that are  stronger consisting guarantees like read  your rights pipeline random access  memory and causal consistency are a bit  like AP in the CapSense and so this is  actually really nice one of the first  times I sort of came across this idea  was a blog post that Werner Vogel wrote  in 2007 from Amazon entitled eventual  consistency  see revisited and so he starts talking  about building sticky connections in the  sense of like Amazon's Amazon DynamoDB  and the one of the points that he makes  in addition to these consistency models  is you're giving your clients sort of a  nicer framework to reason about instead  of having to think about oh my data may  be pulled into all these different  machines and all this crazy concurrency  is having on if you just have your  client talking to the same server  because you have a sticky connection  it's a little easier to reason about so  it helps us out when we're programming  distributed systems models okay so so  those are some of the benefits let's  talk about how you may want to go about  building these so that you can take  advantage of data locality so you might  be able to take advantage of some of  these better consistency models that it  and still be available so the the basic  idea behind a CV connection is it is  exactly what it sounds like we have a  client who's going to make a request to  a cluster of servers and they're always  going to get routed to the same server  somehow they're always going to talk to  the same server for their session or  whatever the duration of what you're  doing is going on so the dumbest and  easiest to implement way is just to open  up a persistent connection so this could  be you know you open up a persistent  HTTP request or you open up a persistent  tcp channel or pick your protocol of  choice it's super easy to implement so  then you'll always be sent to the same  machine because you're always talking to  that machine over the same connection  for the length of the session however it  does have some problems associated with  it obviously once the connection breaks  the stickiness is gone and you're gonna  get like round-robin to another server  but the bigger problem here I think and  that I've actually encountered in  production that's caused outages is load  balancing when you do this you're  essentially making an assumption that  all of these sessions all these sticky  connections sort of last for the same  amount of time and are gonna cause your  seat or your conservator talking to you  the same amount of load and that's not  generally the case so what you need to  do you can easily overwhelm a single  server by having a persistent connection  to many persistent connections sort of  dogpile on one server that are very  expensive or last for a really long time  or doing a ton of work because you just  happen to have a bunch of chatty clients  and that machines gonna like go down  real hard if you do not implement back  pressure so I highly recommend or would  say it's a requirement  building persistent connections that you  need to implement back pressure on these  machines so that they can break  connections when they're overwhelmed  this way the client then has to  reconnect um you could also in addition  do some smarter load balancing logic to  say like hey connect to a machine that  has like the most resources free but you  still need back pressure that's like a  bare minimum requirement for persistent  connections if you want to do something  a little smarter and oh this this is  more beneficial you can implement some  routing logic in your cluster so this is  the idea that a client can talk to any  server in the cluster and then it will  be routed to the server that has its  data that's going to answer its requests  where it's going to perform its  computation and there's two sort of  categories of problems I think about  when solving routing logic in services  is you have cluster membership who is in  my cluster and like how do I determine  like what machines are actually  available to be talked to and then work  distribution how am I going to  distribute load across this cluster  right and so we're going to go through  those because there's actually a variety  of different choices and they have  different impacts and trade-offs with  them so once again the dumbest thing you  can do the easiest thing you can do  which sometimes works right like I'm  always a big fan of starting with the  dumbest thing possible and then seeing  if it meets your needs is using static  cluster memberships this is literally  like a config file that you deploy in  your cluster that has all the addresses  of the nodes and the machines in it and  this works for certain scenarios  although it does have problems it's not  super fault tolerant so if a machine  goes down you essentially have to  replace that machine if you want to  expand a cluster from an Operations  perspective this becomes incredibly  painful because you essentially have to  take down the entire cluster and then  bring it back up in order to do the load  balancing correctly or in order to do  the work distribution correctly oops  sorry  animations so what's going on here is  that this is easy to do but it's  operationally painful and it's also not  a great choice for services that have to  be highly available where you can't  tolerate downtime where you have really  strict SLA s so sort of the next better  thing you can do is dynamic cluster  membership and so this is just the idea  that I  add and remove nodes on the fly from the  cluster and then when I just want to  because of failure or I want to add  capacity they'll just get added to the  cluster and they'll start immediately  taking load and vice versa if one fails  or you know one needs to you can reduce  capacity for whatever is in so there's  sort of two main big ways of doing  dynamic cluster membership that I've  seen work there's gossip protocols so  this is the idea that it's a protocol  design where the machines are gonna chat  just like you sort of would with your  friends and knowledge spreads throughout  a social group and they're gonna chat  about who they can talk to you and who's  alive and who's dead and then each  machine on its own will figure out its  worldview of who it thinks is in the  cluster and so it's just deciding based  on the messages that it happens to have  received and in sort of like a stable  state or a non failure mode environment  we're not a lot of churn is happening  all of the machines in the cluster will  stabilize to have the same worldview of  everyone being who's alive is alive and  everyone who's dead is dead in the case  where you have a bunch of network  failures capacity is being added or like  you have a partition in your network  different machines in the cluster can  actually have different world views of  who is in the cluster so this causes a  bit this is like one of the trade-offs  that you need to make with dynamic  cluster membership is if you want high  availability right like these machines  don't have to coordinate to figure out  who's in the cluster they can each  independently make a decision based on  the knowledge that they currently have  then then you use a gossip protocol but  your code and your applications need to  be able to tolerate this partition or  this uncertainty where work may be  getting routed to different nodes for  brief periods of time during failure  conversely if you need really strong  consistency and sort of cluster  membership like everyone needs to have  exactly the same worldview you want to  use a consensus system to do this and so  you just you know you do this like in a  typical way you interact with the  consensus system it controls the  ownership of everyone who's in the  cluster and then when that changes like  everyone goes and updates their  worldview based on the consensus system  that's holding the truth of like cluster  membership the problem with this is that  once again if that consensus system  isn't available the nodes can actually  route work because they don't know who's  in the  stur it's also going to be slower right  because you're adding coordination to  your system so sort of like Peter valus  talked about right like we sort of want  to avoid this unless we necessarily need  it so I would sort of say this is the  last resort when you're designing  dynamic cluster membership if you need  highly available systems and then  finally I want to talk the second  problem is work distribution right and  there's a couple of different methods  I'm gonna go through three there's  random placement consistent hashing and  distributed hash tables for determining  how to move work throughout your cluster  random placement sounds super dumb but  it actually can be really effective in  certain scenarios so this is the idea of  I get to write to anywhere in the  cluster so when I'm sending you're right  from my client any machine that has  capacity just takes it and then on read  I go and I have to actually read from  every single machine in the cluster to  get the data back so this isn't actually  a sticky connection but it is a stateful  service in the sense of this is a good  way to build like in-memory indexes and  caches and I'll actually get to a  real-world example that does this and  like how it's used in the real world  because it sort of sounds stupid if  you're looking at just this example it's  hard to understand like why it would  ever work but it is nice where you have  a lot of data and your queries are  operating a large amount of data that is  gonna be distributed over the entire  cluster I think one that is probably  more familiar to people is consistent  hashing this came out of a paper in 1997  from the World Wide Web about how to  distribute workloads the basic idea here  is you have deterministic placement of  your requests and we've now mapped our  nodes that are in the cluster to the  same hash space as the requests that are  coming in and so your hashing your  request based on like whatever the  session ID is or whatever the user ID is  depending how you want to partition your  workload and so then you just add the  nodes get mapped to the cluster and then  as a request comes in it also gets  hashed on to the ring and then you walk  right to find the node that's actually  going to execute it for you this is  really popular a lot of databases use  this so like Amazon DynamoDB uses this  Twitter's Manhattan database uses this I  believe Cassandra uses this this is  pretty pretty basic database we  distribution because it is deterministic  placement but the problem with the  termina stick placement especially in  services where users are coming and  going and I don't necessarily need to  keep your data in memory all of the time  like a database does the problem with  this is that you can have hotspots right  you can run into the same problem where  if your requests are not like evenly  distribute or even if they are evenly  distributed because this is a hash they  actually have different different  weights in terms of like the amount of  work that they're gonna do based on like  what each user wants to request and so  you could easily end up with a hot node  or you could just have a node that's  kind of slow in your cluster and so like  it's gonna get overwhelmed for a variety  of reasons because like you know maybe  it's discs or going bad or whatever  there's like a but should think  different things that can happen and so  this does not allow you to move work if  a machine gets overloaded so you have to  allocate enough space in your cluster to  run with enough Headroom to like  tolerate the fact that this is  deterministic and you can't move work so  you're paying an additional cost to have  extra capacity sitting around even in  the normal case so finally I wanna talk  about distribute hash tables for work  just placement so the idea here is that  I'm going to use a hash again to look up  into a distributed hash table where I  should execute this work and so that  what happens is then I just look at this  holds a reference to the node that I'm  gonna go talk to you that's in my  cluster and then if this is this is  non-deterministic placement right  because there's nothing that's forcing  me to always go to note a I could easily  remap this client in my system to go to  node B or node C should note a become  too hot or unavailable for some reason  and so this actually has a lot of nice  properties and I'll get to an example in  the real world where this works very  well  okay so let's talk about stateful  services in the real world I'm gonna  give you an overview of free that I  think are particularly interesting and  that's sort of exhibit a the range of  some of the stuff that we just talked  about in terms of different ways you can  configure and build your cluster out so  scuba is from Facebook  it's an in-memory database that they  built and basically this is its this  runs a lot of the workhorse for their  query and analytics and revenue and  performance debugging and has to be very  very fast and has to be always available  because they're doing things like on the  fly right and so and I believe they use  static cluster membership although I  don't think the paper actually says that  but from what I've inferred from what  I've seen I think it's static cluster  membership so basically what happens is  they do this random fan-out on right so  it's gonna write to any machine that  happens to have it and then it's going  to on read query every single machine in  the cluster when it's executing a query  and then they're going to then all these  results come back in they get composed  by the machine that's like running the  query and then when the results are  returned to the user a completeness  metric is also returned so what's cool  about this is like in order to get 100%  of the data and to know that your query  actually executed correctly and you have  all the results every machine in the  cluster would have to be available but  like we live in a real world and that's  never the case and so what they did is  they built this in from the start to say  I'm gonna tell the the requester what  percentage of data that I have been able  to successfully retrieve data from and  then this allows them to decide if  that's acceptable amount of uncertainty  and so I think that's actually really  really cool there's a paper on scuba if  you want to go read more but this is  actually a pretty neat system so they're  not using sticky but they connections  that they are using in memory for very  very fast data lookups another really  interesting stateful service that is  sort of come out in the last year is  over built this thing called Ring Pop  and what it is is it's an odious library  that allows them to do sort of like  application layers charting for their  dispatcher platform services and so the  reason they built this is because if you  think about what the app is doing like  when you're ordering a car is it  talking to the service and it's gonna  like send your information and your  location and then throughout the  duration of the ride it's gonna send you  more  you're gonna update it with your  location and information and then it has  to process a bunch of payment and your  drivers stuff and if you were getting  load balance to different servers every  single time and that data was constantly  being persisted to the database and then  pulled back in on every request that's a  ton of latency on the service and it's a  ton of extra load on the database so  what they did is they went and  implemented routing logic into this  cluster and so that they can have all of  your requests for your session directed  to a single machine and so they do this  via using the swim gossip protocol for  cluster membership right so this is this  is an AP customer membership thing so  it's not always guaranteed to be totally  correct but they made the choice to  always be available because they'd  rather have you be able to order a car  then like to tell you like sorry we  can't deal with this cuz leg zookeepers  down and then they also use consistent  hashing for doing work distribution  throughout the cluster and so once again  this has the problem where you can have  hot nodes and there's really nothing you  can do except for add more capacity to  the cluster in that case even if you  have a bunch of nodes that are  underutilized this is a really cool  project I highly recommend checking it  out it's open source on github and there  have been a couple extra talks and stuff  around it if you want to know more  finally I want to talk about Arlene's  so Arlene's is a programming model and  runtime for building distributed systems  based on the actor model this came out  of Microsoft research from the extreme  computing group there and I actually had  the pleasure of working with this group  to productionize Arlene's when we  shipped halo 4 so we rebuilt all of the  halo 4 services primarily based on  Arlene's and I've talked about Arlene's  before and I've talked about the actor  model before and I'm just gonna give you  a quick overview so if you are  unfamiliar that you understand what's  happening but really I want to talk  about the routing logic in the system  because it's very cool and it's sort of  how our leans does a lot of its magic so  it's actually happening an actor/model  is this idea for concurrent computation  where actors are the core unit of  computation actors can communicate with  one another by passing asynchronous  messages to each other throughout the  cluster and when an actor receives an  asynchronous message it can do one of  three things  or all of them it can send new messages  or as many as it once it can update its  journals in its internal state and it  can create new actors so essentially  what you end up having in a cluster  running in any kind of actor model is a  bunch of little state machines that are  running and so you are inherently  building stateful services when you're  using the actor model if they are  persisting any state between requests  and we use this very heavily at halo we  use them like in a little in memory  right through caches so how this  actually works though is we just deploy  a bunch of machines and Orleans runtime  takes care of the rest and so when we  got a request it would go to any machine  in the cluster and then the cluster  would actually look up where the actor  lived in the cluster and wrap that  message to it and there's like thousands  hundreds of thousands of actors on any  clock on any single machine in the  cluster so the way they do this is that  use a gossip protocol for cluster  membership because we chose to be highly  available there's actually I think now  that Orleans has been open sourced a  zookeeper implementation of cluster  membership but that's slower and so  you're not going to get the performance  benchmarks that are outlined in the  Orleans paper um and then it for work  distribution it does this interesting  combination of consistent hashing and a  distributed hash table that I'm going to  walk through because I just think it's  neat and I haven't seen many other real  world systems use this so this is our  aleene's cluster we have six machines  and then there's a bunch of actors  running on any machine I'm gonna get a  request from a client that says hey I  need to send a message to this actor in  this ID and so then what a releases  runtime is going to do is apply a  consistent hash to that actor ID and  that's going to tell it where the  distributed hash table for that ID is  located in the cluster so I'm gonna go  and then go to the machine that has the  distributed hash table entry for my  actor this will then tell me which  machine my actor physically lives on and  then the request can get routed to that  machine so this is this is cool because  the consistent hashing part where you're  doing the distributed hash table lookup  is deterministic and so that's going to  be consistent throughout the lifetime of  and after and in the cluster it's not  going to change but this is okay because  when you think about a distributed hash  table like you're just storing the key  which is the actor ID and the Machine  look  which is just an address and it's the  same for every single node in the  cluster so this is like actually very  evenly distributed and balanced workload  however what our actors are doing is not  necessarily evenly distributed in  balance because even different types of  actors can run in Orleans clusters and  so we wanted to make sure that if a  machine becomes hot or leans can help  like rebalance the cluster for you so  what happens is say that machine got too  hot or the session died and then the  client comes in the same client comes in  it'll ask like hey I need to talk to  this my actor again and so it'll get  routed to the same distributed hash  table or the same node it's piece of the  distributed hash table and then that  know the dish read hash table entry has  now changed the aleene's cluster has  actually updated it to say hey it's now  on this machine and it does that for a  couple of reasons one like the machine  that you were talking to you before  failed or the machine the actor you were  talking to you before got like evicted  from memory because no one was talking  to it for a while or you your machine  was running way too hot and Arlene's  decided hey I'm gonna move this for you  so that machine doesn't get overwhelmed  and fall over and I'm gonna use some of  this capacity that's not being used on  this other machine this is one of the  core reasons that we were able to run  our lanes clusters in production at 90  to 95 percent CPU utilization across the  cluster so we were using the entire box  because we were able to move work around  in a non-deterministic fashion so I  think that was pretty cool and I think  it's like I would not recommend doing  this for like a database but it is  really neat when you start thinking  about pulling state into services okay  so finally I'm gonna talk about some  things that are how you might run into  trouble or like gotchas that you might  not think of because you've been  building stateful or stateless services  for a long time so I think we all know  or we should all know that unbounded  queues are essentially like the devil  and distributed systems and will like  kill you really really fast because  you're making implicit assumptions in  state full services unbounded data  structures like in-memory data  structures on the box are like are this  bad they will like hurt you really  really fast because and we don't  generally think about this I think in  state less services because if you bound  your inputs on any request then you're  saying it's assuming that you're  processing a reasonable  sized amount of data on every request  and then that data structure you create  for that request is generally garbage  collected or evicted from memory at the  end of that request when you have state  full services and you're persisting a  bunch of stuff over over a span of  requests you need to put an explicit  bound on here because these could grow  you know unbounded Li and then you run  on a memory on your machine or your  garbage collector gets really sad and  decides it's gonna stop the world and  garbage collects for a really long time  and then that node essentially looks  dead so this is something that you sort  of have to work out I've actually seen  production machines go down because this  assumption that like we would never run  out of memory and our clients would only  a send us a reasonable amount of things  over a stretch of a session like didn't  happen cuz clients are not your friends  they're not gonna do what you want them  to you're also gonna have to deal with  memory management and you do have to  deal with this in stateless service to  some extent but you don't have to tune  generally as much so basically because  we're in a stateful world and we're  persisting data for the lifetime or for  the lifetime of the session which could  be you know minutes hours whatever days  even things are going to get persisted  into the lowest center or the the  longest live generation of garbage  collection so like g2 and the CLR and so  at this point that's generally more  expensive to collect especially if you  have a bunch of references that are  spanning generations of your garbage  collector that's gonna get really  expensive to collect and so you sort of  have to understand stateful services and  be aware of how your garbage collector  is actually running or you could just  say totally I'm not gonna even worry  about it and go and implement unmanaged  code like scuba is all in C++ I believe  and so they like don't even deal with  the garbage collector problem so like  Orleans runs dotnet CLR and so that is  the garbage collected thing we did run  into this problem but we were able to  work with our garbage collector and tune  it and also realize we were just  persisting a lot of state that we never  used and so we sort of cleaned up our  requests but you have to be a little  more careful about what you actually are  persisting because this does have an  Associated cost with it  and then finally the sort of last Gacha  is this idea of reloading state  typically like in state less services  you're going to go to the database every  single time and so you tune your latency  to be acceptable based on like having a  round trip right or you stick a cache in  there to make it better in state full  services there's actually a variety of  different cases you can have the first  connection of this session so that's  actually generally gonna be your most  expensive connection because there is no  data in in anywhere in your service  because it's probably been evicted if  someone hasn't been talking to you for a  while or ever before so you have to go  get all this data from the database you  have to pull it in so that they can  start answering this the startup request  and this could take a long time unless  you're careful you want to be very  selective about what you load on startup  because you want it to look as close to  normal requests as possible the best way  to sort of benchmark and test this is to  use percentiles very heavily because  your average request latency is actually  gonna look really really good because  you don't have to round-trip to the  database every single time once you've  loaded it into memory and so but and you  will really only detect that your first  connection startup time is really long  if you use percentiles another sort of  gotcha with first connections is  typically with state less services I'm  going to make a request and if the  request times out because I'm taking too  long to talk to the database I'm then  just going to like cancel the requests  on the database and not pull that state  into memory but with state full services  you know the clients going to come back  and ask you for that data like you know  right away again  and so you might as well just keep  pulling it into memory even if the first  request has failed and that client has  timed out because then they're just  gonna ask for it again on a retry and it  will get routed to the same machine and  then the data will just be there and it  will be fast so like typically in Halo  we had this issue where I think on games  startup sometimes like the first  connection would actually timeout and so  we just kept pulling the data in from  the database and then the next time the  game box actually retried it would  succeed if we're talking you know like  hundreds of milliseconds of time and  this actually wasn't user noticeable  especially since there was a really  pretty animation playing on the screen  for them to watch and so then by the  time it was like distract and then we  got to do our things on the services and  so-and-so them by the time they came  back the second time we just kept  pulling the data that we needed  especially if it was like a player who  had played a lot or we had tunnel load B  just because our azor table we were like  stressing that connection this worked  really really well for us  another thing that's gonna cause  problems in terms of like reloading  state is recovering from a crash so if  you have to like rehydrate an entire box  after recovering from a crash that could  be expensive if you're not just like  lazily loading everything and sometimes  you can get away with lazy loading and  sometimes you can't and then in the same  instant wave deploying new code you're  gonna have this problem or you have to  put take down an entire box and bring up  a whole nother box and if you can't in  like not a terminus tically place things  or you don't have dynamic clusters  membership then this is also gonna cause  problems for you so one interesting way  to solve this that we sort of came  across was or that I've come across is  that Facebook published a paper called  fast restarts at Facebook and this was  actually designed for their scuba system  because they had the same problem they  had this in memory database that was  holding like a ton of memory in data  that was persisted to hard disk and so  on a rack rack or on a deploy they would  like take down the machine the process  that was currently running and they  would spin up a new machine and then  they would have to read everything from  disk and this took hours like per  machine and because of their SL lays  they had to do a very slow rolling  restart of the entire cluster that took  I think up to 12 hours so this is gonna  slow your development team down a lot  there's not a whole lot you can do to  get away from that on a crash restart  but hopefully that happens fairly  infrequently deploying code though  happens really really frequently or we'd  like to tap in frequently because it  allows us to iterate faster and try new  ideas and do less risky deployments so  they made this key observation that you  can actually decouple the memory  lifetime of a process especially or  memory lifetime from the process  lifetime especially in a state full  service right so when they want to just  deploy new code and they knew it was a  safe shutdown in memory wasn't corrupted  because like I told the process to  shutdown it didn't crash then they would  stop taking requests they would actually  copy all of the data from the current  running process into shared memory and  they would shut down the old process and  bring up the new process which would  then copy the data from shared memory  back into like the processes memory  space and then they would start taking  requests this took minutes and so they  got their cluster research that time  below down to like two  this allows them to deploy much more  frequently than they were able to before  so that's I think just like a really  easy trick that is really cool and we're  actually looking at implementing it on  one of the services that my team is  responsible for at Twitter because we  have sort of like an index that does is  very stateful and when you have to  restart a whole machine have to go and  talk to our Manhattan database and  that's really slow right  compared to memory so in conclusion I  hope I've sort of painted a picture of  why you may want to start bringing state  into your actual services and not just  relying on your databases there are some  really nice properties like data  locality and available consistent more  available consistency mechanisms that  you can get there is a ton of thought  that needs to be put into cluster  membership and work distribution and I  don't have one right answer for you  although I tend to lean very much  towards the available side so I would go  with gossip protocols and then work  distribution it's really going to depend  on the workload that you're using there  are a bunch of these successful stateful  real world systems out there that are  running and so like it's been proven at  scale that you can do this and so it's  not necessarily super scary although it  is new ground and then finally be  cautious this is new territory if you  haven't done staple services before go  through what is different what has  changed what assumptions are you making  and make sure you make them explicit and  then finally I have a sort of like this  is new space and like people aren't  doing this so should I even bother  reading papers yes yes you should  because most of what I have talked about  has actually just come from database  literature and so this problems are  already solved for you and you don't  have to actually even be like the nice  thing about implementing services you  get to cherry-pick what you care about  based on your application state and so  you don't even have to go and implement  the whole paper you can just pick the  piece of the paper that you like and  that problem is probably solved for you  so I highly recommend reading papers do  not reinvent your own protocols this is  actually not new territory people have  been working on this since like the 60s  and 70s um finally I want to say thank  you to some people who helped me out  with this talk Kyle Kingsbury Chris  Mikkel John Thompson Taryn eNOS Umbra  thank you guys so much for all of your  help and I that is all I have for you so  I think we have time for like one  question  you
+
+00:00:06.610 --> 00:00:08.139 align:start position:0%
+I'm gonna talk to you guys this  afternoon about building scalable  stateful services okay  so um I'm kidding McCaffrey if you don't  know me I'm a distributed systems  engineer I currently work at Twitter and  I'm the tech lead for observability  there and then prior to that in a former  life I spent a really long time working  in the games industry on a variety of  different games building out services  that powered those experiences so what  I'm going to talk to you guys today is  some lessons learned in building  stateful services and not databases and  caches but actually bringing state into  our actual services and the benefits and  why we may want to do that and why it's  beneficial moving forward oh that's like  me on the Internet I will talk to you on  the Internet so if you want to do that  hit me up so we've been in this paradigm  of programming state less services and  this has worked really well for about  the last five to ten years and we like  your service is stateless and so then as  you get more clients or customers or  users of your API you just add another  service and you scale out horizontally  and this works pretty well and we use  these databases that we talk to to store  the canonical source of truth to be our  history to be like the you know the the  rock and are in our system that stored  all of our states so that our services  didn't have to think about it and this  works okay and did for a while but the  problem is is like our services do have  state the applications we're building  have state and we've been you relying on  this abstraction if it's all like  covered in this database and that gave  us really strong consistency but we  started to hit these limits where one  database doesn't cut it anymore and so  we've gone into this no sequel world or  we were or were sharding you know  relational databases and we're giving up  some of these more strongly consistent  properties and this abstraction of all  of the data living and being taken care  of by the database is leaky now it's  leaking into our services because what  we're actually doing when we have these  states we have state that we're using in  stateless services is we have a client  making a request in the data shipping  paradigm and so I go to the database and  it sends me some data back and then I  answer the request and then I'm going to  return  the result and then this data that I  transferred over the network is just  gonna go away and then the next time the  client makes a similar request operating  on a similar set of data it's gonna do  the exact same thing but it got load  balance to a different machine this time  and so now we've like God and pulled the  same data across the network onto a  different machine to answer the request  for the same user and then it gets  thrown away again and so this can keep  going on and on and so for applications  where we have these chatty clients that  are operating over a session over a  duration or a period of time like think  in games think in any of these  applications where it's doing something  for you like ordering a car or tracking  your fitness workout or your like  communication something about your state  or your location to the service you're  mostly just talking about yourself  because we all like to talk about  ourselves and so these applications are  operating on the same set of state and  like pulling them into all these  different services load balancing  between can be pretty wasteful so I'm  going to talk to you about how you might  want to think about building state full  services and some of the benefits you  can get from them and I'm gonna caveat  this upfront this is not like a magic  panacea that you want to use all the  time stateless services are still  incredibly effective in horizontal  scalability is something that you still  want to be able to do but you can get  some really nice benefits well then talk  about how you want to go and build these  and start thinking about the trade-offs  you're gonna have to make while building  them and then we'll give you some  real-world examples of some cool systems  they're actually running in production  today and doing very well that have  become a stateful for a variety of  different reasons and then I'll give you  a quick cautionary like road map of  things you might want to watch out for  that are different than building state  less services so if you try to do this  at home these are things that pop up  that you may not think about okay so the  big benefit I see in state full services  is you have data locality so data  locality is this idea that you ship the  request to the machine that holds the  data to operate on it and I want to do  this for a couple reasons one I get low  latency I don't have to go and hit the  database which is the canonical source  of truth still probably at a service  every single time I just have to hit it  whenever I don't happen to have the  state I need on  machine and then so it's providing lower  latency because we're doing less Network  calls it's also really great for data  intensive applications where a client  needs to operate over a bunch of data  and like have very quick response times  so this is relying on the function  shipping paradigms this is the idea of  if a client makes a request or starts a  session we still have to go to the  database the first time to get the data  and it moves into our service but then  once that request has been handled we  leave that data on the service and then  the next time the client makes a very  similar request which is gonna operate  on that data it just has to talk to the  same machine that it just that it  already pulled the data on to and then  this way I don't have to go to my  database I'm not actually adding extra  latency image my databases down I can  still handle this request right and then  the same thing happens like over and  over again as long as I keep not needing  to go back to the database as long as I  can talk to the same machine that my  data already lives on this is a nice  world to live in another benefit of  stateful services if you build them  using sticky connections is you can get  more available consistency models and  I'll sort of walk through this so I  think we're all pretty familiar with the  cap theorem this is the idea that you  have consistency availability and  partition tolerance pick two you don't  not get to pick partition tolerance  because physics and so in a in this  world when we have different levels of  consistency that we operate against some  are not available or not highly  available right like they have our CP  systems they are only on offered under  CP systems and then if we want to have  highly available forms of consistency  you basically get right from reading  monotonic read and monotonic right this  is sort of like an induction tree but if  we have sticky connections where the  data for from a single user and like in  the single model is always talking to  the same machine then you can have these  other consistency models that are  stronger consisting guarantees like read  your rights pipeline random access  memory and causal consistency are a bit  like AP in the CapSense and so this is  actually really nice one of the first  times I sort of came across this idea  was a blog post that Werner Vogel wrote  in 2007 from Amazon entitled eventual  consistency  see revisited and so he starts talking  about building sticky connections in the  sense of like Amazon's Amazon DynamoDB  and the one of the points that he makes  in addition to these consistency models  is you're giving your clients sort of a  nicer framework to reason about instead  of having to think about oh my data may  be pulled into all these different  machines and all this crazy concurrency  is having on if you just have your  client talking to the same server  because you have a sticky connection  it's a little easier to reason about so  it helps us out when we're programming  distributed systems models okay so so  those are some of the benefits let's  talk about how you may want to go about  building these so that you can take  advantage of data locality so you might  be able to take advantage of some of  these better consistency models that it  and still be available so the the basic  idea behind a CV connection is it is  exactly what it sounds like we have a  client who's going to make a request to  a cluster of servers and they're always  going to get routed to the same server  somehow they're always going to talk to  the same server for their session or  whatever the duration of what you're  doing is going on so the dumbest and  easiest to implement way is just to open  up a persistent connection so this could  be you know you open up a persistent  HTTP request or you open up a persistent  tcp channel or pick your protocol of  choice it's super easy to implement so  then you'll always be sent to the same  machine because you're always talking to  that machine over the same connection  for the length of the session however it  does have some problems associated with  it obviously once the connection breaks  the stickiness is gone and you're gonna  get like round-robin to another server  but the bigger problem here I think and  that I've actually encountered in  production that's caused outages is load  balancing when you do this you're  essentially making an assumption that  all of these sessions all these sticky  connections sort of last for the same  amount of time and are gonna cause your  seat or your conservator talking to you  the same amount of load and that's not  generally the case so what you need to  do you can easily overwhelm a single  server by having a persistent connection  to many persistent connections sort of  dogpile on one server that are very  expensive or last for a really long time  or doing a ton of work because you just  happen to have a bunch of chatty clients  and that machines gonna like go down  real hard if you do not implement back  pressure so I highly recommend or would  say it's a requirement  building persistent connections that you  need to implement back pressure on these  machines so that they can break  connections when they're overwhelmed  this way the client then has to  reconnect um you could also in addition  do some smarter load balancing logic to  say like hey connect to a machine that  has like the most resources free but you  still need back pressure that's like a  bare minimum requirement for persistent  connections if you want to do something  a little smarter and oh this this is  more beneficial you can implement some  routing logic in your cluster so this is  the idea that a client can talk to any  server in the cluster and then it will  be routed to the server that has its  data that's going to answer its requests  where it's going to perform its  computation and there's two sort of  categories of problems I think about  when solving routing logic in services  is you have cluster membership who is in  my cluster and like how do I determine  like what machines are actually  available to be talked to and then work  distribution how am I going to  distribute load across this cluster  right and so we're going to go through  those because there's actually a variety  of different choices and they have  different impacts and trade-offs with  them so once again the dumbest thing you  can do the easiest thing you can do  which sometimes works right like I'm  always a big fan of starting with the  dumbest thing possible and then seeing  if it meets your needs is using static  cluster memberships this is literally  like a config file that you deploy in  your cluster that has all the addresses  of the nodes and the machines in it and  this works for certain scenarios  although it does have problems it's not  super fault tolerant so if a machine  goes down you essentially have to  replace that machine if you want to  expand a cluster from an Operations  perspective this becomes incredibly  painful because you essentially have to  take down the entire cluster and then  bring it back up in order to do the load  balancing correctly or in order to do  the work distribution correctly oops  sorry  animations so what's going on here is  that this is easy to do but it's  operationally painful and it's also not  a great choice for services that have to  be highly available where you can't  tolerate downtime where you have really  strict SLA s so sort of the next better  thing you can do is dynamic cluster  membership and so this is just the idea  that I  add and remove nodes on the fly from the  cluster and then when I just want to  because of failure or I want to add  capacity they'll just get added to the  cluster and they'll start immediately  taking load and vice versa if one fails  or you know one needs to you can reduce  capacity for whatever is in so there's  sort of two main big ways of doing  dynamic cluster membership that I've  seen work there's gossip protocols so  this is the idea that it's a protocol  design where the machines are gonna chat  just like you sort of would with your  friends and knowledge spreads throughout  a social group and they're gonna chat  about who they can talk to you and who's  alive and who's dead and then each  machine on its own will figure out its  worldview of who it thinks is in the  cluster and so it's just deciding based  on the messages that it happens to have  received and in sort of like a stable  state or a non failure mode environment  we're not a lot of churn is happening  all of the machines in the cluster will  stabilize to have the same worldview of  everyone being who's alive is alive and  everyone who's dead is dead in the case  where you have a bunch of network  failures capacity is being added or like  you have a partition in your network  different machines in the cluster can  actually have different world views of  who is in the cluster so this causes a  bit this is like one of the trade-offs  that you need to make with dynamic  cluster membership is if you want high  availability right like these machines  don't have to coordinate to figure out  who's in the cluster they can each  independently make a decision based on  the knowledge that they currently have  then then you use a gossip protocol but  your code and your applications need to  be able to tolerate this partition or  this uncertainty where work may be  getting routed to different nodes for  brief periods of time during failure  conversely if you need really strong  consistency and sort of cluster  membership like everyone needs to have  exactly the same worldview you want to  use a consensus system to do this and so  you just you know you do this like in a  typical way you interact with the  consensus system it controls the  ownership of everyone who's in the  cluster and then when that changes like  everyone goes and updates their  worldview based on the consensus system  that's holding the truth of like cluster  membership the problem with this is that  once again if that consensus system  isn't available the nodes can actually  route work because they don't know who's  in the  stur it's also going to be slower right  because you're adding coordination to  your system so sort of like Peter valus  talked about right like we sort of want  to avoid this unless we necessarily need  it so I would sort of say this is the  last resort when you're designing  dynamic cluster membership if you need  highly available systems and then  finally I want to talk the second  problem is work distribution right and  there's a couple of different methods  I'm gonna go through three there's  random placement consistent hashing and  distributed hash tables for determining  how to move work throughout your cluster  random placement sounds super dumb but  it actually can be really effective in  certain scenarios so this is the idea of  I get to write to anywhere in the  cluster so when I'm sending you're right  from my client any machine that has  capacity just takes it and then on read  I go and I have to actually read from  every single machine in the cluster to  get the data back so this isn't actually  a sticky connection but it is a stateful  service in the sense of this is a good  way to build like in-memory indexes and  caches and I'll actually get to a  real-world example that does this and  like how it's used in the real world  because it sort of sounds stupid if  you're looking at just this example it's  hard to understand like why it would  ever work but it is nice where you have  a lot of data and your queries are  operating a large amount of data that is  gonna be distributed over the entire  cluster I think one that is probably  more familiar to people is consistent  hashing this came out of a paper in 1997  from the World Wide Web about how to  distribute workloads the basic idea here  is you have deterministic placement of  your requests and we've now mapped our  nodes that are in the cluster to the  same hash space as the requests that are  coming in and so your hashing your  request based on like whatever the  session ID is or whatever the user ID is  depending how you want to partition your  workload and so then you just add the  nodes get mapped to the cluster and then  as a request comes in it also gets  hashed on to the ring and then you walk  right to find the node that's actually  going to execute it for you this is  really popular a lot of databases use  this so like Amazon DynamoDB uses this  Twitter's Manhattan database uses this I  believe Cassandra uses this this is  pretty pretty basic database we  distribution because it is deterministic  placement but the problem with the  termina stick placement especially in  services where users are coming and  going and I don't necessarily need to  keep your data in memory all of the time  like a database does the problem with  this is that you can have hotspots right  you can run into the same problem where  if your requests are not like evenly  distribute or even if they are evenly  distributed because this is a hash they  actually have different different  weights in terms of like the amount of  work that they're gonna do based on like  what each user wants to request and so  you could easily end up with a hot node  or you could just have a node that's  kind of slow in your cluster and so like  it's gonna get overwhelmed for a variety  of reasons because like you know maybe  it's discs or going bad or whatever  there's like a but should think  different things that can happen and so  this does not allow you to move work if  a machine gets overloaded so you have to  allocate enough space in your cluster to  run with enough Headroom to like  tolerate the fact that this is  deterministic and you can't move work so  you're paying an additional cost to have  extra capacity sitting around even in  the normal case so finally I wanna talk  about distribute hash tables for work  just placement so the idea here is that  I'm going to use a hash again to look up  into a distributed hash table where I  should execute this work and so that  what happens is then I just look at this  holds a reference to the node that I'm  gonna go talk to you that's in my  cluster and then if this is this is  non-deterministic placement right  because there's nothing that's forcing  me to always go to note a I could easily  remap this client in my system to go to  node B or node C should note a become  too hot or unavailable for some reason  and so this actually has a lot of nice  properties and I'll get to an example in  the real world where this works very  well  okay so let's talk about stateful  services in the real world I'm gonna  give you an overview of free that I  think are particularly interesting and  that's sort of exhibit a the range of  some of the stuff that we just talked  about in terms of different ways you can  configure and build your cluster out so  scuba is from Facebook  it's an in-memory database that they  built and basically this is its this  runs a lot of the workhorse for their  query and analytics and revenue and  performance debugging and has to be very  very fast and has to be always available  because they're doing things like on the  fly right and so and I believe they use  static cluster membership although I  don't think the paper actually says that  but from what I've inferred from what  I've seen I think it's static cluster  membership so basically what happens is  they do this random fan-out on right so  it's gonna write to any machine that  happens to have it and then it's going  to on read query every single machine in  the cluster when it's executing a query  and then they're going to then all these  results come back in they get composed  by the machine that's like running the  query and then when the results are  returned to the user a completeness  metric is also returned so what's cool  about this is like in order to get 100%  of the data and to know that your query  actually executed correctly and you have  all the results every machine in the  cluster would have to be available but  like we live in a real world and that's  never the case and so what they did is  they built this in from the start to say  I'm gonna tell the the requester what  percentage of data that I have been able  to successfully retrieve data from and  then this allows them to decide if  that's acceptable amount of uncertainty  and so I think that's actually really  really cool there's a paper on scuba if  you want to go read more but this is  actually a pretty neat system so they're  not using sticky but they connections  that they are using in memory for very  very fast data lookups another really  interesting stateful service that is  sort of come out in the last year is  over built this thing called Ring Pop  and what it is is it's an odious library  that allows them to do sort of like  application layers charting for their  dispatcher platform services and so the  reason they built this is because if you  think about what the app is doing like  when you're ordering a car is it  talking to the service and it's gonna  like send your information and your  location and then throughout the  duration of the ride it's gonna send you  more  you're gonna update it with your  location and information and then it has  to process a bunch of payment and your  drivers stuff and if you were getting  load balance to different servers every  single time and that data was constantly  being persisted to the database and then  pulled back in on every request that's a  ton of latency on the service and it's a  ton of extra load on the database so  what they did is they went and  implemented routing logic into this  cluster and so that they can have all of  your requests for your session directed  to a single machine and so they do this  via using the swim gossip protocol for  cluster membership right so this is this  is an AP customer membership thing so  it's not always guaranteed to be totally  correct but they made the choice to  always be available because they'd  rather have you be able to order a car  then like to tell you like sorry we  can't deal with this cuz leg zookeepers  down and then they also use consistent  hashing for doing work distribution  throughout the cluster and so once again  this has the problem where you can have  hot nodes and there's really nothing you  can do except for add more capacity to  the cluster in that case even if you  have a bunch of nodes that are  underutilized this is a really cool  project I highly recommend checking it  out it's open source on github and there  have been a couple extra talks and stuff  around it if you want to know more  finally I want to talk about Arlene's  so Arlene's is a programming model and  runtime for building distributed systems  based on the actor model this came out  of Microsoft research from the extreme  computing group there and I actually had  the pleasure of working with this group  to productionize Arlene's when we  shipped halo 4 so we rebuilt all of the  halo 4 services primarily based on  Arlene's and I've talked about Arlene's  before and I've talked about the actor  model before and I'm just gonna give you  a quick overview so if you are  unfamiliar that you understand what's  happening but really I want to talk  about the routing logic in the system  because it's very cool and it's sort of  how our leans does a lot of its magic so  it's actually happening an actor/model  is this idea for concurrent computation  where actors are the core unit of  computation actors can communicate with  one another by passing asynchronous  messages to each other throughout the  cluster and when an actor receives an  asynchronous message it can do one of  three things  or all of them it can send new messages  or as many as it once it can update its  journals in its internal state and it  can create new actors so essentially  what you end up having in a cluster  running in any kind of actor model is a  bunch of little state machines that are  running and so you are inherently  building stateful services when you're  using the actor model if they are  persisting any state between requests  and we use this very heavily at halo we  use them like in a little in memory  right through caches so how this  actually works though is we just deploy  a bunch of machines and Orleans runtime  takes care of the rest and so when we  got a request it would go to any machine  in the cluster and then the cluster  would actually look up where the actor  lived in the cluster and wrap that  message to it and there's like thousands  hundreds of thousands of actors on any  clock on any single machine in the  cluster so the way they do this is that  use a gossip protocol for cluster  membership because we chose to be highly  available there's actually I think now  that Orleans has been open sourced a  zookeeper implementation of cluster  membership but that's slower and so  you're not going to get the performance  benchmarks that are outlined in the  Orleans paper um and then it for work  distribution it does this interesting  combination of consistent hashing and a  distributed hash table that I'm going to  walk through because I just think it's  neat and I haven't seen many other real  world systems use this so this is our  aleene's cluster we have six machines  and then there's a bunch of actors  running on any machine I'm gonna get a  request from a client that says hey I  need to send a message to this actor in  this ID and so then what a releases  runtime is going to do is apply a  consistent hash to that actor ID and  that's going to tell it where the  distributed hash table for that ID is  located in the cluster so I'm gonna go  and then go to the machine that has the  distributed hash table entry for my  actor this will then tell me which  machine my actor physically lives on and  then the request can get routed to that  machine so this is this is cool because  the consistent hashing part where you're  doing the distributed hash table lookup  is deterministic and so that's going to  be consistent throughout the lifetime of  and after and in the cluster it's not  going to change but this is okay because  when you think about a distributed hash  table like you're just storing the key  which is the actor ID and the Machine  look  which is just an address and it's the  same for every single node in the  cluster so this is like actually very  evenly distributed and balanced workload  however what our actors are doing is not  necessarily evenly distributed in  balance because even different types of  actors can run in Orleans clusters and  so we wanted to make sure that if a  machine becomes hot or leans can help  like rebalance the cluster for you so  what happens is say that machine got too  hot or the session died and then the  client comes in the same client comes in  it'll ask like hey I need to talk to  this my actor again and so it'll get  routed to the same distributed hash  table or the same node it's piece of the  distributed hash table and then that  know the dish read hash table entry has  now changed the aleene's cluster has  actually updated it to say hey it's now  on this machine and it does that for a  couple of reasons one like the machine  that you were talking to you before  failed or the machine the actor you were  talking to you before got like evicted  from memory because no one was talking  to it for a while or you your machine  was running way too hot and Arlene's  decided hey I'm gonna move this for you  so that machine doesn't get overwhelmed  and fall over and I'm gonna use some of  this capacity that's not being used on  this other machine this is one of the  core reasons that we were able to run  our lanes clusters in production at 90  to 95 percent CPU utilization across the  cluster so we were using the entire box  because we were able to move work around  in a non-deterministic fashion so I  think that was pretty cool and I think  it's like I would not recommend doing  this for like a database but it is  really neat when you start thinking  about pulling state into services okay  so finally I'm gonna talk about some  things that are how you might run into  trouble or like gotchas that you might  not think of because you've been  building stateful or stateless services  for a long time so I think we all know  or we should all know that unbounded  queues are essentially like the devil  and distributed systems and will like  kill you really really fast because  you're making implicit assumptions in  state full services unbounded data  structures like in-memory data  structures on the box are like are this  bad they will like hurt you really  really fast because and we don't  generally think about this I think in  state less services because if you bound  your inputs on any request then you're  saying it's assuming that you're  processing a reasonable  sized amount of data on every request  and then that data structure you create  for that request is generally garbage  collected or evicted from memory at the  end of that request when you have state  full services and you're persisting a  bunch of stuff over over a span of  requests you need to put an explicit  bound on here because these could grow  you know unbounded Li and then you run  on a memory on your machine or your  garbage collector gets really sad and  decides it's gonna stop the world and  garbage collects for a really long time  and then that node essentially looks  dead so this is something that you sort  of have to work out I've actually seen  production machines go down because this  assumption that like we would never run  out of memory and our clients would only  a send us a reasonable amount of things  over a stretch of a session like didn't  happen cuz clients are not your friends  they're not gonna do what you want them  to you're also gonna have to deal with  memory management and you do have to  deal with this in stateless service to  some extent but you don't have to tune  generally as much so basically because  we're in a stateful world and we're  persisting data for the lifetime or for  the lifetime of the session which could  be you know minutes hours whatever days  even things are going to get persisted  into the lowest center or the the  longest live generation of garbage  collection so like g2 and the CLR and so  at this point that's generally more  expensive to collect especially if you  have a bunch of references that are  spanning generations of your garbage  collector that's gonna get really  expensive to collect and so you sort of  have to understand stateful services and  be aware of how your garbage collector  is actually running or you could just  say totally I'm not gonna even worry  about it and go and implement unmanaged  code like scuba is all in C++ I believe  and so they like don't even deal with  the garbage collector problem so like  Orleans runs dotnet CLR and so that is  the garbage collected thing we did run  into this problem but we were able to  work with our garbage collector and tune  it and also realize we were just  persisting a lot of state that we never  used and so we sort of cleaned up our  requests but you have to be a little  more careful about what you actually are  persisting because this does have an  Associated cost with it  and then finally the sort of last Gacha  is this idea of reloading state  typically like in state less services  you're going to go to the database every  single time and so you tune your latency  to be acceptable based on like having a  round trip right or you stick a cache in  there to make it better in state full  services there's actually a variety of  different cases you can have the first  connection of this session so that's  actually generally gonna be your most  expensive connection because there is no  data in in anywhere in your service  because it's probably been evicted if  someone hasn't been talking to you for a  while or ever before so you have to go  get all this data from the database you  have to pull it in so that they can  start answering this the startup request  and this could take a long time unless  you're careful you want to be very  selective about what you load on startup  because you want it to look as close to  normal requests as possible the best way  to sort of benchmark and test this is to  use percentiles very heavily because  your average request latency is actually  gonna look really really good because  you don't have to round-trip to the  database every single time once you've  loaded it into memory and so but and you  will really only detect that your first  connection startup time is really long  if you use percentiles another sort of  gotcha with first connections is  typically with state less services I'm  going to make a request and if the  request times out because I'm taking too  long to talk to the database I'm then  just going to like cancel the requests  on the database and not pull that state  into memory but with state full services  you know the clients going to come back  and ask you for that data like you know  right away again  and so you might as well just keep  pulling it into memory even if the first  request has failed and that client has  timed out because then they're just  gonna ask for it again on a retry and it  will get routed to the same machine and  then the data will just be there and it  will be fast so like typically in Halo  we had this issue where I think on games  startup sometimes like the first  connection would actually timeout and so  we just kept pulling the data in from  the database and then the next time the  game box actually retried it would  succeed if we're talking you know like  hundreds of milliseconds of time and  this actually wasn't user noticeable  especially since there was a really  pretty animation playing on the screen  for them to watch and so then by the  time it was like distract and then we  got to do our things on the services and  so-and-so them by the time they came  back the second time we just kept  pulling the data that we needed  especially if it was like a player who  had played a lot or we had tunnel load B  just because our azor table we were like  stressing that connection this worked  really really well for us  another thing that's gonna cause  problems in terms of like reloading  state is recovering from a crash so if  you have to like rehydrate an entire box  after recovering from a crash that could  be expensive if you're not just like  lazily loading everything and sometimes  you can get away with lazy loading and  sometimes you can't and then in the same  instant wave deploying new code you're  gonna have this problem or you have to  put take down an entire box and bring up  a whole nother box and if you can't in  like not a terminus tically place things  or you don't have dynamic clusters  membership then this is also gonna cause  problems for you so one interesting way  to solve this that we sort of came  across was or that I've come across is  that Facebook published a paper called  fast restarts at Facebook and this was  actually designed for their scuba system  because they had the same problem they  had this in memory database that was  holding like a ton of memory in data  that was persisted to hard disk and so  on a rack rack or on a deploy they would  like take down the machine the process  that was currently running and they  would spin up a new machine and then  they would have to read everything from  disk and this took hours like per  machine and because of their SL lays  they had to do a very slow rolling  restart of the entire cluster that took  I think up to 12 hours so this is gonna  slow your development team down a lot  there's not a whole lot you can do to  get away from that on a crash restart  but hopefully that happens fairly  infrequently deploying code though  happens really really frequently or we'd  like to tap in frequently because it  allows us to iterate faster and try new  ideas and do less risky deployments so  they made this key observation that you  can actually decouple the memory  lifetime of a process especially or  memory lifetime from the process  lifetime especially in a state full  service right so when they want to just  deploy new code and they knew it was a  safe shutdown in memory wasn't corrupted  because like I told the process to  shutdown it didn't crash then they would  stop taking requests they would actually  copy all of the data from the current  running process into shared memory and  they would shut down the old process and  bring up the new process which would  then copy the data from shared memory  back into like the processes memory  space and then they would start taking  requests this took minutes and so they  got their cluster research that time  below down to like two  this allows them to deploy much more  frequently than they were able to before  so that's I think just like a really  easy trick that is really cool and we're  actually looking at implementing it on  one of the services that my team is  responsible for at Twitter because we  have sort of like an index that does is  very stateful and when you have to  restart a whole machine have to go and  talk to our Manhattan database and  that's really slow right  compared to memory so in conclusion I  hope I've sort of painted a picture of  why you may want to start bringing state  into your actual services and not just  relying on your databases there are some  really nice properties like data  locality and available consistent more  available consistency mechanisms that  you can get there is a ton of thought  that needs to be put into cluster  membership and work distribution and I  don't have one right answer for you  although I tend to lean very much  towards the available side so I would go  with gossip protocols and then work  distribution it's really going to depend  on the workload that you're using there  are a bunch of these successful stateful  real world systems out there that are  running and so like it's been proven at  scale that you can do this and so it's  not necessarily super scary although it  is new ground and then finally be  cautious this is new territory if you  haven't done staple services before go  through what is different what has  changed what assumptions are you making  and make sure you make them explicit and  then finally I have a sort of like this  is new space and like people aren't  doing this so should I even bother  reading papers yes yes you should  because most of what I have talked about  has actually just come from database  literature and so this problems are  already solved for you and you don't  have to actually even be like the nice  thing about implementing services you  get to cherry-pick what you care about  based on your application state and so  you don't even have to go and implement  the whole paper you can just pick the  piece of the paper that you like and  that problem is probably solved for you  so I highly recommend reading papers do  not reinvent your own protocols this is  actually not new territory people have  been working on this since like the 60s  and 70s um finally I want to say thank  you to some people who helped me out  with this talk Kyle Kingsbury Chris  Mikkel John Thompson Taryn eNOS Umbra  thank you guys so much for all of your  help and I that is all I have for you so  I think we have time for like one  question  you
+ 
+
+00:00:08.139 --> 00:00:11.770 align:start position:0%
+ 
+ 
+
+00:00:11.770 --> 00:00:13.570 align:start position:0%
+ 
+ 
+
+00:00:13.570 --> 00:00:15.879 align:start position:0%
+ 
+ 
+
+00:00:15.879 --> 00:00:18.010 align:start position:0%
+ 
+ 
+
+00:00:18.010 --> 00:00:19.570 align:start position:0%
+ 
+ 
+
+00:00:19.570 --> 00:00:21.790 align:start position:0%
+ 
+ 
+
+00:00:21.790 --> 00:00:23.110 align:start position:0%
+ 
+ 
+
+00:00:23.110 --> 00:00:26.230 align:start position:0%
+ 
+ 
+
+00:00:26.230 --> 00:00:27.790 align:start position:0%
+ 
+ 
+
+00:00:27.790 --> 00:00:30.220 align:start position:0%
+ 
+ 
+
+00:00:30.220 --> 00:00:31.889 align:start position:0%
+ 
+ 
+
+00:00:31.889 --> 00:00:34.869 align:start position:0%
+ 
+ 
+
+00:00:34.869 --> 00:00:36.880 align:start position:0%
+ 
+ 
+
+00:00:36.880 --> 00:00:39.099 align:start position:0%
+ 
+ 
+
+00:00:39.099 --> 00:00:41.739 align:start position:0%
+ 
+ 
+
+00:00:41.739 --> 00:00:43.479 align:start position:0%
+ 
+ 
+
+00:00:43.479 --> 00:00:46.930 align:start position:0%
+ 
+ 
+
+00:00:46.930 --> 00:00:48.610 align:start position:0%
+ 
+ 
+
+00:00:48.610 --> 00:00:49.989 align:start position:0%
+ 
+ 
+
+00:00:49.989 --> 00:00:54.849 align:start position:0%
+ 
+ 
+
+00:00:54.849 --> 00:00:57.069 align:start position:0%
+ 
+ 
+
+00:00:57.069 --> 00:00:58.479 align:start position:0%
+ 
+ 
+
+00:00:58.479 --> 00:01:01.450 align:start position:0%
+ 
+ 
+
+00:01:01.450 --> 00:01:03.369 align:start position:0%
+ 
+ 
+
+00:01:03.369 --> 00:01:05.439 align:start position:0%
+ 
+ 
+
+00:01:05.439 --> 00:01:07.420 align:start position:0%
+ 
+ 
+
+00:01:07.420 --> 00:01:08.920 align:start position:0%
+ 
+ 
+
+00:01:08.920 --> 00:01:11.920 align:start position:0%
+ 
+ 
+
+00:01:11.920 --> 00:01:14.380 align:start position:0%
+ 
+ 
+
+00:01:14.380 --> 00:01:16.719 align:start position:0%
+ 
+ 
+
+00:01:16.719 --> 00:01:19.569 align:start position:0%
+ 
+ 
+
+00:01:19.569 --> 00:01:21.190 align:start position:0%
+ 
+ 
+
+00:01:21.190 --> 00:01:22.810 align:start position:0%
+ 
+ 
+
+00:01:22.810 --> 00:01:25.389 align:start position:0%
+ 
+ 
+
+00:01:25.389 --> 00:01:28.749 align:start position:0%
+ 
+ 
+
+00:01:28.749 --> 00:01:31.149 align:start position:0%
+ 
+ 
+
+00:01:31.149 --> 00:01:32.889 align:start position:0%
+ 
+ 
+
+00:01:32.889 --> 00:01:35.679 align:start position:0%
+ 
+ 
+
+00:01:35.679 --> 00:01:37.240 align:start position:0%
+ 
+ 
+
+00:01:37.240 --> 00:01:39.700 align:start position:0%
+ 
+ 
+
+00:01:39.700 --> 00:01:41.919 align:start position:0%
+ 
+ 
+
+00:01:41.919 --> 00:01:43.270 align:start position:0%
+ 
+ 
+
+00:01:43.270 --> 00:01:45.340 align:start position:0%
+ 
+ 
+
+00:01:45.340 --> 00:01:47.529 align:start position:0%
+ 
+ 
+
+00:01:47.529 --> 00:01:49.779 align:start position:0%
+ 
+ 
+
+00:01:49.779 --> 00:01:51.520 align:start position:0%
+ 
+ 
+
+00:01:51.520 --> 00:01:53.080 align:start position:0%
+ 
+ 
+
+00:01:53.080 --> 00:01:55.029 align:start position:0%
+ 
+ 
+
+00:01:55.029 --> 00:01:57.730 align:start position:0%
+ 
+ 
+
+00:01:57.730 --> 00:01:59.620 align:start position:0%
+ 
+ 
+
+00:01:59.620 --> 00:02:03.069 align:start position:0%
+ 
+ 
+
+00:02:03.069 --> 00:02:04.630 align:start position:0%
+ 
+ 
+
+00:02:04.630 --> 00:02:06.429 align:start position:0%
+ 
+ 
+
+00:02:06.429 --> 00:02:08.169 align:start position:0%
+ 
+ 
+
+00:02:08.169 --> 00:02:09.760 align:start position:0%
+ 
+ 
+
+00:02:09.760 --> 00:02:11.980 align:start position:0%
+ 
+ 
+
+00:02:11.980 --> 00:02:14.410 align:start position:0%
+ 
+ 
+
+00:02:14.410 --> 00:02:16.300 align:start position:0%
+ 
+ 
+
+00:02:16.300 --> 00:02:16.310 align:start position:0%
+ 
+ 
+
+00:02:16.310 --> 00:02:17.690 align:start position:0%
+ 
+
+
+00:02:17.690 --> 00:02:19.400 align:start position:0%
+ 
+ 
+
+00:02:19.400 --> 00:02:20.750 align:start position:0%
+ 
+ 
+
+00:02:20.750 --> 00:02:22.970 align:start position:0%
+ 
+ 
+
+00:02:22.970 --> 00:02:25.309 align:start position:0%
+ 
+ 
+
+00:02:25.309 --> 00:02:27.140 align:start position:0%
+ 
+ 
+
+00:02:27.140 --> 00:02:28.850 align:start position:0%
+ 
+ 
+
+00:02:28.850 --> 00:02:30.770 align:start position:0%
+ 
+ 
+
+00:02:30.770 --> 00:02:33.260 align:start position:0%
+ 
+ 
+
+00:02:33.260 --> 00:02:35.150 align:start position:0%
+ 
+ 
+
+00:02:35.150 --> 00:02:37.100 align:start position:0%
+ 
+ 
+
+00:02:37.100 --> 00:02:39.260 align:start position:0%
+ 
+ 
+
+00:02:39.260 --> 00:02:40.790 align:start position:0%
+ 
+ 
+
+00:02:40.790 --> 00:02:42.920 align:start position:0%
+ 
+ 
+
+00:02:42.920 --> 00:02:45.110 align:start position:0%
+ 
+ 
+
+00:02:45.110 --> 00:02:46.970 align:start position:0%
+ 
+ 
+
+00:02:46.970 --> 00:02:49.430 align:start position:0%
+ 
+ 
+
+00:02:49.430 --> 00:02:51.920 align:start position:0%
+ 
+ 
+
+00:02:51.920 --> 00:02:54.170 align:start position:0%
+ 
+ 
+
+00:02:54.170 --> 00:02:56.150 align:start position:0%
+ 
+ 
+
+00:02:56.150 --> 00:02:58.130 align:start position:0%
+ 
+ 
+
+00:02:58.130 --> 00:02:59.900 align:start position:0%
+ 
+ 
+
+00:02:59.900 --> 00:03:02.270 align:start position:0%
+ 
+ 
+
+00:03:02.270 --> 00:03:03.590 align:start position:0%
+ 
+ 
+
+00:03:03.590 --> 00:03:04.490 align:start position:0%
+ 
+ 
+
+00:03:04.490 --> 00:03:07.940 align:start position:0%
+ 
+ 
+
+00:03:07.940 --> 00:03:09.259 align:start position:0%
+ 
+ 
+
+00:03:09.259 --> 00:03:10.430 align:start position:0%
+ 
+ 
+
+00:03:10.430 --> 00:03:12.050 align:start position:0%
+ 
+ 
+
+00:03:12.050 --> 00:03:15.890 align:start position:0%
+ 
+ 
+
+00:03:15.890 --> 00:03:17.360 align:start position:0%
+ 
+ 
+
+00:03:17.360 --> 00:03:18.740 align:start position:0%
+ 
+ 
+
+00:03:18.740 --> 00:03:20.360 align:start position:0%
+ 
+ 
+
+00:03:20.360 --> 00:03:22.699 align:start position:0%
+ 
+ 
+
+00:03:22.699 --> 00:03:24.349 align:start position:0%
+ 
+ 
+
+00:03:24.349 --> 00:03:26.090 align:start position:0%
+ 
+ 
+
+00:03:26.090 --> 00:03:27.530 align:start position:0%
+ 
+ 
+
+00:03:27.530 --> 00:03:29.240 align:start position:0%
+ 
+ 
+
+00:03:29.240 --> 00:03:30.620 align:start position:0%
+ 
+ 
+
+00:03:30.620 --> 00:03:32.479 align:start position:0%
+ 
+ 
+
+00:03:32.479 --> 00:03:34.490 align:start position:0%
+ 
+ 
+
+00:03:34.490 --> 00:03:36.229 align:start position:0%
+ 
+ 
+
+00:03:36.229 --> 00:03:37.699 align:start position:0%
+ 
+ 
+
+00:03:37.699 --> 00:03:39.170 align:start position:0%
+ 
+ 
+
+00:03:39.170 --> 00:03:41.210 align:start position:0%
+ 
+ 
+
+00:03:41.210 --> 00:03:42.979 align:start position:0%
+ 
+ 
+
+00:03:42.979 --> 00:03:43.789 align:start position:0%
+ 
+ 
+
+00:03:43.789 --> 00:03:45.650 align:start position:0%
+ 
+ 
+
+00:03:45.650 --> 00:03:48.319 align:start position:0%
+ 
+ 
+
+00:03:48.319 --> 00:03:50.180 align:start position:0%
+ 
+ 
+
+00:03:50.180 --> 00:03:53.210 align:start position:0%
+ 
+ 
+
+00:03:53.210 --> 00:03:54.380 align:start position:0%
+ 
+ 
+
+00:03:54.380 --> 00:03:55.880 align:start position:0%
+ 
+ 
+
+00:03:55.880 --> 00:03:58.340 align:start position:0%
+ 
+ 
+
+00:03:58.340 --> 00:03:59.630 align:start position:0%
+ 
+ 
+
+00:03:59.630 --> 00:04:05.390 align:start position:0%
+ 
+ 
+
+00:04:05.390 --> 00:04:07.849 align:start position:0%
+ 
+ 
+
+00:04:07.849 --> 00:04:09.740 align:start position:0%
+ 
+ 
+
+00:04:09.740 --> 00:04:11.479 align:start position:0%
+ 
+ 
+
+00:04:11.479 --> 00:04:13.130 align:start position:0%
+ 
+ 
+
+00:04:13.130 --> 00:04:15.470 align:start position:0%
+ 
+ 
+
+00:04:15.470 --> 00:04:17.449 align:start position:0%
+ 
+ 
+
+00:04:17.449 --> 00:04:19.009 align:start position:0%
+ 
+ 
+
+00:04:19.009 --> 00:04:20.509 align:start position:0%
+ 
+ 
+
+00:04:20.509 --> 00:04:22.250 align:start position:0%
+ 
+ 
+
+00:04:22.250 --> 00:04:24.680 align:start position:0%
+ 
+ 
+
+00:04:24.680 --> 00:04:26.330 align:start position:0%
+ 
+ 
+
+00:04:26.330 --> 00:04:27.150 align:start position:0%
+ 
+ 
+
+00:04:27.150 --> 00:04:29.820 align:start position:0%
+ 
+ 
+
+00:04:29.820 --> 00:04:31.140 align:start position:0%
+ 
+ 
+
+00:04:31.140 --> 00:04:33.090 align:start position:0%
+ 
+ 
+
+00:04:33.090 --> 00:04:35.880 align:start position:0%
+ 
+ 
+
+00:04:35.880 --> 00:04:37.260 align:start position:0%
+ 
+ 
+
+00:04:37.260 --> 00:04:39.680 align:start position:0%
+ 
+ 
+
+00:04:39.680 --> 00:04:41.820 align:start position:0%
+ 
+ 
+
+00:04:41.820 --> 00:04:43.590 align:start position:0%
+ 
+ 
+
+00:04:43.590 --> 00:04:45.510 align:start position:0%
+ 
+ 
+
+00:04:45.510 --> 00:04:46.950 align:start position:0%
+ 
+ 
+
+00:04:46.950 --> 00:04:48.570 align:start position:0%
+ 
+ 
+
+00:04:48.570 --> 00:04:51.150 align:start position:0%
+ 
+ 
+
+00:04:51.150 --> 00:04:52.680 align:start position:0%
+ 
+ 
+
+00:04:52.680 --> 00:04:55.500 align:start position:0%
+ 
+ 
+
+00:04:55.500 --> 00:04:57.240 align:start position:0%
+ 
+ 
+
+00:04:57.240 --> 00:04:58.800 align:start position:0%
+ 
+ 
+
+00:04:58.800 --> 00:05:00.990 align:start position:0%
+ 
+ 
+
+00:05:00.990 --> 00:05:02.310 align:start position:0%
+ 
+ 
+
+00:05:02.310 --> 00:05:04.770 align:start position:0%
+ 
+ 
+
+00:05:04.770 --> 00:05:05.970 align:start position:0%
+ 
+ 
+
+00:05:05.970 --> 00:05:08.100 align:start position:0%
+ 
+ 
+
+00:05:08.100 --> 00:05:10.680 align:start position:0%
+ 
+ 
+
+00:05:10.680 --> 00:05:12.720 align:start position:0%
+ 
+ 
+
+00:05:12.720 --> 00:05:14.310 align:start position:0%
+ 
+ 
+
+00:05:14.310 --> 00:05:17.010 align:start position:0%
+ 
+ 
+
+00:05:17.010 --> 00:05:18.570 align:start position:0%
+ 
+ 
+
+00:05:18.570 --> 00:05:19.650 align:start position:0%
+ 
+ 
+
+00:05:19.650 --> 00:05:21.660 align:start position:0%
+ 
+ 
+
+00:05:21.660 --> 00:05:25.650 align:start position:0%
+ 
+ 
+
+00:05:25.650 --> 00:05:28.380 align:start position:0%
+ 
+ 
+
+00:05:28.380 --> 00:05:30.240 align:start position:0%
+ 
+ 
+
+00:05:30.240 --> 00:05:33.360 align:start position:0%
+ 
+ 
+
+00:05:33.360 --> 00:05:36.240 align:start position:0%
+ 
+ 
+
+00:05:36.240 --> 00:05:37.740 align:start position:0%
+ 
+ 
+
+00:05:37.740 --> 00:05:39.480 align:start position:0%
+ 
+ 
+
+00:05:39.480 --> 00:05:41.040 align:start position:0%
+ 
+ 
+
+00:05:41.040 --> 00:05:43.170 align:start position:0%
+ 
+ 
+
+00:05:43.170 --> 00:05:44.460 align:start position:0%
+ 
+ 
+
+00:05:44.460 --> 00:05:49.500 align:start position:0%
+ 
+ 
+
+00:05:49.500 --> 00:05:51.150 align:start position:0%
+ 
+ 
+
+00:05:51.150 --> 00:05:53.040 align:start position:0%
+ 
+ 
+
+00:05:53.040 --> 00:05:54.659 align:start position:0%
+ 
+ 
+
+00:05:54.659 --> 00:05:56.550 align:start position:0%
+ 
+ 
+
+00:05:56.550 --> 00:05:58.320 align:start position:0%
+ 
+ 
+
+00:05:58.320 --> 00:06:01.050 align:start position:0%
+ 
+ 
+
+00:06:01.050 --> 00:06:03.030 align:start position:0%
+ 
+ 
+
+00:06:03.030 --> 00:06:04.620 align:start position:0%
+ 
+ 
+
+00:06:04.620 --> 00:06:06.510 align:start position:0%
+ 
+ 
+
+00:06:06.510 --> 00:06:10.020 align:start position:0%
+ 
+ 
+
+00:06:10.020 --> 00:06:11.970 align:start position:0%
+ 
+ 
+
+00:06:11.970 --> 00:06:14.580 align:start position:0%
+ 
+ 
+
+00:06:14.580 --> 00:06:16.170 align:start position:0%
+ 
+ 
+
+00:06:16.170 --> 00:06:18.600 align:start position:0%
+ 
+ 
+
+00:06:18.600 --> 00:06:21.030 align:start position:0%
+ 
+ 
+
+00:06:21.030 --> 00:06:22.620 align:start position:0%
+ 
+ 
+
+00:06:22.620 --> 00:06:24.030 align:start position:0%
+ 
+ 
+
+00:06:24.030 --> 00:06:27.030 align:start position:0%
+ 
+ 
+
+00:06:27.030 --> 00:06:30.060 align:start position:0%
+ 
+ 
+
+00:06:30.060 --> 00:06:33.930 align:start position:0%
+ 
+ 
+
+00:06:33.930 --> 00:06:35.340 align:start position:0%
+ 
+ 
+
+00:06:35.340 --> 00:06:37.440 align:start position:0%
+ 
+ 
+
+00:06:37.440 --> 00:06:40.560 align:start position:0%
+ 
+ 
+
+00:06:40.560 --> 00:06:40.570 align:start position:0%
+ 
+ 
+
+00:06:40.570 --> 00:06:40.950 align:start position:0%
+ 
+
+
+00:06:40.950 --> 00:06:43.170 align:start position:0%
+ 
+ 
+
+00:06:43.170 --> 00:06:45.270 align:start position:0%
+ 
+ 
+
+00:06:45.270 --> 00:06:47.909 align:start position:0%
+ 
+ 
+
+00:06:47.909 --> 00:06:50.730 align:start position:0%
+ 
+ 
+
+00:06:50.730 --> 00:06:52.650 align:start position:0%
+ 
+ 
+
+00:06:52.650 --> 00:06:54.180 align:start position:0%
+ 
+ 
+
+00:06:54.180 --> 00:06:56.129 align:start position:0%
+ 
+ 
+
+00:06:56.129 --> 00:06:57.659 align:start position:0%
+ 
+ 
+
+00:06:57.659 --> 00:06:59.730 align:start position:0%
+ 
+ 
+
+00:06:59.730 --> 00:07:01.409 align:start position:0%
+ 
+ 
+
+00:07:01.409 --> 00:07:02.550 align:start position:0%
+ 
+ 
+
+00:07:02.550 --> 00:07:04.230 align:start position:0%
+ 
+ 
+
+00:07:04.230 --> 00:07:05.790 align:start position:0%
+ 
+ 
+
+00:07:05.790 --> 00:07:07.320 align:start position:0%
+ 
+ 
+
+00:07:07.320 --> 00:07:08.969 align:start position:0%
+ 
+ 
+
+00:07:08.969 --> 00:07:15.270 align:start position:0%
+ 
+ 
+
+00:07:15.270 --> 00:07:16.409 align:start position:0%
+ 
+ 
+
+00:07:16.409 --> 00:07:18.060 align:start position:0%
+ 
+ 
+
+00:07:18.060 --> 00:07:20.129 align:start position:0%
+ 
+ 
+
+00:07:20.129 --> 00:07:21.839 align:start position:0%
+ 
+ 
+
+00:07:21.839 --> 00:07:23.070 align:start position:0%
+ 
+ 
+
+00:07:23.070 --> 00:07:24.839 align:start position:0%
+ 
+ 
+
+00:07:24.839 --> 00:07:29.370 align:start position:0%
+ 
+ 
+
+00:07:29.370 --> 00:07:31.020 align:start position:0%
+ 
+ 
+
+00:07:31.020 --> 00:07:32.700 align:start position:0%
+ 
+ 
+
+00:07:32.700 --> 00:07:34.230 align:start position:0%
+ 
+ 
+
+00:07:34.230 --> 00:07:36.180 align:start position:0%
+ 
+ 
+
+00:07:36.180 --> 00:07:37.770 align:start position:0%
+ 
+ 
+
+00:07:37.770 --> 00:07:39.089 align:start position:0%
+ 
+ 
+
+00:07:39.089 --> 00:07:40.680 align:start position:0%
+ 
+ 
+
+00:07:40.680 --> 00:07:42.570 align:start position:0%
+ 
+ 
+
+00:07:42.570 --> 00:07:46.170 align:start position:0%
+ 
+ 
+
+00:07:46.170 --> 00:07:47.730 align:start position:0%
+ 
+ 
+
+00:07:47.730 --> 00:07:49.649 align:start position:0%
+ 
+ 
+
+00:07:49.649 --> 00:07:50.879 align:start position:0%
+ 
+ 
+
+00:07:50.879 --> 00:07:53.399 align:start position:0%
+ 
+ 
+
+00:07:53.399 --> 00:07:55.050 align:start position:0%
+ 
+ 
+
+00:07:55.050 --> 00:07:57.870 align:start position:0%
+ 
+ 
+
+00:07:57.870 --> 00:07:59.310 align:start position:0%
+ 
+ 
+
+00:07:59.310 --> 00:08:00.719 align:start position:0%
+ 
+ 
+
+00:08:00.719 --> 00:08:01.980 align:start position:0%
+ 
+ 
+
+00:08:01.980 --> 00:08:04.230 align:start position:0%
+ 
+ 
+
+00:08:04.230 --> 00:08:05.909 align:start position:0%
+ 
+ 
+
+00:08:05.909 --> 00:08:08.279 align:start position:0%
+ 
+ 
+
+00:08:08.279 --> 00:08:09.689 align:start position:0%
+ 
+ 
+
+00:08:09.689 --> 00:08:12.050 align:start position:0%
+ 
+ 
+
+00:08:12.050 --> 00:08:14.520 align:start position:0%
+ 
+ 
+
+00:08:14.520 --> 00:08:15.689 align:start position:0%
+ 
+ 
+
+00:08:15.689 --> 00:08:17.459 align:start position:0%
+ 
+ 
+
+00:08:17.459 --> 00:08:20.370 align:start position:0%
+ 
+ 
+
+00:08:20.370 --> 00:08:21.570 align:start position:0%
+ 
+ 
+
+00:08:21.570 --> 00:08:23.100 align:start position:0%
+ 
+ 
+
+00:08:23.100 --> 00:08:24.510 align:start position:0%
+ 
+ 
+
+00:08:24.510 --> 00:08:27.749 align:start position:0%
+ 
+ 
+
+00:08:27.749 --> 00:08:29.459 align:start position:0%
+ 
+ 
+
+00:08:29.459 --> 00:08:31.350 align:start position:0%
+ 
+ 
+
+00:08:31.350 --> 00:08:34.680 align:start position:0%
+ 
+ 
+
+00:08:34.680 --> 00:08:36.360 align:start position:0%
+ 
+ 
+
+00:08:36.360 --> 00:08:38.159 align:start position:0%
+ 
+ 
+
+00:08:38.159 --> 00:08:39.930 align:start position:0%
+ 
+ 
+
+00:08:39.930 --> 00:08:41.370 align:start position:0%
+ 
+ 
+
+00:08:41.370 --> 00:08:42.990 align:start position:0%
+ 
+ 
+
+00:08:42.990 --> 00:08:45.120 align:start position:0%
+ 
+ 
+
+00:08:45.120 --> 00:08:46.470 align:start position:0%
+ 
+ 
+
+00:08:46.470 --> 00:08:47.790 align:start position:0%
+ 
+ 
+
+00:08:47.790 --> 00:08:50.340 align:start position:0%
+ 
+ 
+
+00:08:50.340 --> 00:08:53.400 align:start position:0%
+ 
+ 
+
+00:08:53.400 --> 00:08:54.310 align:start position:0%
+ 
+ 
+
+00:08:54.310 --> 00:08:55.750 align:start position:0%
+ 
+ 
+
+00:08:55.750 --> 00:08:57.010 align:start position:0%
+ 
+ 
+
+00:08:57.010 --> 00:08:58.240 align:start position:0%
+ 
+ 
+
+00:08:58.240 --> 00:08:59.700 align:start position:0%
+ 
+ 
+
+00:08:59.700 --> 00:09:02.290 align:start position:0%
+ 
+ 
+
+00:09:02.290 --> 00:09:04.450 align:start position:0%
+ 
+ 
+
+00:09:04.450 --> 00:09:07.420 align:start position:0%
+ 
+ 
+
+00:09:07.420 --> 00:09:09.070 align:start position:0%
+ 
+ 
+
+00:09:09.070 --> 00:09:11.140 align:start position:0%
+ 
+ 
+
+00:09:11.140 --> 00:09:12.670 align:start position:0%
+ 
+ 
+
+00:09:12.670 --> 00:09:14.500 align:start position:0%
+ 
+ 
+
+00:09:14.500 --> 00:09:19.240 align:start position:0%
+ 
+ 
+
+00:09:19.240 --> 00:09:21.730 align:start position:0%
+ 
+ 
+
+00:09:21.730 --> 00:09:23.110 align:start position:0%
+ 
+ 
+
+00:09:23.110 --> 00:09:24.700 align:start position:0%
+ 
+ 
+
+00:09:24.700 --> 00:09:27.040 align:start position:0%
+ 
+ 
+
+00:09:27.040 --> 00:09:29.890 align:start position:0%
+ 
+ 
+
+00:09:29.890 --> 00:09:32.350 align:start position:0%
+ 
+ 
+
+00:09:32.350 --> 00:09:34.060 align:start position:0%
+ 
+ 
+
+00:09:34.060 --> 00:09:35.560 align:start position:0%
+ 
+ 
+
+00:09:35.560 --> 00:09:38.350 align:start position:0%
+ 
+ 
+
+00:09:38.350 --> 00:09:40.000 align:start position:0%
+ 
+ 
+
+00:09:40.000 --> 00:09:42.970 align:start position:0%
+ 
+ 
+
+00:09:42.970 --> 00:09:45.190 align:start position:0%
+ 
+ 
+
+00:09:45.190 --> 00:09:46.660 align:start position:0%
+ 
+ 
+
+00:09:46.660 --> 00:09:47.860 align:start position:0%
+ 
+ 
+
+00:09:47.860 --> 00:09:50.140 align:start position:0%
+ 
+ 
+
+00:09:50.140 --> 00:09:51.220 align:start position:0%
+ 
+ 
+
+00:09:51.220 --> 00:09:53.080 align:start position:0%
+ 
+ 
+
+00:09:53.080 --> 00:09:55.600 align:start position:0%
+ 
+ 
+
+00:09:55.600 --> 00:09:57.010 align:start position:0%
+ 
+ 
+
+00:09:57.010 --> 00:09:58.720 align:start position:0%
+ 
+ 
+
+00:09:58.720 --> 00:10:00.100 align:start position:0%
+ 
+ 
+
+00:10:00.100 --> 00:10:04.210 align:start position:0%
+ 
+ 
+
+00:10:04.210 --> 00:10:05.950 align:start position:0%
+ 
+ 
+
+00:10:05.950 --> 00:10:07.390 align:start position:0%
+ 
+ 
+
+00:10:07.390 --> 00:10:08.680 align:start position:0%
+ 
+ 
+
+00:10:08.680 --> 00:10:09.910 align:start position:0%
+ 
+ 
+
+00:10:09.910 --> 00:10:12.010 align:start position:0%
+ 
+ 
+
+00:10:12.010 --> 00:10:13.420 align:start position:0%
+ 
+ 
+
+00:10:13.420 --> 00:10:16.060 align:start position:0%
+ 
+ 
+
+00:10:16.060 --> 00:10:17.890 align:start position:0%
+ 
+ 
+
+00:10:17.890 --> 00:10:20.110 align:start position:0%
+ 
+ 
+
+00:10:20.110 --> 00:10:21.700 align:start position:0%
+ 
+ 
+
+00:10:21.700 --> 00:10:24.070 align:start position:0%
+ 
+ 
+
+00:10:24.070 --> 00:10:25.810 align:start position:0%
+ 
+ 
+
+00:10:25.810 --> 00:10:27.400 align:start position:0%
+ 
+ 
+
+00:10:27.400 --> 00:10:29.770 align:start position:0%
+ 
+ 
+
+00:10:29.770 --> 00:10:31.630 align:start position:0%
+ 
+ 
+
+00:10:31.630 --> 00:10:32.830 align:start position:0%
+ 
+ 
+
+00:10:32.830 --> 00:10:34.540 align:start position:0%
+ 
+ 
+
+00:10:34.540 --> 00:10:36.790 align:start position:0%
+ 
+ 
+
+00:10:36.790 --> 00:10:38.830 align:start position:0%
+ 
+ 
+
+00:10:38.830 --> 00:10:40.990 align:start position:0%
+ 
+ 
+
+00:10:40.990 --> 00:10:43.120 align:start position:0%
+ 
+ 
+
+00:10:43.120 --> 00:10:43.130 align:start position:0%
+ 
+ 
+
+00:10:43.130 --> 00:10:46.200 align:start position:0%
+ 
+
+
+00:10:46.200 --> 00:10:50.530 align:start position:0%
+ 
+ 
+
+00:10:50.530 --> 00:10:51.940 align:start position:0%
+ 
+ 
+
+00:10:51.940 --> 00:10:53.920 align:start position:0%
+ 
+ 
+
+00:10:53.920 --> 00:10:55.750 align:start position:0%
+ 
+ 
+
+00:10:55.750 --> 00:10:58.330 align:start position:0%
+ 
+ 
+
+00:10:58.330 --> 00:10:59.920 align:start position:0%
+ 
+ 
+
+00:10:59.920 --> 00:11:04.480 align:start position:0%
+ 
+ 
+
+00:11:04.480 --> 00:11:05.890 align:start position:0%
+ 
+ 
+
+00:11:05.890 --> 00:11:07.780 align:start position:0%
+ 
+ 
+
+00:11:07.780 --> 00:11:08.230 align:start position:0%
+ 
+ 
+
+00:11:08.230 --> 00:11:09.939 align:start position:0%
+ 
+ 
+
+00:11:09.939 --> 00:11:12.759 align:start position:0%
+ 
+ 
+
+00:11:12.759 --> 00:11:14.710 align:start position:0%
+ 
+ 
+
+00:11:14.710 --> 00:11:16.299 align:start position:0%
+ 
+ 
+
+00:11:16.299 --> 00:11:17.559 align:start position:0%
+ 
+ 
+
+00:11:17.559 --> 00:11:20.199 align:start position:0%
+ 
+ 
+
+00:11:20.199 --> 00:11:22.869 align:start position:0%
+ 
+ 
+
+00:11:22.869 --> 00:11:26.650 align:start position:0%
+ 
+ 
+
+00:11:26.650 --> 00:11:30.129 align:start position:0%
+ 
+ 
+
+00:11:30.129 --> 00:11:31.660 align:start position:0%
+ 
+ 
+
+00:11:31.660 --> 00:11:34.329 align:start position:0%
+ 
+ 
+
+00:11:34.329 --> 00:11:36.759 align:start position:0%
+ 
+ 
+
+00:11:36.759 --> 00:11:38.619 align:start position:0%
+ 
+ 
+
+00:11:38.619 --> 00:11:40.090 align:start position:0%
+ 
+ 
+
+00:11:40.090 --> 00:11:41.439 align:start position:0%
+ 
+ 
+
+00:11:41.439 --> 00:11:43.329 align:start position:0%
+ 
+ 
+
+00:11:43.329 --> 00:11:44.829 align:start position:0%
+ 
+ 
+
+00:11:44.829 --> 00:11:46.869 align:start position:0%
+ 
+ 
+
+00:11:46.869 --> 00:11:48.879 align:start position:0%
+ 
+ 
+
+00:11:48.879 --> 00:11:50.679 align:start position:0%
+ 
+ 
+
+00:11:50.679 --> 00:11:53.079 align:start position:0%
+ 
+ 
+
+00:11:53.079 --> 00:11:54.819 align:start position:0%
+ 
+ 
+
+00:11:54.819 --> 00:11:57.069 align:start position:0%
+ 
+ 
+
+00:11:57.069 --> 00:11:59.199 align:start position:0%
+ 
+ 
+
+00:11:59.199 --> 00:12:00.699 align:start position:0%
+ 
+ 
+
+00:12:00.699 --> 00:12:02.530 align:start position:0%
+ 
+ 
+
+00:12:02.530 --> 00:12:04.569 align:start position:0%
+ 
+ 
+
+00:12:04.569 --> 00:12:06.400 align:start position:0%
+ 
+ 
+
+00:12:06.400 --> 00:12:08.980 align:start position:0%
+ 
+ 
+
+00:12:08.980 --> 00:12:10.059 align:start position:0%
+ 
+ 
+
+00:12:10.059 --> 00:12:13.780 align:start position:0%
+ 
+ 
+
+00:12:13.780 --> 00:12:15.160 align:start position:0%
+ 
+ 
+
+00:12:15.160 --> 00:12:16.900 align:start position:0%
+ 
+ 
+
+00:12:16.900 --> 00:12:18.400 align:start position:0%
+ 
+ 
+
+00:12:18.400 --> 00:12:21.460 align:start position:0%
+ 
+ 
+
+00:12:21.460 --> 00:12:23.259 align:start position:0%
+ 
+ 
+
+00:12:23.259 --> 00:12:24.309 align:start position:0%
+ 
+ 
+
+00:12:24.309 --> 00:12:25.929 align:start position:0%
+ 
+ 
+
+00:12:25.929 --> 00:12:27.819 align:start position:0%
+ 
+ 
+
+00:12:27.819 --> 00:12:29.049 align:start position:0%
+ 
+ 
+
+00:12:29.049 --> 00:12:30.009 align:start position:0%
+ 
+ 
+
+00:12:30.009 --> 00:12:31.569 align:start position:0%
+ 
+ 
+
+00:12:31.569 --> 00:12:33.939 align:start position:0%
+ 
+ 
+
+00:12:33.939 --> 00:12:36.429 align:start position:0%
+ 
+ 
+
+00:12:36.429 --> 00:12:38.139 align:start position:0%
+ 
+ 
+
+00:12:38.139 --> 00:12:39.970 align:start position:0%
+ 
+ 
+
+00:12:39.970 --> 00:12:42.160 align:start position:0%
+ 
+ 
+
+00:12:42.160 --> 00:12:44.319 align:start position:0%
+ 
+ 
+
+00:12:44.319 --> 00:12:46.829 align:start position:0%
+ 
+ 
+
+00:12:46.829 --> 00:12:48.869 align:start position:0%
+ 
+ 
+
+00:12:48.869 --> 00:12:51.280 align:start position:0%
+ 
+ 
+
+00:12:51.280 --> 00:12:52.720 align:start position:0%
+ 
+ 
+
+00:12:52.720 --> 00:12:54.999 align:start position:0%
+ 
+ 
+
+00:12:54.999 --> 00:12:58.059 align:start position:0%
+ 
+ 
+
+00:12:58.059 --> 00:12:59.769 align:start position:0%
+ 
+ 
+
+00:12:59.769 --> 00:13:00.669 align:start position:0%
+ 
+ 
+
+00:13:00.669 --> 00:13:02.530 align:start position:0%
+ 
+ 
+
+00:13:02.530 --> 00:13:03.699 align:start position:0%
+ 
+ 
+
+00:13:03.699 --> 00:13:05.410 align:start position:0%
+ 
+ 
+
+00:13:05.410 --> 00:13:06.789 align:start position:0%
+ 
+ 
+
+00:13:06.789 --> 00:13:09.069 align:start position:0%
+ 
+ 
+
+00:13:09.069 --> 00:13:11.590 align:start position:0%
+ 
+ 
+
+00:13:11.590 --> 00:13:14.049 align:start position:0%
+ 
+ 
+
+00:13:14.049 --> 00:13:16.360 align:start position:0%
+ 
+ 
+
+00:13:16.360 --> 00:13:18.610 align:start position:0%
+ 
+ 
+
+00:13:18.610 --> 00:13:20.049 align:start position:0%
+ 
+ 
+
+00:13:20.049 --> 00:13:20.489 align:start position:0%
+ 
+ 
+
+00:13:20.489 --> 00:13:22.439 align:start position:0%
+ 
+ 
+
+00:13:22.439 --> 00:13:23.729 align:start position:0%
+ 
+ 
+
+00:13:23.729 --> 00:13:25.799 align:start position:0%
+ 
+ 
+
+00:13:25.799 --> 00:13:27.359 align:start position:0%
+ 
+ 
+
+00:13:27.359 --> 00:13:29.129 align:start position:0%
+ 
+ 
+
+00:13:29.129 --> 00:13:31.079 align:start position:0%
+ 
+ 
+
+00:13:31.079 --> 00:13:32.369 align:start position:0%
+ 
+ 
+
+00:13:32.369 --> 00:13:34.259 align:start position:0%
+ 
+ 
+
+00:13:34.259 --> 00:13:39.959 align:start position:0%
+ 
+ 
+
+00:13:39.959 --> 00:13:41.009 align:start position:0%
+ 
+ 
+
+00:13:41.009 --> 00:13:42.599 align:start position:0%
+ 
+ 
+
+00:13:42.599 --> 00:13:43.469 align:start position:0%
+ 
+ 
+
+00:13:43.469 --> 00:13:45.179 align:start position:0%
+ 
+ 
+
+00:13:45.179 --> 00:13:47.549 align:start position:0%
+ 
+ 
+
+00:13:47.549 --> 00:13:49.439 align:start position:0%
+ 
+ 
+
+00:13:49.439 --> 00:13:52.939 align:start position:0%
+ 
+ 
+
+00:13:52.939 --> 00:13:55.499 align:start position:0%
+ 
+ 
+
+00:13:55.499 --> 00:13:57.479 align:start position:0%
+ 
+ 
+
+00:13:57.479 --> 00:13:59.609 align:start position:0%
+ 
+ 
+
+00:13:59.609 --> 00:14:01.259 align:start position:0%
+ 
+ 
+
+00:14:01.259 --> 00:14:02.459 align:start position:0%
+ 
+ 
+
+00:14:02.459 --> 00:14:04.739 align:start position:0%
+ 
+ 
+
+00:14:04.739 --> 00:14:08.069 align:start position:0%
+ 
+ 
+
+00:14:08.069 --> 00:14:10.319 align:start position:0%
+ 
+ 
+
+00:14:10.319 --> 00:14:12.209 align:start position:0%
+ 
+ 
+
+00:14:12.209 --> 00:14:16.259 align:start position:0%
+ 
+ 
+
+00:14:16.259 --> 00:14:17.999 align:start position:0%
+ 
+ 
+
+00:14:17.999 --> 00:14:19.589 align:start position:0%
+ 
+ 
+
+00:14:19.589 --> 00:14:21.569 align:start position:0%
+ 
+ 
+
+00:14:21.569 --> 00:14:23.339 align:start position:0%
+ 
+ 
+
+00:14:23.339 --> 00:14:25.309 align:start position:0%
+ 
+ 
+
+00:14:25.309 --> 00:14:27.839 align:start position:0%
+ 
+ 
+
+00:14:27.839 --> 00:14:29.279 align:start position:0%
+ 
+ 
+
+00:14:29.279 --> 00:14:31.109 align:start position:0%
+ 
+ 
+
+00:14:31.109 --> 00:14:32.609 align:start position:0%
+ 
+ 
+
+00:14:32.609 --> 00:14:34.169 align:start position:0%
+ 
+ 
+
+00:14:34.169 --> 00:14:35.969 align:start position:0%
+ 
+ 
+
+00:14:35.969 --> 00:14:37.649 align:start position:0%
+ 
+ 
+
+00:14:37.649 --> 00:14:38.789 align:start position:0%
+ 
+ 
+
+00:14:38.789 --> 00:14:43.949 align:start position:0%
+ 
+ 
+
+00:14:43.949 --> 00:14:45.719 align:start position:0%
+ 
+ 
+
+00:14:45.719 --> 00:14:49.319 align:start position:0%
+ 
+ 
+
+00:14:49.319 --> 00:14:50.999 align:start position:0%
+ 
+ 
+
+00:14:50.999 --> 00:14:53.519 align:start position:0%
+ 
+ 
+
+00:14:53.519 --> 00:14:54.960 align:start position:0%
+ 
+ 
+
+00:14:54.960 --> 00:14:57.869 align:start position:0%
+ 
+ 
+
+00:14:57.869 --> 00:14:59.549 align:start position:0%
+ 
+ 
+
+00:14:59.549 --> 00:15:01.409 align:start position:0%
+ 
+ 
+
+00:15:01.409 --> 00:15:03.149 align:start position:0%
+ 
+ 
+
+00:15:03.149 --> 00:15:04.289 align:start position:0%
+ 
+ 
+
+00:15:04.289 --> 00:15:06.649 align:start position:0%
+ 
+ 
+
+00:15:06.649 --> 00:15:08.669 align:start position:0%
+ 
+ 
+
+00:15:08.669 --> 00:15:12.269 align:start position:0%
+ 
+ 
+
+00:15:12.269 --> 00:15:13.739 align:start position:0%
+ 
+ 
+
+00:15:13.739 --> 00:15:15.449 align:start position:0%
+ 
+ 
+
+00:15:15.449 --> 00:15:16.949 align:start position:0%
+ 
+ 
+
+00:15:16.949 --> 00:15:18.389 align:start position:0%
+ 
+ 
+
+00:15:18.389 --> 00:15:21.269 align:start position:0%
+ 
+ 
+
+00:15:21.269 --> 00:15:24.809 align:start position:0%
+ 
+ 
+
+00:15:24.809 --> 00:15:27.629 align:start position:0%
+ 
+ 
+
+00:15:27.629 --> 00:15:29.549 align:start position:0%
+ 
+ 
+
+00:15:29.549 --> 00:15:30.929 align:start position:0%
+ 
+ 
+
+00:15:30.929 --> 00:15:33.990 align:start position:0%
+ 
+ 
+
+00:15:33.990 --> 00:15:36.120 align:start position:0%
+ 
+ 
+
+00:15:36.120 --> 00:15:37.830 align:start position:0%
+ 
+ 
+
+00:15:37.830 --> 00:15:39.240 align:start position:0%
+ 
+ 
+
+00:15:39.240 --> 00:15:40.560 align:start position:0%
+ 
+ 
+
+00:15:40.560 --> 00:15:42.030 align:start position:0%
+ 
+ 
+
+00:15:42.030 --> 00:15:44.070 align:start position:0%
+ 
+ 
+
+00:15:44.070 --> 00:15:48.300 align:start position:0%
+ 
+ 
+
+00:15:48.300 --> 00:15:50.070 align:start position:0%
+ 
+ 
+
+00:15:50.070 --> 00:15:51.630 align:start position:0%
+ 
+ 
+
+00:15:51.630 --> 00:15:54.120 align:start position:0%
+ 
+ 
+
+00:15:54.120 --> 00:15:55.830 align:start position:0%
+ 
+ 
+
+00:15:55.830 --> 00:15:57.360 align:start position:0%
+ 
+ 
+
+00:15:57.360 --> 00:16:00.240 align:start position:0%
+ 
+ 
+
+00:16:00.240 --> 00:16:01.530 align:start position:0%
+ 
+ 
+
+00:16:01.530 --> 00:16:03.420 align:start position:0%
+ 
+ 
+
+00:16:03.420 --> 00:16:05.220 align:start position:0%
+ 
+ 
+
+00:16:05.220 --> 00:16:06.750 align:start position:0%
+ 
+ 
+
+00:16:06.750 --> 00:16:08.070 align:start position:0%
+ 
+ 
+
+00:16:08.070 --> 00:16:10.020 align:start position:0%
+ 
+ 
+
+00:16:10.020 --> 00:16:12.300 align:start position:0%
+ 
+ 
+
+00:16:12.300 --> 00:16:14.220 align:start position:0%
+ 
+ 
+
+00:16:14.220 --> 00:16:16.080 align:start position:0%
+ 
+ 
+
+00:16:16.080 --> 00:16:17.520 align:start position:0%
+ 
+ 
+
+00:16:17.520 --> 00:16:19.200 align:start position:0%
+ 
+ 
+
+00:16:19.200 --> 00:16:22.800 align:start position:0%
+ 
+ 
+
+00:16:22.800 --> 00:16:24.900 align:start position:0%
+ 
+ 
+
+00:16:24.900 --> 00:16:27.360 align:start position:0%
+ 
+ 
+
+00:16:27.360 --> 00:16:28.770 align:start position:0%
+ 
+ 
+
+00:16:28.770 --> 00:16:30.120 align:start position:0%
+ 
+ 
+
+00:16:30.120 --> 00:16:32.280 align:start position:0%
+ 
+ 
+
+00:16:32.280 --> 00:16:34.140 align:start position:0%
+ 
+ 
+
+00:16:34.140 --> 00:16:36.120 align:start position:0%
+ 
+ 
+
+00:16:36.120 --> 00:16:41.400 align:start position:0%
+ 
+ 
+
+00:16:41.400 --> 00:16:43.590 align:start position:0%
+ 
+ 
+
+00:16:43.590 --> 00:16:46.140 align:start position:0%
+ 
+ 
+
+00:16:46.140 --> 00:16:48.390 align:start position:0%
+ 
+ 
+
+00:16:48.390 --> 00:16:50.490 align:start position:0%
+ 
+ 
+
+00:16:50.490 --> 00:16:53.250 align:start position:0%
+ 
+ 
+
+00:16:53.250 --> 00:16:55.710 align:start position:0%
+ 
+ 
+
+00:16:55.710 --> 00:16:57.360 align:start position:0%
+ 
+ 
+
+00:16:57.360 --> 00:16:58.470 align:start position:0%
+ 
+ 
+
+00:16:58.470 --> 00:17:01.170 align:start position:0%
+ 
+ 
+
+00:17:01.170 --> 00:17:02.370 align:start position:0%
+ 
+ 
+
+00:17:02.370 --> 00:17:04.110 align:start position:0%
+ 
+ 
+
+00:17:04.110 --> 00:17:06.210 align:start position:0%
+ 
+ 
+
+00:17:06.210 --> 00:17:08.819 align:start position:0%
+ 
+ 
+
+00:17:08.819 --> 00:17:10.949 align:start position:0%
+ 
+ 
+
+00:17:10.949 --> 00:17:13.800 align:start position:0%
+ 
+ 
+
+00:17:13.800 --> 00:17:16.110 align:start position:0%
+ 
+ 
+
+00:17:16.110 --> 00:17:18.360 align:start position:0%
+ 
+ 
+
+00:17:18.360 --> 00:17:19.890 align:start position:0%
+ 
+ 
+
+00:17:19.890 --> 00:17:19.900 align:start position:0%
+ 
+ 
+
+00:17:19.900 --> 00:17:25.990 align:start position:0%
+ 
+
+
+00:17:25.990 --> 00:17:28.240 align:start position:0%
+ 
+ 
+
+00:17:28.240 --> 00:17:29.620 align:start position:0%
+ 
+ 
+
+00:17:29.620 --> 00:17:31.060 align:start position:0%
+ 
+ 
+
+00:17:31.060 --> 00:17:33.760 align:start position:0%
+ 
+ 
+
+00:17:33.760 --> 00:17:35.890 align:start position:0%
+ 
+ 
+
+00:17:35.890 --> 00:17:37.000 align:start position:0%
+ 
+ 
+
+00:17:37.000 --> 00:17:38.290 align:start position:0%
+ 
+ 
+
+00:17:38.290 --> 00:17:42.340 align:start position:0%
+ 
+ 
+
+00:17:42.340 --> 00:17:44.290 align:start position:0%
+ 
+ 
+
+00:17:44.290 --> 00:17:45.730 align:start position:0%
+ 
+ 
+
+00:17:45.730 --> 00:17:48.790 align:start position:0%
+ 
+ 
+
+00:17:48.790 --> 00:17:50.470 align:start position:0%
+ 
+ 
+
+00:17:50.470 --> 00:17:52.510 align:start position:0%
+ 
+ 
+
+00:17:52.510 --> 00:17:54.340 align:start position:0%
+ 
+ 
+
+00:17:54.340 --> 00:17:55.750 align:start position:0%
+ 
+ 
+
+00:17:55.750 --> 00:17:57.610 align:start position:0%
+ 
+ 
+
+00:17:57.610 --> 00:18:00.640 align:start position:0%
+ 
+ 
+
+00:18:00.640 --> 00:18:02.170 align:start position:0%
+ 
+ 
+
+00:18:02.170 --> 00:18:03.580 align:start position:0%
+ 
+ 
+
+00:18:03.580 --> 00:18:05.050 align:start position:0%
+ 
+ 
+
+00:18:05.050 --> 00:18:06.310 align:start position:0%
+ 
+ 
+
+00:18:06.310 --> 00:18:09.970 align:start position:0%
+ 
+ 
+
+00:18:09.970 --> 00:18:12.430 align:start position:0%
+ 
+ 
+
+00:18:12.430 --> 00:18:13.990 align:start position:0%
+ 
+ 
+
+00:18:13.990 --> 00:18:16.000 align:start position:0%
+ 
+ 
+
+00:18:16.000 --> 00:18:18.400 align:start position:0%
+ 
+ 
+
+00:18:18.400 --> 00:18:20.290 align:start position:0%
+ 
+ 
+
+00:18:20.290 --> 00:18:23.590 align:start position:0%
+ 
+ 
+
+00:18:23.590 --> 00:18:25.480 align:start position:0%
+ 
+ 
+
+00:18:25.480 --> 00:18:26.830 align:start position:0%
+ 
+ 
+
+00:18:26.830 --> 00:18:29.190 align:start position:0%
+ 
+ 
+
+00:18:29.190 --> 00:18:31.510 align:start position:0%
+ 
+ 
+
+00:18:31.510 --> 00:18:33.490 align:start position:0%
+ 
+ 
+
+00:18:33.490 --> 00:18:35.470 align:start position:0%
+ 
+ 
+
+00:18:35.470 --> 00:18:37.060 align:start position:0%
+ 
+ 
+
+00:18:37.060 --> 00:18:38.830 align:start position:0%
+ 
+ 
+
+00:18:38.830 --> 00:18:40.600 align:start position:0%
+ 
+ 
+
+00:18:40.600 --> 00:18:42.490 align:start position:0%
+ 
+ 
+
+00:18:42.490 --> 00:18:44.290 align:start position:0%
+ 
+ 
+
+00:18:44.290 --> 00:18:46.750 align:start position:0%
+ 
+ 
+
+00:18:46.750 --> 00:18:48.250 align:start position:0%
+ 
+ 
+
+00:18:48.250 --> 00:18:51.700 align:start position:0%
+ 
+ 
+
+00:18:51.700 --> 00:18:53.770 align:start position:0%
+ 
+ 
+
+00:18:53.770 --> 00:18:55.720 align:start position:0%
+ 
+ 
+
+00:18:55.720 --> 00:18:57.580 align:start position:0%
+ 
+ 
+
+00:18:57.580 --> 00:19:00.750 align:start position:0%
+ 
+ 
+
+00:19:00.750 --> 00:19:02.860 align:start position:0%
+ 
+ 
+
+00:19:02.860 --> 00:19:04.720 align:start position:0%
+ 
+ 
+
+00:19:04.720 --> 00:19:06.970 align:start position:0%
+ 
+ 
+
+00:19:06.970 --> 00:19:08.590 align:start position:0%
+ 
+ 
+
+00:19:08.590 --> 00:19:10.540 align:start position:0%
+ 
+ 
+
+00:19:10.540 --> 00:19:12.220 align:start position:0%
+ 
+ 
+
+00:19:12.220 --> 00:19:17.500 align:start position:0%
+ 
+ 
+
+00:19:17.500 --> 00:19:20.650 align:start position:0%
+ 
+ 
+
+00:19:20.650 --> 00:19:22.180 align:start position:0%
+ 
+ 
+
+00:19:22.180 --> 00:19:23.770 align:start position:0%
+ 
+ 
+
+00:19:23.770 --> 00:19:26.410 align:start position:0%
+ 
+ 
+
+00:19:26.410 --> 00:19:27.910 align:start position:0%
+ 
+ 
+
+00:19:27.910 --> 00:19:30.070 align:start position:0%
+ 
+ 
+
+00:19:30.070 --> 00:19:32.410 align:start position:0%
+ 
+ 
+
+00:19:32.410 --> 00:19:33.910 align:start position:0%
+ 
+ 
+
+00:19:33.910 --> 00:19:37.330 align:start position:0%
+ 
+ 
+
+00:19:37.330 --> 00:19:39.150 align:start position:0%
+ 
+ 
+
+00:19:39.150 --> 00:19:40.620 align:start position:0%
+ 
+ 
+
+00:19:40.620 --> 00:19:42.690 align:start position:0%
+ 
+ 
+
+00:19:42.690 --> 00:19:44.160 align:start position:0%
+ 
+ 
+
+00:19:44.160 --> 00:19:45.540 align:start position:0%
+ 
+ 
+
+00:19:45.540 --> 00:19:45.550 align:start position:0%
+ 
+ 
+
+00:19:45.550 --> 00:19:45.870 align:start position:0%
+ 
+
+
+00:19:45.870 --> 00:19:46.920 align:start position:0%
+ 
+ 
+
+00:19:46.920 --> 00:19:48.540 align:start position:0%
+ 
+ 
+
+00:19:48.540 --> 00:19:50.100 align:start position:0%
+ 
+ 
+
+00:19:50.100 --> 00:19:51.840 align:start position:0%
+ 
+ 
+
+00:19:51.840 --> 00:19:53.280 align:start position:0%
+ 
+ 
+
+00:19:53.280 --> 00:19:54.930 align:start position:0%
+ 
+ 
+
+00:19:54.930 --> 00:19:56.910 align:start position:0%
+ 
+ 
+
+00:19:56.910 --> 00:19:58.470 align:start position:0%
+ 
+ 
+
+00:19:58.470 --> 00:20:00.060 align:start position:0%
+ 
+ 
+
+00:20:00.060 --> 00:20:02.760 align:start position:0%
+ 
+ 
+
+00:20:02.760 --> 00:20:03.690 align:start position:0%
+ 
+ 
+
+00:20:03.690 --> 00:20:05.550 align:start position:0%
+ 
+ 
+
+00:20:05.550 --> 00:20:08.520 align:start position:0%
+ 
+ 
+
+00:20:08.520 --> 00:20:10.170 align:start position:0%
+ 
+ 
+
+00:20:10.170 --> 00:20:12.480 align:start position:0%
+ 
+ 
+
+00:20:12.480 --> 00:20:14.460 align:start position:0%
+ 
+ 
+
+00:20:14.460 --> 00:20:16.080 align:start position:0%
+ 
+ 
+
+00:20:16.080 --> 00:20:18.390 align:start position:0%
+ 
+ 
+
+00:20:18.390 --> 00:20:20.580 align:start position:0%
+ 
+ 
+
+00:20:20.580 --> 00:20:23.490 align:start position:0%
+ 
+ 
+
+00:20:23.490 --> 00:20:24.930 align:start position:0%
+ 
+ 
+
+00:20:24.930 --> 00:20:26.460 align:start position:0%
+ 
+ 
+
+00:20:26.460 --> 00:20:28.170 align:start position:0%
+ 
+ 
+
+00:20:28.170 --> 00:20:29.790 align:start position:0%
+ 
+ 
+
+00:20:29.790 --> 00:20:33.540 align:start position:0%
+ 
+ 
+
+00:20:33.540 --> 00:20:36.840 align:start position:0%
+ 
+ 
+
+00:20:36.840 --> 00:20:39.060 align:start position:0%
+ 
+ 
+
+00:20:39.060 --> 00:20:41.420 align:start position:0%
+ 
+ 
+
+00:20:41.420 --> 00:20:43.740 align:start position:0%
+ 
+ 
+
+00:20:43.740 --> 00:20:45.510 align:start position:0%
+ 
+ 
+
+00:20:45.510 --> 00:20:46.980 align:start position:0%
+ 
+ 
+
+00:20:46.980 --> 00:20:48.000 align:start position:0%
+ 
+ 
+
+00:20:48.000 --> 00:20:50.430 align:start position:0%
+ 
+ 
+
+00:20:50.430 --> 00:20:52.140 align:start position:0%
+ 
+ 
+
+00:20:52.140 --> 00:20:55.470 align:start position:0%
+ 
+ 
+
+00:20:55.470 --> 00:20:56.970 align:start position:0%
+ 
+ 
+
+00:20:56.970 --> 00:20:59.330 align:start position:0%
+ 
+ 
+
+00:20:59.330 --> 00:21:01.470 align:start position:0%
+ 
+ 
+
+00:21:01.470 --> 00:21:03.810 align:start position:0%
+ 
+ 
+
+00:21:03.810 --> 00:21:05.730 align:start position:0%
+ 
+ 
+
+00:21:05.730 --> 00:21:08.220 align:start position:0%
+ 
+ 
+
+00:21:08.220 --> 00:21:11.610 align:start position:0%
+ 
+ 
+
+00:21:11.610 --> 00:21:13.650 align:start position:0%
+ 
+ 
+
+00:21:13.650 --> 00:21:15.030 align:start position:0%
+ 
+ 
+
+00:21:15.030 --> 00:21:16.620 align:start position:0%
+ 
+ 
+
+00:21:16.620 --> 00:21:18.630 align:start position:0%
+ 
+ 
+
+00:21:18.630 --> 00:21:20.640 align:start position:0%
+ 
+ 
+
+00:21:20.640 --> 00:21:22.590 align:start position:0%
+ 
+ 
+
+00:21:22.590 --> 00:21:23.760 align:start position:0%
+ 
+ 
+
+00:21:23.760 --> 00:21:24.990 align:start position:0%
+ 
+ 
+
+00:21:24.990 --> 00:21:26.490 align:start position:0%
+ 
+ 
+
+00:21:26.490 --> 00:21:27.810 align:start position:0%
+ 
+ 
+
+00:21:27.810 --> 00:21:29.430 align:start position:0%
+ 
+ 
+
+00:21:29.430 --> 00:21:30.990 align:start position:0%
+ 
+ 
+
+00:21:30.990 --> 00:21:32.520 align:start position:0%
+ 
+ 
+
+00:21:32.520 --> 00:21:36.480 align:start position:0%
+ 
+ 
+
+00:21:36.480 --> 00:21:37.830 align:start position:0%
+ 
+ 
+
+00:21:37.830 --> 00:21:39.960 align:start position:0%
+ 
+ 
+
+00:21:39.960 --> 00:21:41.700 align:start position:0%
+ 
+ 
+
+00:21:41.700 --> 00:21:44.040 align:start position:0%
+ 
+ 
+
+00:21:44.040 --> 00:21:46.380 align:start position:0%
+ 
+ 
+
+00:21:46.380 --> 00:21:47.700 align:start position:0%
+ 
+ 
+
+00:21:47.700 --> 00:21:49.980 align:start position:0%
+ 
+ 
+
+00:21:49.980 --> 00:21:51.480 align:start position:0%
+ 
+ 
+
+00:21:51.480 --> 00:21:52.230 align:start position:0%
+ 
+ 
+
+00:21:52.230 --> 00:21:54.690 align:start position:0%
+ 
+ 
+
+00:21:54.690 --> 00:21:57.540 align:start position:0%
+ 
+ 
+
+00:21:57.540 --> 00:22:00.630 align:start position:0%
+ 
+ 
+
+00:22:00.630 --> 00:22:02.520 align:start position:0%
+ 
+ 
+
+00:22:02.520 --> 00:22:04.169 align:start position:0%
+ 
+ 
+
+00:22:04.169 --> 00:22:06.840 align:start position:0%
+ 
+ 
+
+00:22:06.840 --> 00:22:08.460 align:start position:0%
+ 
+ 
+
+00:22:08.460 --> 00:22:10.350 align:start position:0%
+ 
+ 
+
+00:22:10.350 --> 00:22:11.760 align:start position:0%
+ 
+ 
+
+00:22:11.760 --> 00:22:12.870 align:start position:0%
+ 
+ 
+
+00:22:12.870 --> 00:22:14.700 align:start position:0%
+ 
+ 
+
+00:22:14.700 --> 00:22:17.400 align:start position:0%
+ 
+ 
+
+00:22:17.400 --> 00:22:19.410 align:start position:0%
+ 
+ 
+
+00:22:19.410 --> 00:22:22.500 align:start position:0%
+ 
+ 
+
+00:22:22.500 --> 00:22:24.330 align:start position:0%
+ 
+ 
+
+00:22:24.330 --> 00:22:26.820 align:start position:0%
+ 
+ 
+
+00:22:26.820 --> 00:22:28.919 align:start position:0%
+ 
+ 
+
+00:22:28.919 --> 00:22:31.350 align:start position:0%
+ 
+ 
+
+00:22:31.350 --> 00:22:33.000 align:start position:0%
+ 
+ 
+
+00:22:33.000 --> 00:22:34.950 align:start position:0%
+ 
+ 
+
+00:22:34.950 --> 00:22:36.150 align:start position:0%
+ 
+ 
+
+00:22:36.150 --> 00:22:40.200 align:start position:0%
+ 
+ 
+
+00:22:40.200 --> 00:22:41.880 align:start position:0%
+ 
+ 
+
+00:22:41.880 --> 00:22:43.440 align:start position:0%
+ 
+ 
+
+00:22:43.440 --> 00:22:44.970 align:start position:0%
+ 
+ 
+
+00:22:44.970 --> 00:22:46.290 align:start position:0%
+ 
+ 
+
+00:22:46.290 --> 00:22:47.970 align:start position:0%
+ 
+ 
+
+00:22:47.970 --> 00:22:49.890 align:start position:0%
+ 
+ 
+
+00:22:49.890 --> 00:22:51.419 align:start position:0%
+ 
+ 
+
+00:22:51.419 --> 00:22:53.370 align:start position:0%
+ 
+ 
+
+00:22:53.370 --> 00:22:56.220 align:start position:0%
+ 
+ 
+
+00:22:56.220 --> 00:22:57.120 align:start position:0%
+ 
+ 
+
+00:22:57.120 --> 00:22:58.440 align:start position:0%
+ 
+ 
+
+00:22:58.440 --> 00:23:00.870 align:start position:0%
+ 
+ 
+
+00:23:00.870 --> 00:23:02.160 align:start position:0%
+ 
+ 
+
+00:23:02.160 --> 00:23:04.230 align:start position:0%
+ 
+ 
+
+00:23:04.230 --> 00:23:05.549 align:start position:0%
+ 
+ 
+
+00:23:05.549 --> 00:23:06.810 align:start position:0%
+ 
+ 
+
+00:23:06.810 --> 00:23:08.970 align:start position:0%
+ 
+ 
+
+00:23:08.970 --> 00:23:12.330 align:start position:0%
+ 
+ 
+
+00:23:12.330 --> 00:23:13.860 align:start position:0%
+ 
+ 
+
+00:23:13.860 --> 00:23:15.090 align:start position:0%
+ 
+ 
+
+00:23:15.090 --> 00:23:17.040 align:start position:0%
+ 
+ 
+
+00:23:17.040 --> 00:23:18.480 align:start position:0%
+ 
+ 
+
+00:23:18.480 --> 00:23:20.460 align:start position:0%
+ 
+ 
+
+00:23:20.460 --> 00:23:22.560 align:start position:0%
+ 
+ 
+
+00:23:22.560 --> 00:23:24.180 align:start position:0%
+ 
+ 
+
+00:23:24.180 --> 00:23:26.430 align:start position:0%
+ 
+ 
+
+00:23:26.430 --> 00:23:28.110 align:start position:0%
+ 
+ 
+
+00:23:28.110 --> 00:23:31.140 align:start position:0%
+ 
+ 
+
+00:23:31.140 --> 00:23:34.710 align:start position:0%
+ 
+ 
+
+00:23:34.710 --> 00:23:36.060 align:start position:0%
+ 
+ 
+
+00:23:36.060 --> 00:23:37.560 align:start position:0%
+ 
+ 
+
+00:23:37.560 --> 00:23:40.290 align:start position:0%
+ 
+ 
+
+00:23:40.290 --> 00:23:42.180 align:start position:0%
+ 
+ 
+
+00:23:42.180 --> 00:23:44.310 align:start position:0%
+ 
+ 
+
+00:23:44.310 --> 00:23:47.160 align:start position:0%
+ 
+ 
+
+00:23:47.160 --> 00:23:49.169 align:start position:0%
+ 
+ 
+
+00:23:49.169 --> 00:23:50.669 align:start position:0%
+ 
+ 
+
+00:23:50.669 --> 00:23:52.320 align:start position:0%
+ 
+ 
+
+00:23:52.320 --> 00:23:54.630 align:start position:0%
+ 
+ 
+
+00:23:54.630 --> 00:23:57.720 align:start position:0%
+ 
+ 
+
+00:23:57.720 --> 00:23:58.919 align:start position:0%
+ 
+ 
+
+00:23:58.919 --> 00:24:00.419 align:start position:0%
+ 
+ 
+
+00:24:00.419 --> 00:24:02.430 align:start position:0%
+ 
+ 
+
+00:24:02.430 --> 00:24:05.040 align:start position:0%
+ 
+ 
+
+00:24:05.040 --> 00:24:05.050 align:start position:0%
+ 
+ 
+
+00:24:05.050 --> 00:24:05.370 align:start position:0%
+ 
+
+
+00:24:05.370 --> 00:24:06.540 align:start position:0%
+ 
+ 
+
+00:24:06.540 --> 00:24:07.890 align:start position:0%
+ 
+ 
+
+00:24:07.890 --> 00:24:09.510 align:start position:0%
+ 
+ 
+
+00:24:09.510 --> 00:24:12.470 align:start position:0%
+ 
+ 
+
+00:24:12.470 --> 00:24:14.940 align:start position:0%
+ 
+ 
+
+00:24:14.940 --> 00:24:16.800 align:start position:0%
+ 
+ 
+
+00:24:16.800 --> 00:24:18.150 align:start position:0%
+ 
+ 
+
+00:24:18.150 --> 00:24:20.670 align:start position:0%
+ 
+ 
+
+00:24:20.670 --> 00:24:22.410 align:start position:0%
+ 
+ 
+
+00:24:22.410 --> 00:24:24.840 align:start position:0%
+ 
+ 
+
+00:24:24.840 --> 00:24:27.900 align:start position:0%
+ 
+ 
+
+00:24:27.900 --> 00:24:30.780 align:start position:0%
+ 
+ 
+
+00:24:30.780 --> 00:24:33.870 align:start position:0%
+ 
+ 
+
+00:24:33.870 --> 00:24:35.700 align:start position:0%
+ 
+ 
+
+00:24:35.700 --> 00:24:37.620 align:start position:0%
+ 
+ 
+
+00:24:37.620 --> 00:24:39.780 align:start position:0%
+ 
+ 
+
+00:24:39.780 --> 00:24:41.100 align:start position:0%
+ 
+ 
+
+00:24:41.100 --> 00:24:43.620 align:start position:0%
+ 
+ 
+
+00:24:43.620 --> 00:24:45.560 align:start position:0%
+ 
+ 
+
+00:24:45.560 --> 00:24:48.060 align:start position:0%
+ 
+ 
+
+00:24:48.060 --> 00:24:49.320 align:start position:0%
+ 
+ 
+
+00:24:49.320 --> 00:24:50.940 align:start position:0%
+ 
+ 
+
+00:24:50.940 --> 00:24:52.980 align:start position:0%
+ 
+ 
+
+00:24:52.980 --> 00:24:54.930 align:start position:0%
+ 
+ 
+
+00:24:54.930 --> 00:24:55.740 align:start position:0%
+ 
+ 
+
+00:24:55.740 --> 00:24:58.770 align:start position:0%
+ 
+ 
+
+00:24:58.770 --> 00:25:00.180 align:start position:0%
+ 
+ 
+
+00:25:00.180 --> 00:25:01.260 align:start position:0%
+ 
+ 
+
+00:25:01.260 --> 00:25:05.100 align:start position:0%
+ 
+ 
+
+00:25:05.100 --> 00:25:06.630 align:start position:0%
+ 
+ 
+
+00:25:06.630 --> 00:25:08.490 align:start position:0%
+ 
+ 
+
+00:25:08.490 --> 00:25:09.990 align:start position:0%
+ 
+ 
+
+00:25:09.990 --> 00:25:11.790 align:start position:0%
+ 
+ 
+
+00:25:11.790 --> 00:25:13.170 align:start position:0%
+ 
+ 
+
+00:25:13.170 --> 00:25:15.780 align:start position:0%
+ 
+ 
+
+00:25:15.780 --> 00:25:17.520 align:start position:0%
+ 
+ 
+
+00:25:17.520 --> 00:25:19.770 align:start position:0%
+ 
+ 
+
+00:25:19.770 --> 00:25:22.290 align:start position:0%
+ 
+ 
+
+00:25:22.290 --> 00:25:24.180 align:start position:0%
+ 
+ 
+
+00:25:24.180 --> 00:25:26.010 align:start position:0%
+ 
+ 
+
+00:25:26.010 --> 00:25:29.940 align:start position:0%
+ 
+ 
+
+00:25:29.940 --> 00:25:31.920 align:start position:0%
+ 
+ 
+
+00:25:31.920 --> 00:25:33.600 align:start position:0%
+ 
+ 
+
+00:25:33.600 --> 00:25:35.160 align:start position:0%
+ 
+ 
+
+00:25:35.160 --> 00:25:36.180 align:start position:0%
+ 
+ 
+
+00:25:36.180 --> 00:25:41.010 align:start position:0%
+ 
+ 
+
+00:25:41.010 --> 00:25:43.050 align:start position:0%
+ 
+ 
+
+00:25:43.050 --> 00:25:44.490 align:start position:0%
+ 
+ 
+
+00:25:44.490 --> 00:25:46.560 align:start position:0%
+ 
+ 
+
+00:25:46.560 --> 00:25:47.370 align:start position:0%
+ 
+ 
+
+00:25:47.370 --> 00:25:49.170 align:start position:0%
+ 
+ 
+
+00:25:49.170 --> 00:25:53.460 align:start position:0%
+ 
+ 
+
+00:25:53.460 --> 00:25:55.710 align:start position:0%
+ 
+ 
+
+00:25:55.710 --> 00:25:57.450 align:start position:0%
+ 
+ 
+
+00:25:57.450 --> 00:25:59.190 align:start position:0%
+ 
+ 
+
+00:25:59.190 --> 00:26:00.660 align:start position:0%
+ 
+ 
+
+00:26:00.660 --> 00:26:02.210 align:start position:0%
+ 
+ 
+
+00:26:02.210 --> 00:26:04.980 align:start position:0%
+ 
+ 
+
+00:26:04.980 --> 00:26:06.240 align:start position:0%
+ 
+ 
+
+00:26:06.240 --> 00:26:07.740 align:start position:0%
+ 
+ 
+
+00:26:07.740 --> 00:26:09.960 align:start position:0%
+ 
+ 
+
+00:26:09.960 --> 00:26:11.730 align:start position:0%
+ 
+ 
+
+00:26:11.730 --> 00:26:12.870 align:start position:0%
+ 
+ 
+
+00:26:12.870 --> 00:26:14.580 align:start position:0%
+ 
+ 
+
+00:26:14.580 --> 00:26:16.950 align:start position:0%
+ 
+ 
+
+00:26:16.950 --> 00:26:18.060 align:start position:0%
+ 
+ 
+
+00:26:18.060 --> 00:26:19.060 align:start position:0%
+ 
+ 
+
+00:26:19.060 --> 00:26:20.499 align:start position:0%
+ 
+ 
+
+00:26:20.499 --> 00:26:22.029 align:start position:0%
+ 
+ 
+
+00:26:22.029 --> 00:26:23.320 align:start position:0%
+ 
+ 
+
+00:26:23.320 --> 00:26:25.149 align:start position:0%
+ 
+ 
+
+00:26:25.149 --> 00:26:27.070 align:start position:0%
+ 
+ 
+
+00:26:27.070 --> 00:26:28.450 align:start position:0%
+ 
+ 
+
+00:26:28.450 --> 00:26:30.820 align:start position:0%
+ 
+ 
+
+00:26:30.820 --> 00:26:33.039 align:start position:0%
+ 
+ 
+
+00:26:33.039 --> 00:26:34.440 align:start position:0%
+ 
+ 
+
+00:26:34.440 --> 00:26:36.850 align:start position:0%
+ 
+ 
+
+00:26:36.850 --> 00:26:38.350 align:start position:0%
+ 
+ 
+
+00:26:38.350 --> 00:26:39.970 align:start position:0%
+ 
+ 
+
+00:26:39.970 --> 00:26:41.470 align:start position:0%
+ 
+ 
+
+00:26:41.470 --> 00:26:42.700 align:start position:0%
+ 
+ 
+
+00:26:42.700 --> 00:26:44.860 align:start position:0%
+ 
+ 
+
+00:26:44.860 --> 00:26:47.919 align:start position:0%
+ 
+ 
+
+00:26:47.919 --> 00:26:49.240 align:start position:0%
+ 
+ 
+
+00:26:49.240 --> 00:26:52.060 align:start position:0%
+ 
+ 
+
+00:26:52.060 --> 00:26:53.619 align:start position:0%
+ 
+ 
+
+00:26:53.619 --> 00:26:54.940 align:start position:0%
+ 
+ 
+
+00:26:54.940 --> 00:26:56.619 align:start position:0%
+ 
+ 
+
+00:26:56.619 --> 00:26:58.570 align:start position:0%
+ 
+ 
+
+00:26:58.570 --> 00:27:00.100 align:start position:0%
+ 
+ 
+
+00:27:00.100 --> 00:27:01.480 align:start position:0%
+ 
+ 
+
+00:27:01.480 --> 00:27:05.619 align:start position:0%
+ 
+ 
+
+00:27:05.619 --> 00:27:08.409 align:start position:0%
+ 
+ 
+
+00:27:08.409 --> 00:27:09.879 align:start position:0%
+ 
+ 
+
+00:27:09.879 --> 00:27:11.230 align:start position:0%
+ 
+ 
+
+00:27:11.230 --> 00:27:13.539 align:start position:0%
+ 
+ 
+
+00:27:13.539 --> 00:27:15.580 align:start position:0%
+ 
+ 
+
+00:27:15.580 --> 00:27:18.700 align:start position:0%
+ 
+ 
+
+00:27:18.700 --> 00:27:20.049 align:start position:0%
+ 
+ 
+
+00:27:20.049 --> 00:27:22.149 align:start position:0%
+ 
+ 
+
+00:27:22.149 --> 00:27:24.460 align:start position:0%
+ 
+ 
+
+00:27:24.460 --> 00:27:26.289 align:start position:0%
+ 
+ 
+
+00:27:26.289 --> 00:27:27.700 align:start position:0%
+ 
+ 
+
+00:27:27.700 --> 00:27:31.690 align:start position:0%
+ 
+ 
+
+00:27:31.690 --> 00:27:33.340 align:start position:0%
+ 
+ 
+
+00:27:33.340 --> 00:27:35.680 align:start position:0%
+ 
+ 
+
+00:27:35.680 --> 00:27:36.789 align:start position:0%
+ 
+ 
+
+00:27:36.789 --> 00:27:38.499 align:start position:0%
+ 
+ 
+
+00:27:38.499 --> 00:27:39.730 align:start position:0%
+ 
+ 
+
+00:27:39.730 --> 00:27:41.950 align:start position:0%
+ 
+ 
+
+00:27:41.950 --> 00:27:45.940 align:start position:0%
+ 
+ 
+
+00:27:45.940 --> 00:27:47.590 align:start position:0%
+ 
+ 
+
+00:27:47.590 --> 00:27:49.450 align:start position:0%
+ 
+ 
+
+00:27:49.450 --> 00:27:51.129 align:start position:0%
+ 
+ 
+
+00:27:51.129 --> 00:27:53.049 align:start position:0%
+ 
+ 
+
+00:27:53.049 --> 00:27:56.019 align:start position:0%
+ 
+ 
+
+00:27:56.019 --> 00:27:57.610 align:start position:0%
+ 
+ 
+
+00:27:57.610 --> 00:28:00.070 align:start position:0%
+ 
+ 
+
+00:28:00.070 --> 00:28:03.940 align:start position:0%
+ 
+ 
+
+00:28:03.940 --> 00:28:05.350 align:start position:0%
+ 
+ 
+
+00:28:05.350 --> 00:28:07.389 align:start position:0%
+ 
+ 
+
+00:28:07.389 --> 00:28:08.649 align:start position:0%
+ 
+ 
+
+00:28:08.649 --> 00:28:10.090 align:start position:0%
+ 
+ 
+
+00:28:10.090 --> 00:28:11.560 align:start position:0%
+ 
+ 
+
+00:28:11.560 --> 00:28:13.990 align:start position:0%
+ 
+ 
+
+00:28:13.990 --> 00:28:15.070 align:start position:0%
+ 
+ 
+
+00:28:15.070 --> 00:28:16.659 align:start position:0%
+ 
+ 
+
+00:28:16.659 --> 00:28:18.220 align:start position:0%
+ 
+ 
+
+00:28:18.220 --> 00:28:24.159 align:start position:0%
+ 
+ 
+
+00:28:24.159 --> 00:28:26.320 align:start position:0%
+ 
+ 
+
+00:28:26.320 --> 00:28:28.500 align:start position:0%
+ 
+ 
+
+00:28:28.500 --> 00:28:32.409 align:start position:0%
+ 
+ 
+
+00:28:32.409 --> 00:28:33.940 align:start position:0%
+ 
+ 
+
+00:28:33.940 --> 00:28:35.440 align:start position:0%
+ 
+ 
+
+00:28:35.440 --> 00:28:37.330 align:start position:0%
+ 
+ 
+
+00:28:37.330 --> 00:28:39.100 align:start position:0%
+ 
+ 
+
+00:28:39.100 --> 00:28:42.159 align:start position:0%
+ 
+ 
+
+00:28:42.159 --> 00:28:43.509 align:start position:0%
+ 
+ 
+
+00:28:43.509 --> 00:28:45.070 align:start position:0%
+ 
+ 
+
+00:28:45.070 --> 00:28:46.810 align:start position:0%
+ 
+ 
+
+00:28:46.810 --> 00:28:47.980 align:start position:0%
+ 
+ 
+
+00:28:47.980 --> 00:28:49.570 align:start position:0%
+ 
+ 
+
+00:28:49.570 --> 00:28:51.909 align:start position:0%
+ 
+ 
+
+00:28:51.909 --> 00:28:52.930 align:start position:0%
+ 
+ 
+
+00:28:52.930 --> 00:28:54.100 align:start position:0%
+ 
+ 
+
+00:28:54.100 --> 00:28:56.139 align:start position:0%
+ 
+ 
+
+00:28:56.139 --> 00:28:57.490 align:start position:0%
+ 
+ 
+
+00:28:57.490 --> 00:28:58.750 align:start position:0%
+ 
+ 
+
+00:28:58.750 --> 00:29:00.399 align:start position:0%
+ 
+ 
+
+00:29:00.399 --> 00:29:02.740 align:start position:0%
+ 
+ 
+
+00:29:02.740 --> 00:29:03.940 align:start position:0%
+ 
+ 
+
+00:29:03.940 --> 00:29:05.889 align:start position:0%
+ 
+ 
+
+00:29:05.889 --> 00:29:07.629 align:start position:0%
+ 
+ 
+
+00:29:07.629 --> 00:29:10.450 align:start position:0%
+ 
+ 
+
+00:29:10.450 --> 00:29:12.789 align:start position:0%
+ 
+ 
+
+00:29:12.789 --> 00:29:15.039 align:start position:0%
+ 
+ 
+
+00:29:15.039 --> 00:29:16.659 align:start position:0%
+ 
+ 
+
+00:29:16.659 --> 00:29:17.799 align:start position:0%
+ 
+ 
+
+00:29:17.799 --> 00:29:18.789 align:start position:0%
+ 
+ 
+
+00:29:18.789 --> 00:29:20.200 align:start position:0%
+ 
+ 
+
+00:29:20.200 --> 00:29:23.950 align:start position:0%
+ 
+ 
+
+00:29:23.950 --> 00:29:25.180 align:start position:0%
+ 
+ 
+
+00:29:25.180 --> 00:29:26.919 align:start position:0%
+ 
+ 
+
+00:29:26.919 --> 00:29:29.440 align:start position:0%
+ 
+ 
+
+00:29:29.440 --> 00:29:30.789 align:start position:0%
+ 
+ 
+
+00:29:30.789 --> 00:29:32.590 align:start position:0%
+ 
+ 
+
+00:29:32.590 --> 00:29:34.570 align:start position:0%
+ 
+ 
+
+00:29:34.570 --> 00:29:36.100 align:start position:0%
+ 
+ 
+
+00:29:36.100 --> 00:29:38.049 align:start position:0%
+ 
+ 
+
+00:29:38.049 --> 00:29:40.149 align:start position:0%
+ 
+ 
+
+00:29:40.149 --> 00:29:41.710 align:start position:0%
+ 
+ 
+
+00:29:41.710 --> 00:29:44.409 align:start position:0%
+ 
+ 
+
+00:29:44.409 --> 00:29:45.820 align:start position:0%
+ 
+ 
+
+00:29:45.820 --> 00:29:47.529 align:start position:0%
+ 
+ 
+
+00:29:47.529 --> 00:29:48.490 align:start position:0%
+ 
+ 
+
+00:29:48.490 --> 00:29:50.080 align:start position:0%
+ 
+ 
+
+00:29:50.080 --> 00:29:52.180 align:start position:0%
+ 
+ 
+
+00:29:52.180 --> 00:29:54.159 align:start position:0%
+ 
+ 
+
+00:29:54.159 --> 00:29:55.539 align:start position:0%
+ 
+ 
+
+00:29:55.539 --> 00:29:57.399 align:start position:0%
+ 
+ 
+
+00:29:57.399 --> 00:29:59.019 align:start position:0%
+ 
+ 
+
+00:29:59.019 --> 00:30:00.940 align:start position:0%
+ 
+ 
+
+00:30:00.940 --> 00:30:04.600 align:start position:0%
+ 
+ 
+
+00:30:04.600 --> 00:30:06.580 align:start position:0%
+ 
+ 
+
+00:30:06.580 --> 00:30:10.060 align:start position:0%
+ 
+ 
+
+00:30:10.060 --> 00:30:11.529 align:start position:0%
+ 
+ 
+
+00:30:11.529 --> 00:30:12.879 align:start position:0%
+ 
+ 
+
+00:30:12.879 --> 00:30:14.350 align:start position:0%
+ 
+ 
+
+00:30:14.350 --> 00:30:16.389 align:start position:0%
+ 
+ 
+
+00:30:16.389 --> 00:30:17.769 align:start position:0%
+ 
+ 
+
+00:30:17.769 --> 00:30:19.690 align:start position:0%
+ 
+ 
+
+00:30:19.690 --> 00:30:21.190 align:start position:0%
+ 
+ 
+
+00:30:21.190 --> 00:30:22.240 align:start position:0%
+ 
+ 
+
+00:30:22.240 --> 00:30:23.830 align:start position:0%
+ 
+ 
+
+00:30:23.830 --> 00:30:25.990 align:start position:0%
+ 
+ 
+
+00:30:25.990 --> 00:30:28.629 align:start position:0%
+ 
+ 
+
+00:30:28.629 --> 00:30:30.580 align:start position:0%
+ 
+ 
+
+00:30:30.580 --> 00:30:32.379 align:start position:0%
+ 
+ 
+
+00:30:32.379 --> 00:30:33.549 align:start position:0%
+ 
+ 
+
+00:30:33.549 --> 00:30:35.160 align:start position:0%
+ 
+ 
+
+00:30:35.160 --> 00:30:36.210 align:start position:0%
+ 
+ 
+
+00:30:36.210 --> 00:30:38.310 align:start position:0%
+ 
+ 
+
+00:30:38.310 --> 00:30:41.250 align:start position:0%
+ 
+ 
+
+00:30:41.250 --> 00:30:44.130 align:start position:0%
+ 
+ 
+
+00:30:44.130 --> 00:30:45.110 align:start position:0%
+ 
+ 
+
+00:30:45.110 --> 00:30:47.010 align:start position:0%
+ 
+ 
+
+00:30:47.010 --> 00:30:48.540 align:start position:0%
+ 
+ 
+
+00:30:48.540 --> 00:30:50.430 align:start position:0%
+ 
+ 
+
+00:30:50.430 --> 00:30:52.980 align:start position:0%
+ 
+ 
+
+00:30:52.980 --> 00:30:55.650 align:start position:0%
+ 
+ 
+
+00:30:55.650 --> 00:30:57.030 align:start position:0%
+ 
+ 
+
+00:30:57.030 --> 00:30:59.100 align:start position:0%
+ 
+ 
+
+00:30:59.100 --> 00:31:00.450 align:start position:0%
+ 
+ 
+
+00:31:00.450 --> 00:31:03.120 align:start position:0%
+ 
+ 
+
+00:31:03.120 --> 00:31:04.800 align:start position:0%
+ 
+ 
+
+00:31:04.800 --> 00:31:06.300 align:start position:0%
+ 
+ 
+
+00:31:06.300 --> 00:31:08.400 align:start position:0%
+ 
+ 
+
+00:31:08.400 --> 00:31:10.110 align:start position:0%
+ 
+ 
+
+00:31:10.110 --> 00:31:11.700 align:start position:0%
+ 
+ 
+
+00:31:11.700 --> 00:31:13.500 align:start position:0%
+ 
+ 
+
+00:31:13.500 --> 00:31:15.360 align:start position:0%
+ 
+ 
+
+00:31:15.360 --> 00:31:19.320 align:start position:0%
+ 
+ 
+
+00:31:19.320 --> 00:31:20.820 align:start position:0%
+ 
+ 
+
+00:31:20.820 --> 00:31:23.580 align:start position:0%
+ 
+ 
+
+00:31:23.580 --> 00:31:25.410 align:start position:0%
+ 
+ 
+
+00:31:25.410 --> 00:31:27.540 align:start position:0%
+ 
+ 
+
+00:31:27.540 --> 00:31:29.280 align:start position:0%
+ 
+ 
+
+00:31:29.280 --> 00:31:30.990 align:start position:0%
+ 
+ 
+
+00:31:30.990 --> 00:31:32.400 align:start position:0%
+ 
+ 
+
+00:31:32.400 --> 00:31:34.770 align:start position:0%
+ 
+ 
+
+00:31:34.770 --> 00:31:37.170 align:start position:0%
+ 
+ 
+
+00:31:37.170 --> 00:31:39.570 align:start position:0%
+ 
+ 
+
+00:31:39.570 --> 00:31:41.010 align:start position:0%
+ 
+ 
+
+00:31:41.010 --> 00:31:42.390 align:start position:0%
+ 
+ 
+
+00:31:42.390 --> 00:31:43.710 align:start position:0%
+ 
+ 
+
+00:31:43.710 --> 00:31:44.730 align:start position:0%
+ 
+ 
+
+00:31:44.730 --> 00:31:46.410 align:start position:0%
+ 
+ 
+
+00:31:46.410 --> 00:31:47.850 align:start position:0%
+ 
+ 
+
+00:31:47.850 --> 00:31:49.230 align:start position:0%
+ 
+ 
+
+00:31:49.230 --> 00:31:51.000 align:start position:0%
+ 
+ 
+
+00:31:51.000 --> 00:31:53.610 align:start position:0%
+ 
+ 
+
+00:31:53.610 --> 00:31:55.170 align:start position:0%
+ 
+ 
+
+00:31:55.170 --> 00:31:56.430 align:start position:0%
+ 
+ 
+
+00:31:56.430 --> 00:31:58.230 align:start position:0%
+ 
+ 
+
+00:31:58.230 --> 00:31:59.490 align:start position:0%
+ 
+ 
+
+00:31:59.490 --> 00:32:01.470 align:start position:0%
+ 
+ 
+
+00:32:01.470 --> 00:32:03.510 align:start position:0%
+ 
+ 
+
+00:32:03.510 --> 00:32:04.920 align:start position:0%
+ 
+ 
+
+00:32:04.920 --> 00:32:06.480 align:start position:0%
+ 
+ 
+
+00:32:06.480 --> 00:32:09.000 align:start position:0%
+ 
+ 
+
+00:32:09.000 --> 00:32:11.880 align:start position:0%
+ 
+ 
+
+00:32:11.880 --> 00:32:13.140 align:start position:0%
+ 
+ 
+
+00:32:13.140 --> 00:32:15.360 align:start position:0%
+ 
+ 
+
+00:32:15.360 --> 00:32:17.430 align:start position:0%
+ 
+ 
+
+00:32:17.430 --> 00:32:19.440 align:start position:0%
+ 
+ 
+
+00:32:19.440 --> 00:32:21.750 align:start position:0%
+ 
+ 
+
+00:32:21.750 --> 00:32:23.670 align:start position:0%
+ 
+ 
+
+00:32:23.670 --> 00:32:25.320 align:start position:0%
+ 
+ 
+
+00:32:25.320 --> 00:32:27.210 align:start position:0%
+ 
+ 
+
+00:32:27.210 --> 00:32:29.610 align:start position:0%
+ 
+ 
+
+00:32:29.610 --> 00:32:31.260 align:start position:0%
+ 
+ 
+
+00:32:31.260 --> 00:32:32.730 align:start position:0%
+ 
+ 
+
+00:32:32.730 --> 00:32:34.530 align:start position:0%
+ 
+ 
+
+00:32:34.530 --> 00:32:36.330 align:start position:0%
+ 
+ 
+
+00:32:36.330 --> 00:32:37.500 align:start position:0%
+ 
+ 
+
+00:32:37.500 --> 00:32:39.150 align:start position:0%
+ 
+ 
+
+00:32:39.150 --> 00:32:41.370 align:start position:0%
+ 
+ 
+
+00:32:41.370 --> 00:32:42.930 align:start position:0%
+ 
+ 
+
+00:32:42.930 --> 00:32:45.390 align:start position:0%
+ 
+ 
+
+00:32:45.390 --> 00:32:46.830 align:start position:0%
+ 
+ 
+
+00:32:46.830 --> 00:32:48.870 align:start position:0%
+ 
+ 
+
+00:32:48.870 --> 00:32:50.700 align:start position:0%
+ 
+ 
+
+00:32:50.700 --> 00:32:52.400 align:start position:0%
+ 
+ 
+
+00:32:52.400 --> 00:32:54.750 align:start position:0%
+ 
+ 
+
+00:32:54.750 --> 00:32:56.760 align:start position:0%
+ 
+ 
+
+00:32:56.760 --> 00:32:58.080 align:start position:0%
+ 
+ 
+
+00:32:58.080 --> 00:32:59.730 align:start position:0%
+ 
+ 
+
+00:32:59.730 --> 00:33:01.440 align:start position:0%
+ 
+ 
+
+00:33:01.440 --> 00:33:03.300 align:start position:0%
+ 
+ 
+
+00:33:03.300 --> 00:33:05.100 align:start position:0%
+ 
+ 
+
+00:33:05.100 --> 00:33:06.630 align:start position:0%
+ 
+ 
+
+00:33:06.630 --> 00:33:08.220 align:start position:0%
+ 
+ 
+
+00:33:08.220 --> 00:33:09.830 align:start position:0%
+ 
+ 
+
+00:33:09.830 --> 00:33:14.550 align:start position:0%
+ 
+ 
+
+00:33:14.550 --> 00:33:15.780 align:start position:0%
+ 
+ 
+
+00:33:15.780 --> 00:33:17.610 align:start position:0%
+ 
+ 
+
+00:33:17.610 --> 00:33:19.710 align:start position:0%
+ 
+ 
+
+00:33:19.710 --> 00:33:21.510 align:start position:0%
+ 
+ 
+
+00:33:21.510 --> 00:33:22.770 align:start position:0%
+ 
+ 
+
+00:33:22.770 --> 00:33:24.750 align:start position:0%
+ 
+ 
+
+00:33:24.750 --> 00:33:27.390 align:start position:0%
+ 
+ 
+
+00:33:27.390 --> 00:33:29.850 align:start position:0%
+ 
+ 
+
+00:33:29.850 --> 00:33:31.200 align:start position:0%
+ 
+ 
+
+00:33:31.200 --> 00:33:32.670 align:start position:0%
+ 
+ 
+
+00:33:32.670 --> 00:33:33.960 align:start position:0%
+ 
+ 
+
+00:33:33.960 --> 00:33:35.370 align:start position:0%
+ 
+ 
+
+00:33:35.370 --> 00:33:36.990 align:start position:0%
+ 
+ 
+
+00:33:36.990 --> 00:33:40.020 align:start position:0%
+ 
+ 
+
+00:33:40.020 --> 00:33:41.460 align:start position:0%
+ 
+ 
+
+00:33:41.460 --> 00:33:43.530 align:start position:0%
+ 
+ 
+
+00:33:43.530 --> 00:33:45.240 align:start position:0%
+ 
+ 
+
+00:33:45.240 --> 00:33:46.830 align:start position:0%
+ 
+ 
+
+00:33:46.830 --> 00:33:49.620 align:start position:0%
+ 
+ 
+
+00:33:49.620 --> 00:33:51.450 align:start position:0%
+ 
+ 
+
+00:33:51.450 --> 00:33:53.370 align:start position:0%
+ 
+ 
+
+00:33:53.370 --> 00:33:55.440 align:start position:0%
+ 
+ 
+
+00:33:55.440 --> 00:33:56.970 align:start position:0%
+ 
+ 
+
+00:33:56.970 --> 00:33:59.100 align:start position:0%
+ 
+ 
+
+00:33:59.100 --> 00:34:00.480 align:start position:0%
+ 
+ 
+
+00:34:00.480 --> 00:34:02.220 align:start position:0%
+ 
+ 
+
+00:34:02.220 --> 00:34:05.780 align:start position:0%
+ 
+ 
+
+00:34:05.780 --> 00:34:08.760 align:start position:0%
+ 
+ 
+
+00:34:08.760 --> 00:34:10.080 align:start position:0%
+ 
+ 
+
+00:34:10.080 --> 00:34:11.430 align:start position:0%
+ 
+ 
+
+00:34:11.430 --> 00:34:13.590 align:start position:0%
+ 
+ 
+
+00:34:13.590 --> 00:34:15.600 align:start position:0%
+ 
+ 
+
+00:34:15.600 --> 00:34:17.010 align:start position:0%
+ 
+ 
+
+00:34:17.010 --> 00:34:19.260 align:start position:0%
+ 
+ 
+
+00:34:19.260 --> 00:34:21.090 align:start position:0%
+ 
+ 
+
+00:34:21.090 --> 00:34:23.850 align:start position:0%
+ 
+ 
+
+00:34:23.850 --> 00:34:25.290 align:start position:0%
+ 
+ 
+
+00:34:25.290 --> 00:34:27.210 align:start position:0%
+ 
+ 
+
+00:34:27.210 --> 00:34:29.040 align:start position:0%
+ 
+ 
+
+00:34:29.040 --> 00:34:29.940 align:start position:0%
+ 
+ 
+
+00:34:29.940 --> 00:34:31.200 align:start position:0%
+ 
+ 
+
+00:34:31.200 --> 00:34:32.460 align:start position:0%
+ 
+ 
+
+00:34:32.460 --> 00:34:34.200 align:start position:0%
+ 
+ 
+
+00:34:34.200 --> 00:34:37.500 align:start position:0%
+ 
+ 
+
+00:34:37.500 --> 00:34:39.120 align:start position:0%
+ 
+ 
+
+00:34:39.120 --> 00:34:40.500 align:start position:0%
+ 
+ 
+
+00:34:40.500 --> 00:34:41.940 align:start position:0%
+ 
+ 
+
+00:34:41.940 --> 00:34:45.870 align:start position:0%
+ 
+ 
+
+00:34:45.870 --> 00:34:46.890 align:start position:0%
+ 
+ 
+
+00:34:46.890 --> 00:34:48.570 align:start position:0%
+ 
+ 
+
+00:34:48.570 --> 00:34:50.720 align:start position:0%
+ 
+ 
+
+00:34:50.720 --> 00:34:52.890 align:start position:0%
+ 
+ 
+
+00:34:52.890 --> 00:34:55.770 align:start position:0%
+ 
+ 
+
+00:34:55.770 --> 00:34:57.180 align:start position:0%
+ 
+ 
+
+00:34:57.180 --> 00:34:57.190 align:start position:0%
+ 
+ 
+
+00:34:57.190 --> 00:34:59.980 align:start position:0%
+ 
+
+
+00:34:59.980 --> 00:34:59.990 align:start position:0%
+ 
+ 
+
+00:34:59.990 --> 00:35:02.050 align:start position:0%
+ 
+
+
