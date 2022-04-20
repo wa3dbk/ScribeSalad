@@ -1,0 +1,3992 @@
+WEBVTT
+Kind: captions
+Language: en
+
+00:00:01.120 --> 00:00:15.400 align:start position:0%
+ 
+[Music]  [Music]  [Music]  how many people here actually know about  in flux DB as a project okay  like Taff maybe so in flux DB is an open  source time series database that I  started about three and a half years ago  so this talk is about the storage engine  that we made obviously and some of the  other things that we used a long way and  there's also some material at the end  about a new piece of the storage engine  that we're testing out now that will be  it's in the nightly builds now and it  will be dropping as a default feature in  the near future so the storage engine of  the database is basically kind of two  storage engines in one the database is  like two databases in one the first is a  time series database which basically  just it has you know a time series and a  collection of values and time stamps in  time sorted order right and we do  compression and stuff like that on on  the time series and then there is an  inverted index now normally when you  think about an inverted index you think  about search databases right like they  map terms to document IDs and and use an  inverted index to quickly look up what  documents match which search terms in  our case we're matching time series  metadata with the time series that we  have so before I get into the actual  storage engine I need to introduce kind  of like how we structure data inside of  influx so obviously everything is  indexed by time and the series that it  is so within the database we also have  this concept of shards which are  basically just blocks of time so in this  example we have one shard for each day  now all the time series data for a given  day will exist in that one shard so that  makes it efficient later on to drop old  data if we want to so this is what  influx TVs data looks like so this is  our line protocol which is basically  just a text protocol for writing data  into the database  so first we have a measurement name it's  a string then we have tags with your key  value pairs where the values or strings  and then we have fields key value pairs  where the values are different value  types that we support and finally we  have a timestamp now that looks like a  second level second precision epoch but  we actually store time stamps at the  nanosecond scale then a lot of people  have expressed a surprise or shock that  we support nanosecond scale time stamps  because you wouldn't think that you  would need that but we actually have a  number of users and customers that use  nanosecond scale time stamps so think  people in high-frequency trading firms  or people doing scientific research in  like quantum computing environments  those actually requiring nanosecond  precision time stamps to track that data  alright so looking at an example here so  each series and field map to a unique ID  so basically that's what we think of as  a series right we have the measurement  name the tag set and the actual field so  the series is basically just going to be  a time ordered collection of values so  you can look at it as like a time or a  collection of tuples right where you  have a time stamp and a value so there  we have that each one so so looking at  how to organize time series data in say  a key value store this is like one way  you could do it right you have the key  which is your ID and then a timestamp  and then you have a value so here we  have you know one value in series one  and one value in series two and that we  were insert a new value into series one  we just put it there in the key space so  the the important thing is that the key  space needs to be ordered you need to be  able to do a range scan over the key  space to get your data in you know time  series order so here's just inserting  more now there are a lot of storage  engines out there that have this model  right leveldb has got it LM TVs got it a  bunch of like key value stores that let  you do range scans through the key space  so the question is  why in the hell would we want to create  our news to our own storage engine right  this is a problem that is fiendishly  difficult I've heard people say like a  store a new database storage engine  takes like 10 years to mature like it  takes a long time to actually build it  to the throw bust and you can rely on it  so why in the hell would we want to do  that well first we used LSM trees so  specifically we use the leveldb which is  an embedded database it's a C++ library  that was written at Google and it's  what's called a log structured merge  tree now LSM trees are heavily optimized  for write throughput they're very very  fast with that they also do compression  and we tried so we for the first I don't  know like year and a half of the project  we used level DB at the underlying data  store and we also tried some of the  variants later on we tried hyper level  DB which is a fork of it we tried rocks  DB which is a fork of level DB that's  developed at Facebook when we first  started influx rocks actually didn't  exist so one problem with LSM tree is  deletes are very very expensive so when  you do a delete you actually write a  tombstone record to disk and then later  on when you query you have to resolve  the keys in the database with the  tombstones - that exists actually return  the real result and then later on a  compaction process will run that will  rewrite your SS tables to remove that  record right so basically to remove a  single record you end up rewriting a  bunch of other records which can get  expensive and one another problem we had  was as I mentioned we have we organize  our data into shards of time and what  how we did that was we created a new  level DB database for each block of time  and this wasn't a problem initially but  for users that had very very large  databases or very large spans of time  they would actually end up blowing out  the number of file handles open in the  process so we just run out of file  descriptors so we also tried a memory  memory  mapped copy-on-write B plus trees right  so LM DB is this the first version of  MongoDB was this there is a librarian  NGO called bolt DB which is the one we  used it was heavily inspired by LM DB so  copy-on-write B plus trees are pretty  cool they're they're good but the write  throughput really sucks on them they're  not optimized for write heavy workloads  what we found is that initially the  write throughput would be pretty good  and then as the database grew in size it  would get slower and slower and even  worse it would crush I ops on our disks  like you'd see I'd like I up spikes got  like 20,000 and all sorts of crazy stuff  and the one another thing that was kind  of a complete deal-breaker for us was  with bolt it would size the memory map  file and have the size every time it  started to overgrow that it would over  grow that size it would double the size  of the file right so it's not that big  of a deal when you grow when you're  growing from 256 megabytes to 512  megabytes but when we were in the  gigabyte scales and and hundreds of  gigabytes it would just freeze the  entire database what resize that file  which sucks and then the other thing  that was also a deal-breaker for us is  there's no compression minute there's no  compression built into that storage  engine so you would have to layer it on  top and for the time series use case  compression is actually very very  important so none of the solutions that  we saw out there actually met our  requirements right we needed something  the supported high right throughput we  is something that had really good read  performance which is the weird thing  about time series it's like the worst  possible use case for databases because  not only do you have high write  throughput you also have high read  throughput from all the dashboarding  systems and monitoring systems and stuff  they're just pummeling the database with  range requests all the time we need  something with better compression so we  looked at different techniques for  compressing time series data and what we  found was that we could achieve better  compression than a generalized algorithm  like snap  so we wanted to optimize that we need  something where rights wouldn't block  reads and reads can't block writes we  would rather read stale data then to  have a read block the block writes  coming into the system and the other  thing about time series data is that  it's largely an append-only workload  you're not updating records right you're  just appending new data are you doing  backfill of historical data so and it's  always moving so if you do a read and  it's a little bit stale you're talking  about microseconds or milliseconds or  maybe seconds that weren't included in  the request so we also need to be able  to write multiple ranges simultaneously  so one of the use cases that we have  come up a lot is sensor data and in many  sensor data scenarios you have lagged  data collection right so they'll collect  locally and they'll transmit the data  like once an hour once every four hours  or once a day so we know that at any  given time there could be writes  happening in different time ranges in  the database that are all somewhat close  to now but could be off and something  that could support hot backups at the  time level DBA lovely I don't think  level DB at this point supports backups  hot backups either but Rox does so but  at the time we didn't have an option for  it and we need to have many databases  open in a single process without it  crashing things so about a year and a  half ago we set about to create our own  storage engine which we call the time  structured merge tree or TSM tree it's  heavily inspired by all some trees but  it's a little bit different so here are  the different components of the storage  engine we have a right ahead log we have  an in-memory cache and we have index  files that are read-only this is very  very similar to how LSM trees are  structured right  right ahead log same same concept in LSM  tree in level DB it's called mem tables  in level DB it's called SF tables right  but they're basically the same things  right so going through what it looks  like when we write data to the storage  we have often time series data coming in  we write it to the wall we write it to  in memory the in-memory data structure  that can be queried and then we send a  response back to the client at this  point because we know the right is  durable and it's immediately available  for reads and then periodically we'll do  flushes of this in memory index to what  we call TSM files which would basically  those SS table their files that are  indexed that have a specific structure  that are read-only files and we also  memory map those files so we can access  them like they're an array but more  importantly we let the operating system  handle caching for us right we let it  page stuff in and out of memory so that  we don't have to write all that logic  ourselves so we get a bunch of stuff for  free by memory mapping the files so  here's what a TSM file looks like we  have a header we have blocks of data we  have an index and then we have a footer  so the header looks like this you have  the magic the magic four bytes that tell  you what kind of file it is and then we  have a version the blocks look like this  right so we have collection of blocks we  have a CRC and then we have the actual  data where the data is compressed time  series data for a given series right and  and then if we have a new series will  have a new block and actually even for a  given series we don't compress all of  its data in one run which I'll talk  about in a second then we have an index  so we can see the key length the key  itself which is a string key right the  measurement name the tag set the field  we have the number of values that are in  the file  the min time in the max time and we use  that basically so that when a query  comes in looking for a specific time  range we can find which follows in and  where in the file it is quickly and then  finally we have a footer that just tells  us where the start of the index is so  basically when we have that memory map  file we know we look at the last four  bytes of the array we can jump to that  spot where  the indexes and we're able to do things  on the index as if it's like an  in-memory structure right so we can do  searches and stuff so here's what the  compressed blocks look like you have a  type which is the type of the of the  field we support in 64 float64 boolean's  and strings which is actually quite a  bit different from other time series  databases many other time series  databases only let you store numbers and  usually it's a specific kind of number  either a float 64 or an n64 and then we  have time stamps and values so this is  the part where I say we we we break  series data into blocks of things  because we we separate the time stamps  and values because we can achieve better  compression so by default we will encode  up to a thousand value timestamp pairs  into a single one of these blocks so if  a request comes in for a single value we  actually end up decoding a thousand  worth right so looking at the  compression the time stamps we encode  based on the precision and the deltas  between them right so we support  nanosecond level precision but just  because we support that doesn't mean we  need to represent all the lower order  bits if they're all zeroed out right so  in the best-case scenario we can use run  length encoding for our time stamps so  if you have a regular time series where  you're taking samples once every 10  seconds right  you only need second-level precision so  all you need to do is store the initial  starting timestamp and the Delta between  them and you know like okay so we have  we can just construct any timestamp in  the run from that information so the  okay case we use a compression technique  called simple 8b it's full from this  paper anima fit and index compression  using 64-bit words  so that's cases where it looks kind of  like a double delta encoding right so  times  stamps aren't fixed they aren't fixed  collection intervals that bucketed times  that could be variable right they could  have some jitter by a second or two or  microseconds or milliseconds so in the  worst cases we actually have to store  the raw value we have to store the full  n64 timestamp so that's that comes up in  situations where people are like using  nanosecond scale time stamps but the  distance between each timestamp is too  great to represent is alike a delta or  like the the cost of representing would  be more than just storing a raw  timestamp itself so for float64  compression we use a double delta  technique it's very similar to the  facebook gorilla paper so in to thin the  summer 2015 facebook published a paper  about gorilla which is their metric  system that they have in-house and it  used this this compression technique for  their flow values and they said that  they could compress data down to  depending on the shape of the data down  to about 1.1 bytes per they're using a  32-bit timestamps which is different  than us they're also interleaving  timestamps and values which we don't do  so we kind of changed it up a bit so  this guy Jamie and risky who's a pretty  well-known go developer wrote an  implementation of this after the paper  came out and we just kind of took that  forked it and actually made the  modifications that we needed for our use  case boolean czar bits  those are easy right in 64 we use double  Delta or zigzag encoding zigzags the  same as protobufs strings we just use  snappy we're thinking about adding  dictionary compression later but snappy  is good enough for now  so updates we can actually update values  it's not something we're optimized for  but basically if any value in the  database is keyed off of the measurement  name tags set field and nanosecond scale  timestamp right so you can only have one  value at any  you given series key and nanosecond  scale time stamp so if you write in  another value with that exact same  information it will take the place of  the one that exists so essentially we  resolved that at query time by  eliminating the older dupes and then  later on when the compaction process  runs it throws out the old value and  keeps the new value deletes this is very  similar to an LS m3 we write a tombstone  the compact the at query time we resolve  the tombstones with the data that we  read from the index in the in memory  index and then compactions later we'll  rewrite the PSM files and remove the  deleted data so compactions basically  what they do is they just combine  multiple TSM files into one larger TSM  file our goal with the compactions is to  put as many points from the same series  into a single file right so that they  have a run a contiguous run that way we  can do quick rain scans on the data and  do computations on it right  I mentioned points in 1k blocks we have  multiple levels of compaction right  where we favor the lower levels first  and then the larger levels later and the  other thing is as we're compacting data  we the the TSM files are in time order  they have time ranges in them so if  you're just writing now data right your  pending new data all the time those  older files will get to a point where  they get compacted and then they won't  get touched right we'll only be touching  the young generation of TSM files but  because we have this idea of shards  shards generally will go cold for writes  after some time so after a while we will  actually try to do a full compaction on  that shard which will look at all the  TSM files and try to optimize for the  best possible like combination all right  so now I'll talk a little bit about the  indexing scheme that we have  so this is to go through this walk to  look at this sample query just so we  understand like the the kind of scope of  the problem right so in this query we're  grabbing the 90th percentile value from  the CPU measurement for the last 12  hours only from hosts in the western  region and we want ten minute buckets  and we want a series for every single  host right now the question becomes how  do we map this metadata the measurement  am CPU hosts a region to the underlying  series so that we can perform this  computation and return a bunch of  individual time series backs so we use  an inverted index right so one would the  way to look at it like what we do right  now for the in memory index is we have  you know the series keys which is that  string which maps to unique ID and we  need to see what measurements have what  fields so we can map that later we need  to see for what hosts what values we  have write the tag key host and what  unique values for the region what  regions we have and then we need to keep  our posting lists right what IDs appear  under the CPU measurement what ideas  appear under each tag key value pair and  then later app when you're querying the  data you can do things like unions and  intersects to to find out what are the  list of series IDs that you need to work  with so index be one which is what's in  the current release right now which is  1.2 is in memory we load it on boot  right so we have all the underlying TSM  files when the database starts up it  looks at those files looks at the series  keys in each of those files and build  this in memory index and what that means  is one you're obviously memory  constrained right you can only have as  many unique series in your databases you  can actually keep in the in memory index  but you can also get to a stage where  you have slower boot times if you have  really high cardinality so you could  have a ton of memory but you know on a  system where you have  you know a few hundred gigabytes of  memory it takes a long time to boot that  up and read that much data into memory  right so our goal with index t2 was we  wanted something that is on disk and in  memory like a combination and really  like the key problem we were trying to  solve here is that we have a lot of use  cases where time series are ephemeral  right so if you're thinking about  tracking container metrics or individual  process metrics and you want the  container ID or the process ID to be in  a tag like those are ephemeral right you  could have the process running for a few  hours a few days and then it's going to  go away and you may query it later but  most likely it's not in your working set  it's not hot for queries or for writes  after it goes away so we want something  that would work for those kinds of  ephemeral series so we let's see like  last September we started creating  something we called we just called it  psi for time series index because we are  tired of trying to be creative with  naming so here's kind of what it looks  like right so new data comes in and we  have the index and we say ok here's the  time series metadata which is really  just that key itself right we check the  in memory index then we check the on  disk index do we already have it if we  do we don't need to do anything we don't  need to write it to disk we just  continue continue it on about our  business if we don't have it then we  need to write it to a right ahead log  right an append-only file and then  periodically that wall and write it to  an in-memory index and then periodically  that wall will get flushed out to disk  so this is very very similar to to TSM  to our to our other engine and then  there compactions that run in the  background to combine these index files  into larger and larger index files right  again just like TSM so here is what a  log entry looks like in  and are right ahead logs we have a flag  the reason there's a flag is because you  can do a deletion or an insertion of new  series metadata your measurement name  your tag key value pairs and it checks  um so the index file looks like this we  have a number of different blocks we  have blocked for what series exist in  the index what tags exist a tag key  value pairs and then what measurements  exists and then offsets for the  different locations of the blocks so  let's look a little bit at what the  series lock looks like so we have these  different like components in it right we  have different through these keys and  then we have an index and we've bunch  more serious keys and then another index  and then some other stuff now the reason  we have serious keys and then an index  and the more serious keys and then an  index is because we we don't we don't  want to have to read all the series keys  into memory at one time so by default we  we write out 65,000 series keys at a  time and these are always written in  sorted order so what that means is as  we're going through and compacting index  files we can actually do it in as a  streaming job right we can read multiple  index files merge them together and  write out the 65k series and more and  more and more and more right so we never  have to have more than 65,000 series  keys in memory to actually get it out to  disk alright so let's look at this hash  index thing so the point of the hash  index is if we have a series key right  and we hash it to a bucket right so here  say this is our hash table and we have  position 0 1 2 3 and what is that those  positions are locations in the file byte  offsets right so say we have this series  key right here and we hash it using  whatever hashing algorithm you like and  we say up that that maps to a bucket 1  so we see that's at 2:34 so we jump to  that spot in the file and then we say  okay there's the length of the series  key and then we can look and see if the  key is actually the same so that would  be a lookup to see like do we have this  in this file right uh so the technique  that we used and this one this one is  really interesting I'd never heard about  this technique up until like last fall  or summer it's called Robin Hood hashing  so it's been around for a while but I  have some advantages to it that actually  fit our use case really really well you  can fully load a table you don't have to  so normally with a hash table right like  you you don't you want to have extra  space so you don't have a bunch of  collisions because if you have hash  collisions then it gets more expensive  to do lookups right so we don't have to  keep linked list for lookups and with  Robinhood hashing it's actually really  good if you're doing read-only hashes  like I said our psi files are immutable  we write them once and then they get  read a bunch of times so once we compute  this hash index we never have to write  it again so we don't have to worry about  updates or inserts we don't have to  worry about deletes which means the cost  of computing it is amortized over time  so I'm going to jump through and look  like look at Robin Hood hashing kind of  try to explain it so hopefully it's  understandable so at the top we have you  know the positions in the hash table the  middle section will be the keys the keys  that we're looking up and the last one  is what we call probes which I'll  explain now for this example I'm just  going to use single character keys so  that it fits nicely on the slide and  everything looks good so first where  we're going to insert a into the hash  table we do the hash and a comes up with  position 0 we look nothing's there so  we'll put a there ok now we're going to  do B be hashes to position  one luckily enough there's nothing there  so we put be there now we're going to  insert T C hashes to position one and we  look and B is already there so the next  thing we do since we since we can't put  it there is we actually look at the  probe length of B which we see is zero  but at this point C's probe length is  zero so what the probe length is is the  number of hops you would need to make  forward in the hash table to find that  element to find that key so because  they're both the same we say we're going  to skip to the next location look it up  and since there's nothing there we put C  there and we mark it down as a probe  length of one so we have that for  bookkeeping later now we'll throw away  the probe length array after we've  computed the thing and written it out to  disk but we need it while we're  constructing the hash table okay so the  next one is we're going to try to insert  D it hashes to position one we say oh no  we can't do it because a it's already  there so we move over to the next  position B is already there but at this  point we've tracked the D has a probe  length of 1 and B has a probe length of  0 so we kick be out of position and we  put D there  and we mark its probe length is 1 and  then we look to see if we can insert B  in the next position over nope it's full  C's there but C has a probe length of 1  also so we just have to go to the next  spot over to look for g-spot it's  available we see it's there so we put be  there and we mark the probe length of 2  so this kind of moving things around  this gets to what why it's named robin  hood hashing you rob from the probe rich  and you give to the probe poor right /  where probe riches as close to zero as  possible which is counterintuitive so  another so basically what you can see  here is like when you do lookups on it  you jump to the next positions  so there's a refinement that you can  make for the lookups so when you write  this hash table one you need to write  you know the the table itself which is  that Keys table in our case we store  bite positions in the file of where to  look up the key but you need to store  that and then you need to store the  maxpro blanks everything else can get  thrown away but one other thing you can  do is you can actually look at the  average Pro blanks and store that too so  in our case we're just going to say  ignore position for say that isn't there  we're just going to say the average  probe length is 1 so what that means is  when we have a lookup later on we do the  hash to find its position and then we  add the average to it so in this case D  hashes to 0 we add 1 to it and we end up  finding the exact thing on the first hit  without having to move the probe at all  and essentially what you end up doing is  if you look it up and you add at it and  you have a miss you move the probe back  and forth between the right and left  side until you get to a position where  you either have a miss or you found the  element so here's what a cache miss  looks like so say we're trying to look  up Z to see if it exists in the file Z  hashes to zero and we see okay well a is  not Z so if that's not it so we move the  probe and we say well D is not Z so  that's not it  and notice we're tracking where we are  on the probe length for for Z so we move  the probe again and see is not Z and  where I probe length 2 now and at this  point we know we can exit because we've  stored the max probe length we know  nothing in the table has a probe length  more than 2 so we know it's a cache miss  ok so the last section I just want to  talk about a little bit is a cardinality  estimation so we estimate estimate the  cardinality of how many unique  series there are in a file in the index  how many measurements there are and how  many values there are for a given tag  key which is use useful data for our  internal telemetry and we'll be adding  stuff to the query language later to  actually expose this information to do  things to do like all sorts of different  stuff so we keep sketches basically we  use Hyper log log plus plus which is  basically some improvements on the old  hll algorithm but not going to cover  those in this talk so but we'll have  more details in a more detailed write-up  about this coming soon it's in the  nightly build for 1.3 right now it's a  feature that you can turn or the  indexing stuff so it's a feature that  you can turn on with a flag in the  config I should wrote a blog post about  it a couple of weeks ago so it's listed  in there it tells you how to do it so  that is my talk thank you thank you Paul  so now we're going to have questions  thank you very much all thanks for the  great talk I had a question so almost a  decade ago I'd use a tool called rrd so  is the influx DV have capabilities to  roll out to do roll-ups essentially you  know like rrdtool does they are like  aggregate yeah these buy hours or  minutes and days yeah so we have feature  called continuous queries which will let  you basically you can have different  retention policies in the database  retention policy sets how long you want  to keep the data around you can keep it  around forever or you can say I would  you know I want to keep this  high-precision data around for seven  days and this medium precision data  around for three months and the database  will automatically handle evicting it  for you and like I said because of the  way we organize the data on disk it's  really just dropping files so it's not  like a rewriting indexes and also crazy  stuff  so continuous queries is one way to get  that we have another project called  capacitor which is basically a  processing engine for influx flavored  time series data and you can do  aggregations and down sampling and that  kind of stuff using capacitor it's a bit  more powerful than our continuous query  language so yeah you can do that I think  about our D that makes it a bit  different is our D is a round-robin  database so it actually only works for  samples at fixed intervals of time  it also doesn't give you compression  right because round-robin databases are  just like we have we know we want we  have samples that we're taking once  every minute and we want to keep two  days worth of samples so it's just  allocates a file of that size and like  you know rotating buffer so got it  thanks  hi I took questions is it written and go  yes oh yeah sorry the database is  written in go okay okay and the  secondary question is I tried to use the  job of the Scala client maybe about 2 or  3 months ago and it didn't work yeah  that's because we can actually we  actually haven't written any of the  clients we actually just kind of kicked  it over the community so because I  should probably get into it fix it up  form yeah yeah at this point at this  stage all the client libraries or  community contributed we will take over  ownership at some point but it just  hasn't been a priority what with  everything else basically so if you have  VC money you want to give it to us we'll  hire client I have it I have I have my  own money I want to use your DB for so  maybe that's a different conversation  next question I just said I think I know  where there's a client to kind of walk  away in flux PPI run it in Scala so I  can tell you yeah I definitely know we  have Scala users I'm just not sure I'm  sure if you do a search there probably  multiple libraries it's coming from this  links that example my question is a so  the influx TV is a real-time database  what kind of data is a usually store I  mean you're monitoring that data  you know sensor data that's fine do you  how that compared to other real-time  databases for example fluid type is a  real-time OLAP databases so it's there  compared to two type of databases in  that there's do you what's the best  practice is what kind of data you store  there do you favor  OLAP data or any data or you know try to  get a sense of which points should be  used for what I mean so are two primary  use cases are monitoring data so you're  talking about server metrics application  performance monitoring data and sensor  data so those are you know generally  you're doing computations on them like  histograms percentile min mackney and  all that kind of stuff  standard deviation so we're optimize for  that you can store like real time  real like user analytics data in our  database as well but druid for example  was built originally Metamarkets which  does like behavioral analytics for  advert ad tech companies so it's a very  its foundation is very very different  like it's more like counting events and  slicing and dicing on whatever  dimensions you want to slice and dice  those on so druid will absolutely be in  flux in any sort of bake-off if that's  what you're doing because that's what it  was designed for originally so Ivan it's  been a while since I looked at the  project so it was certainly like before  the company that got started around  druid was founded so I'm sure they've  actually done a lot more since that time  but the other ones we get compared to  our graphite which is a round robin  database so it doesn't work for  event-driven data whereas our goal was  we wanted it we want influx to work for  regular and irregular time series so a  regular series of samples at fixed  intervals but an irregular one is  largely event-driven  so events could be requests to an API  they could be pageviews they could be  trades in a stock market or quotes so  general our use cases are our biggest  one is monitoring followed by kind of  real-time analytics or sensor data and  then there's a small group of people  using it for financial market data so  yeah so at one point I think you showed  your like series range blocks  mm-hm and you mentioned compression  techniques at deltas but you just  mentioned also like you can have a  regular so you basically can get events  out of time out of order because that  time is not you don't write client so  it's not determined by you what you  could get stuff like way out of order  like way delayed as well right like yes  a time could let's say you got some data  reported to you an hour late what do you  do with that because you've already  flushed to disk  you've already is it when you compact  things that you find stuff out of order  and we yeah well so if we get it depends  on  what the out of order data looks like  right so they're use cases what we see  in sensor gate most the time when we get  delayed data collection we see it in  sensor data use cases like we have one  customer who has their instrumenting  solar panels in Africa and they can only  communicate via just gsm network so they  only connect transmit data once every  four hours they just like get a package  of it and send it up but even then like  they have different collection intervals  for all these but these are individual  time series that are delayed so the data  for a specific series is still generally  written in order it's just that for the  different time series it could be out of  order  so although we have queries where you  can merge all that data together so  basically if out of order data comes in  we write it to the in memory index in  the wall later they'll get flushed to a  TSM file right and a query time we will  sort that dynamically right so what that  means is you take a hit on performance a  query time if we end up having to do  that but if we don't then you're good  and then later when the compaction runs  it will MIT will compact that older file  into the other files into new files with  the older files right so they make sure  that it's all in order right okay so  that was a point you you do have to  inspect at least every file maybe not  read the whole file but inspect the  files of the files are sorted and then  you could see if certain series are  showing up for the same real key for the  same keys and yeah so in the in present  you have to in the index in the file we  have the min time in the max time in the  file and we have them in time in the max  time for each series so when the  compaction is running the series keys in  the index are all in sorted order so we  look at them and we can merge them at  that time and then yeah we know the  minute max time so we know which ones to  decode and one last question do you  canonicalize the keys yourself because  let's say yeah I thought CPU host yeah  we do that okay yes yeah we oh the way  we do it is we keep the tags in sorted  order right by by key and then value so  the the optimal way to write data in is  to  already sorted because if you don't we  end up sorting it before we write it  actually to the to the wall
+
+00:00:15.400 --> 00:00:15.410 align:start position:0%
+ 
+ 
+
+00:00:15.410 --> 00:00:31.440 align:start position:0%
+ 
+
+
+00:00:31.440 --> 00:00:31.450 align:start position:0%
+ 
+ 
+
+00:00:31.450 --> 00:00:34.300 align:start position:0%
+ 
+
+
+00:00:34.300 --> 00:00:36.920 align:start position:0%
+ 
+ 
+
+00:00:36.920 --> 00:00:39.860 align:start position:0%
+ 
+ 
+
+00:00:39.860 --> 00:00:45.860 align:start position:0%
+ 
+ 
+
+00:00:45.860 --> 00:00:48.440 align:start position:0%
+ 
+ 
+
+00:00:48.440 --> 00:00:50.530 align:start position:0%
+ 
+ 
+
+00:00:50.530 --> 00:00:52.820 align:start position:0%
+ 
+ 
+
+00:00:52.820 --> 00:00:55.670 align:start position:0%
+ 
+ 
+
+00:00:55.670 --> 00:00:58.640 align:start position:0%
+ 
+ 
+
+00:00:58.640 --> 00:01:00.260 align:start position:0%
+ 
+ 
+
+00:01:00.260 --> 00:01:02.960 align:start position:0%
+ 
+ 
+
+00:01:02.960 --> 00:01:05.050 align:start position:0%
+ 
+ 
+
+00:01:05.050 --> 00:01:07.400 align:start position:0%
+ 
+ 
+
+00:01:07.400 --> 00:01:09.080 align:start position:0%
+ 
+ 
+
+00:01:09.080 --> 00:01:13.730 align:start position:0%
+ 
+ 
+
+00:01:13.730 --> 00:01:16.190 align:start position:0%
+ 
+ 
+
+00:01:16.190 --> 00:01:18.770 align:start position:0%
+ 
+ 
+
+00:01:18.770 --> 00:01:21.770 align:start position:0%
+ 
+ 
+
+00:01:21.770 --> 00:01:23.480 align:start position:0%
+ 
+ 
+
+00:01:23.480 --> 00:01:26.690 align:start position:0%
+ 
+ 
+
+00:01:26.690 --> 00:01:28.700 align:start position:0%
+ 
+ 
+
+00:01:28.700 --> 00:01:31.130 align:start position:0%
+ 
+ 
+
+00:01:31.130 --> 00:01:32.390 align:start position:0%
+ 
+ 
+
+00:01:32.390 --> 00:01:35.090 align:start position:0%
+ 
+ 
+
+00:01:35.090 --> 00:01:37.700 align:start position:0%
+ 
+ 
+
+00:01:37.700 --> 00:01:39.920 align:start position:0%
+ 
+ 
+
+00:01:39.920 --> 00:01:42.920 align:start position:0%
+ 
+ 
+
+00:01:42.920 --> 00:01:47.120 align:start position:0%
+ 
+ 
+
+00:01:47.120 --> 00:01:49.370 align:start position:0%
+ 
+ 
+
+00:01:49.370 --> 00:01:51.649 align:start position:0%
+ 
+ 
+
+00:01:51.649 --> 00:01:55.430 align:start position:0%
+ 
+ 
+
+00:01:55.430 --> 00:01:57.680 align:start position:0%
+ 
+ 
+
+00:01:57.680 --> 00:02:00.920 align:start position:0%
+ 
+ 
+
+00:02:00.920 --> 00:02:02.750 align:start position:0%
+ 
+ 
+
+00:02:02.750 --> 00:02:05.360 align:start position:0%
+ 
+ 
+
+00:02:05.360 --> 00:02:10.009 align:start position:0%
+ 
+ 
+
+00:02:10.009 --> 00:02:14.300 align:start position:0%
+ 
+ 
+
+00:02:14.300 --> 00:02:18.380 align:start position:0%
+ 
+ 
+
+00:02:18.380 --> 00:02:20.509 align:start position:0%
+ 
+ 
+
+00:02:20.509 --> 00:02:22.910 align:start position:0%
+ 
+ 
+
+00:02:22.910 --> 00:02:26.539 align:start position:0%
+ 
+ 
+
+00:02:26.539 --> 00:02:28.729 align:start position:0%
+ 
+ 
+
+00:02:28.729 --> 00:02:32.870 align:start position:0%
+ 
+ 
+
+00:02:32.870 --> 00:02:34.880 align:start position:0%
+ 
+ 
+
+00:02:34.880 --> 00:02:37.940 align:start position:0%
+ 
+ 
+
+00:02:37.940 --> 00:02:40.490 align:start position:0%
+ 
+ 
+
+00:02:40.490 --> 00:02:42.800 align:start position:0%
+ 
+ 
+
+00:02:42.800 --> 00:02:44.540 align:start position:0%
+ 
+ 
+
+00:02:44.540 --> 00:02:46.100 align:start position:0%
+ 
+ 
+
+00:02:46.100 --> 00:02:48.320 align:start position:0%
+ 
+ 
+
+00:02:48.320 --> 00:02:50.780 align:start position:0%
+ 
+ 
+
+00:02:50.780 --> 00:02:52.790 align:start position:0%
+ 
+ 
+
+00:02:52.790 --> 00:02:56.180 align:start position:0%
+ 
+ 
+
+00:02:56.180 --> 00:02:57.530 align:start position:0%
+ 
+ 
+
+00:02:57.530 --> 00:02:59.900 align:start position:0%
+ 
+ 
+
+00:02:59.900 --> 00:03:02.120 align:start position:0%
+ 
+ 
+
+00:03:02.120 --> 00:03:05.180 align:start position:0%
+ 
+ 
+
+00:03:05.180 --> 00:03:07.460 align:start position:0%
+ 
+ 
+
+00:03:07.460 --> 00:03:11.390 align:start position:0%
+ 
+ 
+
+00:03:11.390 --> 00:03:14.810 align:start position:0%
+ 
+ 
+
+00:03:14.810 --> 00:03:16.670 align:start position:0%
+ 
+ 
+
+00:03:16.670 --> 00:03:17.960 align:start position:0%
+ 
+ 
+
+00:03:17.960 --> 00:03:19.760 align:start position:0%
+ 
+ 
+
+00:03:19.760 --> 00:03:21.680 align:start position:0%
+ 
+ 
+
+00:03:21.680 --> 00:03:25.150 align:start position:0%
+ 
+ 
+
+00:03:25.150 --> 00:03:27.470 align:start position:0%
+ 
+ 
+
+00:03:27.470 --> 00:03:30.590 align:start position:0%
+ 
+ 
+
+00:03:30.590 --> 00:03:32.150 align:start position:0%
+ 
+ 
+
+00:03:32.150 --> 00:03:34.070 align:start position:0%
+ 
+ 
+
+00:03:34.070 --> 00:03:37.600 align:start position:0%
+ 
+ 
+
+00:03:37.600 --> 00:03:40.880 align:start position:0%
+ 
+ 
+
+00:03:40.880 --> 00:03:44.690 align:start position:0%
+ 
+ 
+
+00:03:44.690 --> 00:03:46.250 align:start position:0%
+ 
+ 
+
+00:03:46.250 --> 00:03:47.660 align:start position:0%
+ 
+ 
+
+00:03:47.660 --> 00:03:50.030 align:start position:0%
+ 
+ 
+
+00:03:50.030 --> 00:03:51.680 align:start position:0%
+ 
+ 
+
+00:03:51.680 --> 00:03:54.680 align:start position:0%
+ 
+ 
+
+00:03:54.680 --> 00:03:56.449 align:start position:0%
+ 
+ 
+
+00:03:56.449 --> 00:03:58.400 align:start position:0%
+ 
+ 
+
+00:03:58.400 --> 00:04:01.250 align:start position:0%
+ 
+ 
+
+00:04:01.250 --> 00:04:07.190 align:start position:0%
+ 
+ 
+
+00:04:07.190 --> 00:04:09.770 align:start position:0%
+ 
+ 
+
+00:04:09.770 --> 00:04:12.110 align:start position:0%
+ 
+ 
+
+00:04:12.110 --> 00:04:14.240 align:start position:0%
+ 
+ 
+
+00:04:14.240 --> 00:04:16.759 align:start position:0%
+ 
+ 
+
+00:04:16.759 --> 00:04:20.300 align:start position:0%
+ 
+ 
+
+00:04:20.300 --> 00:04:23.300 align:start position:0%
+ 
+ 
+
+00:04:23.300 --> 00:04:25.610 align:start position:0%
+ 
+ 
+
+00:04:25.610 --> 00:04:27.850 align:start position:0%
+ 
+ 
+
+00:04:27.850 --> 00:04:31.580 align:start position:0%
+ 
+ 
+
+00:04:31.580 --> 00:04:34.159 align:start position:0%
+ 
+ 
+
+00:04:34.159 --> 00:04:35.840 align:start position:0%
+ 
+ 
+
+00:04:35.840 --> 00:04:37.520 align:start position:0%
+ 
+ 
+
+00:04:37.520 --> 00:04:40.700 align:start position:0%
+ 
+ 
+
+00:04:40.700 --> 00:04:43.940 align:start position:0%
+ 
+ 
+
+00:04:43.940 --> 00:04:46.820 align:start position:0%
+ 
+ 
+
+00:04:46.820 --> 00:04:49.520 align:start position:0%
+ 
+ 
+
+00:04:49.520 --> 00:04:53.300 align:start position:0%
+ 
+ 
+
+00:04:53.300 --> 00:04:55.250 align:start position:0%
+ 
+ 
+
+00:04:55.250 --> 00:04:57.620 align:start position:0%
+ 
+ 
+
+00:04:57.620 --> 00:04:59.659 align:start position:0%
+ 
+ 
+
+00:04:59.659 --> 00:05:02.089 align:start position:0%
+ 
+ 
+
+00:05:02.089 --> 00:05:04.339 align:start position:0%
+ 
+ 
+
+00:05:04.339 --> 00:05:06.800 align:start position:0%
+ 
+ 
+
+00:05:06.800 --> 00:05:10.969 align:start position:0%
+ 
+ 
+
+00:05:10.969 --> 00:05:12.950 align:start position:0%
+ 
+ 
+
+00:05:12.950 --> 00:05:14.869 align:start position:0%
+ 
+ 
+
+00:05:14.869 --> 00:05:16.489 align:start position:0%
+ 
+ 
+
+00:05:16.489 --> 00:05:18.350 align:start position:0%
+ 
+ 
+
+00:05:18.350 --> 00:05:19.909 align:start position:0%
+ 
+ 
+
+00:05:19.909 --> 00:05:24.200 align:start position:0%
+ 
+ 
+
+00:05:24.200 --> 00:05:27.050 align:start position:0%
+ 
+ 
+
+00:05:27.050 --> 00:05:29.899 align:start position:0%
+ 
+ 
+
+00:05:29.899 --> 00:05:33.170 align:start position:0%
+ 
+ 
+
+00:05:33.170 --> 00:05:35.179 align:start position:0%
+ 
+ 
+
+00:05:35.179 --> 00:05:37.969 align:start position:0%
+ 
+ 
+
+00:05:37.969 --> 00:05:39.409 align:start position:0%
+ 
+ 
+
+00:05:39.409 --> 00:05:41.740 align:start position:0%
+ 
+ 
+
+00:05:41.740 --> 00:05:47.629 align:start position:0%
+ 
+ 
+
+00:05:47.629 --> 00:05:49.240 align:start position:0%
+ 
+ 
+
+00:05:49.240 --> 00:05:52.040 align:start position:0%
+ 
+ 
+
+00:05:52.040 --> 00:05:54.200 align:start position:0%
+ 
+ 
+
+00:05:54.200 --> 00:05:56.059 align:start position:0%
+ 
+ 
+
+00:05:56.059 --> 00:05:58.309 align:start position:0%
+ 
+ 
+
+00:05:58.309 --> 00:06:00.320 align:start position:0%
+ 
+ 
+
+00:06:00.320 --> 00:06:03.890 align:start position:0%
+ 
+ 
+
+00:06:03.890 --> 00:06:06.679 align:start position:0%
+ 
+ 
+
+00:06:06.679 --> 00:06:11.110 align:start position:0%
+ 
+ 
+
+00:06:11.110 --> 00:06:13.999 align:start position:0%
+ 
+ 
+
+00:06:13.999 --> 00:06:15.769 align:start position:0%
+ 
+ 
+
+00:06:15.769 --> 00:06:19.459 align:start position:0%
+ 
+ 
+
+00:06:19.459 --> 00:06:22.189 align:start position:0%
+ 
+ 
+
+00:06:22.189 --> 00:06:24.019 align:start position:0%
+ 
+ 
+
+00:06:24.019 --> 00:06:26.179 align:start position:0%
+ 
+ 
+
+00:06:26.179 --> 00:06:28.459 align:start position:0%
+ 
+ 
+
+00:06:28.459 --> 00:06:30.769 align:start position:0%
+ 
+ 
+
+00:06:30.769 --> 00:06:35.029 align:start position:0%
+ 
+ 
+
+00:06:35.029 --> 00:06:37.519 align:start position:0%
+ 
+ 
+
+00:06:37.519 --> 00:06:39.079 align:start position:0%
+ 
+ 
+
+00:06:39.079 --> 00:06:41.749 align:start position:0%
+ 
+ 
+
+00:06:41.749 --> 00:06:44.600 align:start position:0%
+ 
+ 
+
+00:06:44.600 --> 00:06:46.850 align:start position:0%
+ 
+ 
+
+00:06:46.850 --> 00:06:50.149 align:start position:0%
+ 
+ 
+
+00:06:50.149 --> 00:06:51.980 align:start position:0%
+ 
+ 
+
+00:06:51.980 --> 00:06:54.649 align:start position:0%
+ 
+ 
+
+00:06:54.649 --> 00:06:58.249 align:start position:0%
+ 
+ 
+
+00:06:58.249 --> 00:07:00.379 align:start position:0%
+ 
+ 
+
+00:07:00.379 --> 00:07:02.959 align:start position:0%
+ 
+ 
+
+00:07:02.959 --> 00:07:04.909 align:start position:0%
+ 
+ 
+
+00:07:04.909 --> 00:07:06.619 align:start position:0%
+ 
+ 
+
+00:07:06.619 --> 00:07:08.540 align:start position:0%
+ 
+ 
+
+00:07:08.540 --> 00:07:12.589 align:start position:0%
+ 
+ 
+
+00:07:12.589 --> 00:07:12.599 align:start position:0%
+ 
+ 
+
+00:07:12.599 --> 00:07:13.310 align:start position:0%
+ 
+
+
+00:07:13.310 --> 00:07:15.650 align:start position:0%
+ 
+ 
+
+00:07:15.650 --> 00:07:18.110 align:start position:0%
+ 
+ 
+
+00:07:18.110 --> 00:07:21.770 align:start position:0%
+ 
+ 
+
+00:07:21.770 --> 00:07:24.110 align:start position:0%
+ 
+ 
+
+00:07:24.110 --> 00:07:29.710 align:start position:0%
+ 
+ 
+
+00:07:29.710 --> 00:07:31.730 align:start position:0%
+ 
+ 
+
+00:07:31.730 --> 00:07:35.480 align:start position:0%
+ 
+ 
+
+00:07:35.480 --> 00:07:36.920 align:start position:0%
+ 
+ 
+
+00:07:36.920 --> 00:07:38.890 align:start position:0%
+ 
+ 
+
+00:07:38.890 --> 00:07:41.810 align:start position:0%
+ 
+ 
+
+00:07:41.810 --> 00:07:43.490 align:start position:0%
+ 
+ 
+
+00:07:43.490 --> 00:07:46.490 align:start position:0%
+ 
+ 
+
+00:07:46.490 --> 00:07:48.650 align:start position:0%
+ 
+ 
+
+00:07:48.650 --> 00:07:51.500 align:start position:0%
+ 
+ 
+
+00:07:51.500 --> 00:07:53.780 align:start position:0%
+ 
+ 
+
+00:07:53.780 --> 00:07:55.790 align:start position:0%
+ 
+ 
+
+00:07:55.790 --> 00:07:59.360 align:start position:0%
+ 
+ 
+
+00:07:59.360 --> 00:08:01.720 align:start position:0%
+ 
+ 
+
+00:08:01.720 --> 00:08:05.000 align:start position:0%
+ 
+ 
+
+00:08:05.000 --> 00:08:07.390 align:start position:0%
+ 
+ 
+
+00:08:07.390 --> 00:08:10.700 align:start position:0%
+ 
+ 
+
+00:08:10.700 --> 00:08:12.500 align:start position:0%
+ 
+ 
+
+00:08:12.500 --> 00:08:14.720 align:start position:0%
+ 
+ 
+
+00:08:14.720 --> 00:08:15.860 align:start position:0%
+ 
+ 
+
+00:08:15.860 --> 00:08:18.320 align:start position:0%
+ 
+ 
+
+00:08:18.320 --> 00:08:19.970 align:start position:0%
+ 
+ 
+
+00:08:19.970 --> 00:08:22.760 align:start position:0%
+ 
+ 
+
+00:08:22.760 --> 00:08:25.520 align:start position:0%
+ 
+ 
+
+00:08:25.520 --> 00:08:27.760 align:start position:0%
+ 
+ 
+
+00:08:27.760 --> 00:08:31.340 align:start position:0%
+ 
+ 
+
+00:08:31.340 --> 00:08:33.230 align:start position:0%
+ 
+ 
+
+00:08:33.230 --> 00:08:35.270 align:start position:0%
+ 
+ 
+
+00:08:35.270 --> 00:08:36.800 align:start position:0%
+ 
+ 
+
+00:08:36.800 --> 00:08:38.780 align:start position:0%
+ 
+ 
+
+00:08:38.780 --> 00:08:42.050 align:start position:0%
+ 
+ 
+
+00:08:42.050 --> 00:08:43.670 align:start position:0%
+ 
+ 
+
+00:08:43.670 --> 00:08:47.420 align:start position:0%
+ 
+ 
+
+00:08:47.420 --> 00:08:49.160 align:start position:0%
+ 
+ 
+
+00:08:49.160 --> 00:08:51.110 align:start position:0%
+ 
+ 
+
+00:08:51.110 --> 00:08:53.360 align:start position:0%
+ 
+ 
+
+00:08:53.360 --> 00:08:54.800 align:start position:0%
+ 
+ 
+
+00:08:54.800 --> 00:08:57.200 align:start position:0%
+ 
+ 
+
+00:08:57.200 --> 00:08:58.520 align:start position:0%
+ 
+ 
+
+00:08:58.520 --> 00:09:01.040 align:start position:0%
+ 
+ 
+
+00:09:01.040 --> 00:09:02.450 align:start position:0%
+ 
+ 
+
+00:09:02.450 --> 00:09:03.800 align:start position:0%
+ 
+ 
+
+00:09:03.800 --> 00:09:06.020 align:start position:0%
+ 
+ 
+
+00:09:06.020 --> 00:09:08.030 align:start position:0%
+ 
+ 
+
+00:09:08.030 --> 00:09:10.220 align:start position:0%
+ 
+ 
+
+00:09:10.220 --> 00:09:14.570 align:start position:0%
+ 
+ 
+
+00:09:14.570 --> 00:09:16.580 align:start position:0%
+ 
+ 
+
+00:09:16.580 --> 00:09:18.860 align:start position:0%
+ 
+ 
+
+00:09:18.860 --> 00:09:20.330 align:start position:0%
+ 
+ 
+
+00:09:20.330 --> 00:09:22.490 align:start position:0%
+ 
+ 
+
+00:09:22.490 --> 00:09:24.620 align:start position:0%
+ 
+ 
+
+00:09:24.620 --> 00:09:25.430 align:start position:0%
+ 
+ 
+
+00:09:25.430 --> 00:09:29.210 align:start position:0%
+ 
+ 
+
+00:09:29.210 --> 00:09:30.530 align:start position:0%
+ 
+ 
+
+00:09:30.530 --> 00:09:33.590 align:start position:0%
+ 
+ 
+
+00:09:33.590 --> 00:09:37.100 align:start position:0%
+ 
+ 
+
+00:09:37.100 --> 00:09:40.520 align:start position:0%
+ 
+ 
+
+00:09:40.520 --> 00:09:43.610 align:start position:0%
+ 
+ 
+
+00:09:43.610 --> 00:09:45.020 align:start position:0%
+ 
+ 
+
+00:09:45.020 --> 00:09:46.730 align:start position:0%
+ 
+ 
+
+00:09:46.730 --> 00:09:48.980 align:start position:0%
+ 
+ 
+
+00:09:48.980 --> 00:09:50.720 align:start position:0%
+ 
+ 
+
+00:09:50.720 --> 00:09:53.840 align:start position:0%
+ 
+ 
+
+00:09:53.840 --> 00:09:55.610 align:start position:0%
+ 
+ 
+
+00:09:55.610 --> 00:09:57.050 align:start position:0%
+ 
+ 
+
+00:09:57.050 --> 00:09:59.900 align:start position:0%
+ 
+ 
+
+00:09:59.900 --> 00:10:03.380 align:start position:0%
+ 
+ 
+
+00:10:03.380 --> 00:10:06.500 align:start position:0%
+ 
+ 
+
+00:10:06.500 --> 00:10:09.760 align:start position:0%
+ 
+ 
+
+00:10:09.760 --> 00:10:13.460 align:start position:0%
+ 
+ 
+
+00:10:13.460 --> 00:10:16.220 align:start position:0%
+ 
+ 
+
+00:10:16.220 --> 00:10:18.080 align:start position:0%
+ 
+ 
+
+00:10:18.080 --> 00:10:20.360 align:start position:0%
+ 
+ 
+
+00:10:20.360 --> 00:10:22.130 align:start position:0%
+ 
+ 
+
+00:10:22.130 --> 00:10:24.290 align:start position:0%
+ 
+ 
+
+00:10:24.290 --> 00:10:27.380 align:start position:0%
+ 
+ 
+
+00:10:27.380 --> 00:10:28.580 align:start position:0%
+ 
+ 
+
+00:10:28.580 --> 00:10:30.230 align:start position:0%
+ 
+ 
+
+00:10:30.230 --> 00:10:32.360 align:start position:0%
+ 
+ 
+
+00:10:32.360 --> 00:10:35.360 align:start position:0%
+ 
+ 
+
+00:10:35.360 --> 00:10:37.190 align:start position:0%
+ 
+ 
+
+00:10:37.190 --> 00:10:38.990 align:start position:0%
+ 
+ 
+
+00:10:38.990 --> 00:10:41.660 align:start position:0%
+ 
+ 
+
+00:10:41.660 --> 00:10:45.800 align:start position:0%
+ 
+ 
+
+00:10:45.800 --> 00:10:46.970 align:start position:0%
+ 
+ 
+
+00:10:46.970 --> 00:10:50.780 align:start position:0%
+ 
+ 
+
+00:10:50.780 --> 00:10:52.670 align:start position:0%
+ 
+ 
+
+00:10:52.670 --> 00:10:56.810 align:start position:0%
+ 
+ 
+
+00:10:56.810 --> 00:10:59.990 align:start position:0%
+ 
+ 
+
+00:10:59.990 --> 00:11:02.420 align:start position:0%
+ 
+ 
+
+00:11:02.420 --> 00:11:06.410 align:start position:0%
+ 
+ 
+
+00:11:06.410 --> 00:11:08.660 align:start position:0%
+ 
+ 
+
+00:11:08.660 --> 00:11:11.120 align:start position:0%
+ 
+ 
+
+00:11:11.120 --> 00:11:12.380 align:start position:0%
+ 
+ 
+
+00:11:12.380 --> 00:11:15.470 align:start position:0%
+ 
+ 
+
+00:11:15.470 --> 00:11:17.180 align:start position:0%
+ 
+ 
+
+00:11:17.180 --> 00:11:19.310 align:start position:0%
+ 
+ 
+
+00:11:19.310 --> 00:11:20.990 align:start position:0%
+ 
+ 
+
+00:11:20.990 --> 00:11:22.210 align:start position:0%
+ 
+ 
+
+00:11:22.210 --> 00:11:26.150 align:start position:0%
+ 
+ 
+
+00:11:26.150 --> 00:11:28.780 align:start position:0%
+ 
+ 
+
+00:11:28.780 --> 00:11:31.990 align:start position:0%
+ 
+ 
+
+00:11:31.990 --> 00:11:34.310 align:start position:0%
+ 
+ 
+
+00:11:34.310 --> 00:11:37.490 align:start position:0%
+ 
+ 
+
+00:11:37.490 --> 00:11:39.280 align:start position:0%
+ 
+ 
+
+00:11:39.280 --> 00:11:41.870 align:start position:0%
+ 
+ 
+
+00:11:41.870 --> 00:11:47.300 align:start position:0%
+ 
+ 
+
+00:11:47.300 --> 00:11:49.670 align:start position:0%
+ 
+ 
+
+00:11:49.670 --> 00:11:51.740 align:start position:0%
+ 
+ 
+
+00:11:51.740 --> 00:11:53.180 align:start position:0%
+ 
+ 
+
+00:11:53.180 --> 00:11:54.800 align:start position:0%
+ 
+ 
+
+00:11:54.800 --> 00:11:56.420 align:start position:0%
+ 
+ 
+
+00:11:56.420 --> 00:12:01.160 align:start position:0%
+ 
+ 
+
+00:12:01.160 --> 00:12:04.880 align:start position:0%
+ 
+ 
+
+00:12:04.880 --> 00:12:07.610 align:start position:0%
+ 
+ 
+
+00:12:07.610 --> 00:12:09.980 align:start position:0%
+ 
+ 
+
+00:12:09.980 --> 00:12:11.930 align:start position:0%
+ 
+ 
+
+00:12:11.930 --> 00:12:14.900 align:start position:0%
+ 
+ 
+
+00:12:14.900 --> 00:12:17.600 align:start position:0%
+ 
+ 
+
+00:12:17.600 --> 00:12:21.080 align:start position:0%
+ 
+ 
+
+00:12:21.080 --> 00:12:23.180 align:start position:0%
+ 
+ 
+
+00:12:23.180 --> 00:12:26.530 align:start position:0%
+ 
+ 
+
+00:12:26.530 --> 00:12:28.940 align:start position:0%
+ 
+ 
+
+00:12:28.940 --> 00:12:30.140 align:start position:0%
+ 
+ 
+
+00:12:30.140 --> 00:12:32.240 align:start position:0%
+ 
+ 
+
+00:12:32.240 --> 00:12:36.200 align:start position:0%
+ 
+ 
+
+00:12:36.200 --> 00:12:38.570 align:start position:0%
+ 
+ 
+
+00:12:38.570 --> 00:12:40.280 align:start position:0%
+ 
+ 
+
+00:12:40.280 --> 00:12:41.650 align:start position:0%
+ 
+ 
+
+00:12:41.650 --> 00:12:44.300 align:start position:0%
+ 
+ 
+
+00:12:44.300 --> 00:12:46.100 align:start position:0%
+ 
+ 
+
+00:12:46.100 --> 00:12:47.930 align:start position:0%
+ 
+ 
+
+00:12:47.930 --> 00:12:50.750 align:start position:0%
+ 
+ 
+
+00:12:50.750 --> 00:12:54.320 align:start position:0%
+ 
+ 
+
+00:12:54.320 --> 00:12:55.760 align:start position:0%
+ 
+ 
+
+00:12:55.760 --> 00:12:58.970 align:start position:0%
+ 
+ 
+
+00:12:58.970 --> 00:13:03.020 align:start position:0%
+ 
+ 
+
+00:13:03.020 --> 00:13:05.390 align:start position:0%
+ 
+ 
+
+00:13:05.390 --> 00:13:08.270 align:start position:0%
+ 
+ 
+
+00:13:08.270 --> 00:13:09.830 align:start position:0%
+ 
+ 
+
+00:13:09.830 --> 00:13:11.660 align:start position:0%
+ 
+ 
+
+00:13:11.660 --> 00:13:14.780 align:start position:0%
+ 
+ 
+
+00:13:14.780 --> 00:13:17.570 align:start position:0%
+ 
+ 
+
+00:13:17.570 --> 00:13:19.940 align:start position:0%
+ 
+ 
+
+00:13:19.940 --> 00:13:21.790 align:start position:0%
+ 
+ 
+
+00:13:21.790 --> 00:13:24.260 align:start position:0%
+ 
+ 
+
+00:13:24.260 --> 00:13:24.950 align:start position:0%
+ 
+ 
+
+00:13:24.950 --> 00:13:27.470 align:start position:0%
+ 
+ 
+
+00:13:27.470 --> 00:13:29.870 align:start position:0%
+ 
+ 
+
+00:13:29.870 --> 00:13:31.460 align:start position:0%
+ 
+ 
+
+00:13:31.460 --> 00:13:34.760 align:start position:0%
+ 
+ 
+
+00:13:34.760 --> 00:13:38.930 align:start position:0%
+ 
+ 
+
+00:13:38.930 --> 00:13:40.550 align:start position:0%
+ 
+ 
+
+00:13:40.550 --> 00:13:43.550 align:start position:0%
+ 
+ 
+
+00:13:43.550 --> 00:13:45.530 align:start position:0%
+ 
+ 
+
+00:13:45.530 --> 00:13:48.170 align:start position:0%
+ 
+ 
+
+00:13:48.170 --> 00:13:51.440 align:start position:0%
+ 
+ 
+
+00:13:51.440 --> 00:13:52.670 align:start position:0%
+ 
+ 
+
+00:13:52.670 --> 00:13:54.200 align:start position:0%
+ 
+ 
+
+00:13:54.200 --> 00:13:57.050 align:start position:0%
+ 
+ 
+
+00:13:57.050 --> 00:13:58.579 align:start position:0%
+ 
+ 
+
+00:13:58.579 --> 00:14:02.930 align:start position:0%
+ 
+ 
+
+00:14:02.930 --> 00:14:05.870 align:start position:0%
+ 
+ 
+
+00:14:05.870 --> 00:14:10.670 align:start position:0%
+ 
+ 
+
+00:14:10.670 --> 00:14:14.720 align:start position:0%
+ 
+ 
+
+00:14:14.720 --> 00:14:19.370 align:start position:0%
+ 
+ 
+
+00:14:19.370 --> 00:14:20.810 align:start position:0%
+ 
+ 
+
+00:14:20.810 --> 00:14:22.699 align:start position:0%
+ 
+ 
+
+00:14:22.699 --> 00:14:25.490 align:start position:0%
+ 
+ 
+
+00:14:25.490 --> 00:14:27.350 align:start position:0%
+ 
+ 
+
+00:14:27.350 --> 00:14:31.579 align:start position:0%
+ 
+ 
+
+00:14:31.579 --> 00:14:35.840 align:start position:0%
+ 
+ 
+
+00:14:35.840 --> 00:14:37.820 align:start position:0%
+ 
+ 
+
+00:14:37.820 --> 00:14:39.620 align:start position:0%
+ 
+ 
+
+00:14:39.620 --> 00:14:43.340 align:start position:0%
+ 
+ 
+
+00:14:43.340 --> 00:14:44.900 align:start position:0%
+ 
+ 
+
+00:14:44.900 --> 00:14:48.290 align:start position:0%
+ 
+ 
+
+00:14:48.290 --> 00:14:51.949 align:start position:0%
+ 
+ 
+
+00:14:51.949 --> 00:14:54.620 align:start position:0%
+ 
+ 
+
+00:14:54.620 --> 00:14:57.350 align:start position:0%
+ 
+ 
+
+00:14:57.350 --> 00:14:59.480 align:start position:0%
+ 
+ 
+
+00:14:59.480 --> 00:15:02.720 align:start position:0%
+ 
+ 
+
+00:15:02.720 --> 00:15:05.750 align:start position:0%
+ 
+ 
+
+00:15:05.750 --> 00:15:08.510 align:start position:0%
+ 
+ 
+
+00:15:08.510 --> 00:15:11.300 align:start position:0%
+ 
+ 
+
+00:15:11.300 --> 00:15:13.670 align:start position:0%
+ 
+ 
+
+00:15:13.670 --> 00:15:15.350 align:start position:0%
+ 
+ 
+
+00:15:15.350 --> 00:15:17.780 align:start position:0%
+ 
+ 
+
+00:15:17.780 --> 00:15:21.140 align:start position:0%
+ 
+ 
+
+00:15:21.140 --> 00:15:24.140 align:start position:0%
+ 
+ 
+
+00:15:24.140 --> 00:15:26.600 align:start position:0%
+ 
+ 
+
+00:15:26.600 --> 00:15:28.640 align:start position:0%
+ 
+ 
+
+00:15:28.640 --> 00:15:30.199 align:start position:0%
+ 
+ 
+
+00:15:30.199 --> 00:15:31.850 align:start position:0%
+ 
+ 
+
+00:15:31.850 --> 00:15:34.519 align:start position:0%
+ 
+ 
+
+00:15:34.519 --> 00:15:37.280 align:start position:0%
+ 
+ 
+
+00:15:37.280 --> 00:15:40.190 align:start position:0%
+ 
+ 
+
+00:15:40.190 --> 00:15:42.710 align:start position:0%
+ 
+ 
+
+00:15:42.710 --> 00:15:44.810 align:start position:0%
+ 
+ 
+
+00:15:44.810 --> 00:15:49.730 align:start position:0%
+ 
+ 
+
+00:15:49.730 --> 00:15:52.220 align:start position:0%
+ 
+ 
+
+00:15:52.220 --> 00:15:54.829 align:start position:0%
+ 
+ 
+
+00:15:54.829 --> 00:15:57.230 align:start position:0%
+ 
+ 
+
+00:15:57.230 --> 00:15:59.920 align:start position:0%
+ 
+ 
+
+00:15:59.920 --> 00:16:03.860 align:start position:0%
+ 
+ 
+
+00:16:03.860 --> 00:16:05.870 align:start position:0%
+ 
+ 
+
+00:16:05.870 --> 00:16:05.880 align:start position:0%
+ 
+ 
+
+00:16:05.880 --> 00:16:06.410 align:start position:0%
+ 
+
+
+00:16:06.410 --> 00:16:08.960 align:start position:0%
+ 
+ 
+
+00:16:08.960 --> 00:16:10.850 align:start position:0%
+ 
+ 
+
+00:16:10.850 --> 00:16:12.800 align:start position:0%
+ 
+ 
+
+00:16:12.800 --> 00:16:14.829 align:start position:0%
+ 
+ 
+
+00:16:14.829 --> 00:16:18.500 align:start position:0%
+ 
+ 
+
+00:16:18.500 --> 00:16:20.030 align:start position:0%
+ 
+ 
+
+00:16:20.030 --> 00:16:21.829 align:start position:0%
+ 
+ 
+
+00:16:21.829 --> 00:16:25.970 align:start position:0%
+ 
+ 
+
+00:16:25.970 --> 00:16:27.410 align:start position:0%
+ 
+ 
+
+00:16:27.410 --> 00:16:29.509 align:start position:0%
+ 
+ 
+
+00:16:29.509 --> 00:16:33.290 align:start position:0%
+ 
+ 
+
+00:16:33.290 --> 00:16:35.300 align:start position:0%
+ 
+ 
+
+00:16:35.300 --> 00:16:37.970 align:start position:0%
+ 
+ 
+
+00:16:37.970 --> 00:16:39.110 align:start position:0%
+ 
+ 
+
+00:16:39.110 --> 00:16:43.340 align:start position:0%
+ 
+ 
+
+00:16:43.340 --> 00:16:44.780 align:start position:0%
+ 
+ 
+
+00:16:44.780 --> 00:16:48.620 align:start position:0%
+ 
+ 
+
+00:16:48.620 --> 00:16:51.379 align:start position:0%
+ 
+ 
+
+00:16:51.379 --> 00:16:54.680 align:start position:0%
+ 
+ 
+
+00:16:54.680 --> 00:16:57.650 align:start position:0%
+ 
+ 
+
+00:16:57.650 --> 00:17:00.350 align:start position:0%
+ 
+ 
+
+00:17:00.350 --> 00:17:03.829 align:start position:0%
+ 
+ 
+
+00:17:03.829 --> 00:17:05.480 align:start position:0%
+ 
+ 
+
+00:17:05.480 --> 00:17:06.970 align:start position:0%
+ 
+ 
+
+00:17:06.970 --> 00:17:09.620 align:start position:0%
+ 
+ 
+
+00:17:09.620 --> 00:17:14.020 align:start position:0%
+ 
+ 
+
+00:17:14.020 --> 00:17:17.720 align:start position:0%
+ 
+ 
+
+00:17:17.720 --> 00:17:21.350 align:start position:0%
+ 
+ 
+
+00:17:21.350 --> 00:17:23.090 align:start position:0%
+ 
+ 
+
+00:17:23.090 --> 00:17:27.350 align:start position:0%
+ 
+ 
+
+00:17:27.350 --> 00:17:29.780 align:start position:0%
+ 
+ 
+
+00:17:29.780 --> 00:17:32.150 align:start position:0%
+ 
+ 
+
+00:17:32.150 --> 00:17:34.970 align:start position:0%
+ 
+ 
+
+00:17:34.970 --> 00:17:36.890 align:start position:0%
+ 
+ 
+
+00:17:36.890 --> 00:17:38.600 align:start position:0%
+ 
+ 
+
+00:17:38.600 --> 00:17:41.270 align:start position:0%
+ 
+ 
+
+00:17:41.270 --> 00:17:44.360 align:start position:0%
+ 
+ 
+
+00:17:44.360 --> 00:17:48.710 align:start position:0%
+ 
+ 
+
+00:17:48.710 --> 00:17:50.840 align:start position:0%
+ 
+ 
+
+00:17:50.840 --> 00:17:53.960 align:start position:0%
+ 
+ 
+
+00:17:53.960 --> 00:17:56.030 align:start position:0%
+ 
+ 
+
+00:17:56.030 --> 00:17:58.190 align:start position:0%
+ 
+ 
+
+00:17:58.190 --> 00:18:00.130 align:start position:0%
+ 
+ 
+
+00:18:00.130 --> 00:18:04.100 align:start position:0%
+ 
+ 
+
+00:18:04.100 --> 00:18:06.340 align:start position:0%
+ 
+ 
+
+00:18:06.340 --> 00:18:10.490 align:start position:0%
+ 
+ 
+
+00:18:10.490 --> 00:18:12.710 align:start position:0%
+ 
+ 
+
+00:18:12.710 --> 00:18:16.250 align:start position:0%
+ 
+ 
+
+00:18:16.250 --> 00:18:18.710 align:start position:0%
+ 
+ 
+
+00:18:18.710 --> 00:18:20.150 align:start position:0%
+ 
+ 
+
+00:18:20.150 --> 00:18:22.730 align:start position:0%
+ 
+ 
+
+00:18:22.730 --> 00:18:23.930 align:start position:0%
+ 
+ 
+
+00:18:23.930 --> 00:18:25.280 align:start position:0%
+ 
+ 
+
+00:18:25.280 --> 00:18:27.230 align:start position:0%
+ 
+ 
+
+00:18:27.230 --> 00:18:29.930 align:start position:0%
+ 
+ 
+
+00:18:29.930 --> 00:18:31.490 align:start position:0%
+ 
+ 
+
+00:18:31.490 --> 00:18:33.500 align:start position:0%
+ 
+ 
+
+00:18:33.500 --> 00:18:35.150 align:start position:0%
+ 
+ 
+
+00:18:35.150 --> 00:18:37.580 align:start position:0%
+ 
+ 
+
+00:18:37.580 --> 00:18:41.870 align:start position:0%
+ 
+ 
+
+00:18:41.870 --> 00:18:44.120 align:start position:0%
+ 
+ 
+
+00:18:44.120 --> 00:18:47.630 align:start position:0%
+ 
+ 
+
+00:18:47.630 --> 00:18:49.040 align:start position:0%
+ 
+ 
+
+00:18:49.040 --> 00:18:50.480 align:start position:0%
+ 
+ 
+
+00:18:50.480 --> 00:18:54.170 align:start position:0%
+ 
+ 
+
+00:18:54.170 --> 00:18:57.890 align:start position:0%
+ 
+ 
+
+00:18:57.890 --> 00:19:03.290 align:start position:0%
+ 
+ 
+
+00:19:03.290 --> 00:19:04.340 align:start position:0%
+ 
+ 
+
+00:19:04.340 --> 00:19:07.190 align:start position:0%
+ 
+ 
+
+00:19:07.190 --> 00:19:13.520 align:start position:0%
+ 
+ 
+
+00:19:13.520 --> 00:19:15.230 align:start position:0%
+ 
+ 
+
+00:19:15.230 --> 00:19:17.000 align:start position:0%
+ 
+ 
+
+00:19:17.000 --> 00:19:22.460 align:start position:0%
+ 
+ 
+
+00:19:22.460 --> 00:19:25.580 align:start position:0%
+ 
+ 
+
+00:19:25.580 --> 00:19:28.220 align:start position:0%
+ 
+ 
+
+00:19:28.220 --> 00:19:31.640 align:start position:0%
+ 
+ 
+
+00:19:31.640 --> 00:19:33.230 align:start position:0%
+ 
+ 
+
+00:19:33.230 --> 00:19:35.330 align:start position:0%
+ 
+ 
+
+00:19:35.330 --> 00:19:39.080 align:start position:0%
+ 
+ 
+
+00:19:39.080 --> 00:19:41.560 align:start position:0%
+ 
+ 
+
+00:19:41.560 --> 00:19:46.040 align:start position:0%
+ 
+ 
+
+00:19:46.040 --> 00:19:48.980 align:start position:0%
+ 
+ 
+
+00:19:48.980 --> 00:19:52.040 align:start position:0%
+ 
+ 
+
+00:19:52.040 --> 00:19:54.200 align:start position:0%
+ 
+ 
+
+00:19:54.200 --> 00:19:55.760 align:start position:0%
+ 
+ 
+
+00:19:55.760 --> 00:19:57.470 align:start position:0%
+ 
+ 
+
+00:19:57.470 --> 00:19:59.720 align:start position:0%
+ 
+ 
+
+00:19:59.720 --> 00:20:03.490 align:start position:0%
+ 
+ 
+
+00:20:03.490 --> 00:20:05.950 align:start position:0%
+ 
+ 
+
+00:20:05.950 --> 00:20:08.840 align:start position:0%
+ 
+ 
+
+00:20:08.840 --> 00:20:11.900 align:start position:0%
+ 
+ 
+
+00:20:11.900 --> 00:20:13.910 align:start position:0%
+ 
+ 
+
+00:20:13.910 --> 00:20:16.580 align:start position:0%
+ 
+ 
+
+00:20:16.580 --> 00:20:18.950 align:start position:0%
+ 
+ 
+
+00:20:18.950 --> 00:20:23.410 align:start position:0%
+ 
+ 
+
+00:20:23.410 --> 00:20:26.780 align:start position:0%
+ 
+ 
+
+00:20:26.780 --> 00:20:31.310 align:start position:0%
+ 
+ 
+
+00:20:31.310 --> 00:20:33.770 align:start position:0%
+ 
+ 
+
+00:20:33.770 --> 00:20:36.710 align:start position:0%
+ 
+ 
+
+00:20:36.710 --> 00:20:39.140 align:start position:0%
+ 
+ 
+
+00:20:39.140 --> 00:20:42.410 align:start position:0%
+ 
+ 
+
+00:20:42.410 --> 00:20:44.450 align:start position:0%
+ 
+ 
+
+00:20:44.450 --> 00:20:46.640 align:start position:0%
+ 
+ 
+
+00:20:46.640 --> 00:20:50.090 align:start position:0%
+ 
+ 
+
+00:20:50.090 --> 00:20:52.310 align:start position:0%
+ 
+ 
+
+00:20:52.310 --> 00:20:54.200 align:start position:0%
+ 
+ 
+
+00:20:54.200 --> 00:20:58.640 align:start position:0%
+ 
+ 
+
+00:20:58.640 --> 00:21:01.280 align:start position:0%
+ 
+ 
+
+00:21:01.280 --> 00:21:05.300 align:start position:0%
+ 
+ 
+
+00:21:05.300 --> 00:21:07.010 align:start position:0%
+ 
+ 
+
+00:21:07.010 --> 00:21:08.780 align:start position:0%
+ 
+ 
+
+00:21:08.780 --> 00:21:11.600 align:start position:0%
+ 
+ 
+
+00:21:11.600 --> 00:21:16.370 align:start position:0%
+ 
+ 
+
+00:21:16.370 --> 00:21:17.870 align:start position:0%
+ 
+ 
+
+00:21:17.870 --> 00:21:20.630 align:start position:0%
+ 
+ 
+
+00:21:20.630 --> 00:21:22.550 align:start position:0%
+ 
+ 
+
+00:21:22.550 --> 00:21:26.300 align:start position:0%
+ 
+ 
+
+00:21:26.300 --> 00:21:28.940 align:start position:0%
+ 
+ 
+
+00:21:28.940 --> 00:21:31.520 align:start position:0%
+ 
+ 
+
+00:21:31.520 --> 00:21:34.160 align:start position:0%
+ 
+ 
+
+00:21:34.160 --> 00:21:36.200 align:start position:0%
+ 
+ 
+
+00:21:36.200 --> 00:21:38.600 align:start position:0%
+ 
+ 
+
+00:21:38.600 --> 00:21:41.720 align:start position:0%
+ 
+ 
+
+00:21:41.720 --> 00:21:45.320 align:start position:0%
+ 
+ 
+
+00:21:45.320 --> 00:21:47.150 align:start position:0%
+ 
+ 
+
+00:21:47.150 --> 00:21:50.050 align:start position:0%
+ 
+ 
+
+00:21:50.050 --> 00:21:53.090 align:start position:0%
+ 
+ 
+
+00:21:53.090 --> 00:21:55.310 align:start position:0%
+ 
+ 
+
+00:21:55.310 --> 00:21:59.330 align:start position:0%
+ 
+ 
+
+00:21:59.330 --> 00:22:00.890 align:start position:0%
+ 
+ 
+
+00:22:00.890 --> 00:22:05.270 align:start position:0%
+ 
+ 
+
+00:22:05.270 --> 00:22:07.160 align:start position:0%
+ 
+ 
+
+00:22:07.160 --> 00:22:12.410 align:start position:0%
+ 
+ 
+
+00:22:12.410 --> 00:22:14.870 align:start position:0%
+ 
+ 
+
+00:22:14.870 --> 00:22:17.360 align:start position:0%
+ 
+ 
+
+00:22:17.360 --> 00:22:18.950 align:start position:0%
+ 
+ 
+
+00:22:18.950 --> 00:22:21.170 align:start position:0%
+ 
+ 
+
+00:22:21.170 --> 00:22:23.390 align:start position:0%
+ 
+ 
+
+00:22:23.390 --> 00:22:26.570 align:start position:0%
+ 
+ 
+
+00:22:26.570 --> 00:22:28.940 align:start position:0%
+ 
+ 
+
+00:22:28.940 --> 00:22:31.370 align:start position:0%
+ 
+ 
+
+00:22:31.370 --> 00:22:33.790 align:start position:0%
+ 
+ 
+
+00:22:33.790 --> 00:22:36.680 align:start position:0%
+ 
+ 
+
+00:22:36.680 --> 00:22:38.210 align:start position:0%
+ 
+ 
+
+00:22:38.210 --> 00:22:40.400 align:start position:0%
+ 
+ 
+
+00:22:40.400 --> 00:22:42.620 align:start position:0%
+ 
+ 
+
+00:22:42.620 --> 00:22:44.360 align:start position:0%
+ 
+ 
+
+00:22:44.360 --> 00:22:46.700 align:start position:0%
+ 
+ 
+
+00:22:46.700 --> 00:22:49.280 align:start position:0%
+ 
+ 
+
+00:22:49.280 --> 00:22:50.870 align:start position:0%
+ 
+ 
+
+00:22:50.870 --> 00:22:55.820 align:start position:0%
+ 
+ 
+
+00:22:55.820 --> 00:22:58.070 align:start position:0%
+ 
+ 
+
+00:22:58.070 --> 00:23:00.230 align:start position:0%
+ 
+ 
+
+00:23:00.230 --> 00:23:02.720 align:start position:0%
+ 
+ 
+
+00:23:02.720 --> 00:23:05.030 align:start position:0%
+ 
+ 
+
+00:23:05.030 --> 00:23:07.360 align:start position:0%
+ 
+ 
+
+00:23:07.360 --> 00:23:09.710 align:start position:0%
+ 
+ 
+
+00:23:09.710 --> 00:23:13.370 align:start position:0%
+ 
+ 
+
+00:23:13.370 --> 00:23:15.440 align:start position:0%
+ 
+ 
+
+00:23:15.440 --> 00:23:17.540 align:start position:0%
+ 
+ 
+
+00:23:17.540 --> 00:23:19.790 align:start position:0%
+ 
+ 
+
+00:23:19.790 --> 00:23:21.200 align:start position:0%
+ 
+ 
+
+00:23:21.200 --> 00:23:23.299 align:start position:0%
+ 
+ 
+
+00:23:23.299 --> 00:23:26.060 align:start position:0%
+ 
+ 
+
+00:23:26.060 --> 00:23:28.520 align:start position:0%
+ 
+ 
+
+00:23:28.520 --> 00:23:30.740 align:start position:0%
+ 
+ 
+
+00:23:30.740 --> 00:23:33.590 align:start position:0%
+ 
+ 
+
+00:23:33.590 --> 00:23:34.850 align:start position:0%
+ 
+ 
+
+00:23:34.850 --> 00:23:44.180 align:start position:0%
+ 
+ 
+
+00:23:44.180 --> 00:23:45.650 align:start position:0%
+ 
+ 
+
+00:23:45.650 --> 00:23:47.600 align:start position:0%
+ 
+ 
+
+00:23:47.600 --> 00:23:50.780 align:start position:0%
+ 
+ 
+
+00:23:50.780 --> 00:23:52.669 align:start position:0%
+ 
+ 
+
+00:23:52.669 --> 00:23:57.530 align:start position:0%
+ 
+ 
+
+00:23:57.530 --> 00:24:01.850 align:start position:0%
+ 
+ 
+
+00:24:01.850 --> 00:24:03.380 align:start position:0%
+ 
+ 
+
+00:24:03.380 --> 00:24:05.000 align:start position:0%
+ 
+ 
+
+00:24:05.000 --> 00:24:07.640 align:start position:0%
+ 
+ 
+
+00:24:07.640 --> 00:24:09.980 align:start position:0%
+ 
+ 
+
+00:24:09.980 --> 00:24:12.410 align:start position:0%
+ 
+ 
+
+00:24:12.410 --> 00:24:13.880 align:start position:0%
+ 
+ 
+
+00:24:13.880 --> 00:24:15.280 align:start position:0%
+ 
+ 
+
+00:24:15.280 --> 00:24:17.960 align:start position:0%
+ 
+ 
+
+00:24:17.960 --> 00:24:20.900 align:start position:0%
+ 
+ 
+
+00:24:20.900 --> 00:24:23.120 align:start position:0%
+ 
+ 
+
+00:24:23.120 --> 00:24:27.200 align:start position:0%
+ 
+ 
+
+00:24:27.200 --> 00:24:29.270 align:start position:0%
+ 
+ 
+
+00:24:29.270 --> 00:24:31.580 align:start position:0%
+ 
+ 
+
+00:24:31.580 --> 00:24:33.740 align:start position:0%
+ 
+ 
+
+00:24:33.740 --> 00:24:38.980 align:start position:0%
+ 
+ 
+
+00:24:38.980 --> 00:24:41.900 align:start position:0%
+ 
+ 
+
+00:24:41.900 --> 00:24:43.820 align:start position:0%
+ 
+ 
+
+00:24:43.820 --> 00:24:46.520 align:start position:0%
+ 
+ 
+
+00:24:46.520 --> 00:24:49.160 align:start position:0%
+ 
+ 
+
+00:24:49.160 --> 00:24:53.590 align:start position:0%
+ 
+ 
+
+00:24:53.590 --> 00:24:56.220 align:start position:0%
+ 
+ 
+
+00:24:56.220 --> 00:24:58.650 align:start position:0%
+ 
+ 
+
+00:24:58.650 --> 00:25:00.390 align:start position:0%
+ 
+ 
+
+00:25:00.390 --> 00:25:03.169 align:start position:0%
+ 
+ 
+
+00:25:03.169 --> 00:25:06.120 align:start position:0%
+ 
+ 
+
+00:25:06.120 --> 00:25:08.220 align:start position:0%
+ 
+ 
+
+00:25:08.220 --> 00:25:13.590 align:start position:0%
+ 
+ 
+
+00:25:13.590 --> 00:25:15.600 align:start position:0%
+ 
+ 
+
+00:25:15.600 --> 00:25:18.000 align:start position:0%
+ 
+ 
+
+00:25:18.000 --> 00:25:23.039 align:start position:0%
+ 
+ 
+
+00:25:23.039 --> 00:25:25.860 align:start position:0%
+ 
+ 
+
+00:25:25.860 --> 00:25:27.780 align:start position:0%
+ 
+ 
+
+00:25:27.780 --> 00:25:31.350 align:start position:0%
+ 
+ 
+
+00:25:31.350 --> 00:25:34.200 align:start position:0%
+ 
+ 
+
+00:25:34.200 --> 00:25:38.039 align:start position:0%
+ 
+ 
+
+00:25:38.039 --> 00:25:39.930 align:start position:0%
+ 
+ 
+
+00:25:39.930 --> 00:25:41.460 align:start position:0%
+ 
+ 
+
+00:25:41.460 --> 00:25:42.870 align:start position:0%
+ 
+ 
+
+00:25:42.870 --> 00:25:45.110 align:start position:0%
+ 
+ 
+
+00:25:45.110 --> 00:25:48.539 align:start position:0%
+ 
+ 
+
+00:25:48.539 --> 00:25:50.070 align:start position:0%
+ 
+ 
+
+00:25:50.070 --> 00:25:51.659 align:start position:0%
+ 
+ 
+
+00:25:51.659 --> 00:25:58.530 align:start position:0%
+ 
+ 
+
+00:25:58.530 --> 00:26:00.090 align:start position:0%
+ 
+ 
+
+00:26:00.090 --> 00:26:02.850 align:start position:0%
+ 
+ 
+
+00:26:02.850 --> 00:26:05.850 align:start position:0%
+ 
+ 
+
+00:26:05.850 --> 00:26:09.270 align:start position:0%
+ 
+ 
+
+00:26:09.270 --> 00:26:11.940 align:start position:0%
+ 
+ 
+
+00:26:11.940 --> 00:26:13.799 align:start position:0%
+ 
+ 
+
+00:26:13.799 --> 00:26:15.960 align:start position:0%
+ 
+ 
+
+00:26:15.960 --> 00:26:18.240 align:start position:0%
+ 
+ 
+
+00:26:18.240 --> 00:26:19.890 align:start position:0%
+ 
+ 
+
+00:26:19.890 --> 00:26:22.710 align:start position:0%
+ 
+ 
+
+00:26:22.710 --> 00:26:24.930 align:start position:0%
+ 
+ 
+
+00:26:24.930 --> 00:26:26.760 align:start position:0%
+ 
+ 
+
+00:26:26.760 --> 00:26:29.039 align:start position:0%
+ 
+ 
+
+00:26:29.039 --> 00:26:33.840 align:start position:0%
+ 
+ 
+
+00:26:33.840 --> 00:26:36.450 align:start position:0%
+ 
+ 
+
+00:26:36.450 --> 00:26:41.610 align:start position:0%
+ 
+ 
+
+00:26:41.610 --> 00:26:46.350 align:start position:0%
+ 
+ 
+
+00:26:46.350 --> 00:26:48.780 align:start position:0%
+ 
+ 
+
+00:26:48.780 --> 00:26:53.100 align:start position:0%
+ 
+ 
+
+00:26:53.100 --> 00:26:55.919 align:start position:0%
+ 
+ 
+
+00:26:55.919 --> 00:27:00.510 align:start position:0%
+ 
+ 
+
+00:27:00.510 --> 00:27:03.419 align:start position:0%
+ 
+ 
+
+00:27:03.419 --> 00:27:06.060 align:start position:0%
+ 
+ 
+
+00:27:06.060 --> 00:27:09.930 align:start position:0%
+ 
+ 
+
+00:27:09.930 --> 00:27:13.890 align:start position:0%
+ 
+ 
+
+00:27:13.890 --> 00:27:16.320 align:start position:0%
+ 
+ 
+
+00:27:16.320 --> 00:27:18.510 align:start position:0%
+ 
+ 
+
+00:27:18.510 --> 00:27:20.910 align:start position:0%
+ 
+ 
+
+00:27:20.910 --> 00:27:22.530 align:start position:0%
+ 
+ 
+
+00:27:22.530 --> 00:27:24.660 align:start position:0%
+ 
+ 
+
+00:27:24.660 --> 00:27:31.470 align:start position:0%
+ 
+ 
+
+00:27:31.470 --> 00:27:35.040 align:start position:0%
+ 
+ 
+
+00:27:35.040 --> 00:27:36.600 align:start position:0%
+ 
+ 
+
+00:27:36.600 --> 00:27:39.720 align:start position:0%
+ 
+ 
+
+00:27:39.720 --> 00:27:44.070 align:start position:0%
+ 
+ 
+
+00:27:44.070 --> 00:27:47.430 align:start position:0%
+ 
+ 
+
+00:27:47.430 --> 00:27:49.410 align:start position:0%
+ 
+ 
+
+00:27:49.410 --> 00:27:52.320 align:start position:0%
+ 
+ 
+
+00:27:52.320 --> 00:27:55.050 align:start position:0%
+ 
+ 
+
+00:27:55.050 --> 00:27:56.970 align:start position:0%
+ 
+ 
+
+00:27:56.970 --> 00:27:59.130 align:start position:0%
+ 
+ 
+
+00:27:59.130 --> 00:28:00.390 align:start position:0%
+ 
+ 
+
+00:28:00.390 --> 00:28:01.800 align:start position:0%
+ 
+ 
+
+00:28:01.800 --> 00:28:03.450 align:start position:0%
+ 
+ 
+
+00:28:03.450 --> 00:28:07.200 align:start position:0%
+ 
+ 
+
+00:28:07.200 --> 00:28:10.080 align:start position:0%
+ 
+ 
+
+00:28:10.080 --> 00:28:12.510 align:start position:0%
+ 
+ 
+
+00:28:12.510 --> 00:28:15.720 align:start position:0%
+ 
+ 
+
+00:28:15.720 --> 00:28:18.630 align:start position:0%
+ 
+ 
+
+00:28:18.630 --> 00:28:20.790 align:start position:0%
+ 
+ 
+
+00:28:20.790 --> 00:28:23.310 align:start position:0%
+ 
+ 
+
+00:28:23.310 --> 00:28:25.800 align:start position:0%
+ 
+ 
+
+00:28:25.800 --> 00:28:27.150 align:start position:0%
+ 
+ 
+
+00:28:27.150 --> 00:28:29.490 align:start position:0%
+ 
+ 
+
+00:28:29.490 --> 00:28:32.460 align:start position:0%
+ 
+ 
+
+00:28:32.460 --> 00:28:35.450 align:start position:0%
+ 
+ 
+
+00:28:35.450 --> 00:28:38.730 align:start position:0%
+ 
+ 
+
+00:28:38.730 --> 00:28:41.400 align:start position:0%
+ 
+ 
+
+00:28:41.400 --> 00:28:43.560 align:start position:0%
+ 
+ 
+
+00:28:43.560 --> 00:28:46.470 align:start position:0%
+ 
+ 
+
+00:28:46.470 --> 00:28:49.770 align:start position:0%
+ 
+ 
+
+00:28:49.770 --> 00:28:52.530 align:start position:0%
+ 
+ 
+
+00:28:52.530 --> 00:28:55.200 align:start position:0%
+ 
+ 
+
+00:28:55.200 --> 00:28:57.360 align:start position:0%
+ 
+ 
+
+00:28:57.360 --> 00:29:00.630 align:start position:0%
+ 
+ 
+
+00:29:00.630 --> 00:29:03.450 align:start position:0%
+ 
+ 
+
+00:29:03.450 --> 00:29:05.580 align:start position:0%
+ 
+ 
+
+00:29:05.580 --> 00:29:10.500 align:start position:0%
+ 
+ 
+
+00:29:10.500 --> 00:29:13.020 align:start position:0%
+ 
+ 
+
+00:29:13.020 --> 00:29:15.660 align:start position:0%
+ 
+ 
+
+00:29:15.660 --> 00:29:19.380 align:start position:0%
+ 
+ 
+
+00:29:19.380 --> 00:29:21.630 align:start position:0%
+ 
+ 
+
+00:29:21.630 --> 00:29:23.940 align:start position:0%
+ 
+ 
+
+00:29:23.940 --> 00:29:25.919 align:start position:0%
+ 
+ 
+
+00:29:25.919 --> 00:29:31.259 align:start position:0%
+ 
+ 
+
+00:29:31.259 --> 00:29:34.590 align:start position:0%
+ 
+ 
+
+00:29:34.590 --> 00:29:37.799 align:start position:0%
+ 
+ 
+
+00:29:37.799 --> 00:29:40.320 align:start position:0%
+ 
+ 
+
+00:29:40.320 --> 00:29:42.210 align:start position:0%
+ 
+ 
+
+00:29:42.210 --> 00:29:45.810 align:start position:0%
+ 
+ 
+
+00:29:45.810 --> 00:29:48.570 align:start position:0%
+ 
+ 
+
+00:29:48.570 --> 00:29:50.820 align:start position:0%
+ 
+ 
+
+00:29:50.820 --> 00:29:52.680 align:start position:0%
+ 
+ 
+
+00:29:52.680 --> 00:29:55.740 align:start position:0%
+ 
+ 
+
+00:29:55.740 --> 00:29:59.009 align:start position:0%
+ 
+ 
+
+00:29:59.009 --> 00:30:00.659 align:start position:0%
+ 
+ 
+
+00:30:00.659 --> 00:30:03.090 align:start position:0%
+ 
+ 
+
+00:30:03.090 --> 00:30:05.220 align:start position:0%
+ 
+ 
+
+00:30:05.220 --> 00:30:08.399 align:start position:0%
+ 
+ 
+
+00:30:08.399 --> 00:30:10.409 align:start position:0%
+ 
+ 
+
+00:30:10.409 --> 00:30:13.200 align:start position:0%
+ 
+ 
+
+00:30:13.200 --> 00:30:15.480 align:start position:0%
+ 
+ 
+
+00:30:15.480 --> 00:30:17.009 align:start position:0%
+ 
+ 
+
+00:30:17.009 --> 00:30:18.720 align:start position:0%
+ 
+ 
+
+00:30:18.720 --> 00:30:22.200 align:start position:0%
+ 
+ 
+
+00:30:22.200 --> 00:30:23.549 align:start position:0%
+ 
+ 
+
+00:30:23.549 --> 00:30:27.389 align:start position:0%
+ 
+ 
+
+00:30:27.389 --> 00:30:29.190 align:start position:0%
+ 
+ 
+
+00:30:29.190 --> 00:30:32.519 align:start position:0%
+ 
+ 
+
+00:30:32.519 --> 00:30:35.370 align:start position:0%
+ 
+ 
+
+00:30:35.370 --> 00:30:37.049 align:start position:0%
+ 
+ 
+
+00:30:37.049 --> 00:30:40.680 align:start position:0%
+ 
+ 
+
+00:30:40.680 --> 00:30:45.090 align:start position:0%
+ 
+ 
+
+00:30:45.090 --> 00:30:46.049 align:start position:0%
+ 
+ 
+
+00:30:46.049 --> 00:30:47.879 align:start position:0%
+ 
+ 
+
+00:30:47.879 --> 00:30:50.430 align:start position:0%
+ 
+ 
+
+00:30:50.430 --> 00:30:53.430 align:start position:0%
+ 
+ 
+
+00:30:53.430 --> 00:30:55.950 align:start position:0%
+ 
+ 
+
+00:30:55.950 --> 00:30:58.889 align:start position:0%
+ 
+ 
+
+00:30:58.889 --> 00:31:01.409 align:start position:0%
+ 
+ 
+
+00:31:01.409 --> 00:31:04.440 align:start position:0%
+ 
+ 
+
+00:31:04.440 --> 00:31:07.340 align:start position:0%
+ 
+ 
+
+00:31:07.340 --> 00:31:11.190 align:start position:0%
+ 
+ 
+
+00:31:11.190 --> 00:31:13.889 align:start position:0%
+ 
+ 
+
+00:31:13.889 --> 00:31:16.710 align:start position:0%
+ 
+ 
+
+00:31:16.710 --> 00:31:20.820 align:start position:0%
+ 
+ 
+
+00:31:20.820 --> 00:31:22.710 align:start position:0%
+ 
+ 
+
+00:31:22.710 --> 00:31:27.960 align:start position:0%
+ 
+ 
+
+00:31:27.960 --> 00:31:30.930 align:start position:0%
+ 
+ 
+
+00:31:30.930 --> 00:31:33.480 align:start position:0%
+ 
+ 
+
+00:31:33.480 --> 00:31:36.830 align:start position:0%
+ 
+ 
+
+00:31:36.830 --> 00:31:38.930 align:start position:0%
+ 
+ 
+
+00:31:38.930 --> 00:31:42.529 align:start position:0%
+ 
+ 
+
+00:31:42.529 --> 00:31:44.299 align:start position:0%
+ 
+ 
+
+00:31:44.299 --> 00:31:47.600 align:start position:0%
+ 
+ 
+
+00:31:47.600 --> 00:31:51.100 align:start position:0%
+ 
+ 
+
+00:31:51.100 --> 00:31:54.289 align:start position:0%
+ 
+ 
+
+00:31:54.289 --> 00:31:58.940 align:start position:0%
+ 
+ 
+
+00:31:58.940 --> 00:32:00.259 align:start position:0%
+ 
+ 
+
+00:32:00.259 --> 00:32:02.779 align:start position:0%
+ 
+ 
+
+00:32:02.779 --> 00:32:06.169 align:start position:0%
+ 
+ 
+
+00:32:06.169 --> 00:32:07.669 align:start position:0%
+ 
+ 
+
+00:32:07.669 --> 00:32:10.639 align:start position:0%
+ 
+ 
+
+00:32:10.639 --> 00:32:11.889 align:start position:0%
+ 
+ 
+
+00:32:11.889 --> 00:32:14.600 align:start position:0%
+ 
+ 
+
+00:32:14.600 --> 00:32:15.859 align:start position:0%
+ 
+ 
+
+00:32:15.859 --> 00:32:20.539 align:start position:0%
+ 
+ 
+
+00:32:20.539 --> 00:32:23.930 align:start position:0%
+ 
+ 
+
+00:32:23.930 --> 00:32:27.019 align:start position:0%
+ 
+ 
+
+00:32:27.019 --> 00:32:29.840 align:start position:0%
+ 
+ 
+
+00:32:29.840 --> 00:32:32.389 align:start position:0%
+ 
+ 
+
+00:32:32.389 --> 00:32:34.609 align:start position:0%
+ 
+ 
+
+00:32:34.609 --> 00:32:36.379 align:start position:0%
+ 
+ 
+
+00:32:36.379 --> 00:32:38.600 align:start position:0%
+ 
+ 
+
+00:32:38.600 --> 00:32:41.930 align:start position:0%
+ 
+ 
+
+00:32:41.930 --> 00:32:45.830 align:start position:0%
+ 
+ 
+
+00:32:45.830 --> 00:32:47.509 align:start position:0%
+ 
+ 
+
+00:32:47.509 --> 00:32:50.960 align:start position:0%
+ 
+ 
+
+00:32:50.960 --> 00:32:52.430 align:start position:0%
+ 
+ 
+
+00:32:52.430 --> 00:32:55.399 align:start position:0%
+ 
+ 
+
+00:32:55.399 --> 00:32:57.289 align:start position:0%
+ 
+ 
+
+00:32:57.289 --> 00:33:00.529 align:start position:0%
+ 
+ 
+
+00:33:00.529 --> 00:33:03.919 align:start position:0%
+ 
+ 
+
+00:33:03.919 --> 00:33:06.470 align:start position:0%
+ 
+ 
+
+00:33:06.470 --> 00:33:08.749 align:start position:0%
+ 
+ 
+
+00:33:08.749 --> 00:33:09.560 align:start position:0%
+ 
+ 
+
+00:33:09.560 --> 00:33:11.930 align:start position:0%
+ 
+ 
+
+00:33:11.930 --> 00:33:16.940 align:start position:0%
+ 
+ 
+
+00:33:16.940 --> 00:33:22.389 align:start position:0%
+ 
+ 
+
+00:33:22.389 --> 00:33:25.639 align:start position:0%
+ 
+ 
+
+00:33:25.639 --> 00:33:29.539 align:start position:0%
+ 
+ 
+
+00:33:29.539 --> 00:33:31.039 align:start position:0%
+ 
+ 
+
+00:33:31.039 --> 00:33:32.539 align:start position:0%
+ 
+ 
+
+00:33:32.539 --> 00:33:38.019 align:start position:0%
+ 
+ 
+
+00:33:38.019 --> 00:33:42.980 align:start position:0%
+ 
+ 
+
+00:33:42.980 --> 00:33:46.940 align:start position:0%
+ 
+ 
+
+00:33:46.940 --> 00:33:49.129 align:start position:0%
+ 
+ 
+
+00:33:49.129 --> 00:33:50.419 align:start position:0%
+ 
+ 
+
+00:33:50.419 --> 00:33:52.609 align:start position:0%
+ 
+ 
+
+00:33:52.609 --> 00:33:54.859 align:start position:0%
+ 
+ 
+
+00:33:54.859 --> 00:33:57.169 align:start position:0%
+ 
+ 
+
+00:33:57.169 --> 00:34:00.080 align:start position:0%
+ 
+ 
+
+00:34:00.080 --> 00:34:02.600 align:start position:0%
+ 
+ 
+
+00:34:02.600 --> 00:34:04.549 align:start position:0%
+ 
+ 
+
+00:34:04.549 --> 00:34:07.190 align:start position:0%
+ 
+ 
+
+00:34:07.190 --> 00:34:09.859 align:start position:0%
+ 
+ 
+
+00:34:09.859 --> 00:34:14.750 align:start position:0%
+ 
+ 
+
+00:34:14.750 --> 00:34:16.970 align:start position:0%
+ 
+ 
+
+00:34:16.970 --> 00:34:20.180 align:start position:0%
+ 
+ 
+
+00:34:20.180 --> 00:34:24.559 align:start position:0%
+ 
+ 
+
+00:34:24.559 --> 00:34:27.440 align:start position:0%
+ 
+ 
+
+00:34:27.440 --> 00:34:29.180 align:start position:0%
+ 
+ 
+
+00:34:29.180 --> 00:34:32.030 align:start position:0%
+ 
+ 
+
+00:34:32.030 --> 00:34:34.700 align:start position:0%
+ 
+ 
+
+00:34:34.700 --> 00:34:36.790 align:start position:0%
+ 
+ 
+
+00:34:36.790 --> 00:34:39.889 align:start position:0%
+ 
+ 
+
+00:34:39.889 --> 00:34:41.299 align:start position:0%
+ 
+ 
+
+00:34:41.299 --> 00:34:43.159 align:start position:0%
+ 
+ 
+
+00:34:43.159 --> 00:34:45.649 align:start position:0%
+ 
+ 
+
+00:34:45.649 --> 00:34:47.799 align:start position:0%
+ 
+ 
+
+00:34:47.799 --> 00:34:57.020 align:start position:0%
+ 
+ 
+
+00:34:57.020 --> 00:35:09.050 align:start position:0%
+ 
+ 
+
+00:35:09.050 --> 00:35:13.140 align:start position:0%
+ 
+ 
+
+00:35:13.140 --> 00:35:16.620 align:start position:0%
+ 
+ 
+
+00:35:16.620 --> 00:35:19.590 align:start position:0%
+ 
+ 
+
+00:35:19.590 --> 00:35:22.170 align:start position:0%
+ 
+ 
+
+00:35:22.170 --> 00:35:24.480 align:start position:0%
+ 
+ 
+
+00:35:24.480 --> 00:35:26.160 align:start position:0%
+ 
+ 
+
+00:35:26.160 --> 00:35:28.590 align:start position:0%
+ 
+ 
+
+00:35:28.590 --> 00:35:30.600 align:start position:0%
+ 
+ 
+
+00:35:30.600 --> 00:35:33.300 align:start position:0%
+ 
+ 
+
+00:35:33.300 --> 00:35:35.130 align:start position:0%
+ 
+ 
+
+00:35:35.130 --> 00:35:36.710 align:start position:0%
+ 
+ 
+
+00:35:36.710 --> 00:35:39.210 align:start position:0%
+ 
+ 
+
+00:35:39.210 --> 00:35:40.800 align:start position:0%
+ 
+ 
+
+00:35:40.800 --> 00:35:42.810 align:start position:0%
+ 
+ 
+
+00:35:42.810 --> 00:35:43.710 align:start position:0%
+ 
+ 
+
+00:35:43.710 --> 00:35:45.540 align:start position:0%
+ 
+ 
+
+00:35:45.540 --> 00:35:47.130 align:start position:0%
+ 
+ 
+
+00:35:47.130 --> 00:35:49.560 align:start position:0%
+ 
+ 
+
+00:35:49.560 --> 00:35:51.060 align:start position:0%
+ 
+ 
+
+00:35:51.060 --> 00:35:53.100 align:start position:0%
+ 
+ 
+
+00:35:53.100 --> 00:35:54.720 align:start position:0%
+ 
+ 
+
+00:35:54.720 --> 00:35:57.090 align:start position:0%
+ 
+ 
+
+00:35:57.090 --> 00:35:59.220 align:start position:0%
+ 
+ 
+
+00:35:59.220 --> 00:35:59.230 align:start position:0%
+ 
+ 
+
+00:35:59.230 --> 00:36:00.840 align:start position:0%
+ 
+
+
+00:36:00.840 --> 00:36:03.300 align:start position:0%
+ 
+ 
+
+00:36:03.300 --> 00:36:05.250 align:start position:0%
+ 
+ 
+
+00:36:05.250 --> 00:36:06.810 align:start position:0%
+ 
+ 
+
+00:36:06.810 --> 00:36:10.080 align:start position:0%
+ 
+ 
+
+00:36:10.080 --> 00:36:12.270 align:start position:0%
+ 
+ 
+
+00:36:12.270 --> 00:36:14.790 align:start position:0%
+ 
+ 
+
+00:36:14.790 --> 00:36:16.770 align:start position:0%
+ 
+ 
+
+00:36:16.770 --> 00:36:19.620 align:start position:0%
+ 
+ 
+
+00:36:19.620 --> 00:36:23.010 align:start position:0%
+ 
+ 
+
+00:36:23.010 --> 00:36:24.630 align:start position:0%
+ 
+ 
+
+00:36:24.630 --> 00:36:26.790 align:start position:0%
+ 
+ 
+
+00:36:26.790 --> 00:36:29.180 align:start position:0%
+ 
+ 
+
+00:36:29.180 --> 00:36:31.890 align:start position:0%
+ 
+ 
+
+00:36:31.890 --> 00:36:33.570 align:start position:0%
+ 
+ 
+
+00:36:33.570 --> 00:36:35.070 align:start position:0%
+ 
+ 
+
+00:36:35.070 --> 00:36:37.740 align:start position:0%
+ 
+ 
+
+00:36:37.740 --> 00:36:39.330 align:start position:0%
+ 
+ 
+
+00:36:39.330 --> 00:36:41.790 align:start position:0%
+ 
+ 
+
+00:36:41.790 --> 00:36:43.290 align:start position:0%
+ 
+ 
+
+00:36:43.290 --> 00:36:45.930 align:start position:0%
+ 
+ 
+
+00:36:45.930 --> 00:36:49.740 align:start position:0%
+ 
+ 
+
+00:36:49.740 --> 00:36:49.750 align:start position:0%
+ 
+ 
+
+00:36:49.750 --> 00:36:56.819 align:start position:0%
+ 
+
+
+00:36:56.819 --> 00:37:00.690 align:start position:0%
+ 
+ 
+
+00:37:00.690 --> 00:37:03.220 align:start position:0%
+ 
+ 
+
+00:37:03.220 --> 00:37:05.680 align:start position:0%
+ 
+ 
+
+00:37:05.680 --> 00:37:08.200 align:start position:0%
+ 
+ 
+
+00:37:08.200 --> 00:37:10.960 align:start position:0%
+ 
+ 
+
+00:37:10.960 --> 00:37:14.589 align:start position:0%
+ 
+ 
+
+00:37:14.589 --> 00:37:17.349 align:start position:0%
+ 
+ 
+
+00:37:17.349 --> 00:37:18.849 align:start position:0%
+ 
+ 
+
+00:37:18.849 --> 00:37:20.710 align:start position:0%
+ 
+ 
+
+00:37:20.710 --> 00:37:22.870 align:start position:0%
+ 
+ 
+
+00:37:22.870 --> 00:37:24.700 align:start position:0%
+ 
+ 
+
+00:37:24.700 --> 00:37:27.880 align:start position:0%
+ 
+ 
+
+00:37:27.880 --> 00:37:29.859 align:start position:0%
+ 
+ 
+
+00:37:29.859 --> 00:37:32.289 align:start position:0%
+ 
+ 
+
+00:37:32.289 --> 00:37:33.910 align:start position:0%
+ 
+ 
+
+00:37:33.910 --> 00:37:36.279 align:start position:0%
+ 
+ 
+
+00:37:36.279 --> 00:37:39.609 align:start position:0%
+ 
+ 
+
+00:37:39.609 --> 00:37:41.170 align:start position:0%
+ 
+ 
+
+00:37:41.170 --> 00:37:44.319 align:start position:0%
+ 
+ 
+
+00:37:44.319 --> 00:37:47.620 align:start position:0%
+ 
+ 
+
+00:37:47.620 --> 00:37:52.049 align:start position:0%
+ 
+ 
+
+00:37:52.049 --> 00:37:56.079 align:start position:0%
+ 
+ 
+
+00:37:56.079 --> 00:37:57.880 align:start position:0%
+ 
+ 
+
+00:37:57.880 --> 00:38:00.789 align:start position:0%
+ 
+ 
+
+00:38:00.789 --> 00:38:02.769 align:start position:0%
+ 
+ 
+
+00:38:02.769 --> 00:38:05.140 align:start position:0%
+ 
+ 
+
+00:38:05.140 --> 00:38:06.309 align:start position:0%
+ 
+ 
+
+00:38:06.309 --> 00:38:07.900 align:start position:0%
+ 
+ 
+
+00:38:07.900 --> 00:38:10.960 align:start position:0%
+ 
+ 
+
+00:38:10.960 --> 00:38:13.569 align:start position:0%
+ 
+ 
+
+00:38:13.569 --> 00:38:15.400 align:start position:0%
+ 
+ 
+
+00:38:15.400 --> 00:38:16.870 align:start position:0%
+ 
+ 
+
+00:38:16.870 --> 00:38:19.510 align:start position:0%
+ 
+ 
+
+00:38:19.510 --> 00:38:22.319 align:start position:0%
+ 
+ 
+
+00:38:22.319 --> 00:38:25.480 align:start position:0%
+ 
+ 
+
+00:38:25.480 --> 00:38:28.349 align:start position:0%
+ 
+ 
+
+00:38:28.349 --> 00:38:30.549 align:start position:0%
+ 
+ 
+
+00:38:30.549 --> 00:38:33.160 align:start position:0%
+ 
+ 
+
+00:38:33.160 --> 00:38:34.750 align:start position:0%
+ 
+ 
+
+00:38:34.750 --> 00:38:36.099 align:start position:0%
+ 
+ 
+
+00:38:36.099 --> 00:38:39.250 align:start position:0%
+ 
+ 
+
+00:38:39.250 --> 00:38:40.720 align:start position:0%
+ 
+ 
+
+00:38:40.720 --> 00:38:43.690 align:start position:0%
+ 
+ 
+
+00:38:43.690 --> 00:38:47.890 align:start position:0%
+ 
+ 
+
+00:38:47.890 --> 00:38:49.630 align:start position:0%
+ 
+ 
+
+00:38:49.630 --> 00:38:52.660 align:start position:0%
+ 
+ 
+
+00:38:52.660 --> 00:38:55.299 align:start position:0%
+ 
+ 
+
+00:38:55.299 --> 00:38:57.039 align:start position:0%
+ 
+ 
+
+00:38:57.039 --> 00:39:00.279 align:start position:0%
+ 
+ 
+
+00:39:00.279 --> 00:39:00.880 align:start position:0%
+ 
+ 
+
+00:39:00.880 --> 00:39:05.650 align:start position:0%
+ 
+ 
+
+00:39:05.650 --> 00:39:07.840 align:start position:0%
+ 
+ 
+
+00:39:07.840 --> 00:39:09.760 align:start position:0%
+ 
+ 
+
+00:39:09.760 --> 00:39:12.160 align:start position:0%
+ 
+ 
+
+00:39:12.160 --> 00:39:14.800 align:start position:0%
+ 
+ 
+
+00:39:14.800 --> 00:39:17.620 align:start position:0%
+ 
+ 
+
+00:39:17.620 --> 00:39:20.820 align:start position:0%
+ 
+ 
+
+00:39:20.820 --> 00:39:24.280 align:start position:0%
+ 
+ 
+
+00:39:24.280 --> 00:39:26.650 align:start position:0%
+ 
+ 
+
+00:39:26.650 --> 00:39:28.060 align:start position:0%
+ 
+ 
+
+00:39:28.060 --> 00:39:29.290 align:start position:0%
+ 
+ 
+
+00:39:29.290 --> 00:39:33.460 align:start position:0%
+ 
+ 
+
+00:39:33.460 --> 00:39:35.560 align:start position:0%
+ 
+ 
+
+00:39:35.560 --> 00:39:37.660 align:start position:0%
+ 
+ 
+
+00:39:37.660 --> 00:39:41.080 align:start position:0%
+ 
+ 
+
+00:39:41.080 --> 00:39:42.190 align:start position:0%
+ 
+ 
+
+00:39:42.190 --> 00:39:44.380 align:start position:0%
+ 
+ 
+
+00:39:44.380 --> 00:39:46.180 align:start position:0%
+ 
+ 
+
+00:39:46.180 --> 00:39:48.640 align:start position:0%
+ 
+ 
+
+00:39:48.640 --> 00:39:51.240 align:start position:0%
+ 
+ 
+
+00:39:51.240 --> 00:39:54.250 align:start position:0%
+ 
+ 
+
+00:39:54.250 --> 00:39:57.610 align:start position:0%
+ 
+ 
+
+00:39:57.610 --> 00:40:00.040 align:start position:0%
+ 
+ 
+
+00:40:00.040 --> 00:40:02.800 align:start position:0%
+ 
+ 
+
+00:40:02.800 --> 00:40:04.810 align:start position:0%
+ 
+ 
+
+00:40:04.810 --> 00:40:08.080 align:start position:0%
+ 
+ 
+
+00:40:08.080 --> 00:40:09.940 align:start position:0%
+ 
+ 
+
+00:40:09.940 --> 00:40:11.530 align:start position:0%
+ 
+ 
+
+00:40:11.530 --> 00:40:12.610 align:start position:0%
+ 
+ 
+
+00:40:12.610 --> 00:40:15.670 align:start position:0%
+ 
+ 
+
+00:40:15.670 --> 00:40:17.620 align:start position:0%
+ 
+ 
+
+00:40:17.620 --> 00:40:21.030 align:start position:0%
+ 
+ 
+
+00:40:21.030 --> 00:40:23.500 align:start position:0%
+ 
+ 
+
+00:40:23.500 --> 00:40:26.770 align:start position:0%
+ 
+ 
+
+00:40:26.770 --> 00:40:28.750 align:start position:0%
+ 
+ 
+
+00:40:28.750 --> 00:40:29.980 align:start position:0%
+ 
+ 
+
+00:40:29.980 --> 00:40:33.820 align:start position:0%
+ 
+ 
+
+00:40:33.820 --> 00:40:40.780 align:start position:0%
+ 
+ 
+
+00:40:40.780 --> 00:40:43.750 align:start position:0%
+ 
+ 
+
+00:40:43.750 --> 00:40:46.570 align:start position:0%
+ 
+ 
+
+00:40:46.570 --> 00:40:48.250 align:start position:0%
+ 
+ 
+
+00:40:48.250 --> 00:40:49.660 align:start position:0%
+ 
+ 
+
+00:40:49.660 --> 00:40:52.990 align:start position:0%
+ 
+ 
+
+00:40:52.990 --> 00:40:56.440 align:start position:0%
+ 
+ 
+
+00:40:56.440 --> 00:40:58.900 align:start position:0%
+ 
+ 
+
+00:40:58.900 --> 00:41:01.060 align:start position:0%
+ 
+ 
+
+00:41:01.060 --> 00:41:02.800 align:start position:0%
+ 
+ 
+
+00:41:02.800 --> 00:41:04.900 align:start position:0%
+ 
+ 
+
+00:41:04.900 --> 00:41:07.120 align:start position:0%
+ 
+ 
+
+00:41:07.120 --> 00:41:10.090 align:start position:0%
+ 
+ 
+
+00:41:10.090 --> 00:41:11.410 align:start position:0%
+ 
+ 
+
+00:41:11.410 --> 00:41:12.640 align:start position:0%
+ 
+ 
+
+00:41:12.640 --> 00:41:15.190 align:start position:0%
+ 
+ 
+
+00:41:15.190 --> 00:41:16.780 align:start position:0%
+ 
+ 
+
+00:41:16.780 --> 00:41:20.890 align:start position:0%
+ 
+ 
+
+00:41:20.890 --> 00:41:20.900 align:start position:0%
+ 
+ 
+
+00:41:20.900 --> 00:41:21.050 align:start position:0%
+ 
+
+
+00:41:21.050 --> 00:41:22.520 align:start position:0%
+ 
+ 
+
+00:41:22.520 --> 00:41:25.490 align:start position:0%
+ 
+ 
+
+00:41:25.490 --> 00:41:27.470 align:start position:0%
+ 
+ 
+
+00:41:27.470 --> 00:41:29.690 align:start position:0%
+ 
+ 
+
+00:41:29.690 --> 00:41:31.730 align:start position:0%
+ 
+ 
+
+00:41:31.730 --> 00:41:33.910 align:start position:0%
+ 
+ 
+
+00:41:33.910 --> 00:41:36.620 align:start position:0%
+ 
+ 
+
+00:41:36.620 --> 00:41:39.230 align:start position:0%
+ 
+ 
+
+00:41:39.230 --> 00:41:41.570 align:start position:0%
+ 
+ 
+
+00:41:41.570 --> 00:41:43.730 align:start position:0%
+ 
+ 
+
+00:41:43.730 --> 00:41:46.210 align:start position:0%
+ 
+ 
+
+00:41:46.210 --> 00:41:49.280 align:start position:0%
+ 
+ 
+
+00:41:49.280 --> 00:41:50.690 align:start position:0%
+ 
+ 
+
+00:41:50.690 --> 00:41:54.200 align:start position:0%
+ 
+ 
+
+00:41:54.200 --> 00:41:56.270 align:start position:0%
+ 
+ 
+
+00:41:56.270 --> 00:41:58.340 align:start position:0%
+ 
+ 
+
+00:41:58.340 --> 00:41:59.810 align:start position:0%
+ 
+ 
+
+00:41:59.810 --> 00:41:59.820 align:start position:0%
+ 
+ 
+
+00:41:59.820 --> 00:42:00.980 align:start position:0%
+ 
+
+
+00:42:00.980 --> 00:42:03.800 align:start position:0%
+ 
+ 
+
+00:42:03.800 --> 00:42:05.420 align:start position:0%
+ 
+ 
+
+00:42:05.420 --> 00:42:07.970 align:start position:0%
+ 
+ 
+
+00:42:07.970 --> 00:42:09.740 align:start position:0%
+ 
+ 
+
+00:42:09.740 --> 00:42:12.310 align:start position:0%
+ 
+ 
+
+00:42:12.310 --> 00:42:16.840 align:start position:0%
+ 
+ 
+
+00:42:16.840 --> 00:42:19.490 align:start position:0%
+ 
+ 
+
+00:42:19.490 --> 00:42:21.290 align:start position:0%
+ 
+ 
+
+00:42:21.290 --> 00:42:22.910 align:start position:0%
+ 
+ 
+
+00:42:22.910 --> 00:42:25.940 align:start position:0%
+ 
+ 
+
+00:42:25.940 --> 00:42:28.190 align:start position:0%
+ 
+ 
+
+00:42:28.190 --> 00:42:31.730 align:start position:0%
+ 
+ 
+
+00:42:31.730 --> 00:42:34.820 align:start position:0%
+ 
+ 
+
+00:42:34.820 --> 00:42:37.160 align:start position:0%
+ 
+ 
+
+00:42:37.160 --> 00:42:40.640 align:start position:0%
+ 
+ 
+
+00:42:40.640 --> 00:42:41.960 align:start position:0%
+ 
+ 
+
+00:42:41.960 --> 00:42:44.150 align:start position:0%
+ 
+ 
+
+00:42:44.150 --> 00:42:45.680 align:start position:0%
+ 
+ 
+
+00:42:45.680 --> 00:42:47.030 align:start position:0%
+ 
+ 
+
+00:42:47.030 --> 00:42:49.310 align:start position:0%
+ 
+ 
+
+00:42:49.310 --> 00:42:51.560 align:start position:0%
+ 
+ 
+
+00:42:51.560 --> 00:42:54.200 align:start position:0%
+ 
+ 
+
+00:42:54.200 --> 00:42:55.820 align:start position:0%
+ 
+ 
+
+00:42:55.820 --> 00:42:57.080 align:start position:0%
+ 
+ 
+
+00:42:57.080 --> 00:42:58.550 align:start position:0%
+ 
+ 
+
+00:42:58.550 --> 00:43:00.800 align:start position:0%
+ 
+ 
+
+00:43:00.800 --> 00:43:02.780 align:start position:0%
+ 
+ 
+
+00:43:02.780 --> 00:43:05.750 align:start position:0%
+ 
+ 
+
+00:43:05.750 --> 00:43:07.790 align:start position:0%
+ 
+ 
+
+00:43:07.790 --> 00:43:10.640 align:start position:0%
+ 
+ 
+
+00:43:10.640 --> 00:43:12.710 align:start position:0%
+ 
+ 
+
+00:43:12.710 --> 00:43:14.720 align:start position:0%
+ 
+ 
+
+00:43:14.720 --> 00:43:17.300 align:start position:0%
+ 
+ 
+
+00:43:17.300 --> 00:43:19.010 align:start position:0%
+ 
+ 
+
+00:43:19.010 --> 00:43:22.340 align:start position:0%
+ 
+ 
+
+00:43:22.340 --> 00:43:26.480 align:start position:0%
+ 
+ 
+
+00:43:26.480 --> 00:43:30.550 align:start position:0%
+ 
+ 
+
+00:43:30.550 --> 00:43:33.740 align:start position:0%
+ 
+ 
+
+00:43:33.740 --> 00:43:33.750 align:start position:0%
+ 
+ 
+
+00:43:33.750 --> 00:43:34.000 align:start position:0%
+ 
+
+
+00:43:34.000 --> 00:43:36.130 align:start position:0%
+ 
+ 
+
+00:43:36.130 --> 00:43:38.170 align:start position:0%
+ 
+ 
+
+00:43:38.170 --> 00:43:41.770 align:start position:0%
+ 
+ 
+

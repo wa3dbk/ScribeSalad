@@ -1,0 +1,3032 @@
+WEBVTT
+Kind: captions
+Language: en
+
+00:00:04.860 --> 00:00:07.220 align:start position:0%
+ 
+hi everybody my name is scott mansfield  i'm a senior software engineer on the AV  cache team at netflix and i'm here to  talk to you about the hidden micro  service it's our nickname for the  caching layer to be clear before I start  this has nothing to do with the open  connects CDN which some people also  refer to as a cache that's a really cool  interesting deep concept all on its own  it's not what we're talking about this  is just the Amazon Web Services cloud  caching layer so you just signed up for  Netflix good decision you get home the  end of the day you turn on your TV  you open the Netflix app you need to  sign in with your brand-new account you  choose your profile and naturally your  name is tester like everybody else you  asks you to pick a few titles that  you've liked before or maybe ones that  you've seen so you pick a few keep going  it tells you it's personalizing your  experience for you so it's building a  brand new homepage just for you and  there you are  you get there you have house of cards  making a murder which is a fantastic  documentary you could do a search for  Tom Hanks watch Forrest Gump for the  millionth time but you settle on narcos  this says season 2 coming September 2nd  it's already out in case anybody is  excited about that show you can go watch  season 2 you're watching the first  episode you get to the part where he  tells the gardener llamo Pablo Emilio  Escobar's guy Vidya and he tells him  Plata o Plomo  and you're so impressed by this line you  need to go rate this show five stars and  you've him just showing all of your  friends all the favorite parts of all  you of your episodes and we're keeping  track so any guesses on how long we have  to capture your attention before you go  off and do something else guesses [ __ ]  okay okay a little bit short it's about  90 seconds  so the faster the smoother the better  the experience that you have the more  likely we are to keep your attention and  keep you watching Netflix and part of  the way we do that is by caching things  on the server side so let's take a look  in that experience that you just saw  what things caches touch you're signing  up logging in choosing a profile picking  like videos the personalization process  which we'll look at in a little bit more  detail later loading the homepage itself  scrolling through the homepage any a be  test allocations that might be on your  profile and even the video image  selection the boxart that you're seeing  and there's a whole mess of other things  even beyond that and if you look there's  a bunch of these have multiple caches  involved in the backend  put another way this is what a typical  homepage request looks like this is the  output from our request facing system so  the request comes in from the left side  and goes all the way down to the right  if you look at those leaf nodes on the  right there's maybe half a dozen that  are not an easy cash node so I've talked  about it  I mentioned it let's talk a little bit  about EB cache  it stands for ephemeral volatile cash  it's a key value store that we run  that's optimized for running on Amazon  Web Services and tuned for Netflix  specific use cases it's a distributed  sharded and replicated store and that  replication is tunable both within a  single region and across multiple  different regions it's based on memcache  two highly resilient to failure because  AWS is a highly dynamic environment one  of my colleagues actually called AWS  chaos monkey as a service which is  pretty accurate all credit to him for  that but they actually kill more of our  instances than the chaos monkey does  it's topology aware network topology  aware for faster access as linearly  scalable we can scale out the server  side as much as we need to to handle the  traffic and it has seamless deployments  for our internal customers so why do we  want to optimize for AWS like I said  it's highly dynamic but what does that  mean well instances can up and disappear  at any time zones can fail entire  regions can become unstable for any one  of a variety of reasons the network  itself is lossy and customer requests  can actually bounce between multiple  different regions of the same session  and the simple fact of life is that  failures happen and we have to be ready  for them and we test them all the time  so that we are ready so I'll give you a  sense of scale for Evi cache use of  Netflix we hold hundreds of terabytes of  data and cache we do trillions of  operations per day hold tens of billions  of items do millions of operations per  second millions of cross region  replications per second between two  different regions which we'll look at in  more detail later we have thousands of  servers it's more than ten thousand but  not quite enough to call it like tens of  thousands we have hundreds of instances  for cluster up to hundreds hundreds of  service clients that are potentially  connecting to a single cluster it tens  of distinct clusters for different use  cases they're tuned differently or have  different setups we operate across three  regions and we do this with four  engineers  yeah so let's take a look at just like a  single app box and a single server box  how they talk to each other or just what  the setup looks like there's an  application running on our cloud  somewhere the likely path is that  they're consuming somebody else's  service client that library would then  consume our Evie cache client library  and this is a Java client library it's a  jar that we've end the server side has  memcache D or what looks like memcache D  and prana which is a sidecar it's  written in Java it's used for people who  are running applications that are not  based in Java it hooks into the rest of  the Netflix ecosystem so we can report  metrics and and register with our  service discovery system their client  talks directly to memcache T there's a  TCP connection between the two the  sidecar will register with our service  discovery and the client can pull that  information in order to find the server  so one client with a whole Evie cache  cluster here if you look there's three  different availability zones and there's  this dotted line around these boxes  that's a whole copy of data so in this  picture we have three whole copies of  data one per availability zone and the  client has a connection to all of these  separately if we have many clients all  the clients have a connection to all the  boxes so this forms what's called a  complete bipartite graph so all clients  connected to all servers no clients  connected to each other and no servers  are actually talking to each other so  for reading relatively simple we try the  closest one first and there's a couple  backup paths in case that one doesn't  work out if it's a brand new instance if  it just died or it's having network  problems or any one of a number of  failures that can happen we can try a  different node a writing is a little bit  more interesting the client writes to  all three and that's how we have  multiple different copies  all clients would be writing to all the  different places that they need to write  data so we're gonna take a look at a few  different use cases going from simple to  complex this one's fairly  straightforward it's a pretty common use  case so if you have a relatively slow  service in a relatively fast cache you  can try the cache first and look in the  service layer so if the application  requests some data from the client  library here we try Eevee cache client  first and if it's not there we can go to  the service which will go to its  database typically Cassandra for us and  then the service itself is responsible  for writing back into the cache before  or asynchronously as it returns the data  the second one transient data store so  thinks things like your playback session  as it's going on we want to keep track  of how you're doing and over time we  have multiple different applications  talk to the cache you might have one  start up your session another one update  your session then do a session roll-up  at the very end have you notice there's  no database in this picture it's just  the cache there this is a lot more  interesting to me this is our largest  footprint really of caches  it's actually the primary storage  mechanism for data so we have these  really large scale pre compute systems  that run overnight every day to compute  a brand-new home page for every profile  of every user it's quite a lot of  computation and it's quite a lot of data  and what they do is they just write it  into an e be cache cluster and the  online services are reading from this  not worrying about what time anything  was written we have a pretty strong  culture of fall back so you don't have  to worry so much about data not quite  being there all the time so the whole  picture looks like this we have a set of  offline services writing in the cache so  I have online services reading and the  cache acts as this buffer between the  two or a gateway or many other words you  could use for it so this is our  personalization data this is even more  interesting we have some things that are  very high volume and also need to be  very high availability so thank you I  strings where if you don't  them the user experience is pretty bad  because it has no words on it they would  have an in-memory cache and then if that  doesn't have the data or they could do a  background refresh from evie cache if it  doesn't have the data they could reach  out to give you cash it does if it does  they could do a background refresh so  think about whenever we're going into  our peak during the day we need to scale  up some servers and they all want to get  this data they'll be pulling it from UV  cache and there's another process that  is asynchronously computing the latest  package and publishing it to the cache  and beyond that they could even go  further and have a service that owns  this data or the database behind it but  most people have actually found this to  be optional because the uptime of the  evie cache clusters is so good that they  don't worry about it so we've been  looking at maybe 10,000 feet let's take  a step back let's go to 3050 and take a  look at what I call pipeline of  personalization so when you compute a  new homepage it's not just one step  there's many different steps involved  with different algorithms doing  different things you would have one say  just compute a publishing into an Eevee  cache clustered its data sources or  something that we're not involved with  may be offline hive or other data  sources and then maybe a compute B you  might have a see that depends on these  two and a D and maybe an e and this  forms a dag of data dependencies for our  personalization process all this happens  offline and online services don't just  pull the last output they might pick and  choose from different parts of this in  order to provide the experience that  they need so online one pull from A  through D and online to could pulls from  a different set  so the polyglot story at Netflix is an  interesting one it's a point of  discussion right now even but our team  as a somewhat central service has  decided to go ahead and solve this in  our own way our old world or current  world really is a Java app and our Java  client that's pretty straightforward is  what you've already seen but other  people actually run our prana sidecar as  well so we have an HTTP like a REST API  that runs on box that people can use to  access the cache and we've made that  remote as well so we have a remote HTTP  API and even an experimental memcache D  protocol API that we've been working on  with a couple of our partner teams  internally this is still an area of  active development for us so I don't  really have any more detail on it right  now if you want to know more you can  talk to me at the booth upstairs  afterwards there's some extra things on  top of all the things that I've shown  you so far that make the product work at  Netflix scale the main one is our cross  region global replication we also do  cache warming for faster deployments we  have secondary indexing for point  queries for debugging and we have a  consistency checker that provides  metrics on how consistent the caches are  now all of this is powered by mutation  metadata flowing through a Kafka cluster  so we'll take a look at replication and  the cache forming first so replication  we have two regions here we actually  operate out of three so this goes  between like every pair but I'll just  show you these two we have an app and  region a and an app and region B and we  have a cache in region a that we want to  match the cache in region B so in a an  app could mutate that cache and  asynchronously send metadata about that  mutation into Kafka we have an app we  call our replication relay it pulls that  data out of Kafka and can optionally  pull the data if it needs it out of the  and write it across the cross region  linked to what we call a replication  proxy which does that operation on  behalf of the app in region a in the  cache and region B and then the app in  region B can see that change and of  course this goes both directions or  every which way between all different  regions a cache warming this is our  steady state so you've seen this before  without the Kafka button this heart in  our steady state we're writing to one  cache say we want to double it is two  nodes right now we want four but we can  bring up a second one in parallel that's  double the size and start writing to it  immediately we bring up a cache warming  app that pulls that metadata stream from  Kafka can read the data from the old one  and write it into the new one until the  new one looks like the old one  and we can tear down the cache warmer  tear down the old one well send reads  the new one first then tear down the old  one and win our new steady state and  very recent modifications or updates to  memcache D itself have actually made it  possible for us to do this without the  Kafka box on here but we're still  figuring out how to roll that on the  production this is all the code that our  clients need to use in order to actually  take advantage of all of that complexity  I've just shown you all they need to do  is make a client set get delete touch  etc anything that you might think to do  on a memcache D server that's all our  clients need to do internally  so let's switch gears a little bit I've  been working well I've been showing you  all of this higher level design work how  the caches operate in the larger  environment let's take a deeper dive  into the server side so this is a new  server for us and we just were at the  tail end of rolling this out to the  places that it's required  it's a project we call Minetta his name  Minetta after the goddess of memory and  the protectress of funds for Juno as an  evolution of our server to put some data  on disk is a cost optimization project  for us and it's lowering our cost now  but also lowering the rate of increase  of our cost in the future as we gain  more members this is pretty important  for us because we actually track the  cost per stream start it's a metric that  our finance team tracks and something  that is highly correlated if we change  that will be helpful in the future and  it takes advantage of our global request  patterns that we have across multiple  different regions so our old server  you've already seen  it's just memcache D and prana it's not  very exciting all the data stored in RAM  this is very expensive relatively  speaking compared to disk the late last  year Netflix as a company changed their  architecture so changed our architecture  to be n plus one across three different  regions meaning that any one region  could go down at any time and we would  be okay by shifting traffic to the other  two any member can be served equally  well from any region in addition at the  beginning of this calendar year we  launched in 130 new countries at the  same time which just added more data on  to the pilot so how do we optimize this  well we can target those personalization  pre compute use cases that you saw  before our global data means many copies  so that picture that you saw with three  copies is actually nine globally because  it's three in one region three in each  region times three  nine copies but our hacked our access  patterns are very heavily region  oriented if you're watching Netflix in  California you are hitting the US west  to region the likelihood that we see  your traffic go to EU West one or or Us  East one the other two regions that we  operate out of is extremely low so in  one region our hot data is very hot and  our cold data is very cold it will keep  the hot data and RAM and the cold data  on disk and we can size the RAM for the  working set and size the SSD for the  whole data set  what was our new server look like it  adds a couple of new processes there's  one called rent and another called  mnemonic we're still running memcache D  the server now is a dynamic l1 l2 cache  which allows it to adapt to the needs of  the application at anytime without  worrying about very strictly segregating  data and all three of these processes  are running the same protocol so we can  use the same debugging tools or same  load generation tools to test any one of  them so rent here is the proxy taking  external connections and holding open  connections to the internal processes  memcache D and mnemonic are l1 and l2  we'll take a look at ren first take a  look at mnemonic see the whole thing  together and we'll take a look at some  performance numbers which is probably  the most exciting part for me so any go  developers in the audience yes okay this  is a go project you can go get it it's  actually a public github repo under the  Netflix org so yeah have fun with that  it's a high performance wire compatible  memcache D proxy and server it's a  transparent change to our clients it's  written in go mostly for its concurrency  primitives but also because it's  relatively fast for developers to get up  and running in to write new code and  it's very fast and it's running in  production its purpose is to manage the  l1 and l2 relationship on a single box  and before the project even started we  had caches that had tens of thousands of  concurrent connections reading and  writing that was a requirement for this  process from the very beginning so  taking a better look at the insides of  it it's a modular software project what  you see on github is actually what we're  running in production it's not fake it  manages the connections coming in the  request orchestration between l1 and l2  communicating to the backends it even  includes our own homegrown metrics  library which might make some of you  cringe but nothing really fit our needs  in the NGO world because we have to  integrate with our Atlas back-end and  Netflix it includes multiple  orchestrators reasons for which will  become apparent when we look at the  whole thing together and it includes  this feature which we call parallel  locking so any one server can have many  parallel requests happening at the exact  same time but no one key will have two  concurrent modifications which allows us  to keep data integrity and keep l1 and  l2 consistent so mnemonic this is our l2  piece I say open source soon with air  quotes because I don't really have a  timeline for you but I want to get it  open source we'll see this is our SSD  backed storage solution it reuses some  of the rent code to do the heavy lifting  for memcache T protocol parsing and  connection management but its main  purpose is to map those memcache the  operations into rocks DB operations so  in the bottom you can see rocks DV the  request here would come in on top of  this diagram run through the code that  you've already seen in whren and through  a shim to get into the c++ world into  our mnemonic core library which then  uses the rocks DB library underneath to  store the data on disk  we chose rocks TV for a few different  reasons mostly because when you write to  rocks DB it writes directly into an  in-memory buffer which then is  asynchronously flushed on a disk in  these static files so it's fast to write  and fast to read so how do we use it  specifically we use FIFO compaction  which isn't really compacting anything  at all it's just this FIFO queue of  files on disk it's linearly  written in terms of time so more recent  files coming at the front of the queue  and older files will just get deleted if  yet weep in the bloom filters and  indices in memory for quick access or  misses as the case may be which does  trade some l1 space but it makes our l2  much faster which is great for us and we  have many rocks tb7 like separate rocks  TV instances per box so that we can  further decrease the latency this is  great for our pre compute use cases but  we're still working on figuring out how  to do this for much for more  heterogeneous data so if we have very  fast-moving data next to very slow very  fast changing data next to very slow  changing data the fast changing data can  write enough data on disk to actually  push the slow ones off the end of the  FIFO queue and then we've lost something  which is not great so we're working on  this still the whole thing together is a  little bit more complex  we run multiple different open ports in  production for different use cases per  server so we have these servers already  serving all of that personalization data  before remember that pipeline of  personalization all those green Eevee  cache nodes were this server we have two  ports one for standard access which is  highly dynamic access or actively  managed data and then we have an async  batch port well it's really a batch port  it's not a sink but it's for people who  are writing data in that won't  necessarily be used anytime soon and  it'll keep the working set hot so that  we don't end up blowing away our l1 when  we're computing our personalization  stuff okay the slide I've been waiting  for so this is performance in production  for our most heavily loaded cache that  is using Minetta right now I measured  both at the peak like the three hours of  peak for us and the three hours in the  trough for us all the different Layton  sees and percentiles and things so  given all the complexity that we've  added to this you might think that it's  really slow but taking a look at the  gets our average latency is around two  hundred and thirty microseconds on the  server side and you can see the  percentiles here the higher ones get a  little high because it's got go as a  garbage collected language but that's  okay with us the 99th is really really  great for us and in the trough it's even  faster and the sets are also we're very  happy with this 367 microseconds average  and like I said you can see the rest of  the percentiles there but these are all  great for us so if we look at client  side Layton sees the network in AWS adds  maybe 250 to 500 microseconds and most  people expect an answer out of us in  under a millisecond almost all the time  okay I told you this is a cost  optimization project any guesses highest  percentage savings we saw in a single  cluster one thousand percent kind of  impossible  10% a little low okay is about 70% cost  savings on a single cluster just because  we noticed that we have this small hot  set and a really large cold dataset and  this project has been a really great one  for us and we're just nearing the end of  rolling it out  so yeah huge success for us all these  things that you've seen not all of them  sorry mnemonic we've had the air quotes  around it  evie cache the Java client library is  open source and that REST API that I  mentioned earlier is also in that same  repository and the rent code itself is  also open source on the netflix github  repo so you can go check those out and  that's all I have  okay I'll take any questions if anybody  once yes I wasn't the engineer that  sorry the question was the decision tree  to get to rocks dB  I wasn't the engineer who made the  decision specifically to go with rocks  DB but generally it was the fastest it  worked for our use case yeah I have to  think about it a little bit more you can  I'll be at the booth after this for a  couple hours so please come find me yes  all right have we considered using  Couchbase no not really  we've talked to them before we're happy  with our homegrown solution that's  working really well for us if we need to  customize it in any way we can just turn  around and modify our code and get a new  candidate jar out the same day I don't  believe that would be a good process for  Couchbase so I mean I haven't like gone  into deep talks with them but we're  happy with where we are and I don't  think that we would have been able to do  something like the monitor projects  directly with them yes  right so have we found any limitations  with the commands that are available in  the memcache D protocol not really a lot  of our data is organized by user or  profile or something like that most of  the time people just want to get the  whole piece of data there's not very  many use cases where they just want like  the one array element so it's not really  necessary  any other questions yes time scale for  this project you mean the Minetta  project right the time scale I started  dabbling and go about a year ago and  started hacking on rent  maybe November if I had convinced my  teammates earlier this year that it was  a good idea to do this project in this  manner and we are basically done rolling  it out into production for the largest  use cases right now so about a year  total yeah follow up  so how did I convince my teammates to  use go kind of like because we're not in  the paved path anymore it's not too hard  when you make a proof of concept that's  already running fast right off the bat  so that's what I said like it's fast  when it's compiled I had a relatively  dumb like text protocol based version  that was already running you know in the  hundreds of thousands of RPS fairly  easily so from there we don't we don't  even run that fast I need one server  from there we can work out how to make  it function on the server we already had  memcache D which was essentially a  binary blob to us we already were kind  of off the paved path so it didn't  really scare us so much plus my  teammates have been converted I guess to  the religion of go at this point they  seem to like the language is there any  other questions anybody up top anything  yeah okay do the management asked us to  do this to save money not directly  engineers at Netflix tend to have a lot  of context about how the business is  doing and where it's going and what the  needs are so as a team we've looked at  what our needs were and saw this  opportunity for an optimization so we  decided to just go for it  and you know not only do we have to  convince ourselves this is a good idea  we have to go to all these people whose  data we're storing and tell them hey  we're gonna change this out from under  you I hope you're ok with that  and they generally are so it was driven  mostly by the engineers but we had  backup as we were pitching  this idea started as a side project  became my main project just because we  decided it was a higher priority  anything else yes I'm sorry I can't hear  you can you speak up please  okay I probably didn't explain that  extremely well is the first time I  presented that slide publicly so our  personalization project process ends up  creating an ad hoc data dependency dag  but it's not any formalized like dag  that exists anywhere in any form other  than in engineers minds of this is my  dependency so when they're writing the  data out their process writes into an  Eevee cache cluster and those Eevee  cache clusters are in discovery in the  service discovery system and anybody can  find them at any time so that's I'm not  sure if I answered your question yeah so  anybody who wants to talk to Eevee cache  would use the Eureka system in order to  to access them does that answer your  question  well in that in that diagram there was  these like single green like database  looking things that was meant to  represent a whole cluster and that's  actually a globally replicated charted  cluster I saw another yes and he plans  to extend to other cloud providers it's  open source  we accept patches pull requests not  really we our team is focused on solving  Netflix problems we have it an open  source in the hopes that it helps other  people solve their problems  it's not a primary goal for us to  support the open source as an open  source thing like but it should be  useful to some people anything else up  top nothing ok I think that's it
+
+00:00:07.220 --> 00:00:09.410 align:start position:0%
+hi everybody my name is scott mansfield  i'm a senior software engineer on the AV  cache team at netflix and i'm here to  talk to you about the hidden micro  service it's our nickname for the  caching layer to be clear before I start  this has nothing to do with the open  connects CDN which some people also  refer to as a cache that's a really cool  interesting deep concept all on its own  it's not what we're talking about this  is just the Amazon Web Services cloud  caching layer so you just signed up for  Netflix good decision you get home the  end of the day you turn on your TV  you open the Netflix app you need to  sign in with your brand-new account you  choose your profile and naturally your  name is tester like everybody else you  asks you to pick a few titles that  you've liked before or maybe ones that  you've seen so you pick a few keep going  it tells you it's personalizing your  experience for you so it's building a  brand new homepage just for you and  there you are  you get there you have house of cards  making a murder which is a fantastic  documentary you could do a search for  Tom Hanks watch Forrest Gump for the  millionth time but you settle on narcos  this says season 2 coming September 2nd  it's already out in case anybody is  excited about that show you can go watch  season 2 you're watching the first  episode you get to the part where he  tells the gardener llamo Pablo Emilio  Escobar's guy Vidya and he tells him  Plata o Plomo  and you're so impressed by this line you  need to go rate this show five stars and  you've him just showing all of your  friends all the favorite parts of all  you of your episodes and we're keeping  track so any guesses on how long we have  to capture your attention before you go  off and do something else guesses [ __ ]  okay okay a little bit short it's about  90 seconds  so the faster the smoother the better  the experience that you have the more  likely we are to keep your attention and  keep you watching Netflix and part of  the way we do that is by caching things  on the server side so let's take a look  in that experience that you just saw  what things caches touch you're signing  up logging in choosing a profile picking  like videos the personalization process  which we'll look at in a little bit more  detail later loading the homepage itself  scrolling through the homepage any a be  test allocations that might be on your  profile and even the video image  selection the boxart that you're seeing  and there's a whole mess of other things  even beyond that and if you look there's  a bunch of these have multiple caches  involved in the backend  put another way this is what a typical  homepage request looks like this is the  output from our request facing system so  the request comes in from the left side  and goes all the way down to the right  if you look at those leaf nodes on the  right there's maybe half a dozen that  are not an easy cash node so I've talked  about it  I mentioned it let's talk a little bit  about EB cache  it stands for ephemeral volatile cash  it's a key value store that we run  that's optimized for running on Amazon  Web Services and tuned for Netflix  specific use cases it's a distributed  sharded and replicated store and that  replication is tunable both within a  single region and across multiple  different regions it's based on memcache  two highly resilient to failure because  AWS is a highly dynamic environment one  of my colleagues actually called AWS  chaos monkey as a service which is  pretty accurate all credit to him for  that but they actually kill more of our  instances than the chaos monkey does  it's topology aware network topology  aware for faster access as linearly  scalable we can scale out the server  side as much as we need to to handle the  traffic and it has seamless deployments  for our internal customers so why do we  want to optimize for AWS like I said  it's highly dynamic but what does that  mean well instances can up and disappear  at any time zones can fail entire  regions can become unstable for any one  of a variety of reasons the network  itself is lossy and customer requests  can actually bounce between multiple  different regions of the same session  and the simple fact of life is that  failures happen and we have to be ready  for them and we test them all the time  so that we are ready so I'll give you a  sense of scale for Evi cache use of  Netflix we hold hundreds of terabytes of  data and cache we do trillions of  operations per day hold tens of billions  of items do millions of operations per  second millions of cross region  replications per second between two  different regions which we'll look at in  more detail later we have thousands of  servers it's more than ten thousand but  not quite enough to call it like tens of  thousands we have hundreds of instances  for cluster up to hundreds hundreds of  service clients that are potentially  connecting to a single cluster it tens  of distinct clusters for different use  cases they're tuned differently or have  different setups we operate across three  regions and we do this with four  engineers  yeah so let's take a look at just like a  single app box and a single server box  how they talk to each other or just what  the setup looks like there's an  application running on our cloud  somewhere the likely path is that  they're consuming somebody else's  service client that library would then  consume our Evie cache client library  and this is a Java client library it's a  jar that we've end the server side has  memcache D or what looks like memcache D  and prana which is a sidecar it's  written in Java it's used for people who  are running applications that are not  based in Java it hooks into the rest of  the Netflix ecosystem so we can report  metrics and and register with our  service discovery system their client  talks directly to memcache T there's a  TCP connection between the two the  sidecar will register with our service  discovery and the client can pull that  information in order to find the server  so one client with a whole Evie cache  cluster here if you look there's three  different availability zones and there's  this dotted line around these boxes  that's a whole copy of data so in this  picture we have three whole copies of  data one per availability zone and the  client has a connection to all of these  separately if we have many clients all  the clients have a connection to all the  boxes so this forms what's called a  complete bipartite graph so all clients  connected to all servers no clients  connected to each other and no servers  are actually talking to each other so  for reading relatively simple we try the  closest one first and there's a couple  backup paths in case that one doesn't  work out if it's a brand new instance if  it just died or it's having network  problems or any one of a number of  failures that can happen we can try a  different node a writing is a little bit  more interesting the client writes to  all three and that's how we have  multiple different copies  all clients would be writing to all the  different places that they need to write  data so we're gonna take a look at a few  different use cases going from simple to  complex this one's fairly  straightforward it's a pretty common use  case so if you have a relatively slow  service in a relatively fast cache you  can try the cache first and look in the  service layer so if the application  requests some data from the client  library here we try Eevee cache client  first and if it's not there we can go to  the service which will go to its  database typically Cassandra for us and  then the service itself is responsible  for writing back into the cache before  or asynchronously as it returns the data  the second one transient data store so  thinks things like your playback session  as it's going on we want to keep track  of how you're doing and over time we  have multiple different applications  talk to the cache you might have one  start up your session another one update  your session then do a session roll-up  at the very end have you notice there's  no database in this picture it's just  the cache there this is a lot more  interesting to me this is our largest  footprint really of caches  it's actually the primary storage  mechanism for data so we have these  really large scale pre compute systems  that run overnight every day to compute  a brand-new home page for every profile  of every user it's quite a lot of  computation and it's quite a lot of data  and what they do is they just write it  into an e be cache cluster and the  online services are reading from this  not worrying about what time anything  was written we have a pretty strong  culture of fall back so you don't have  to worry so much about data not quite  being there all the time so the whole  picture looks like this we have a set of  offline services writing in the cache so  I have online services reading and the  cache acts as this buffer between the  two or a gateway or many other words you  could use for it so this is our  personalization data this is even more  interesting we have some things that are  very high volume and also need to be  very high availability so thank you I  strings where if you don't  them the user experience is pretty bad  because it has no words on it they would  have an in-memory cache and then if that  doesn't have the data or they could do a  background refresh from evie cache if it  doesn't have the data they could reach  out to give you cash it does if it does  they could do a background refresh so  think about whenever we're going into  our peak during the day we need to scale  up some servers and they all want to get  this data they'll be pulling it from UV  cache and there's another process that  is asynchronously computing the latest  package and publishing it to the cache  and beyond that they could even go  further and have a service that owns  this data or the database behind it but  most people have actually found this to  be optional because the uptime of the  evie cache clusters is so good that they  don't worry about it so we've been  looking at maybe 10,000 feet let's take  a step back let's go to 3050 and take a  look at what I call pipeline of  personalization so when you compute a  new homepage it's not just one step  there's many different steps involved  with different algorithms doing  different things you would have one say  just compute a publishing into an Eevee  cache clustered its data sources or  something that we're not involved with  may be offline hive or other data  sources and then maybe a compute B you  might have a see that depends on these  two and a D and maybe an e and this  forms a dag of data dependencies for our  personalization process all this happens  offline and online services don't just  pull the last output they might pick and  choose from different parts of this in  order to provide the experience that  they need so online one pull from A  through D and online to could pulls from  a different set  so the polyglot story at Netflix is an  interesting one it's a point of  discussion right now even but our team  as a somewhat central service has  decided to go ahead and solve this in  our own way our old world or current  world really is a Java app and our Java  client that's pretty straightforward is  what you've already seen but other  people actually run our prana sidecar as  well so we have an HTTP like a REST API  that runs on box that people can use to  access the cache and we've made that  remote as well so we have a remote HTTP  API and even an experimental memcache D  protocol API that we've been working on  with a couple of our partner teams  internally this is still an area of  active development for us so I don't  really have any more detail on it right  now if you want to know more you can  talk to me at the booth upstairs  afterwards there's some extra things on  top of all the things that I've shown  you so far that make the product work at  Netflix scale the main one is our cross  region global replication we also do  cache warming for faster deployments we  have secondary indexing for point  queries for debugging and we have a  consistency checker that provides  metrics on how consistent the caches are  now all of this is powered by mutation  metadata flowing through a Kafka cluster  so we'll take a look at replication and  the cache forming first so replication  we have two regions here we actually  operate out of three so this goes  between like every pair but I'll just  show you these two we have an app and  region a and an app and region B and we  have a cache in region a that we want to  match the cache in region B so in a an  app could mutate that cache and  asynchronously send metadata about that  mutation into Kafka we have an app we  call our replication relay it pulls that  data out of Kafka and can optionally  pull the data if it needs it out of the  and write it across the cross region  linked to what we call a replication  proxy which does that operation on  behalf of the app in region a in the  cache and region B and then the app in  region B can see that change and of  course this goes both directions or  every which way between all different  regions a cache warming this is our  steady state so you've seen this before  without the Kafka button this heart in  our steady state we're writing to one  cache say we want to double it is two  nodes right now we want four but we can  bring up a second one in parallel that's  double the size and start writing to it  immediately we bring up a cache warming  app that pulls that metadata stream from  Kafka can read the data from the old one  and write it into the new one until the  new one looks like the old one  and we can tear down the cache warmer  tear down the old one well send reads  the new one first then tear down the old  one and win our new steady state and  very recent modifications or updates to  memcache D itself have actually made it  possible for us to do this without the  Kafka box on here but we're still  figuring out how to roll that on the  production this is all the code that our  clients need to use in order to actually  take advantage of all of that complexity  I've just shown you all they need to do  is make a client set get delete touch  etc anything that you might think to do  on a memcache D server that's all our  clients need to do internally  so let's switch gears a little bit I've  been working well I've been showing you  all of this higher level design work how  the caches operate in the larger  environment let's take a deeper dive  into the server side so this is a new  server for us and we just were at the  tail end of rolling this out to the  places that it's required  it's a project we call Minetta his name  Minetta after the goddess of memory and  the protectress of funds for Juno as an  evolution of our server to put some data  on disk is a cost optimization project  for us and it's lowering our cost now  but also lowering the rate of increase  of our cost in the future as we gain  more members this is pretty important  for us because we actually track the  cost per stream start it's a metric that  our finance team tracks and something  that is highly correlated if we change  that will be helpful in the future and  it takes advantage of our global request  patterns that we have across multiple  different regions so our old server  you've already seen  it's just memcache D and prana it's not  very exciting all the data stored in RAM  this is very expensive relatively  speaking compared to disk the late last  year Netflix as a company changed their  architecture so changed our architecture  to be n plus one across three different  regions meaning that any one region  could go down at any time and we would  be okay by shifting traffic to the other  two any member can be served equally  well from any region in addition at the  beginning of this calendar year we  launched in 130 new countries at the  same time which just added more data on  to the pilot so how do we optimize this  well we can target those personalization  pre compute use cases that you saw  before our global data means many copies  so that picture that you saw with three  copies is actually nine globally because  it's three in one region three in each  region times three  nine copies but our hacked our access  patterns are very heavily region  oriented if you're watching Netflix in  California you are hitting the US west  to region the likelihood that we see  your traffic go to EU West one or or Us  East one the other two regions that we  operate out of is extremely low so in  one region our hot data is very hot and  our cold data is very cold it will keep  the hot data and RAM and the cold data  on disk and we can size the RAM for the  working set and size the SSD for the  whole data set  what was our new server look like it  adds a couple of new processes there's  one called rent and another called  mnemonic we're still running memcache D  the server now is a dynamic l1 l2 cache  which allows it to adapt to the needs of  the application at anytime without  worrying about very strictly segregating  data and all three of these processes  are running the same protocol so we can  use the same debugging tools or same  load generation tools to test any one of  them so rent here is the proxy taking  external connections and holding open  connections to the internal processes  memcache D and mnemonic are l1 and l2  we'll take a look at ren first take a  look at mnemonic see the whole thing  together and we'll take a look at some  performance numbers which is probably  the most exciting part for me so any go  developers in the audience yes okay this  is a go project you can go get it it's  actually a public github repo under the  Netflix org so yeah have fun with that  it's a high performance wire compatible  memcache D proxy and server it's a  transparent change to our clients it's  written in go mostly for its concurrency  primitives but also because it's  relatively fast for developers to get up  and running in to write new code and  it's very fast and it's running in  production its purpose is to manage the  l1 and l2 relationship on a single box  and before the project even started we  had caches that had tens of thousands of  concurrent connections reading and  writing that was a requirement for this  process from the very beginning so  taking a better look at the insides of  it it's a modular software project what  you see on github is actually what we're  running in production it's not fake it  manages the connections coming in the  request orchestration between l1 and l2  communicating to the backends it even  includes our own homegrown metrics  library which might make some of you  cringe but nothing really fit our needs  in the NGO world because we have to  integrate with our Atlas back-end and  Netflix it includes multiple  orchestrators reasons for which will  become apparent when we look at the  whole thing together and it includes  this feature which we call parallel  locking so any one server can have many  parallel requests happening at the exact  same time but no one key will have two  concurrent modifications which allows us  to keep data integrity and keep l1 and  l2 consistent so mnemonic this is our l2  piece I say open source soon with air  quotes because I don't really have a  timeline for you but I want to get it  open source we'll see this is our SSD  backed storage solution it reuses some  of the rent code to do the heavy lifting  for memcache T protocol parsing and  connection management but its main  purpose is to map those memcache the  operations into rocks DB operations so  in the bottom you can see rocks DV the  request here would come in on top of  this diagram run through the code that  you've already seen in whren and through  a shim to get into the c++ world into  our mnemonic core library which then  uses the rocks DB library underneath to  store the data on disk  we chose rocks TV for a few different  reasons mostly because when you write to  rocks DB it writes directly into an  in-memory buffer which then is  asynchronously flushed on a disk in  these static files so it's fast to write  and fast to read so how do we use it  specifically we use FIFO compaction  which isn't really compacting anything  at all it's just this FIFO queue of  files on disk it's linearly  written in terms of time so more recent  files coming at the front of the queue  and older files will just get deleted if  yet weep in the bloom filters and  indices in memory for quick access or  misses as the case may be which does  trade some l1 space but it makes our l2  much faster which is great for us and we  have many rocks tb7 like separate rocks  TV instances per box so that we can  further decrease the latency this is  great for our pre compute use cases but  we're still working on figuring out how  to do this for much for more  heterogeneous data so if we have very  fast-moving data next to very slow very  fast changing data next to very slow  changing data the fast changing data can  write enough data on disk to actually  push the slow ones off the end of the  FIFO queue and then we've lost something  which is not great so we're working on  this still the whole thing together is a  little bit more complex  we run multiple different open ports in  production for different use cases per  server so we have these servers already  serving all of that personalization data  before remember that pipeline of  personalization all those green Eevee  cache nodes were this server we have two  ports one for standard access which is  highly dynamic access or actively  managed data and then we have an async  batch port well it's really a batch port  it's not a sink but it's for people who  are writing data in that won't  necessarily be used anytime soon and  it'll keep the working set hot so that  we don't end up blowing away our l1 when  we're computing our personalization  stuff okay the slide I've been waiting  for so this is performance in production  for our most heavily loaded cache that  is using Minetta right now I measured  both at the peak like the three hours of  peak for us and the three hours in the  trough for us all the different Layton  sees and percentiles and things so  given all the complexity that we've  added to this you might think that it's  really slow but taking a look at the  gets our average latency is around two  hundred and thirty microseconds on the  server side and you can see the  percentiles here the higher ones get a  little high because it's got go as a  garbage collected language but that's  okay with us the 99th is really really  great for us and in the trough it's even  faster and the sets are also we're very  happy with this 367 microseconds average  and like I said you can see the rest of  the percentiles there but these are all  great for us so if we look at client  side Layton sees the network in AWS adds  maybe 250 to 500 microseconds and most  people expect an answer out of us in  under a millisecond almost all the time  okay I told you this is a cost  optimization project any guesses highest  percentage savings we saw in a single  cluster one thousand percent kind of  impossible  10% a little low okay is about 70% cost  savings on a single cluster just because  we noticed that we have this small hot  set and a really large cold dataset and  this project has been a really great one  for us and we're just nearing the end of  rolling it out  so yeah huge success for us all these  things that you've seen not all of them  sorry mnemonic we've had the air quotes  around it  evie cache the Java client library is  open source and that REST API that I  mentioned earlier is also in that same  repository and the rent code itself is  also open source on the netflix github  repo so you can go check those out and  that's all I have  okay I'll take any questions if anybody  once yes I wasn't the engineer that  sorry the question was the decision tree  to get to rocks dB  I wasn't the engineer who made the  decision specifically to go with rocks  DB but generally it was the fastest it  worked for our use case yeah I have to  think about it a little bit more you can  I'll be at the booth after this for a  couple hours so please come find me yes  all right have we considered using  Couchbase no not really  we've talked to them before we're happy  with our homegrown solution that's  working really well for us if we need to  customize it in any way we can just turn  around and modify our code and get a new  candidate jar out the same day I don't  believe that would be a good process for  Couchbase so I mean I haven't like gone  into deep talks with them but we're  happy with where we are and I don't  think that we would have been able to do  something like the monitor projects  directly with them yes  right so have we found any limitations  with the commands that are available in  the memcache D protocol not really a lot  of our data is organized by user or  profile or something like that most of  the time people just want to get the  whole piece of data there's not very  many use cases where they just want like  the one array element so it's not really  necessary  any other questions yes time scale for  this project you mean the Minetta  project right the time scale I started  dabbling and go about a year ago and  started hacking on rent  maybe November if I had convinced my  teammates earlier this year that it was  a good idea to do this project in this  manner and we are basically done rolling  it out into production for the largest  use cases right now so about a year  total yeah follow up  so how did I convince my teammates to  use go kind of like because we're not in  the paved path anymore it's not too hard  when you make a proof of concept that's  already running fast right off the bat  so that's what I said like it's fast  when it's compiled I had a relatively  dumb like text protocol based version  that was already running you know in the  hundreds of thousands of RPS fairly  easily so from there we don't we don't  even run that fast I need one server  from there we can work out how to make  it function on the server we already had  memcache D which was essentially a  binary blob to us we already were kind  of off the paved path so it didn't  really scare us so much plus my  teammates have been converted I guess to  the religion of go at this point they  seem to like the language is there any  other questions anybody up top anything  yeah okay do the management asked us to  do this to save money not directly  engineers at Netflix tend to have a lot  of context about how the business is  doing and where it's going and what the  needs are so as a team we've looked at  what our needs were and saw this  opportunity for an optimization so we  decided to just go for it  and you know not only do we have to  convince ourselves this is a good idea  we have to go to all these people whose  data we're storing and tell them hey  we're gonna change this out from under  you I hope you're ok with that  and they generally are so it was driven  mostly by the engineers but we had  backup as we were pitching  this idea started as a side project  became my main project just because we  decided it was a higher priority  anything else yes I'm sorry I can't hear  you can you speak up please  okay I probably didn't explain that  extremely well is the first time I  presented that slide publicly so our  personalization project process ends up  creating an ad hoc data dependency dag  but it's not any formalized like dag  that exists anywhere in any form other  than in engineers minds of this is my  dependency so when they're writing the  data out their process writes into an  Eevee cache cluster and those Eevee  cache clusters are in discovery in the  service discovery system and anybody can  find them at any time so that's I'm not  sure if I answered your question yeah so  anybody who wants to talk to Eevee cache  would use the Eureka system in order to  to access them does that answer your  question  well in that in that diagram there was  these like single green like database  looking things that was meant to  represent a whole cluster and that's  actually a globally replicated charted  cluster I saw another yes and he plans  to extend to other cloud providers it's  open source  we accept patches pull requests not  really we our team is focused on solving  Netflix problems we have it an open  source in the hopes that it helps other  people solve their problems  it's not a primary goal for us to  support the open source as an open  source thing like but it should be  useful to some people anything else up  top nothing ok I think that's it
+ 
+
+00:00:09.410 --> 00:00:11.930 align:start position:0%
+ 
+ 
+
+00:00:11.930 --> 00:00:13.610 align:start position:0%
+ 
+ 
+
+00:00:13.610 --> 00:00:15.650 align:start position:0%
+ 
+ 
+
+00:00:15.650 --> 00:00:18.859 align:start position:0%
+ 
+ 
+
+00:00:18.859 --> 00:00:20.420 align:start position:0%
+ 
+ 
+
+00:00:20.420 --> 00:00:22.790 align:start position:0%
+ 
+ 
+
+00:00:22.790 --> 00:00:24.440 align:start position:0%
+ 
+ 
+
+00:00:24.440 --> 00:00:26.270 align:start position:0%
+ 
+ 
+
+00:00:26.270 --> 00:00:28.370 align:start position:0%
+ 
+ 
+
+00:00:28.370 --> 00:00:31.359 align:start position:0%
+ 
+ 
+
+00:00:31.359 --> 00:00:36.860 align:start position:0%
+ 
+ 
+
+00:00:36.860 --> 00:00:40.130 align:start position:0%
+ 
+ 
+
+00:00:40.130 --> 00:00:42.080 align:start position:0%
+ 
+ 
+
+00:00:42.080 --> 00:00:45.440 align:start position:0%
+ 
+ 
+
+00:00:45.440 --> 00:00:48.830 align:start position:0%
+ 
+ 
+
+00:00:48.830 --> 00:00:51.410 align:start position:0%
+ 
+ 
+
+00:00:51.410 --> 00:00:55.420 align:start position:0%
+ 
+ 
+
+00:00:55.420 --> 00:00:57.979 align:start position:0%
+ 
+ 
+
+00:00:57.979 --> 00:01:00.590 align:start position:0%
+ 
+ 
+
+00:01:00.590 --> 00:01:03.229 align:start position:0%
+ 
+ 
+
+00:01:03.229 --> 00:01:04.969 align:start position:0%
+ 
+ 
+
+00:01:04.969 --> 00:01:07.700 align:start position:0%
+ 
+ 
+
+00:01:07.700 --> 00:01:10.570 align:start position:0%
+ 
+ 
+
+00:01:10.570 --> 00:01:12.080 align:start position:0%
+ 
+ 
+
+00:01:12.080 --> 00:01:16.300 align:start position:0%
+ 
+ 
+
+00:01:16.300 --> 00:01:18.469 align:start position:0%
+ 
+ 
+
+00:01:18.469 --> 00:01:21.980 align:start position:0%
+ 
+ 
+
+00:01:21.980 --> 00:01:23.870 align:start position:0%
+ 
+ 
+
+00:01:23.870 --> 00:01:28.060 align:start position:0%
+ 
+ 
+
+00:01:28.060 --> 00:01:30.530 align:start position:0%
+ 
+ 
+
+00:01:30.530 --> 00:01:32.000 align:start position:0%
+ 
+ 
+
+00:01:32.000 --> 00:01:33.859 align:start position:0%
+ 
+ 
+
+00:01:33.859 --> 00:01:36.200 align:start position:0%
+ 
+ 
+
+00:01:36.200 --> 00:01:38.600 align:start position:0%
+ 
+ 
+
+00:01:38.600 --> 00:01:40.490 align:start position:0%
+ 
+ 
+
+00:01:40.490 --> 00:01:42.469 align:start position:0%
+ 
+ 
+
+00:01:42.469 --> 00:01:43.760 align:start position:0%
+ 
+ 
+
+00:01:43.760 --> 00:01:46.609 align:start position:0%
+ 
+ 
+
+00:01:46.609 --> 00:01:50.590 align:start position:0%
+ 
+ 
+
+00:01:50.590 --> 00:01:52.460 align:start position:0%
+ 
+ 
+
+00:01:52.460 --> 00:01:53.630 align:start position:0%
+ 
+ 
+
+00:01:53.630 --> 00:01:56.210 align:start position:0%
+ 
+ 
+
+00:01:56.210 --> 00:02:01.190 align:start position:0%
+ 
+ 
+
+00:02:01.190 --> 00:02:03.590 align:start position:0%
+ 
+ 
+
+00:02:03.590 --> 00:02:08.600 align:start position:0%
+ 
+ 
+
+00:02:08.600 --> 00:02:11.750 align:start position:0%
+ 
+ 
+
+00:02:11.750 --> 00:02:13.320 align:start position:0%
+ 
+ 
+
+00:02:13.320 --> 00:02:16.710 align:start position:0%
+ 
+ 
+
+00:02:16.710 --> 00:02:19.110 align:start position:0%
+ 
+ 
+
+00:02:19.110 --> 00:02:21.960 align:start position:0%
+ 
+ 
+
+00:02:21.960 --> 00:02:25.860 align:start position:0%
+ 
+ 
+
+00:02:25.860 --> 00:02:27.930 align:start position:0%
+ 
+ 
+
+00:02:27.930 --> 00:02:32.130 align:start position:0%
+ 
+ 
+
+00:02:32.130 --> 00:02:33.300 align:start position:0%
+ 
+ 
+
+00:02:33.300 --> 00:02:37.590 align:start position:0%
+ 
+ 
+
+00:02:37.590 --> 00:02:44.220 align:start position:0%
+ 
+ 
+
+00:02:44.220 --> 00:02:47.400 align:start position:0%
+ 
+ 
+
+00:02:47.400 --> 00:02:48.720 align:start position:0%
+ 
+ 
+
+00:02:48.720 --> 00:02:52.520 align:start position:0%
+ 
+ 
+
+00:02:52.520 --> 00:02:55.920 align:start position:0%
+ 
+ 
+
+00:02:55.920 --> 00:02:57.930 align:start position:0%
+ 
+ 
+
+00:02:57.930 --> 00:03:00.630 align:start position:0%
+ 
+ 
+
+00:03:00.630 --> 00:03:02.220 align:start position:0%
+ 
+ 
+
+00:03:02.220 --> 00:03:04.080 align:start position:0%
+ 
+ 
+
+00:03:04.080 --> 00:03:06.540 align:start position:0%
+ 
+ 
+
+00:03:06.540 --> 00:03:08.460 align:start position:0%
+ 
+ 
+
+00:03:08.460 --> 00:03:12.290 align:start position:0%
+ 
+ 
+
+00:03:12.290 --> 00:03:15.300 align:start position:0%
+ 
+ 
+
+00:03:15.300 --> 00:03:17.460 align:start position:0%
+ 
+ 
+
+00:03:17.460 --> 00:03:20.550 align:start position:0%
+ 
+ 
+
+00:03:20.550 --> 00:03:22.320 align:start position:0%
+ 
+ 
+
+00:03:22.320 --> 00:03:23.910 align:start position:0%
+ 
+ 
+
+00:03:23.910 --> 00:03:25.650 align:start position:0%
+ 
+ 
+
+00:03:25.650 --> 00:03:27.449 align:start position:0%
+ 
+ 
+
+00:03:27.449 --> 00:03:32.640 align:start position:0%
+ 
+ 
+
+00:03:32.640 --> 00:03:33.180 align:start position:0%
+ 
+ 
+
+00:03:33.180 --> 00:03:36.270 align:start position:0%
+ 
+ 
+
+00:03:36.270 --> 00:03:42.440 align:start position:0%
+ 
+ 
+
+00:03:42.440 --> 00:03:45.090 align:start position:0%
+ 
+ 
+
+00:03:45.090 --> 00:03:47.130 align:start position:0%
+ 
+ 
+
+00:03:47.130 --> 00:03:49.620 align:start position:0%
+ 
+ 
+
+00:03:49.620 --> 00:03:52.110 align:start position:0%
+ 
+ 
+
+00:03:52.110 --> 00:03:57.180 align:start position:0%
+ 
+ 
+
+00:03:57.180 --> 00:03:58.860 align:start position:0%
+ 
+ 
+
+00:03:58.860 --> 00:04:00.660 align:start position:0%
+ 
+ 
+
+00:04:00.660 --> 00:04:02.010 align:start position:0%
+ 
+ 
+
+00:04:02.010 --> 00:04:04.200 align:start position:0%
+ 
+ 
+
+00:04:04.200 --> 00:04:07.290 align:start position:0%
+ 
+ 
+
+00:04:07.290 --> 00:04:10.110 align:start position:0%
+ 
+ 
+
+00:04:10.110 --> 00:04:12.230 align:start position:0%
+ 
+ 
+
+00:04:12.230 --> 00:04:16.080 align:start position:0%
+ 
+ 
+
+00:04:16.080 --> 00:04:17.970 align:start position:0%
+ 
+ 
+
+00:04:17.970 --> 00:04:20.610 align:start position:0%
+ 
+ 
+
+00:04:20.610 --> 00:04:23.840 align:start position:0%
+ 
+ 
+
+00:04:23.840 --> 00:04:26.640 align:start position:0%
+ 
+ 
+
+00:04:26.640 --> 00:04:29.280 align:start position:0%
+ 
+ 
+
+00:04:29.280 --> 00:04:30.870 align:start position:0%
+ 
+ 
+
+00:04:30.870 --> 00:04:32.550 align:start position:0%
+ 
+ 
+
+00:04:32.550 --> 00:04:34.500 align:start position:0%
+ 
+ 
+
+00:04:34.500 --> 00:04:37.920 align:start position:0%
+ 
+ 
+
+00:04:37.920 --> 00:04:40.710 align:start position:0%
+ 
+ 
+
+00:04:40.710 --> 00:04:41.910 align:start position:0%
+ 
+ 
+
+00:04:41.910 --> 00:04:44.520 align:start position:0%
+ 
+ 
+
+00:04:44.520 --> 00:04:47.310 align:start position:0%
+ 
+ 
+
+00:04:47.310 --> 00:04:49.170 align:start position:0%
+ 
+ 
+
+00:04:49.170 --> 00:04:51.930 align:start position:0%
+ 
+ 
+
+00:04:51.930 --> 00:04:55.500 align:start position:0%
+ 
+ 
+
+00:04:55.500 --> 00:04:57.030 align:start position:0%
+ 
+ 
+
+00:04:57.030 --> 00:04:59.130 align:start position:0%
+ 
+ 
+
+00:04:59.130 --> 00:05:01.440 align:start position:0%
+ 
+ 
+
+00:05:01.440 --> 00:05:04.230 align:start position:0%
+ 
+ 
+
+00:05:04.230 --> 00:05:05.730 align:start position:0%
+ 
+ 
+
+00:05:05.730 --> 00:05:09.930 align:start position:0%
+ 
+ 
+
+00:05:09.930 --> 00:05:12.660 align:start position:0%
+ 
+ 
+
+00:05:12.660 --> 00:05:16.290 align:start position:0%
+ 
+ 
+
+00:05:16.290 --> 00:05:18.630 align:start position:0%
+ 
+ 
+
+00:05:18.630 --> 00:05:21.690 align:start position:0%
+ 
+ 
+
+00:05:21.690 --> 00:05:24.780 align:start position:0%
+ 
+ 
+
+00:05:24.780 --> 00:05:27.690 align:start position:0%
+ 
+ 
+
+00:05:27.690 --> 00:05:29.370 align:start position:0%
+ 
+ 
+
+00:05:29.370 --> 00:05:31.290 align:start position:0%
+ 
+ 
+
+00:05:31.290 --> 00:05:33.750 align:start position:0%
+ 
+ 
+
+00:05:33.750 --> 00:05:35.970 align:start position:0%
+ 
+ 
+
+00:05:35.970 --> 00:05:37.710 align:start position:0%
+ 
+ 
+
+00:05:37.710 --> 00:05:40.470 align:start position:0%
+ 
+ 
+
+00:05:40.470 --> 00:05:42.930 align:start position:0%
+ 
+ 
+
+00:05:42.930 --> 00:05:44.760 align:start position:0%
+ 
+ 
+
+00:05:44.760 --> 00:05:46.980 align:start position:0%
+ 
+ 
+
+00:05:46.980 --> 00:05:49.230 align:start position:0%
+ 
+ 
+
+00:05:49.230 --> 00:05:50.820 align:start position:0%
+ 
+ 
+
+00:05:50.820 --> 00:05:53.550 align:start position:0%
+ 
+ 
+
+00:05:53.550 --> 00:05:55.080 align:start position:0%
+ 
+ 
+
+00:05:55.080 --> 00:05:55.090 align:start position:0%
+ 
+ 
+
+00:05:55.090 --> 00:06:00.320 align:start position:0%
+ 
+
+
+00:06:00.320 --> 00:06:07.110 align:start position:0%
+ 
+ 
+
+00:06:07.110 --> 00:06:10.650 align:start position:0%
+ 
+ 
+
+00:06:10.650 --> 00:06:12.930 align:start position:0%
+ 
+ 
+
+00:06:12.930 --> 00:06:14.640 align:start position:0%
+ 
+ 
+
+00:06:14.640 --> 00:06:15.810 align:start position:0%
+ 
+ 
+
+00:06:15.810 --> 00:06:19.020 align:start position:0%
+ 
+ 
+
+00:06:19.020 --> 00:06:20.850 align:start position:0%
+ 
+ 
+
+00:06:20.850 --> 00:06:24.629 align:start position:0%
+ 
+ 
+
+00:06:24.629 --> 00:06:27.180 align:start position:0%
+ 
+ 
+
+00:06:27.180 --> 00:06:29.969 align:start position:0%
+ 
+ 
+
+00:06:29.969 --> 00:06:34.469 align:start position:0%
+ 
+ 
+
+00:06:34.469 --> 00:06:38.279 align:start position:0%
+ 
+ 
+
+00:06:38.279 --> 00:06:41.670 align:start position:0%
+ 
+ 
+
+00:06:41.670 --> 00:06:43.439 align:start position:0%
+ 
+ 
+
+00:06:43.439 --> 00:06:45.000 align:start position:0%
+ 
+ 
+
+00:06:45.000 --> 00:06:47.490 align:start position:0%
+ 
+ 
+
+00:06:47.490 --> 00:06:49.560 align:start position:0%
+ 
+ 
+
+00:06:49.560 --> 00:06:51.210 align:start position:0%
+ 
+ 
+
+00:06:51.210 --> 00:06:54.719 align:start position:0%
+ 
+ 
+
+00:06:54.719 --> 00:06:56.490 align:start position:0%
+ 
+ 
+
+00:06:56.490 --> 00:06:59.189 align:start position:0%
+ 
+ 
+
+00:06:59.189 --> 00:07:01.290 align:start position:0%
+ 
+ 
+
+00:07:01.290 --> 00:07:02.879 align:start position:0%
+ 
+ 
+
+00:07:02.879 --> 00:07:07.670 align:start position:0%
+ 
+ 
+
+00:07:07.670 --> 00:07:12.120 align:start position:0%
+ 
+ 
+
+00:07:12.120 --> 00:07:14.399 align:start position:0%
+ 
+ 
+
+00:07:14.399 --> 00:07:16.350 align:start position:0%
+ 
+ 
+
+00:07:16.350 --> 00:07:17.820 align:start position:0%
+ 
+ 
+
+00:07:17.820 --> 00:07:19.830 align:start position:0%
+ 
+ 
+
+00:07:19.830 --> 00:07:21.240 align:start position:0%
+ 
+ 
+
+00:07:21.240 --> 00:07:23.370 align:start position:0%
+ 
+ 
+
+00:07:23.370 --> 00:07:24.930 align:start position:0%
+ 
+ 
+
+00:07:24.930 --> 00:07:28.140 align:start position:0%
+ 
+ 
+
+00:07:28.140 --> 00:07:30.000 align:start position:0%
+ 
+ 
+
+00:07:30.000 --> 00:07:32.040 align:start position:0%
+ 
+ 
+
+00:07:32.040 --> 00:07:33.960 align:start position:0%
+ 
+ 
+
+00:07:33.960 --> 00:07:36.029 align:start position:0%
+ 
+ 
+
+00:07:36.029 --> 00:07:37.200 align:start position:0%
+ 
+ 
+
+00:07:37.200 --> 00:07:41.129 align:start position:0%
+ 
+ 
+
+00:07:41.129 --> 00:07:44.100 align:start position:0%
+ 
+ 
+
+00:07:44.100 --> 00:07:47.909 align:start position:0%
+ 
+ 
+
+00:07:47.909 --> 00:07:49.710 align:start position:0%
+ 
+ 
+
+00:07:49.710 --> 00:07:51.120 align:start position:0%
+ 
+ 
+
+00:07:51.120 --> 00:07:52.560 align:start position:0%
+ 
+ 
+
+00:07:52.560 --> 00:07:54.240 align:start position:0%
+ 
+ 
+
+00:07:54.240 --> 00:07:56.909 align:start position:0%
+ 
+ 
+
+00:07:56.909 --> 00:08:00.810 align:start position:0%
+ 
+ 
+
+00:08:00.810 --> 00:08:03.779 align:start position:0%
+ 
+ 
+
+00:08:03.779 --> 00:08:05.550 align:start position:0%
+ 
+ 
+
+00:08:05.550 --> 00:08:07.399 align:start position:0%
+ 
+ 
+
+00:08:07.399 --> 00:08:09.739 align:start position:0%
+ 
+ 
+
+00:08:09.739 --> 00:08:10.969 align:start position:0%
+ 
+ 
+
+00:08:10.969 --> 00:08:18.619 align:start position:0%
+ 
+ 
+
+00:08:18.619 --> 00:08:21.229 align:start position:0%
+ 
+ 
+
+00:08:21.229 --> 00:08:25.699 align:start position:0%
+ 
+ 
+
+00:08:25.699 --> 00:08:27.320 align:start position:0%
+ 
+ 
+
+00:08:27.320 --> 00:08:28.999 align:start position:0%
+ 
+ 
+
+00:08:28.999 --> 00:08:30.679 align:start position:0%
+ 
+ 
+
+00:08:30.679 --> 00:08:32.629 align:start position:0%
+ 
+ 
+
+00:08:32.629 --> 00:08:34.369 align:start position:0%
+ 
+ 
+
+00:08:34.369 --> 00:08:35.420 align:start position:0%
+ 
+ 
+
+00:08:35.420 --> 00:08:37.100 align:start position:0%
+ 
+ 
+
+00:08:37.100 --> 00:08:39.619 align:start position:0%
+ 
+ 
+
+00:08:39.619 --> 00:08:40.699 align:start position:0%
+ 
+ 
+
+00:08:40.699 --> 00:08:43.219 align:start position:0%
+ 
+ 
+
+00:08:43.219 --> 00:08:44.900 align:start position:0%
+ 
+ 
+
+00:08:44.900 --> 00:08:47.269 align:start position:0%
+ 
+ 
+
+00:08:47.269 --> 00:08:51.400 align:start position:0%
+ 
+ 
+
+00:08:51.400 --> 00:08:54.679 align:start position:0%
+ 
+ 
+
+00:08:54.679 --> 00:08:57.769 align:start position:0%
+ 
+ 
+
+00:08:57.769 --> 00:08:59.090 align:start position:0%
+ 
+ 
+
+00:08:59.090 --> 00:09:01.519 align:start position:0%
+ 
+ 
+
+00:09:01.519 --> 00:09:02.900 align:start position:0%
+ 
+ 
+
+00:09:02.900 --> 00:09:04.340 align:start position:0%
+ 
+ 
+
+00:09:04.340 --> 00:09:06.470 align:start position:0%
+ 
+ 
+
+00:09:06.470 --> 00:09:07.970 align:start position:0%
+ 
+ 
+
+00:09:07.970 --> 00:09:10.280 align:start position:0%
+ 
+ 
+
+00:09:10.280 --> 00:09:11.569 align:start position:0%
+ 
+ 
+
+00:09:11.569 --> 00:09:17.090 align:start position:0%
+ 
+ 
+
+00:09:17.090 --> 00:09:20.150 align:start position:0%
+ 
+ 
+
+00:09:20.150 --> 00:09:22.370 align:start position:0%
+ 
+ 
+
+00:09:22.370 --> 00:09:23.929 align:start position:0%
+ 
+ 
+
+00:09:23.929 --> 00:09:26.809 align:start position:0%
+ 
+ 
+
+00:09:26.809 --> 00:09:28.939 align:start position:0%
+ 
+ 
+
+00:09:28.939 --> 00:09:31.220 align:start position:0%
+ 
+ 
+
+00:09:31.220 --> 00:09:32.990 align:start position:0%
+ 
+ 
+
+00:09:32.990 --> 00:09:35.480 align:start position:0%
+ 
+ 
+
+00:09:35.480 --> 00:09:36.980 align:start position:0%
+ 
+ 
+
+00:09:36.980 --> 00:09:38.990 align:start position:0%
+ 
+ 
+
+00:09:38.990 --> 00:09:42.410 align:start position:0%
+ 
+ 
+
+00:09:42.410 --> 00:09:44.030 align:start position:0%
+ 
+ 
+
+00:09:44.030 --> 00:09:46.550 align:start position:0%
+ 
+ 
+
+00:09:46.550 --> 00:09:48.290 align:start position:0%
+ 
+ 
+
+00:09:48.290 --> 00:09:49.550 align:start position:0%
+ 
+ 
+
+00:09:49.550 --> 00:09:51.590 align:start position:0%
+ 
+ 
+
+00:09:51.590 --> 00:09:54.470 align:start position:0%
+ 
+ 
+
+00:09:54.470 --> 00:09:55.759 align:start position:0%
+ 
+ 
+
+00:09:55.759 --> 00:09:57.799 align:start position:0%
+ 
+ 
+
+00:09:57.799 --> 00:09:59.360 align:start position:0%
+ 
+ 
+
+00:09:59.360 --> 00:10:00.980 align:start position:0%
+ 
+ 
+
+00:10:00.980 --> 00:10:03.710 align:start position:0%
+ 
+ 
+
+00:10:03.710 --> 00:10:07.069 align:start position:0%
+ 
+ 
+
+00:10:07.069 --> 00:10:10.999 align:start position:0%
+ 
+ 
+
+00:10:10.999 --> 00:10:13.069 align:start position:0%
+ 
+ 
+
+00:10:13.069 --> 00:10:15.769 align:start position:0%
+ 
+ 
+
+00:10:15.769 --> 00:10:18.110 align:start position:0%
+ 
+ 
+
+00:10:18.110 --> 00:10:21.110 align:start position:0%
+ 
+ 
+
+00:10:21.110 --> 00:10:23.059 align:start position:0%
+ 
+ 
+
+00:10:23.059 --> 00:10:26.600 align:start position:0%
+ 
+ 
+
+00:10:26.600 --> 00:10:29.360 align:start position:0%
+ 
+ 
+
+00:10:29.360 --> 00:10:31.400 align:start position:0%
+ 
+ 
+
+00:10:31.400 --> 00:10:34.519 align:start position:0%
+ 
+ 
+
+00:10:34.519 --> 00:10:35.389 align:start position:0%
+ 
+ 
+
+00:10:35.389 --> 00:10:38.059 align:start position:0%
+ 
+ 
+
+00:10:38.059 --> 00:10:41.420 align:start position:0%
+ 
+ 
+
+00:10:41.420 --> 00:10:43.999 align:start position:0%
+ 
+ 
+
+00:10:43.999 --> 00:10:45.499 align:start position:0%
+ 
+ 
+
+00:10:45.499 --> 00:10:46.879 align:start position:0%
+ 
+ 
+
+00:10:46.879 --> 00:10:48.139 align:start position:0%
+ 
+ 
+
+00:10:48.139 --> 00:10:50.299 align:start position:0%
+ 
+ 
+
+00:10:50.299 --> 00:10:53.090 align:start position:0%
+ 
+ 
+
+00:10:53.090 --> 00:10:54.499 align:start position:0%
+ 
+ 
+
+00:10:54.499 --> 00:10:58.280 align:start position:0%
+ 
+ 
+
+00:10:58.280 --> 00:10:59.989 align:start position:0%
+ 
+ 
+
+00:10:59.989 --> 00:11:02.210 align:start position:0%
+ 
+ 
+
+00:11:02.210 --> 00:11:03.590 align:start position:0%
+ 
+ 
+
+00:11:03.590 --> 00:11:05.660 align:start position:0%
+ 
+ 
+
+00:11:05.660 --> 00:11:07.519 align:start position:0%
+ 
+ 
+
+00:11:07.519 --> 00:11:12.319 align:start position:0%
+ 
+ 
+
+00:11:12.319 --> 00:11:15.110 align:start position:0%
+ 
+ 
+
+00:11:15.110 --> 00:11:19.790 align:start position:0%
+ 
+ 
+
+00:11:19.790 --> 00:11:21.619 align:start position:0%
+ 
+ 
+
+00:11:21.619 --> 00:11:23.989 align:start position:0%
+ 
+ 
+
+00:11:23.989 --> 00:11:25.429 align:start position:0%
+ 
+ 
+
+00:11:25.429 --> 00:11:26.840 align:start position:0%
+ 
+ 
+
+00:11:26.840 --> 00:11:28.939 align:start position:0%
+ 
+ 
+
+00:11:28.939 --> 00:11:31.369 align:start position:0%
+ 
+ 
+
+00:11:31.369 --> 00:11:35.150 align:start position:0%
+ 
+ 
+
+00:11:35.150 --> 00:11:37.129 align:start position:0%
+ 
+ 
+
+00:11:37.129 --> 00:11:38.689 align:start position:0%
+ 
+ 
+
+00:11:38.689 --> 00:11:41.509 align:start position:0%
+ 
+ 
+
+00:11:41.509 --> 00:11:45.559 align:start position:0%
+ 
+ 
+
+00:11:45.559 --> 00:11:47.179 align:start position:0%
+ 
+ 
+
+00:11:47.179 --> 00:11:49.999 align:start position:0%
+ 
+ 
+
+00:11:49.999 --> 00:11:52.939 align:start position:0%
+ 
+ 
+
+00:11:52.939 --> 00:11:55.309 align:start position:0%
+ 
+ 
+
+00:11:55.309 --> 00:11:58.429 align:start position:0%
+ 
+ 
+
+00:11:58.429 --> 00:12:01.040 align:start position:0%
+ 
+ 
+
+00:12:01.040 --> 00:12:02.600 align:start position:0%
+ 
+ 
+
+00:12:02.600 --> 00:12:03.919 align:start position:0%
+ 
+ 
+
+00:12:03.919 --> 00:12:06.410 align:start position:0%
+ 
+ 
+
+00:12:06.410 --> 00:12:08.660 align:start position:0%
+ 
+ 
+
+00:12:08.660 --> 00:12:14.140 align:start position:0%
+ 
+ 
+
+00:12:14.140 --> 00:12:17.079 align:start position:0%
+ 
+ 
+
+00:12:17.079 --> 00:12:18.370 align:start position:0%
+ 
+ 
+
+00:12:18.370 --> 00:12:21.070 align:start position:0%
+ 
+ 
+
+00:12:21.070 --> 00:12:22.480 align:start position:0%
+ 
+ 
+
+00:12:22.480 --> 00:12:25.030 align:start position:0%
+ 
+ 
+
+00:12:25.030 --> 00:12:27.760 align:start position:0%
+ 
+ 
+
+00:12:27.760 --> 00:12:30.280 align:start position:0%
+ 
+ 
+
+00:12:30.280 --> 00:12:31.750 align:start position:0%
+ 
+ 
+
+00:12:31.750 --> 00:12:34.600 align:start position:0%
+ 
+ 
+
+00:12:34.600 --> 00:12:37.480 align:start position:0%
+ 
+ 
+
+00:12:37.480 --> 00:12:41.890 align:start position:0%
+ 
+ 
+
+00:12:41.890 --> 00:12:45.040 align:start position:0%
+ 
+ 
+
+00:12:45.040 --> 00:12:47.890 align:start position:0%
+ 
+ 
+
+00:12:47.890 --> 00:12:51.579 align:start position:0%
+ 
+ 
+
+00:12:51.579 --> 00:12:55.120 align:start position:0%
+ 
+ 
+
+00:12:55.120 --> 00:12:56.890 align:start position:0%
+ 
+ 
+
+00:12:56.890 --> 00:12:58.930 align:start position:0%
+ 
+ 
+
+00:12:58.930 --> 00:13:02.110 align:start position:0%
+ 
+ 
+
+00:13:02.110 --> 00:13:03.790 align:start position:0%
+ 
+ 
+
+00:13:03.790 --> 00:13:05.290 align:start position:0%
+ 
+ 
+
+00:13:05.290 --> 00:13:07.600 align:start position:0%
+ 
+ 
+
+00:13:07.600 --> 00:13:09.850 align:start position:0%
+ 
+ 
+
+00:13:09.850 --> 00:13:15.579 align:start position:0%
+ 
+ 
+
+00:13:15.579 --> 00:13:17.110 align:start position:0%
+ 
+ 
+
+00:13:17.110 --> 00:13:19.930 align:start position:0%
+ 
+ 
+
+00:13:19.930 --> 00:13:23.740 align:start position:0%
+ 
+ 
+
+00:13:23.740 --> 00:13:26.949 align:start position:0%
+ 
+ 
+
+00:13:26.949 --> 00:13:29.800 align:start position:0%
+ 
+ 
+
+00:13:29.800 --> 00:13:32.650 align:start position:0%
+ 
+ 
+
+00:13:32.650 --> 00:13:35.290 align:start position:0%
+ 
+ 
+
+00:13:35.290 --> 00:13:36.579 align:start position:0%
+ 
+ 
+
+00:13:36.579 --> 00:13:39.790 align:start position:0%
+ 
+ 
+
+00:13:39.790 --> 00:13:43.150 align:start position:0%
+ 
+ 
+
+00:13:43.150 --> 00:13:47.250 align:start position:0%
+ 
+ 
+
+00:13:47.250 --> 00:13:50.280 align:start position:0%
+ 
+ 
+
+00:13:50.280 --> 00:13:57.780 align:start position:0%
+ 
+ 
+
+00:13:57.780 --> 00:14:00.010 align:start position:0%
+ 
+ 
+
+00:14:00.010 --> 00:14:02.050 align:start position:0%
+ 
+ 
+
+00:14:02.050 --> 00:14:04.600 align:start position:0%
+ 
+ 
+
+00:14:04.600 --> 00:14:06.850 align:start position:0%
+ 
+ 
+
+00:14:06.850 --> 00:14:08.890 align:start position:0%
+ 
+ 
+
+00:14:08.890 --> 00:14:10.269 align:start position:0%
+ 
+ 
+
+00:14:10.269 --> 00:14:13.720 align:start position:0%
+ 
+ 
+
+00:14:13.720 --> 00:14:15.930 align:start position:0%
+ 
+ 
+
+00:14:15.930 --> 00:14:18.370 align:start position:0%
+ 
+ 
+
+00:14:18.370 --> 00:14:22.210 align:start position:0%
+ 
+ 
+
+00:14:22.210 --> 00:14:24.340 align:start position:0%
+ 
+ 
+
+00:14:24.340 --> 00:14:26.260 align:start position:0%
+ 
+ 
+
+00:14:26.260 --> 00:14:27.940 align:start position:0%
+ 
+ 
+
+00:14:27.940 --> 00:14:30.820 align:start position:0%
+ 
+ 
+
+00:14:30.820 --> 00:14:32.620 align:start position:0%
+ 
+ 
+
+00:14:32.620 --> 00:14:34.690 align:start position:0%
+ 
+ 
+
+00:14:34.690 --> 00:14:37.090 align:start position:0%
+ 
+ 
+
+00:14:37.090 --> 00:14:39.700 align:start position:0%
+ 
+ 
+
+00:14:39.700 --> 00:14:41.920 align:start position:0%
+ 
+ 
+
+00:14:41.920 --> 00:14:43.660 align:start position:0%
+ 
+ 
+
+00:14:43.660 --> 00:14:45.700 align:start position:0%
+ 
+ 
+
+00:14:45.700 --> 00:14:51.250 align:start position:0%
+ 
+ 
+
+00:14:51.250 --> 00:14:54.040 align:start position:0%
+ 
+ 
+
+00:14:54.040 --> 00:14:56.140 align:start position:0%
+ 
+ 
+
+00:14:56.140 --> 00:14:57.460 align:start position:0%
+ 
+ 
+
+00:14:57.460 --> 00:14:59.650 align:start position:0%
+ 
+ 
+
+00:14:59.650 --> 00:15:02.410 align:start position:0%
+ 
+ 
+
+00:15:02.410 --> 00:15:03.910 align:start position:0%
+ 
+ 
+
+00:15:03.910 --> 00:15:05.860 align:start position:0%
+ 
+ 
+
+00:15:05.860 --> 00:15:08.590 align:start position:0%
+ 
+ 
+
+00:15:08.590 --> 00:15:10.510 align:start position:0%
+ 
+ 
+
+00:15:10.510 --> 00:15:12.610 align:start position:0%
+ 
+ 
+
+00:15:12.610 --> 00:15:13.870 align:start position:0%
+ 
+ 
+
+00:15:13.870 --> 00:15:15.990 align:start position:0%
+ 
+ 
+
+00:15:15.990 --> 00:15:18.310 align:start position:0%
+ 
+ 
+
+00:15:18.310 --> 00:15:21.940 align:start position:0%
+ 
+ 
+
+00:15:21.940 --> 00:15:23.860 align:start position:0%
+ 
+ 
+
+00:15:23.860 --> 00:15:26.890 align:start position:0%
+ 
+ 
+
+00:15:26.890 --> 00:15:29.650 align:start position:0%
+ 
+ 
+
+00:15:29.650 --> 00:15:31.240 align:start position:0%
+ 
+ 
+
+00:15:31.240 --> 00:15:33.490 align:start position:0%
+ 
+ 
+
+00:15:33.490 --> 00:15:36.490 align:start position:0%
+ 
+ 
+
+00:15:36.490 --> 00:15:37.720 align:start position:0%
+ 
+ 
+
+00:15:37.720 --> 00:15:42.070 align:start position:0%
+ 
+ 
+
+00:15:42.070 --> 00:15:44.190 align:start position:0%
+ 
+ 
+
+00:15:44.190 --> 00:15:46.690 align:start position:0%
+ 
+ 
+
+00:15:46.690 --> 00:15:49.090 align:start position:0%
+ 
+ 
+
+00:15:49.090 --> 00:15:51.190 align:start position:0%
+ 
+ 
+
+00:15:51.190 --> 00:15:53.380 align:start position:0%
+ 
+ 
+
+00:15:53.380 --> 00:15:57.190 align:start position:0%
+ 
+ 
+
+00:15:57.190 --> 00:16:02.880 align:start position:0%
+ 
+ 
+
+00:16:02.880 --> 00:16:05.860 align:start position:0%
+ 
+ 
+
+00:16:05.860 --> 00:16:09.330 align:start position:0%
+ 
+ 
+
+00:16:09.330 --> 00:16:14.020 align:start position:0%
+ 
+ 
+
+00:16:14.020 --> 00:16:15.970 align:start position:0%
+ 
+ 
+
+00:16:15.970 --> 00:16:19.780 align:start position:0%
+ 
+ 
+
+00:16:19.780 --> 00:16:23.230 align:start position:0%
+ 
+ 
+
+00:16:23.230 --> 00:16:26.020 align:start position:0%
+ 
+ 
+
+00:16:26.020 --> 00:16:28.360 align:start position:0%
+ 
+ 
+
+00:16:28.360 --> 00:16:29.590 align:start position:0%
+ 
+ 
+
+00:16:29.590 --> 00:16:34.330 align:start position:0%
+ 
+ 
+
+00:16:34.330 --> 00:16:37.270 align:start position:0%
+ 
+ 
+
+00:16:37.270 --> 00:16:40.690 align:start position:0%
+ 
+ 
+
+00:16:40.690 --> 00:16:42.370 align:start position:0%
+ 
+ 
+
+00:16:42.370 --> 00:16:46.390 align:start position:0%
+ 
+ 
+
+00:16:46.390 --> 00:16:50.440 align:start position:0%
+ 
+ 
+
+00:16:50.440 --> 00:16:53.470 align:start position:0%
+ 
+ 
+
+00:16:53.470 --> 00:16:55.150 align:start position:0%
+ 
+ 
+
+00:16:55.150 --> 00:16:57.760 align:start position:0%
+ 
+ 
+
+00:16:57.760 --> 00:16:59.260 align:start position:0%
+ 
+ 
+
+00:16:59.260 --> 00:17:00.970 align:start position:0%
+ 
+ 
+
+00:17:00.970 --> 00:17:03.940 align:start position:0%
+ 
+ 
+
+00:17:03.940 --> 00:17:05.980 align:start position:0%
+ 
+ 
+
+00:17:05.980 --> 00:17:08.890 align:start position:0%
+ 
+ 
+
+00:17:08.890 --> 00:17:10.510 align:start position:0%
+ 
+ 
+
+00:17:10.510 --> 00:17:12.370 align:start position:0%
+ 
+ 
+
+00:17:12.370 --> 00:17:15.760 align:start position:0%
+ 
+ 
+
+00:17:15.760 --> 00:17:16.570 align:start position:0%
+ 
+ 
+
+00:17:16.570 --> 00:17:19.330 align:start position:0%
+ 
+ 
+
+00:17:19.330 --> 00:17:22.690 align:start position:0%
+ 
+ 
+
+00:17:22.690 --> 00:17:25.060 align:start position:0%
+ 
+ 
+
+00:17:25.060 --> 00:17:28.480 align:start position:0%
+ 
+ 
+
+00:17:28.480 --> 00:17:30.640 align:start position:0%
+ 
+ 
+
+00:17:30.640 --> 00:17:32.920 align:start position:0%
+ 
+ 
+
+00:17:32.920 --> 00:17:36.910 align:start position:0%
+ 
+ 
+
+00:17:36.910 --> 00:17:38.710 align:start position:0%
+ 
+ 
+
+00:17:38.710 --> 00:17:40.870 align:start position:0%
+ 
+ 
+
+00:17:40.870 --> 00:17:42.700 align:start position:0%
+ 
+ 
+
+00:17:42.700 --> 00:17:45.400 align:start position:0%
+ 
+ 
+
+00:17:45.400 --> 00:17:50.110 align:start position:0%
+ 
+ 
+
+00:17:50.110 --> 00:17:52.510 align:start position:0%
+ 
+ 
+
+00:17:52.510 --> 00:17:54.250 align:start position:0%
+ 
+ 
+
+00:17:54.250 --> 00:17:56.530 align:start position:0%
+ 
+ 
+
+00:17:56.530 --> 00:18:00.060 align:start position:0%
+ 
+ 
+
+00:18:00.060 --> 00:18:02.620 align:start position:0%
+ 
+ 
+
+00:18:02.620 --> 00:18:04.240 align:start position:0%
+ 
+ 
+
+00:18:04.240 --> 00:18:07.540 align:start position:0%
+ 
+ 
+
+00:18:07.540 --> 00:18:09.760 align:start position:0%
+ 
+ 
+
+00:18:09.760 --> 00:18:12.100 align:start position:0%
+ 
+ 
+
+00:18:12.100 --> 00:18:13.720 align:start position:0%
+ 
+ 
+
+00:18:13.720 --> 00:18:14.740 align:start position:0%
+ 
+ 
+
+00:18:14.740 --> 00:18:17.800 align:start position:0%
+ 
+ 
+
+00:18:17.800 --> 00:18:19.120 align:start position:0%
+ 
+ 
+
+00:18:19.120 --> 00:18:21.300 align:start position:0%
+ 
+ 
+
+00:18:21.300 --> 00:18:24.010 align:start position:0%
+ 
+ 
+
+00:18:24.010 --> 00:18:26.890 align:start position:0%
+ 
+ 
+
+00:18:26.890 --> 00:18:29.740 align:start position:0%
+ 
+ 
+
+00:18:29.740 --> 00:18:31.270 align:start position:0%
+ 
+ 
+
+00:18:31.270 --> 00:18:33.970 align:start position:0%
+ 
+ 
+
+00:18:33.970 --> 00:18:36.190 align:start position:0%
+ 
+ 
+
+00:18:36.190 --> 00:18:40.330 align:start position:0%
+ 
+ 
+
+00:18:40.330 --> 00:18:41.950 align:start position:0%
+ 
+ 
+
+00:18:41.950 --> 00:18:45.730 align:start position:0%
+ 
+ 
+
+00:18:45.730 --> 00:18:47.980 align:start position:0%
+ 
+ 
+
+00:18:47.980 --> 00:18:49.350 align:start position:0%
+ 
+ 
+
+00:18:49.350 --> 00:18:52.900 align:start position:0%
+ 
+ 
+
+00:18:52.900 --> 00:18:55.000 align:start position:0%
+ 
+ 
+
+00:18:55.000 --> 00:18:57.190 align:start position:0%
+ 
+ 
+
+00:18:57.190 --> 00:18:59.370 align:start position:0%
+ 
+ 
+
+00:18:59.370 --> 00:19:03.670 align:start position:0%
+ 
+ 
+
+00:19:03.670 --> 00:19:05.950 align:start position:0%
+ 
+ 
+
+00:19:05.950 --> 00:19:07.840 align:start position:0%
+ 
+ 
+
+00:19:07.840 --> 00:19:11.080 align:start position:0%
+ 
+ 
+
+00:19:11.080 --> 00:19:14.410 align:start position:0%
+ 
+ 
+
+00:19:14.410 --> 00:19:16.180 align:start position:0%
+ 
+ 
+
+00:19:16.180 --> 00:19:18.010 align:start position:0%
+ 
+ 
+
+00:19:18.010 --> 00:19:20.230 align:start position:0%
+ 
+ 
+
+00:19:20.230 --> 00:19:26.380 align:start position:0%
+ 
+ 
+
+00:19:26.380 --> 00:19:28.390 align:start position:0%
+ 
+ 
+
+00:19:28.390 --> 00:19:30.130 align:start position:0%
+ 
+ 
+
+00:19:30.130 --> 00:19:34.080 align:start position:0%
+ 
+ 
+
+00:19:34.080 --> 00:19:37.030 align:start position:0%
+ 
+ 
+
+00:19:37.030 --> 00:19:39.010 align:start position:0%
+ 
+ 
+
+00:19:39.010 --> 00:19:40.960 align:start position:0%
+ 
+ 
+
+00:19:40.960 --> 00:19:43.270 align:start position:0%
+ 
+ 
+
+00:19:43.270 --> 00:19:46.060 align:start position:0%
+ 
+ 
+
+00:19:46.060 --> 00:19:49.480 align:start position:0%
+ 
+ 
+
+00:19:49.480 --> 00:19:51.430 align:start position:0%
+ 
+ 
+
+00:19:51.430 --> 00:19:54.520 align:start position:0%
+ 
+ 
+
+00:19:54.520 --> 00:19:58.980 align:start position:0%
+ 
+ 
+
+00:19:58.980 --> 00:20:01.960 align:start position:0%
+ 
+ 
+
+00:20:01.960 --> 00:20:03.640 align:start position:0%
+ 
+ 
+
+00:20:03.640 --> 00:20:06.610 align:start position:0%
+ 
+ 
+
+00:20:06.610 --> 00:20:09.040 align:start position:0%
+ 
+ 
+
+00:20:09.040 --> 00:20:10.810 align:start position:0%
+ 
+ 
+
+00:20:10.810 --> 00:20:13.900 align:start position:0%
+ 
+ 
+
+00:20:13.900 --> 00:20:15.430 align:start position:0%
+ 
+ 
+
+00:20:15.430 --> 00:20:17.680 align:start position:0%
+ 
+ 
+
+00:20:17.680 --> 00:20:20.950 align:start position:0%
+ 
+ 
+
+00:20:20.950 --> 00:20:22.990 align:start position:0%
+ 
+ 
+
+00:20:22.990 --> 00:20:26.410 align:start position:0%
+ 
+ 
+
+00:20:26.410 --> 00:20:28.360 align:start position:0%
+ 
+ 
+
+00:20:28.360 --> 00:20:29.590 align:start position:0%
+ 
+ 
+
+00:20:29.590 --> 00:20:31.630 align:start position:0%
+ 
+ 
+
+00:20:31.630 --> 00:20:34.980 align:start position:0%
+ 
+ 
+
+00:20:34.980 --> 00:20:37.630 align:start position:0%
+ 
+ 
+
+00:20:37.630 --> 00:20:40.360 align:start position:0%
+ 
+ 
+
+00:20:40.360 --> 00:20:41.860 align:start position:0%
+ 
+ 
+
+00:20:41.860 --> 00:20:44.410 align:start position:0%
+ 
+ 
+
+00:20:44.410 --> 00:20:46.270 align:start position:0%
+ 
+ 
+
+00:20:46.270 --> 00:20:48.660 align:start position:0%
+ 
+ 
+
+00:20:48.660 --> 00:20:50.590 align:start position:0%
+ 
+ 
+
+00:20:50.590 --> 00:20:51.970 align:start position:0%
+ 
+ 
+
+00:20:51.970 --> 00:20:53.290 align:start position:0%
+ 
+ 
+
+00:20:53.290 --> 00:20:57.340 align:start position:0%
+ 
+ 
+
+00:20:57.340 --> 00:20:59.200 align:start position:0%
+ 
+ 
+
+00:20:59.200 --> 00:21:00.669 align:start position:0%
+ 
+ 
+
+00:21:00.669 --> 00:21:02.680 align:start position:0%
+ 
+ 
+
+00:21:02.680 --> 00:21:05.590 align:start position:0%
+ 
+ 
+
+00:21:05.590 --> 00:21:06.669 align:start position:0%
+ 
+ 
+
+00:21:06.669 --> 00:21:08.919 align:start position:0%
+ 
+ 
+
+00:21:08.919 --> 00:21:10.000 align:start position:0%
+ 
+ 
+
+00:21:10.000 --> 00:21:13.630 align:start position:0%
+ 
+ 
+
+00:21:13.630 --> 00:21:15.100 align:start position:0%
+ 
+ 
+
+00:21:15.100 --> 00:21:18.160 align:start position:0%
+ 
+ 
+
+00:21:18.160 --> 00:21:21.370 align:start position:0%
+ 
+ 
+
+00:21:21.370 --> 00:21:24.070 align:start position:0%
+ 
+ 
+
+00:21:24.070 --> 00:21:29.140 align:start position:0%
+ 
+ 
+
+00:21:29.140 --> 00:21:33.340 align:start position:0%
+ 
+ 
+
+00:21:33.340 --> 00:21:35.020 align:start position:0%
+ 
+ 
+
+00:21:35.020 --> 00:21:37.299 align:start position:0%
+ 
+ 
+
+00:21:37.299 --> 00:21:40.900 align:start position:0%
+ 
+ 
+
+00:21:40.900 --> 00:21:44.290 align:start position:0%
+ 
+ 
+
+00:21:44.290 --> 00:21:46.060 align:start position:0%
+ 
+ 
+
+00:21:46.060 --> 00:21:48.280 align:start position:0%
+ 
+ 
+
+00:21:48.280 --> 00:21:50.200 align:start position:0%
+ 
+ 
+
+00:21:50.200 --> 00:21:51.790 align:start position:0%
+ 
+ 
+
+00:21:51.790 --> 00:21:54.640 align:start position:0%
+ 
+ 
+
+00:21:54.640 --> 00:21:56.710 align:start position:0%
+ 
+ 
+
+00:21:56.710 --> 00:21:58.360 align:start position:0%
+ 
+ 
+
+00:21:58.360 --> 00:22:00.250 align:start position:0%
+ 
+ 
+
+00:22:00.250 --> 00:22:02.560 align:start position:0%
+ 
+ 
+
+00:22:02.560 --> 00:22:06.580 align:start position:0%
+ 
+ 
+
+00:22:06.580 --> 00:22:08.500 align:start position:0%
+ 
+ 
+
+00:22:08.500 --> 00:22:10.750 align:start position:0%
+ 
+ 
+
+00:22:10.750 --> 00:22:12.990 align:start position:0%
+ 
+ 
+
+00:22:12.990 --> 00:22:15.340 align:start position:0%
+ 
+ 
+
+00:22:15.340 --> 00:22:18.760 align:start position:0%
+ 
+ 
+
+00:22:18.760 --> 00:22:20.890 align:start position:0%
+ 
+ 
+
+00:22:20.890 --> 00:22:22.450 align:start position:0%
+ 
+ 
+
+00:22:22.450 --> 00:22:24.040 align:start position:0%
+ 
+ 
+
+00:22:24.040 --> 00:22:26.710 align:start position:0%
+ 
+ 
+
+00:22:26.710 --> 00:22:32.320 align:start position:0%
+ 
+ 
+
+00:22:32.320 --> 00:22:35.740 align:start position:0%
+ 
+ 
+
+00:22:35.740 --> 00:22:37.000 align:start position:0%
+ 
+ 
+
+00:22:37.000 --> 00:22:39.160 align:start position:0%
+ 
+ 
+
+00:22:39.160 --> 00:22:42.100 align:start position:0%
+ 
+ 
+
+00:22:42.100 --> 00:22:45.549 align:start position:0%
+ 
+ 
+
+00:22:45.549 --> 00:22:47.169 align:start position:0%
+ 
+ 
+
+00:22:47.169 --> 00:22:49.539 align:start position:0%
+ 
+ 
+
+00:22:49.539 --> 00:22:51.970 align:start position:0%
+ 
+ 
+
+00:22:51.970 --> 00:22:56.320 align:start position:0%
+ 
+ 
+
+00:22:56.320 --> 00:22:59.409 align:start position:0%
+ 
+ 
+
+00:22:59.409 --> 00:23:01.240 align:start position:0%
+ 
+ 
+
+00:23:01.240 --> 00:23:03.820 align:start position:0%
+ 
+ 
+
+00:23:03.820 --> 00:23:05.769 align:start position:0%
+ 
+ 
+
+00:23:05.769 --> 00:23:09.430 align:start position:0%
+ 
+ 
+
+00:23:09.430 --> 00:23:13.180 align:start position:0%
+ 
+ 
+
+00:23:13.180 --> 00:23:15.039 align:start position:0%
+ 
+ 
+
+00:23:15.039 --> 00:23:16.389 align:start position:0%
+ 
+ 
+
+00:23:16.389 --> 00:23:20.490 align:start position:0%
+ 
+ 
+
+00:23:20.490 --> 00:23:23.680 align:start position:0%
+ 
+ 
+
+00:23:23.680 --> 00:23:25.570 align:start position:0%
+ 
+ 
+
+00:23:25.570 --> 00:23:27.310 align:start position:0%
+ 
+ 
+
+00:23:27.310 --> 00:23:29.259 align:start position:0%
+ 
+ 
+
+00:23:29.259 --> 00:23:30.730 align:start position:0%
+ 
+ 
+
+00:23:30.730 --> 00:23:32.080 align:start position:0%
+ 
+ 
+
+00:23:32.080 --> 00:23:34.240 align:start position:0%
+ 
+ 
+
+00:23:34.240 --> 00:23:36.909 align:start position:0%
+ 
+ 
+
+00:23:36.909 --> 00:23:42.009 align:start position:0%
+ 
+ 
+
+00:23:42.009 --> 00:23:43.029 align:start position:0%
+ 
+ 
+
+00:23:43.029 --> 00:23:46.000 align:start position:0%
+ 
+ 
+
+00:23:46.000 --> 00:23:47.919 align:start position:0%
+ 
+ 
+
+00:23:47.919 --> 00:23:51.399 align:start position:0%
+ 
+ 
+
+00:23:51.399 --> 00:23:53.680 align:start position:0%
+ 
+ 
+
+00:23:53.680 --> 00:23:55.029 align:start position:0%
+ 
+ 
+
+00:23:55.029 --> 00:23:57.549 align:start position:0%
+ 
+ 
+
+00:23:57.549 --> 00:24:02.470 align:start position:0%
+ 
+ 
+
+00:24:02.470 --> 00:24:04.560 align:start position:0%
+ 
+ 
+
+00:24:04.560 --> 00:24:07.509 align:start position:0%
+ 
+ 
+
+00:24:07.509 --> 00:24:09.940 align:start position:0%
+ 
+ 
+
+00:24:09.940 --> 00:24:13.509 align:start position:0%
+ 
+ 
+
+00:24:13.509 --> 00:24:16.120 align:start position:0%
+ 
+ 
+
+00:24:16.120 --> 00:24:17.740 align:start position:0%
+ 
+ 
+
+00:24:17.740 --> 00:24:20.159 align:start position:0%
+ 
+ 
+
+00:24:20.159 --> 00:24:22.930 align:start position:0%
+ 
+ 
+
+00:24:22.930 --> 00:24:24.940 align:start position:0%
+ 
+ 
+
+00:24:24.940 --> 00:24:27.190 align:start position:0%
+ 
+ 
+
+00:24:27.190 --> 00:24:31.840 align:start position:0%
+ 
+ 
+
+00:24:31.840 --> 00:24:35.980 align:start position:0%
+ 
+ 
+
+00:24:35.980 --> 00:24:39.129 align:start position:0%
+ 
+ 
+
+00:24:39.129 --> 00:24:43.750 align:start position:0%
+ 
+ 
+
+00:24:43.750 --> 00:24:46.120 align:start position:0%
+ 
+ 
+
+00:24:46.120 --> 00:24:47.889 align:start position:0%
+ 
+ 
+
+00:24:47.889 --> 00:24:50.350 align:start position:0%
+ 
+ 
+
+00:24:50.350 --> 00:24:53.320 align:start position:0%
+ 
+ 
+
+00:24:53.320 --> 00:24:55.120 align:start position:0%
+ 
+ 
+
+00:24:55.120 --> 00:24:57.910 align:start position:0%
+ 
+ 
+
+00:24:57.910 --> 00:25:01.210 align:start position:0%
+ 
+ 
+
+00:25:01.210 --> 00:25:03.880 align:start position:0%
+ 
+ 
+
+00:25:03.880 --> 00:25:05.230 align:start position:0%
+ 
+ 
+
+00:25:05.230 --> 00:25:07.390 align:start position:0%
+ 
+ 
+
+00:25:07.390 --> 00:25:09.460 align:start position:0%
+ 
+ 
+
+00:25:09.460 --> 00:25:11.080 align:start position:0%
+ 
+ 
+
+00:25:11.080 --> 00:25:13.450 align:start position:0%
+ 
+ 
+
+00:25:13.450 --> 00:25:16.660 align:start position:0%
+ 
+ 
+
+00:25:16.660 --> 00:25:18.880 align:start position:0%
+ 
+ 
+
+00:25:18.880 --> 00:25:22.390 align:start position:0%
+ 
+ 
+
+00:25:22.390 --> 00:25:26.190 align:start position:0%
+ 
+ 
+
+00:25:26.190 --> 00:25:29.740 align:start position:0%
+ 
+ 
+
+00:25:29.740 --> 00:25:31.300 align:start position:0%
+ 
+ 
+
+00:25:31.300 --> 00:25:33.400 align:start position:0%
+ 
+ 
+
+00:25:33.400 --> 00:25:35.380 align:start position:0%
+ 
+ 
+
+00:25:35.380 --> 00:25:38.530 align:start position:0%
+ 
+ 
+
+00:25:38.530 --> 00:25:40.300 align:start position:0%
+ 
+ 
+
+00:25:40.300 --> 00:25:46.680 align:start position:0%
+ 
+ 
+
+00:25:46.680 --> 00:25:49.600 align:start position:0%
+ 
+ 
+
+00:25:49.600 --> 00:25:53.260 align:start position:0%
+ 
+ 
+
+00:25:53.260 --> 00:25:54.940 align:start position:0%
+ 
+ 
+
+00:25:54.940 --> 00:26:00.580 align:start position:0%
+ 
+ 
+
+00:26:00.580 --> 00:26:00.590 align:start position:0%
+ 
+ 
+
+00:26:00.590 --> 00:26:04.480 align:start position:0%
+ 
+
+
+00:26:04.480 --> 00:26:08.299 align:start position:0%
+ 
+ 
+
+00:26:08.299 --> 00:26:10.970 align:start position:0%
+ 
+ 
+
+00:26:10.970 --> 00:26:12.980 align:start position:0%
+ 
+ 
+
+00:26:12.980 --> 00:26:16.310 align:start position:0%
+ 
+ 
+
+00:26:16.310 --> 00:26:17.900 align:start position:0%
+ 
+ 
+
+00:26:17.900 --> 00:26:20.720 align:start position:0%
+ 
+ 
+
+00:26:20.720 --> 00:26:22.299 align:start position:0%
+ 
+ 
+
+00:26:22.299 --> 00:26:26.900 align:start position:0%
+ 
+ 
+
+00:26:26.900 --> 00:26:28.730 align:start position:0%
+ 
+ 
+
+00:26:28.730 --> 00:26:30.260 align:start position:0%
+ 
+ 
+
+00:26:30.260 --> 00:26:31.390 align:start position:0%
+ 
+ 
+
+00:26:31.390 --> 00:26:34.549 align:start position:0%
+ 
+ 
+
+00:26:34.549 --> 00:26:38.180 align:start position:0%
+ 
+ 
+
+00:26:38.180 --> 00:26:39.530 align:start position:0%
+ 
+ 
+
+00:26:39.530 --> 00:26:42.770 align:start position:0%
+ 
+ 
+
+00:26:42.770 --> 00:26:45.350 align:start position:0%
+ 
+ 
+
+00:26:45.350 --> 00:26:50.180 align:start position:0%
+ 
+ 
+
+00:26:50.180 --> 00:27:02.870 align:start position:0%
+ 
+ 
+
+00:27:02.870 --> 00:27:05.010 align:start position:0%
+ 
+ 
+
+00:27:05.010 --> 00:27:18.420 align:start position:0%
+ 
+ 
+
+00:27:18.420 --> 00:27:20.370 align:start position:0%
+ 
+ 
+
+00:27:20.370 --> 00:27:22.590 align:start position:0%
+ 
+ 
+
+00:27:22.590 --> 00:27:25.320 align:start position:0%
+ 
+ 
+
+00:27:25.320 --> 00:27:27.090 align:start position:0%
+ 
+ 
+
+00:27:27.090 --> 00:27:32.580 align:start position:0%
+ 
+ 
+
+00:27:32.580 --> 00:27:39.150 align:start position:0%
+ 
+ 
+
+00:27:39.150 --> 00:27:40.650 align:start position:0%
+ 
+ 
+
+00:27:40.650 --> 00:27:42.570 align:start position:0%
+ 
+ 
+
+00:27:42.570 --> 00:27:50.990 align:start position:0%
+ 
+ 
+
+00:27:50.990 --> 00:27:53.070 align:start position:0%
+ 
+ 
+
+00:27:53.070 --> 00:27:58.770 align:start position:0%
+ 
+ 
+
+00:27:58.770 --> 00:28:01.380 align:start position:0%
+ 
+ 
+
+00:28:01.380 --> 00:28:03.120 align:start position:0%
+ 
+ 
+
+00:28:03.120 --> 00:28:04.650 align:start position:0%
+ 
+ 
+
+00:28:04.650 --> 00:28:06.570 align:start position:0%
+ 
+ 
+
+00:28:06.570 --> 00:28:08.220 align:start position:0%
+ 
+ 
+
+00:28:08.220 --> 00:28:11.370 align:start position:0%
+ 
+ 
+
+00:28:11.370 --> 00:28:12.990 align:start position:0%
+ 
+ 
+
+00:28:12.990 --> 00:28:18.690 align:start position:0%
+ 
+ 
+
+00:28:18.690 --> 00:28:21.090 align:start position:0%
+ 
+ 
+
+00:28:21.090 --> 00:28:23.310 align:start position:0%
+ 
+ 
+
+00:28:23.310 --> 00:28:24.720 align:start position:0%
+ 
+ 
+
+00:28:24.720 --> 00:28:27.120 align:start position:0%
+ 
+ 
+
+00:28:27.120 --> 00:28:44.340 align:start position:0%
+ 
+ 
+
+00:28:44.340 --> 00:28:47.230 align:start position:0%
+ 
+ 
+
+00:28:47.230 --> 00:28:49.149 align:start position:0%
+ 
+ 
+
+00:28:49.149 --> 00:28:54.460 align:start position:0%
+ 
+ 
+
+00:28:54.460 --> 00:28:57.430 align:start position:0%
+ 
+ 
+
+00:28:57.430 --> 00:28:59.860 align:start position:0%
+ 
+ 
+
+00:28:59.860 --> 00:29:01.029 align:start position:0%
+ 
+ 
+
+00:29:01.029 --> 00:29:02.799 align:start position:0%
+ 
+ 
+
+00:29:02.799 --> 00:29:04.539 align:start position:0%
+ 
+ 
+
+00:29:04.539 --> 00:29:09.159 align:start position:0%
+ 
+ 
+
+00:29:09.159 --> 00:29:09.169 align:start position:0%
+ 
+ 
+
+00:29:09.169 --> 00:29:12.899 align:start position:0%
+ 
+
+
+00:29:12.899 --> 00:29:23.259 align:start position:0%
+ 
+ 
+
+00:29:23.259 --> 00:29:24.669 align:start position:0%
+ 
+ 
+
+00:29:24.669 --> 00:29:29.259 align:start position:0%
+ 
+ 
+
+00:29:29.259 --> 00:29:33.330 align:start position:0%
+ 
+ 
+
+00:29:33.330 --> 00:29:37.500 align:start position:0%
+ 
+ 
+
+00:29:37.500 --> 00:29:42.940 align:start position:0%
+ 
+ 
+
+00:29:42.940 --> 00:29:44.500 align:start position:0%
+ 
+ 
+
+00:29:44.500 --> 00:29:47.740 align:start position:0%
+ 
+ 
+
+00:29:47.740 --> 00:29:52.419 align:start position:0%
+ 
+ 
+
+00:29:52.419 --> 00:29:53.830 align:start position:0%
+ 
+ 
+
+00:29:53.830 --> 00:29:56.169 align:start position:0%
+ 
+ 
+
+00:29:56.169 --> 00:30:20.149 align:start position:0%
+ 
+ 
+
+00:30:20.149 --> 00:30:22.860 align:start position:0%
+ 
+ 
+
+00:30:22.860 --> 00:30:26.129 align:start position:0%
+ 
+ 
+
+00:30:26.129 --> 00:30:31.649 align:start position:0%
+ 
+ 
+
+00:30:31.649 --> 00:30:32.999 align:start position:0%
+ 
+ 
+
+00:30:32.999 --> 00:30:35.249 align:start position:0%
+ 
+ 
+
+00:30:35.249 --> 00:30:36.810 align:start position:0%
+ 
+ 
+
+00:30:36.810 --> 00:30:39.240 align:start position:0%
+ 
+ 
+
+00:30:39.240 --> 00:30:41.460 align:start position:0%
+ 
+ 
+
+00:30:41.460 --> 00:30:43.799 align:start position:0%
+ 
+ 
+
+00:30:43.799 --> 00:30:45.480 align:start position:0%
+ 
+ 
+
+00:30:45.480 --> 00:30:49.950 align:start position:0%
+ 
+ 
+
+00:30:49.950 --> 00:30:53.299 align:start position:0%
+ 
+ 
+
+00:30:53.299 --> 00:30:56.220 align:start position:0%
+ 
+ 
+
+00:30:56.220 --> 00:30:57.960 align:start position:0%
+ 
+ 
+
+00:30:57.960 --> 00:31:00.299 align:start position:0%
+ 
+ 
+
+00:31:00.299 --> 00:31:02.730 align:start position:0%
+ 
+ 
+
+00:31:02.730 --> 00:31:04.379 align:start position:0%
+ 
+ 
+
+00:31:04.379 --> 00:31:07.980 align:start position:0%
+ 
+ 
+
+00:31:07.980 --> 00:31:12.509 align:start position:0%
+ 
+ 
+
+00:31:12.509 --> 00:31:15.480 align:start position:0%
+ 
+ 
+
+00:31:15.480 --> 00:31:19.799 align:start position:0%
+ 
+ 
+
+00:31:19.799 --> 00:31:22.110 align:start position:0%
+ 
+ 
+
+00:31:22.110 --> 00:31:32.789 align:start position:0%
+ 
+ 
+
+00:31:32.789 --> 00:31:37.009 align:start position:0%
+ 
+ 
+
+00:31:37.009 --> 00:31:40.440 align:start position:0%
+ 
+ 
+
+00:31:40.440 --> 00:31:42.299 align:start position:0%
+ 
+ 
+
+00:31:42.299 --> 00:31:43.860 align:start position:0%
+ 
+ 
+
+00:31:43.860 --> 00:31:47.340 align:start position:0%
+ 
+ 
+
+00:31:47.340 --> 00:31:49.980 align:start position:0%
+ 
+ 
+
+00:31:49.980 --> 00:31:53.009 align:start position:0%
+ 
+ 
+
+00:31:53.009 --> 00:31:54.990 align:start position:0%
+ 
+ 
+
+00:31:54.990 --> 00:31:57.720 align:start position:0%
+ 
+ 
+
+00:31:57.720 --> 00:31:58.950 align:start position:0%
+ 
+ 
+
+00:31:58.950 --> 00:32:01.019 align:start position:0%
+ 
+ 
+
+00:32:01.019 --> 00:32:03.810 align:start position:0%
+ 
+ 
+
+00:32:03.810 --> 00:32:05.279 align:start position:0%
+ 
+ 
+
+00:32:05.279 --> 00:32:06.570 align:start position:0%
+ 
+ 
+
+00:32:06.570 --> 00:32:12.629 align:start position:0%
+ 
+ 
+
+00:32:12.629 --> 00:32:14.759 align:start position:0%
+ 
+ 
+
+00:32:14.759 --> 00:32:17.310 align:start position:0%
+ 
+ 
+
+00:32:17.310 --> 00:32:24.720 align:start position:0%
+ 
+ 
+
+00:32:24.720 --> 00:32:28.529 align:start position:0%
+ 
+ 
+
+00:32:28.529 --> 00:32:33.080 align:start position:0%
+ 
+ 
+
+00:32:33.080 --> 00:32:45.210 align:start position:0%
+ 
+ 
+
+00:32:45.210 --> 00:33:07.640 align:start position:0%
+ 
+ 
+
+00:33:07.640 --> 00:33:11.750 align:start position:0%
+ 
+ 
+
+00:33:11.750 --> 00:33:14.040 align:start position:0%
+ 
+ 
+
+00:33:14.040 --> 00:33:16.920 align:start position:0%
+ 
+ 
+
+00:33:16.920 --> 00:33:19.950 align:start position:0%
+ 
+ 
+
+00:33:19.950 --> 00:33:23.880 align:start position:0%
+ 
+ 
+
+00:33:23.880 --> 00:33:27.840 align:start position:0%
+ 
+ 
+
+00:33:27.840 --> 00:33:30.810 align:start position:0%
+ 
+ 
+
+00:33:30.810 --> 00:33:32.820 align:start position:0%
+ 
+ 
+
+00:33:32.820 --> 00:33:36.810 align:start position:0%
+ 
+ 
+
+00:33:36.810 --> 00:33:41.040 align:start position:0%
+ 
+ 
+
+00:33:41.040 --> 00:33:42.930 align:start position:0%
+ 
+ 
+
+00:33:42.930 --> 00:33:47.010 align:start position:0%
+ 
+ 
+
+00:33:47.010 --> 00:33:50.610 align:start position:0%
+ 
+ 
+
+00:33:50.610 --> 00:33:53.550 align:start position:0%
+ 
+ 
+
+00:33:53.550 --> 00:33:57.720 align:start position:0%
+ 
+ 
+
+00:33:57.720 --> 00:33:59.130 align:start position:0%
+ 
+ 
+
+00:33:59.130 --> 00:34:00.870 align:start position:0%
+ 
+ 
+
+00:34:00.870 --> 00:34:04.230 align:start position:0%
+ 
+ 
+
+00:34:04.230 --> 00:34:04.240 align:start position:0%
+ 
+ 
+
+00:34:04.240 --> 00:34:14.530 align:start position:0%
+ 
+
+
+00:34:14.530 --> 00:34:16.540 align:start position:0%
+ 
+ 
+
+00:34:16.540 --> 00:34:18.760 align:start position:0%
+ 
+ 
+
+00:34:18.760 --> 00:34:20.830 align:start position:0%
+ 
+ 
+
+00:34:20.830 --> 00:34:23.020 align:start position:0%
+ 
+ 
+
+00:34:23.020 --> 00:34:25.360 align:start position:0%
+ 
+ 
+
+00:34:25.360 --> 00:34:32.530 align:start position:0%
+ 
+ 
+
+00:34:32.530 --> 00:34:36.250 align:start position:0%
+ 
+ 
+
+00:34:36.250 --> 00:34:37.710 align:start position:0%
+ 
+ 
+
+00:34:37.710 --> 00:34:42.399 align:start position:0%
+ 
+ 
+
+00:34:42.399 --> 00:34:45.460 align:start position:0%
+ 
+ 
+
+00:34:45.460 --> 00:34:48.430 align:start position:0%
+ 
+ 
+
+00:34:48.430 --> 00:34:50.440 align:start position:0%
+ 
+ 
+
+00:34:50.440 --> 00:34:52.000 align:start position:0%
+ 
+ 
+
+00:34:52.000 --> 00:34:54.190 align:start position:0%
+ 
+ 
+
+00:34:54.190 --> 00:34:55.930 align:start position:0%
+ 
+ 
+
+00:34:55.930 --> 00:34:59.290 align:start position:0%
+ 
+ 
+
+00:34:59.290 --> 00:35:05.020 align:start position:0%
+ 
+ 
+
+00:35:05.020 --> 00:35:17.170 align:start position:0%
+ 
+ 
+
