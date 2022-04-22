@@ -1,0 +1,2116 @@
+WEBVTT
+Kind: captions
+Language: en
+
+00:00:00.280 --> 00:00:25.200 align:start position:0%
+ 
+[Music]  my name is Vadim I work at data dock as  a data engineer and today I'm going to  be talking about using apache spark for  brass and trillions of records everyday  so a little bit information about data  doc we are a monitoring service for  things like databases web servers  cloud-based tools or communication tools  we have over 200 integrations and we can  accept any custom metric we also provide  application performance monitoring and  you can set up alerts on top of those  metrics and we keep data for over 18  months with a one-second resolution and  I'm going to be talking about the  service that produces this historical  data but no worries everything that I'm  going to be talking about can be applied  to any apache spark based job so the  initial setup that we were targeting we  use AWS EMR we wanted to use 100 to 200  r3 to flourish notes  those are pretty beefy with 244 gigs of  ram we were trying to use spot instances  as they are cheaper roughly five times  the on demand notes and we were using  spark 1.6 in your own classroom oh and  we use Scala and our GD a PA and quickly  we learned that actually it's only 240  gigs because of then and here's some  other settings that we used as you can  see the most important thing as  everybody knows in Java is garbage  collection settings oh I'm just kidding  we tried to put driver and executor on  the same node manager so we could  utilize resources at for and how big is  a trillion trillion a is a roughly 500  times bigger than maximum value of  integer so and in Java arrays a limited  at they cannot hold more than two  billion elements so it was natural for  us that we're going to hit our favorite  error out of memory right so what people  do when they hit the out of memory in  SPARC they Google and they get 2.5  million results and they realize ok it's  probably related to Java 77 million  results and then they start tweaking and  complaining about Java and stuff stuff  like that  and there are different types of out of  memory the first one is related to heap  size second is about garbage third is  something is using off heap memory  fourth is your your non manager is  killing your container because it  promised to not go beyond certain water  mark but it went and not manager killed  it and fifth is simply your operating  system doesn't have more memory and  killed it so we tried the first thing  that we learned is that the driver must  arrive because it's a single point of  failure so we increased memory and now  the driver doesn't run alongside  executors so they don't fight for  resources but our job was still failing  and how do people fix their jobs when  they fail on out of memory this is a  image of spark fine tuning using Sparky  I so you have three gauges garbage  collection pick executors memory usage  and input records and then you have a  lot of knobs to tune it executors memory  over had split size I cough threats you  name it and you basically try to turn  them and try to see if your job works so  you need some observability monitoring  we were we stumbled upon this project  from Etsy called SD JVM profiler it's  easy to add it to your executors and you  start getting metrics so we submit  metrics to data dot and you can see how  much heap we use so the Purple Line is  our max X Max and the orange line is how  much memory we use we also edit events  so the red bars represent when our  stages start to finish so we can kind of  see what is actually using a lot of  memory and we also track garbage  collection so we were fine on garbage  collection and by using all of this we  were able to solve some of our out of  memories and everything was fine but we  were still getting errors like this and  noticed something  it's nao and forget and it turns out the  use of  keep memory and there are also multiple  things that use of you so there is  direct allocated buffers like Burkett  message back  there's Java native interface it's  mostly used for compression libraries  like GZ sleep lz4 and there is unsaved  direct memory access that is used in  some of spark and Hadoop packages and  how we measure all of them we cannot  measure them but we can actually check  how much memory our process is using so  there's a such thing as rocket fest that  you can query so you basically use the  process ID and get the information and  the metric that you are looking at more  interested in is resident cell size and  there's still problem how we submit this  metric how we get it automatically  without going to each node and  coordinate and I present you our  solution so basically it's a Java agent  but we get memory we ask the operating  system about how much memory my JVM  process is using and then submitted and  we started getting the real process  memory usage so you can see we use  hundred twenty gigs but the heap used is  about 70 so 50 gigabytes is spent on  some of hip so by doing that you can  actually see based on what stage is  currently running you can kind of  predict and understand what is actually  using in your of heap memory and we also  submit data for each container so when  your container fails on out of memory  you can check what it was doing and what  was it was a memory usage before that so  you can kind of understand what exactly  is using memory and by doing that we  were able to solve all out of memory  almost but the job was still slow in  some parts and we didn't know where it's  low so we added up sorry the lessons  that we learned give more resources that  you think you would need because it's  easier your first goal is to make sure  that your job actually works and that  once it works you can scale it down  merger memory usage of each executor to  see who is using maybe there are skewed  parts maybe something else keep an eye  on your garbage collection metrics to  make sure that you don't produce a lot  of Java objects and we started measuring  in slow parts so here you can see we  just added some timer and we submit it  as a cumulative so we get what's the  maximum time of your map function and  what is the total time and we also watch  this cute part so in this case we group  by key and we get values for the key and  we check what it was the size of the all  values and if it's if it goes beyond a  certain threshold we just don't process  it but we still log in and we can still  process it some separate in a separate  way this way you make sure that your job  doesn't fail and if there's a huge key  you can process it separate or don't  process it at all and we also keep track  of what keys have a lot of values and  you don't need to report these metrics  for all the keys because you have for  example a billion kiss you there's a lot  of polls you can report just max time or  max number of values for each of the  partitions ones with each task ends and  we also collect executor metrics so here  you see input records processed by a  single executor per second and you can  see that the job gets faster or slower  in some parts and just by doing that you  can identify the slowest parts of your  job or the fastest and the lessons we  learned so murder slowest parts of your  job like I said murder what parts of  your job are skewed and what keys have  skews and keep track of how much CPU is  actually spent because a lot of people  when they compare how fast their spur  jobs became the  look at the world clock time which is  not entirely correct and have some  alerting on metrics so all the metrics  that we collect like skewed parts or  slow parts we also have alerts on top of  them so we get alerts when our job gets  lower or somebody is I'm offending keys  found and so on so you can be proactive  before your jump your job fails so we  were using spot instances and everything  was fine until as you can see on the  graph in April of this part market  started collapsing and you can see that  it was until August and that means that  our cluster was constantly dying and the  job wasn't progressing so to mitigate  this issue we broke the job into smaller  survivable pieces but because of that  our job overall became slower because we  have we had to wait for the previous job  to finish before starting a new one so  we enable dynamic allocation and we  started submitting these small jobs in  parallel and because of that we had to  disable caching because when your  executor holds some data it cannot go  and leave the job board and join the  other job instead we use checkpoint it  writes data to HDFS so the executor can  quit the job and other executors can  still to get data from HDFS and it  helped dynamic allocation like I said  and losing multiple executors doesn't  result in losing your job recomputing a  lot of partitions because your data is  on the HDFS but we open a box of Pandora  called external shuffle service so when  your executor is using dynamic  allocation it writes partitions on the  instance for example if you get a one  wrote partitions 1 2 3 4 and then it  tells the driver that I have no more  work to do and the driver tells the  executor that you can leave the job and  then executors will take data from the  instance directly by  talking to external shuffled service but  what happens if the instance dies  unfortunately a driver doesn't know that  the instance is gone  and it tells that the second executor  that partitions still leave on that  instance executor 2 tries to communicate  with the external travel service but  gets an exception  tells the driver that there's no  partition the driver says okay let's  recomputed and your job is going to  recompute all the partitions that led to  that partition ok first partition was  recomputed third executor does the same  recomputes but what if your job has ten  thousand partitions it will take ages to  recompute everything because the driver  doesn't flush like it doesn't clear it  doesn't remove all partitions because it  still thinks that if the instance is  still there it still has files so let's  try to get files from that instance so  these are some issues related to  external shuffle service problem and  unfortunately there are a lot more fetch  failures that we observe and this is the  umbrella ticket about optimizing the  fetch failures so this is our solution  to that this problem was to stop using  spot instances so we started using  on-demand instances but unfortunately  there is still a possibility to lose one  instance store in especially in our case  when we get run like 200 instance  instances it's not a rare event to lose  just one and then because of external  shuffle service your job just goes  forever so keep an eye on failed tests  failed test tasks so you would know when  your job is actually breaking as you can  see on this graph as soon as market  started misbehaving we started getting  more and more available tasks and once  the market stabilized we actually switch  to on demand notes the number dropped  but still we get sporadic  failed tasks want the job and doesn't  move em so keep keep an eye on that so  the lessons keep all logs so when our  raffle service was misbehaving it was  difficult to see what was what was going  on so we had to go through all logs and  see who was talking to who what kind of  errors they were getting and what was  the stage actually and so on spark isn't  super resilient even when one node dies  that's what we learned about spark  unfortunately and we just have to  monitor the number of failed task stages  number of lost nodes so be proactive  about the page feathers everything was  fine  everything was moving great until it  wasn't  so here we join two three arteries and  all joints in our tapi done through coal  group so basically it gets data for the  same key and puts your gives you  iterators and in our case we had to have  one-to-one join but just out of being  cautious and being safe just edit some  checks that we actually get just one  element and it was more for ourselves if  we just somebody changed the code and  the test should fail here but we were  running our job and one day it fired  here that the key received wasn't one  record and it should never never happen  and as you can see we also have to set  so we only care about if we get multiple  different values and this situation  should never happen but it happened so  what was the problem turns out when one  executor tries to query get data from  the other executors it can sometime get  fetch failure and it will tell the  driver that I need to read to recompute  that partition and the partition gets  recomputed but the instance that produce  fetch failed actually still running it  comes  sensitive partition and now you get two  values for the same key and in our case  it was because we were sorting our tuple  just by the first field so as you can  see we have one ten one one  but if results come differently upon  recomputing you get different output and  the solution was simple just to sort  everything by all fields the lessons  that we learn trust by put extra checks  and log everything we were trusting  sparked that it would not it would  recompute everything it would just drop  the partitions that were we computing  right add extra and so make sure that  even when your framework promises you  that everything will be all right just  to make sure make sure that upon we  computing you still produce the same  result even when you we are sure that  everything will be fine and file the job  as soon as possible when some unexpected  behavior is observed but maybe you still  can overcome these unexpected behavior  so in our case we were even when we got  multiple values we were only we really  only cared if we get multiple different  results so our job would run even if we  so our job still runs even when we get  multiple same results upon we compete  because we made sure that upon we  competing of partitions we produce  always the same result and have retries  from the pipeline scheduled level  because this job is not going to survive  but upon every try it can actually  survive because there will be no lost or  like later Ivan partitions so we left  our job running for a month and to do  test start pushing more more and more  data and we got all these five issues  and the last one we actually repair our  cells and some of those issues were  fixed in spark too  so we migrated easily to spark to solve  this problem and the lessons from this  short chapter is check the bug tracker  periodically to see what a new issues  were added or what has been solved  subscribe to mailing list to see what  issues people my head that you are going  to hit more likely and participate in  discussing issues if you don't  understand what what's going on  just check and ask and in conclusion I  want to repeat log everything including  drivers exodus non-manager garbage  collection everything it will in case of  a failure it will you will have all the  information needed to see what exactly  what's happening measure everything you  might have to measure memory you have to  merge the garbage collection executor  CPU file task stages slow parts cute  parts everything measure everything  trust but be ready like we put a lot of  trust in how Apache spark works and  Apache spark promises that it's super  resilient but sometimes it's not and we  hit those problems especially when you  work at large scale and don't try to run  one huge job always breaks a your job  into smaller survivable pieces because  one huge job the transport and ours has  a high chance of failing and you still  in you going upon failure you have to  retry it and it is again going to run  for 10 hours instead of just breaking in  10 jobs maybe if you can and those those  smaller jobs will have higher chance of  surviving and this is pretty much all I  have if you want to work with us on  spark of career elasticsearch or  something else come to our booth or  check our website and if you have any  questions here's my Twitter handle and  my personal and working mail  [Applause]  hi so you mentioned Sparkle agency being  kind of a constant right  especially run you know memory  specifically so can you reflect a bit on  one using small versus using the dupe in  this potential case using Hadoop for  example yeah yeah it is possible but  Hadoop after each stage finishes you  write to HDFS right  so in that case yeah the job would be  would definitely survive better but it  will be slower because in SPARC you can  actually keep some memory as some data  in memory on executors directly and you  don't have this condition where you have  to wait until your job finishes I mean  sorry until you don't have to write to  HDFS right which adds up like on  serializing writing to HDFS and so on so  there are like different trade-offs the  other the other solution that I heard of  is some companies run spark break the  job into two different jobs which so for  example one runs as a spark job and then  you go into some and then you write it  the second job in hadoop mapreduce  because it survives better right so you  kind of use both techniques hey question  you spoke about measuring skew data  measuring key skew could you could you  speak a little bit about any sort of  strategies you have developed or general  strategies for actually handling case Q  so in our case we we try to make sure  that we don't have a lot of parts where  we have skews by so we have few joints  and the joints are so for example in our  case we had joints on two columns but we  rewrote they join in to use three  columns and we had to add extra  so for each record from the smaller  table we had to add additional record  with third key so all our joints work on  that small level and we know for sure  that that small level doesn't have more  than 10,000 elements but we still have  SKUs in other parts and the only  solution that we come up with we  unfortunately couldn't use like salting  on something else we basically have to  start processing once we hit this  threshold so for example 100 million  points that's a lot and we don't press  that or we can process separately and we  still get the metrics what keys are  skewed so we still see them in our  interface so we we we can reach out to  customers or reach out to whoever  submitted this key with a lot of values  and say them that actually we haven't  processed you in a cluster in such large  size do you are till you currently using  EMR and do you currently experience any  kind of s3 eventual consistency okay I  see what you're saying we still use AWS  EMR because it not only provides for  just cluster it also locks a lot of data  so for example it locks all the  processes that were running every 15  minutes all the disk space usage and so  on so used in it it saves all the logs  from from yarn to s3 so you can later  analyze them and figure out what was  going on if in case of a failure and  recently they also added a feature for  spa they automatically feed SPARC lock  UI logs so you can actually see in AWS  EMR interface how it was doing so yes  that's the reason why we use in mark and  as the consistency issues we don't have  because in our case we we don't actually  use Hadoop output writers we wrote our  own writers because we we had to  right files twice in different files but  we didn't want to split the job into two  jobs so we actually have map function  that writes data to the s3 and we know  for sure that there's like just limited  amount of data we don't go beyond 15  megabytes so and we after we wrote we  check that we actually wrote the wiki so  we don't we don't have any eventual  consistency problems yeah this might be  a bit off topic but the JVM profiler  that you guys wrote is that does that  only write to date a dog or do you have  like a we actually we just poured the  add CSS DGM profiler and it writes to a  necessity back-end you can hook it up to  influx DB or anything but the features  that might be specific to data log is  the container IDs and stuff like that  because I'm not sure if study supports  tags for example  [Music]
+
+00:00:25.200 --> 00:00:28.570 align:start position:0%
+ 
+ 
+
+00:00:28.570 --> 00:00:30.040 align:start position:0%
+ 
+ 
+
+00:00:30.040 --> 00:00:32.109 align:start position:0%
+ 
+ 
+
+00:00:32.109 --> 00:00:34.110 align:start position:0%
+ 
+ 
+
+00:00:34.110 --> 00:00:36.430 align:start position:0%
+ 
+ 
+
+00:00:36.430 --> 00:00:38.830 align:start position:0%
+ 
+ 
+
+00:00:38.830 --> 00:00:40.869 align:start position:0%
+ 
+ 
+
+00:00:40.869 --> 00:00:43.210 align:start position:0%
+ 
+ 
+
+00:00:43.210 --> 00:00:46.840 align:start position:0%
+ 
+ 
+
+00:00:46.840 --> 00:00:49.240 align:start position:0%
+ 
+ 
+
+00:00:49.240 --> 00:00:51.010 align:start position:0%
+ 
+ 
+
+00:00:51.010 --> 00:00:52.810 align:start position:0%
+ 
+ 
+
+00:00:52.810 --> 00:00:56.950 align:start position:0%
+ 
+ 
+
+00:00:56.950 --> 00:00:59.050 align:start position:0%
+ 
+ 
+
+00:00:59.050 --> 00:01:00.280 align:start position:0%
+ 
+ 
+
+00:01:00.280 --> 00:01:02.170 align:start position:0%
+ 
+ 
+
+00:01:02.170 --> 00:01:04.540 align:start position:0%
+ 
+ 
+
+00:01:04.540 --> 00:01:06.550 align:start position:0%
+ 
+ 
+
+00:01:06.550 --> 00:01:10.870 align:start position:0%
+ 
+ 
+
+00:01:10.870 --> 00:01:13.270 align:start position:0%
+ 
+ 
+
+00:01:13.270 --> 00:01:17.290 align:start position:0%
+ 
+ 
+
+00:01:17.290 --> 00:01:18.430 align:start position:0%
+ 
+ 
+
+00:01:18.430 --> 00:01:21.700 align:start position:0%
+ 
+ 
+
+00:01:21.700 --> 00:01:25.030 align:start position:0%
+ 
+ 
+
+00:01:25.030 --> 00:01:27.370 align:start position:0%
+ 
+ 
+
+00:01:27.370 --> 00:01:29.770 align:start position:0%
+ 
+ 
+
+00:01:29.770 --> 00:01:32.590 align:start position:0%
+ 
+ 
+
+00:01:32.590 --> 00:01:36.609 align:start position:0%
+ 
+ 
+
+00:01:36.609 --> 00:01:39.130 align:start position:0%
+ 
+ 
+
+00:01:39.130 --> 00:01:42.249 align:start position:0%
+ 
+ 
+
+00:01:42.249 --> 00:01:45.760 align:start position:0%
+ 
+ 
+
+00:01:45.760 --> 00:01:47.680 align:start position:0%
+ 
+ 
+
+00:01:47.680 --> 00:01:49.690 align:start position:0%
+ 
+ 
+
+00:01:49.690 --> 00:01:51.630 align:start position:0%
+ 
+ 
+
+00:01:51.630 --> 00:01:55.240 align:start position:0%
+ 
+ 
+
+00:01:55.240 --> 00:01:57.190 align:start position:0%
+ 
+ 
+
+00:01:57.190 --> 00:02:01.150 align:start position:0%
+ 
+ 
+
+00:02:01.150 --> 00:02:04.300 align:start position:0%
+ 
+ 
+
+00:02:04.300 --> 00:02:06.490 align:start position:0%
+ 
+ 
+
+00:02:06.490 --> 00:02:10.930 align:start position:0%
+ 
+ 
+
+00:02:10.930 --> 00:02:14.500 align:start position:0%
+ 
+ 
+
+00:02:14.500 --> 00:02:16.720 align:start position:0%
+ 
+ 
+
+00:02:16.720 --> 00:02:18.699 align:start position:0%
+ 
+ 
+
+00:02:18.699 --> 00:02:21.970 align:start position:0%
+ 
+ 
+
+00:02:21.970 --> 00:02:24.400 align:start position:0%
+ 
+ 
+
+00:02:24.400 --> 00:02:27.010 align:start position:0%
+ 
+ 
+
+00:02:27.010 --> 00:02:30.220 align:start position:0%
+ 
+ 
+
+00:02:30.220 --> 00:02:32.920 align:start position:0%
+ 
+ 
+
+00:02:32.920 --> 00:02:35.380 align:start position:0%
+ 
+ 
+
+00:02:35.380 --> 00:02:36.880 align:start position:0%
+ 
+ 
+
+00:02:36.880 --> 00:02:37.910 align:start position:0%
+ 
+ 
+
+00:02:37.910 --> 00:02:39.800 align:start position:0%
+ 
+ 
+
+00:02:39.800 --> 00:02:42.140 align:start position:0%
+ 
+ 
+
+00:02:42.140 --> 00:02:45.740 align:start position:0%
+ 
+ 
+
+00:02:45.740 --> 00:02:47.380 align:start position:0%
+ 
+ 
+
+00:02:47.380 --> 00:02:50.240 align:start position:0%
+ 
+ 
+
+00:02:50.240 --> 00:02:51.740 align:start position:0%
+ 
+ 
+
+00:02:51.740 --> 00:02:54.770 align:start position:0%
+ 
+ 
+
+00:02:54.770 --> 00:02:56.660 align:start position:0%
+ 
+ 
+
+00:02:56.660 --> 00:03:00.260 align:start position:0%
+ 
+ 
+
+00:03:00.260 --> 00:03:01.729 align:start position:0%
+ 
+ 
+
+00:03:01.729 --> 00:03:07.309 align:start position:0%
+ 
+ 
+
+00:03:07.309 --> 00:03:09.860 align:start position:0%
+ 
+ 
+
+00:03:09.860 --> 00:03:12.710 align:start position:0%
+ 
+ 
+
+00:03:12.710 --> 00:03:15.530 align:start position:0%
+ 
+ 
+
+00:03:15.530 --> 00:03:16.970 align:start position:0%
+ 
+ 
+
+00:03:16.970 --> 00:03:19.070 align:start position:0%
+ 
+ 
+
+00:03:19.070 --> 00:03:22.340 align:start position:0%
+ 
+ 
+
+00:03:22.340 --> 00:03:26.780 align:start position:0%
+ 
+ 
+
+00:03:26.780 --> 00:03:29.920 align:start position:0%
+ 
+ 
+
+00:03:29.920 --> 00:03:33.890 align:start position:0%
+ 
+ 
+
+00:03:33.890 --> 00:03:37.190 align:start position:0%
+ 
+ 
+
+00:03:37.190 --> 00:03:40.160 align:start position:0%
+ 
+ 
+
+00:03:40.160 --> 00:03:42.050 align:start position:0%
+ 
+ 
+
+00:03:42.050 --> 00:03:44.599 align:start position:0%
+ 
+ 
+
+00:03:44.599 --> 00:03:48.410 align:start position:0%
+ 
+ 
+
+00:03:48.410 --> 00:03:50.870 align:start position:0%
+ 
+ 
+
+00:03:50.870 --> 00:03:54.160 align:start position:0%
+ 
+ 
+
+00:03:54.160 --> 00:03:57.340 align:start position:0%
+ 
+ 
+
+00:03:57.340 --> 00:04:00.770 align:start position:0%
+ 
+ 
+
+00:04:00.770 --> 00:04:04.099 align:start position:0%
+ 
+ 
+
+00:04:04.099 --> 00:04:06.500 align:start position:0%
+ 
+ 
+
+00:04:06.500 --> 00:04:08.390 align:start position:0%
+ 
+ 
+
+00:04:08.390 --> 00:04:11.060 align:start position:0%
+ 
+ 
+
+00:04:11.060 --> 00:04:15.229 align:start position:0%
+ 
+ 
+
+00:04:15.229 --> 00:04:20.870 align:start position:0%
+ 
+ 
+
+00:04:20.870 --> 00:04:23.360 align:start position:0%
+ 
+ 
+
+00:04:23.360 --> 00:04:25.730 align:start position:0%
+ 
+ 
+
+00:04:25.730 --> 00:04:28.670 align:start position:0%
+ 
+ 
+
+00:04:28.670 --> 00:04:31.100 align:start position:0%
+ 
+ 
+
+00:04:31.100 --> 00:04:34.610 align:start position:0%
+ 
+ 
+
+00:04:34.610 --> 00:04:36.770 align:start position:0%
+ 
+ 
+
+00:04:36.770 --> 00:04:39.110 align:start position:0%
+ 
+ 
+
+00:04:39.110 --> 00:04:41.420 align:start position:0%
+ 
+ 
+
+00:04:41.420 --> 00:04:44.360 align:start position:0%
+ 
+ 
+
+00:04:44.360 --> 00:04:46.820 align:start position:0%
+ 
+ 
+
+00:04:46.820 --> 00:04:47.960 align:start position:0%
+ 
+ 
+
+00:04:47.960 --> 00:04:51.560 align:start position:0%
+ 
+ 
+
+00:04:51.560 --> 00:04:52.010 align:start position:0%
+ 
+ 
+
+00:04:52.010 --> 00:04:54.409 align:start position:0%
+ 
+ 
+
+00:04:54.409 --> 00:04:57.140 align:start position:0%
+ 
+ 
+
+00:04:57.140 --> 00:04:59.900 align:start position:0%
+ 
+ 
+
+00:04:59.900 --> 00:05:00.680 align:start position:0%
+ 
+ 
+
+00:05:00.680 --> 00:05:02.960 align:start position:0%
+ 
+ 
+
+00:05:02.960 --> 00:05:05.360 align:start position:0%
+ 
+ 
+
+00:05:05.360 --> 00:05:10.070 align:start position:0%
+ 
+ 
+
+00:05:10.070 --> 00:05:12.020 align:start position:0%
+ 
+ 
+
+00:05:12.020 --> 00:05:14.839 align:start position:0%
+ 
+ 
+
+00:05:14.839 --> 00:05:19.129 align:start position:0%
+ 
+ 
+
+00:05:19.129 --> 00:05:21.950 align:start position:0%
+ 
+ 
+
+00:05:21.950 --> 00:05:25.010 align:start position:0%
+ 
+ 
+
+00:05:25.010 --> 00:05:28.490 align:start position:0%
+ 
+ 
+
+00:05:28.490 --> 00:05:32.570 align:start position:0%
+ 
+ 
+
+00:05:32.570 --> 00:05:35.029 align:start position:0%
+ 
+ 
+
+00:05:35.029 --> 00:05:37.850 align:start position:0%
+ 
+ 
+
+00:05:37.850 --> 00:05:42.159 align:start position:0%
+ 
+ 
+
+00:05:42.159 --> 00:05:45.350 align:start position:0%
+ 
+ 
+
+00:05:45.350 --> 00:05:47.510 align:start position:0%
+ 
+ 
+
+00:05:47.510 --> 00:05:49.520 align:start position:0%
+ 
+ 
+
+00:05:49.520 --> 00:05:51.770 align:start position:0%
+ 
+ 
+
+00:05:51.770 --> 00:05:57.200 align:start position:0%
+ 
+ 
+
+00:05:57.200 --> 00:06:01.249 align:start position:0%
+ 
+ 
+
+00:06:01.249 --> 00:06:03.200 align:start position:0%
+ 
+ 
+
+00:06:03.200 --> 00:06:05.240 align:start position:0%
+ 
+ 
+
+00:06:05.240 --> 00:06:08.300 align:start position:0%
+ 
+ 
+
+00:06:08.300 --> 00:06:11.120 align:start position:0%
+ 
+ 
+
+00:06:11.120 --> 00:06:14.180 align:start position:0%
+ 
+ 
+
+00:06:14.180 --> 00:06:17.149 align:start position:0%
+ 
+ 
+
+00:06:17.149 --> 00:06:19.640 align:start position:0%
+ 
+ 
+
+00:06:19.640 --> 00:06:22.730 align:start position:0%
+ 
+ 
+
+00:06:22.730 --> 00:06:24.439 align:start position:0%
+ 
+ 
+
+00:06:24.439 --> 00:06:26.450 align:start position:0%
+ 
+ 
+
+00:06:26.450 --> 00:06:29.749 align:start position:0%
+ 
+ 
+
+00:06:29.749 --> 00:06:33.830 align:start position:0%
+ 
+ 
+
+00:06:33.830 --> 00:06:35.510 align:start position:0%
+ 
+ 
+
+00:06:35.510 --> 00:06:38.809 align:start position:0%
+ 
+ 
+
+00:06:38.809 --> 00:06:42.260 align:start position:0%
+ 
+ 
+
+00:06:42.260 --> 00:06:44.029 align:start position:0%
+ 
+ 
+
+00:06:44.029 --> 00:06:48.589 align:start position:0%
+ 
+ 
+
+00:06:48.589 --> 00:06:51.830 align:start position:0%
+ 
+ 
+
+00:06:51.830 --> 00:06:56.390 align:start position:0%
+ 
+ 
+
+00:06:56.390 --> 00:06:58.760 align:start position:0%
+ 
+ 
+
+00:06:58.760 --> 00:07:03.379 align:start position:0%
+ 
+ 
+
+00:07:03.379 --> 00:07:05.850 align:start position:0%
+ 
+ 
+
+00:07:05.850 --> 00:07:06.959 align:start position:0%
+ 
+ 
+
+00:07:06.959 --> 00:07:09.149 align:start position:0%
+ 
+ 
+
+00:07:09.149 --> 00:07:11.429 align:start position:0%
+ 
+ 
+
+00:07:11.429 --> 00:07:14.119 align:start position:0%
+ 
+ 
+
+00:07:14.119 --> 00:07:16.860 align:start position:0%
+ 
+ 
+
+00:07:16.860 --> 00:07:19.770 align:start position:0%
+ 
+ 
+
+00:07:19.770 --> 00:07:21.990 align:start position:0%
+ 
+ 
+
+00:07:21.990 --> 00:07:23.520 align:start position:0%
+ 
+ 
+
+00:07:23.520 --> 00:07:24.929 align:start position:0%
+ 
+ 
+
+00:07:24.929 --> 00:07:28.260 align:start position:0%
+ 
+ 
+
+00:07:28.260 --> 00:07:30.480 align:start position:0%
+ 
+ 
+
+00:07:30.480 --> 00:07:32.640 align:start position:0%
+ 
+ 
+
+00:07:32.640 --> 00:07:35.159 align:start position:0%
+ 
+ 
+
+00:07:35.159 --> 00:07:38.219 align:start position:0%
+ 
+ 
+
+00:07:38.219 --> 00:07:41.999 align:start position:0%
+ 
+ 
+
+00:07:41.999 --> 00:07:44.219 align:start position:0%
+ 
+ 
+
+00:07:44.219 --> 00:07:47.100 align:start position:0%
+ 
+ 
+
+00:07:47.100 --> 00:07:51.209 align:start position:0%
+ 
+ 
+
+00:07:51.209 --> 00:07:53.730 align:start position:0%
+ 
+ 
+
+00:07:53.730 --> 00:07:55.290 align:start position:0%
+ 
+ 
+
+00:07:55.290 --> 00:07:57.779 align:start position:0%
+ 
+ 
+
+00:07:57.779 --> 00:08:00.360 align:start position:0%
+ 
+ 
+
+00:08:00.360 --> 00:08:03.269 align:start position:0%
+ 
+ 
+
+00:08:03.269 --> 00:08:07.469 align:start position:0%
+ 
+ 
+
+00:08:07.469 --> 00:08:09.930 align:start position:0%
+ 
+ 
+
+00:08:09.930 --> 00:08:12.600 align:start position:0%
+ 
+ 
+
+00:08:12.600 --> 00:08:18.619 align:start position:0%
+ 
+ 
+
+00:08:18.619 --> 00:08:21.869 align:start position:0%
+ 
+ 
+
+00:08:21.869 --> 00:08:24.959 align:start position:0%
+ 
+ 
+
+00:08:24.959 --> 00:08:26.640 align:start position:0%
+ 
+ 
+
+00:08:26.640 --> 00:08:32.399 align:start position:0%
+ 
+ 
+
+00:08:32.399 --> 00:08:34.980 align:start position:0%
+ 
+ 
+
+00:08:34.980 --> 00:08:39.800 align:start position:0%
+ 
+ 
+
+00:08:39.800 --> 00:08:42.779 align:start position:0%
+ 
+ 
+
+00:08:42.779 --> 00:08:44.639 align:start position:0%
+ 
+ 
+
+00:08:44.639 --> 00:08:47.340 align:start position:0%
+ 
+ 
+
+00:08:47.340 --> 00:08:50.670 align:start position:0%
+ 
+ 
+
+00:08:50.670 --> 00:08:53.189 align:start position:0%
+ 
+ 
+
+00:08:53.189 --> 00:08:55.949 align:start position:0%
+ 
+ 
+
+00:08:55.949 --> 00:08:59.790 align:start position:0%
+ 
+ 
+
+00:08:59.790 --> 00:09:01.829 align:start position:0%
+ 
+ 
+
+00:09:01.829 --> 00:09:05.250 align:start position:0%
+ 
+ 
+
+00:09:05.250 --> 00:09:07.650 align:start position:0%
+ 
+ 
+
+00:09:07.650 --> 00:09:11.069 align:start position:0%
+ 
+ 
+
+00:09:11.069 --> 00:09:13.760 align:start position:0%
+ 
+ 
+
+00:09:13.760 --> 00:09:16.740 align:start position:0%
+ 
+ 
+
+00:09:16.740 --> 00:09:19.079 align:start position:0%
+ 
+ 
+
+00:09:19.079 --> 00:09:20.730 align:start position:0%
+ 
+ 
+
+00:09:20.730 --> 00:09:24.360 align:start position:0%
+ 
+ 
+
+00:09:24.360 --> 00:09:27.119 align:start position:0%
+ 
+ 
+
+00:09:27.119 --> 00:09:29.730 align:start position:0%
+ 
+ 
+
+00:09:29.730 --> 00:09:32.249 align:start position:0%
+ 
+ 
+
+00:09:32.249 --> 00:09:36.420 align:start position:0%
+ 
+ 
+
+00:09:36.420 --> 00:09:38.939 align:start position:0%
+ 
+ 
+
+00:09:38.939 --> 00:09:41.509 align:start position:0%
+ 
+ 
+
+00:09:41.509 --> 00:09:46.799 align:start position:0%
+ 
+ 
+
+00:09:46.799 --> 00:09:49.799 align:start position:0%
+ 
+ 
+
+00:09:49.799 --> 00:09:51.989 align:start position:0%
+ 
+ 
+
+00:09:51.989 --> 00:09:54.600 align:start position:0%
+ 
+ 
+
+00:09:54.600 --> 00:09:57.689 align:start position:0%
+ 
+ 
+
+00:09:57.689 --> 00:10:01.679 align:start position:0%
+ 
+ 
+
+00:10:01.679 --> 00:10:04.049 align:start position:0%
+ 
+ 
+
+00:10:04.049 --> 00:10:06.540 align:start position:0%
+ 
+ 
+
+00:10:06.540 --> 00:10:08.970 align:start position:0%
+ 
+ 
+
+00:10:08.970 --> 00:10:11.579 align:start position:0%
+ 
+ 
+
+00:10:11.579 --> 00:10:14.879 align:start position:0%
+ 
+ 
+
+00:10:14.879 --> 00:10:18.030 align:start position:0%
+ 
+ 
+
+00:10:18.030 --> 00:10:20.519 align:start position:0%
+ 
+ 
+
+00:10:20.519 --> 00:10:23.489 align:start position:0%
+ 
+ 
+
+00:10:23.489 --> 00:10:26.309 align:start position:0%
+ 
+ 
+
+00:10:26.309 --> 00:10:29.519 align:start position:0%
+ 
+ 
+
+00:10:29.519 --> 00:10:32.400 align:start position:0%
+ 
+ 
+
+00:10:32.400 --> 00:10:35.309 align:start position:0%
+ 
+ 
+
+00:10:35.309 --> 00:10:37.110 align:start position:0%
+ 
+ 
+
+00:10:37.110 --> 00:10:39.540 align:start position:0%
+ 
+ 
+
+00:10:39.540 --> 00:10:42.569 align:start position:0%
+ 
+ 
+
+00:10:42.569 --> 00:10:45.660 align:start position:0%
+ 
+ 
+
+00:10:45.660 --> 00:10:48.989 align:start position:0%
+ 
+ 
+
+00:10:48.989 --> 00:10:50.850 align:start position:0%
+ 
+ 
+
+00:10:50.850 --> 00:10:53.610 align:start position:0%
+ 
+ 
+
+00:10:53.610 --> 00:10:56.369 align:start position:0%
+ 
+ 
+
+00:10:56.369 --> 00:10:58.889 align:start position:0%
+ 
+ 
+
+00:10:58.889 --> 00:11:04.759 align:start position:0%
+ 
+ 
+
+00:11:04.759 --> 00:11:08.819 align:start position:0%
+ 
+ 
+
+00:11:08.819 --> 00:11:11.699 align:start position:0%
+ 
+ 
+
+00:11:11.699 --> 00:11:15.210 align:start position:0%
+ 
+ 
+
+00:11:15.210 --> 00:11:17.040 align:start position:0%
+ 
+ 
+
+00:11:17.040 --> 00:11:19.769 align:start position:0%
+ 
+ 
+
+00:11:19.769 --> 00:11:22.230 align:start position:0%
+ 
+ 
+
+00:11:22.230 --> 00:11:25.319 align:start position:0%
+ 
+ 
+
+00:11:25.319 --> 00:11:26.910 align:start position:0%
+ 
+ 
+
+00:11:26.910 --> 00:11:28.980 align:start position:0%
+ 
+ 
+
+00:11:28.980 --> 00:11:31.960 align:start position:0%
+ 
+ 
+
+00:11:31.960 --> 00:11:34.749 align:start position:0%
+ 
+ 
+
+00:11:34.749 --> 00:11:39.240 align:start position:0%
+ 
+ 
+
+00:11:39.240 --> 00:11:41.379 align:start position:0%
+ 
+ 
+
+00:11:41.379 --> 00:11:42.460 align:start position:0%
+ 
+ 
+
+00:11:42.460 --> 00:11:45.460 align:start position:0%
+ 
+ 
+
+00:11:45.460 --> 00:11:48.280 align:start position:0%
+ 
+ 
+
+00:11:48.280 --> 00:11:51.670 align:start position:0%
+ 
+ 
+
+00:11:51.670 --> 00:11:53.199 align:start position:0%
+ 
+ 
+
+00:11:53.199 --> 00:11:54.340 align:start position:0%
+ 
+ 
+
+00:11:54.340 --> 00:11:58.150 align:start position:0%
+ 
+ 
+
+00:11:58.150 --> 00:12:00.490 align:start position:0%
+ 
+ 
+
+00:12:00.490 --> 00:12:02.889 align:start position:0%
+ 
+ 
+
+00:12:02.889 --> 00:12:04.990 align:start position:0%
+ 
+ 
+
+00:12:04.990 --> 00:12:09.850 align:start position:0%
+ 
+ 
+
+00:12:09.850 --> 00:12:13.650 align:start position:0%
+ 
+ 
+
+00:12:13.650 --> 00:12:17.530 align:start position:0%
+ 
+ 
+
+00:12:17.530 --> 00:12:20.350 align:start position:0%
+ 
+ 
+
+00:12:20.350 --> 00:12:22.840 align:start position:0%
+ 
+ 
+
+00:12:22.840 --> 00:12:27.100 align:start position:0%
+ 
+ 
+
+00:12:27.100 --> 00:12:29.920 align:start position:0%
+ 
+ 
+
+00:12:29.920 --> 00:12:32.230 align:start position:0%
+ 
+ 
+
+00:12:32.230 --> 00:12:34.240 align:start position:0%
+ 
+ 
+
+00:12:34.240 --> 00:12:38.619 align:start position:0%
+ 
+ 
+
+00:12:38.619 --> 00:12:40.869 align:start position:0%
+ 
+ 
+
+00:12:40.869 --> 00:12:42.960 align:start position:0%
+ 
+ 
+
+00:12:42.960 --> 00:12:45.639 align:start position:0%
+ 
+ 
+
+00:12:45.639 --> 00:12:47.949 align:start position:0%
+ 
+ 
+
+00:12:47.949 --> 00:12:50.559 align:start position:0%
+ 
+ 
+
+00:12:50.559 --> 00:12:57.460 align:start position:0%
+ 
+ 
+
+00:12:57.460 --> 00:13:00.879 align:start position:0%
+ 
+ 
+
+00:13:00.879 --> 00:13:02.889 align:start position:0%
+ 
+ 
+
+00:13:02.889 --> 00:13:05.049 align:start position:0%
+ 
+ 
+
+00:13:05.049 --> 00:13:08.559 align:start position:0%
+ 
+ 
+
+00:13:08.559 --> 00:13:10.990 align:start position:0%
+ 
+ 
+
+00:13:10.990 --> 00:13:12.879 align:start position:0%
+ 
+ 
+
+00:13:12.879 --> 00:13:15.670 align:start position:0%
+ 
+ 
+
+00:13:15.670 --> 00:13:18.009 align:start position:0%
+ 
+ 
+
+00:13:18.009 --> 00:13:20.679 align:start position:0%
+ 
+ 
+
+00:13:20.679 --> 00:13:24.249 align:start position:0%
+ 
+ 
+
+00:13:24.249 --> 00:13:27.910 align:start position:0%
+ 
+ 
+
+00:13:27.910 --> 00:13:29.949 align:start position:0%
+ 
+ 
+
+00:13:29.949 --> 00:13:32.590 align:start position:0%
+ 
+ 
+
+00:13:32.590 --> 00:13:35.410 align:start position:0%
+ 
+ 
+
+00:13:35.410 --> 00:13:38.199 align:start position:0%
+ 
+ 
+
+00:13:38.199 --> 00:13:41.169 align:start position:0%
+ 
+ 
+
+00:13:41.169 --> 00:13:43.809 align:start position:0%
+ 
+ 
+
+00:13:43.809 --> 00:13:46.009 align:start position:0%
+ 
+ 
+
+00:13:46.009 --> 00:13:48.439 align:start position:0%
+ 
+ 
+
+00:13:48.439 --> 00:13:52.790 align:start position:0%
+ 
+ 
+
+00:13:52.790 --> 00:13:56.600 align:start position:0%
+ 
+ 
+
+00:13:56.600 --> 00:13:58.999 align:start position:0%
+ 
+ 
+
+00:13:58.999 --> 00:14:02.269 align:start position:0%
+ 
+ 
+
+00:14:02.269 --> 00:14:04.850 align:start position:0%
+ 
+ 
+
+00:14:04.850 --> 00:14:07.280 align:start position:0%
+ 
+ 
+
+00:14:07.280 --> 00:14:09.679 align:start position:0%
+ 
+ 
+
+00:14:09.679 --> 00:14:12.860 align:start position:0%
+ 
+ 
+
+00:14:12.860 --> 00:14:16.249 align:start position:0%
+ 
+ 
+
+00:14:16.249 --> 00:14:18.590 align:start position:0%
+ 
+ 
+
+00:14:18.590 --> 00:14:22.009 align:start position:0%
+ 
+ 
+
+00:14:22.009 --> 00:14:24.170 align:start position:0%
+ 
+ 
+
+00:14:24.170 --> 00:14:26.769 align:start position:0%
+ 
+ 
+
+00:14:26.769 --> 00:14:32.600 align:start position:0%
+ 
+ 
+
+00:14:32.600 --> 00:14:32.610 align:start position:0%
+ 
+ 
+
+00:14:32.610 --> 00:14:34.090 align:start position:0%
+ 
+
+
+00:14:34.090 --> 00:14:37.129 align:start position:0%
+ 
+ 
+
+00:14:37.129 --> 00:14:37.139 align:start position:0%
+ 
+ 
+
+00:14:37.139 --> 00:14:37.550 align:start position:0%
+ 
+
+
+00:14:37.550 --> 00:14:41.269 align:start position:0%
+ 
+ 
+
+00:14:41.269 --> 00:14:44.720 align:start position:0%
+ 
+ 
+
+00:14:44.720 --> 00:14:49.879 align:start position:0%
+ 
+ 
+
+00:14:49.879 --> 00:14:53.179 align:start position:0%
+ 
+ 
+
+00:14:53.179 --> 00:14:56.360 align:start position:0%
+ 
+ 
+
+00:14:56.360 --> 00:15:00.410 align:start position:0%
+ 
+ 
+
+00:15:00.410 --> 00:15:03.249 align:start position:0%
+ 
+ 
+
+00:15:03.249 --> 00:15:05.749 align:start position:0%
+ 
+ 
+
+00:15:05.749 --> 00:15:09.319 align:start position:0%
+ 
+ 
+
+00:15:09.319 --> 00:15:11.900 align:start position:0%
+ 
+ 
+
+00:15:11.900 --> 00:15:16.549 align:start position:0%
+ 
+ 
+
+00:15:16.549 --> 00:15:18.499 align:start position:0%
+ 
+ 
+
+00:15:18.499 --> 00:15:21.319 align:start position:0%
+ 
+ 
+
+00:15:21.319 --> 00:15:23.240 align:start position:0%
+ 
+ 
+
+00:15:23.240 --> 00:15:26.449 align:start position:0%
+ 
+ 
+
+00:15:26.449 --> 00:15:29.720 align:start position:0%
+ 
+ 
+
+00:15:29.720 --> 00:15:32.509 align:start position:0%
+ 
+ 
+
+00:15:32.509 --> 00:15:34.569 align:start position:0%
+ 
+ 
+
+00:15:34.569 --> 00:15:39.559 align:start position:0%
+ 
+ 
+
+00:15:39.559 --> 00:15:42.319 align:start position:0%
+ 
+ 
+
+00:15:42.319 --> 00:15:44.840 align:start position:0%
+ 
+ 
+
+00:15:44.840 --> 00:15:47.240 align:start position:0%
+ 
+ 
+
+00:15:47.240 --> 00:15:49.369 align:start position:0%
+ 
+ 
+
+00:15:49.369 --> 00:15:52.100 align:start position:0%
+ 
+ 
+
+00:15:52.100 --> 00:15:55.040 align:start position:0%
+ 
+ 
+
+00:15:55.040 --> 00:15:58.400 align:start position:0%
+ 
+ 
+
+00:15:58.400 --> 00:15:58.410 align:start position:0%
+ 
+ 
+
+00:15:58.410 --> 00:15:59.490 align:start position:0%
+ 
+
+
+00:15:59.490 --> 00:16:02.640 align:start position:0%
+ 
+ 
+
+00:16:02.640 --> 00:16:05.760 align:start position:0%
+ 
+ 
+
+00:16:05.760 --> 00:16:08.910 align:start position:0%
+ 
+ 
+
+00:16:08.910 --> 00:16:11.100 align:start position:0%
+ 
+ 
+
+00:16:11.100 --> 00:16:14.540 align:start position:0%
+ 
+ 
+
+00:16:14.540 --> 00:16:17.820 align:start position:0%
+ 
+ 
+
+00:16:17.820 --> 00:16:22.100 align:start position:0%
+ 
+ 
+
+00:16:22.100 --> 00:16:24.870 align:start position:0%
+ 
+ 
+
+00:16:24.870 --> 00:16:29.130 align:start position:0%
+ 
+ 
+
+00:16:29.130 --> 00:16:31.650 align:start position:0%
+ 
+ 
+
+00:16:31.650 --> 00:16:34.470 align:start position:0%
+ 
+ 
+
+00:16:34.470 --> 00:16:37.350 align:start position:0%
+ 
+ 
+
+00:16:37.350 --> 00:16:39.740 align:start position:0%
+ 
+ 
+
+00:16:39.740 --> 00:16:43.050 align:start position:0%
+ 
+ 
+
+00:16:43.050 --> 00:16:47.780 align:start position:0%
+ 
+ 
+
+00:16:47.780 --> 00:16:51.900 align:start position:0%
+ 
+ 
+
+00:16:51.900 --> 00:16:54.000 align:start position:0%
+ 
+ 
+
+00:16:54.000 --> 00:16:56.730 align:start position:0%
+ 
+ 
+
+00:16:56.730 --> 00:16:58.680 align:start position:0%
+ 
+ 
+
+00:16:58.680 --> 00:17:01.530 align:start position:0%
+ 
+ 
+
+00:17:01.530 --> 00:17:05.040 align:start position:0%
+ 
+ 
+
+00:17:05.040 --> 00:17:06.870 align:start position:0%
+ 
+ 
+
+00:17:06.870 --> 00:17:10.410 align:start position:0%
+ 
+ 
+
+00:17:10.410 --> 00:17:14.340 align:start position:0%
+ 
+ 
+
+00:17:14.340 --> 00:17:17.850 align:start position:0%
+ 
+ 
+
+00:17:17.850 --> 00:17:21.180 align:start position:0%
+ 
+ 
+
+00:17:21.180 --> 00:17:23.670 align:start position:0%
+ 
+ 
+
+00:17:23.670 --> 00:17:28.470 align:start position:0%
+ 
+ 
+
+00:17:28.470 --> 00:17:31.920 align:start position:0%
+ 
+ 
+
+00:17:31.920 --> 00:17:34.860 align:start position:0%
+ 
+ 
+
+00:17:34.860 --> 00:17:36.960 align:start position:0%
+ 
+ 
+
+00:17:36.960 --> 00:17:38.760 align:start position:0%
+ 
+ 
+
+00:17:38.760 --> 00:17:42.180 align:start position:0%
+ 
+ 
+
+00:17:42.180 --> 00:17:43.590 align:start position:0%
+ 
+ 
+
+00:17:43.590 --> 00:17:45.780 align:start position:0%
+ 
+ 
+
+00:17:45.780 --> 00:17:48.540 align:start position:0%
+ 
+ 
+
+00:17:48.540 --> 00:17:51.210 align:start position:0%
+ 
+ 
+
+00:17:51.210 --> 00:17:55.440 align:start position:0%
+ 
+ 
+
+00:17:55.440 --> 00:17:58.860 align:start position:0%
+ 
+ 
+
+00:17:58.860 --> 00:18:01.020 align:start position:0%
+ 
+ 
+
+00:18:01.020 --> 00:18:06.690 align:start position:0%
+ 
+ 
+
+00:18:06.690 --> 00:18:08.790 align:start position:0%
+ 
+ 
+
+00:18:08.790 --> 00:18:11.190 align:start position:0%
+ 
+ 
+
+00:18:11.190 --> 00:18:12.990 align:start position:0%
+ 
+ 
+
+00:18:12.990 --> 00:18:16.110 align:start position:0%
+ 
+ 
+
+00:18:16.110 --> 00:18:17.580 align:start position:0%
+ 
+ 
+
+00:18:17.580 --> 00:18:20.130 align:start position:0%
+ 
+ 
+
+00:18:20.130 --> 00:18:23.250 align:start position:0%
+ 
+ 
+
+00:18:23.250 --> 00:18:25.440 align:start position:0%
+ 
+ 
+
+00:18:25.440 --> 00:18:27.659 align:start position:0%
+ 
+ 
+
+00:18:27.659 --> 00:18:31.260 align:start position:0%
+ 
+ 
+
+00:18:31.260 --> 00:18:34.440 align:start position:0%
+ 
+ 
+
+00:18:34.440 --> 00:18:35.970 align:start position:0%
+ 
+ 
+
+00:18:35.970 --> 00:18:37.770 align:start position:0%
+ 
+ 
+
+00:18:37.770 --> 00:18:41.940 align:start position:0%
+ 
+ 
+
+00:18:41.940 --> 00:18:45.810 align:start position:0%
+ 
+ 
+
+00:18:45.810 --> 00:18:47.970 align:start position:0%
+ 
+ 
+
+00:18:47.970 --> 00:18:50.340 align:start position:0%
+ 
+ 
+
+00:18:50.340 --> 00:18:52.860 align:start position:0%
+ 
+ 
+
+00:18:52.860 --> 00:18:54.990 align:start position:0%
+ 
+ 
+
+00:18:54.990 --> 00:18:58.409 align:start position:0%
+ 
+ 
+
+00:18:58.409 --> 00:19:00.060 align:start position:0%
+ 
+ 
+
+00:19:00.060 --> 00:19:02.010 align:start position:0%
+ 
+ 
+
+00:19:02.010 --> 00:19:04.950 align:start position:0%
+ 
+ 
+
+00:19:04.950 --> 00:19:07.669 align:start position:0%
+ 
+ 
+
+00:19:07.669 --> 00:19:11.070 align:start position:0%
+ 
+ 
+
+00:19:11.070 --> 00:19:13.770 align:start position:0%
+ 
+ 
+
+00:19:13.770 --> 00:19:15.570 align:start position:0%
+ 
+ 
+
+00:19:15.570 --> 00:19:18.390 align:start position:0%
+ 
+ 
+
+00:19:18.390 --> 00:19:20.370 align:start position:0%
+ 
+ 
+
+00:19:20.370 --> 00:19:25.649 align:start position:0%
+ 
+ 
+
+00:19:25.649 --> 00:19:29.220 align:start position:0%
+ 
+ 
+
+00:19:29.220 --> 00:19:31.470 align:start position:0%
+ 
+ 
+
+00:19:31.470 --> 00:19:34.169 align:start position:0%
+ 
+ 
+
+00:19:34.169 --> 00:19:36.270 align:start position:0%
+ 
+ 
+
+00:19:36.270 --> 00:19:39.180 align:start position:0%
+ 
+ 
+
+00:19:39.180 --> 00:19:41.370 align:start position:0%
+ 
+ 
+
+00:19:41.370 --> 00:19:43.590 align:start position:0%
+ 
+ 
+
+00:19:43.590 --> 00:19:48.299 align:start position:0%
+ 
+ 
+
+00:19:48.299 --> 00:19:50.279 align:start position:0%
+ 
+ 
+
+00:19:50.279 --> 00:19:54.539 align:start position:0%
+ 
+ 
+
+00:19:54.539 --> 00:19:56.789 align:start position:0%
+ 
+ 
+
+00:19:56.789 --> 00:19:58.440 align:start position:0%
+ 
+ 
+
+00:19:58.440 --> 00:20:00.380 align:start position:0%
+ 
+ 
+
+00:20:00.380 --> 00:20:04.080 align:start position:0%
+ 
+ 
+
+00:20:04.080 --> 00:20:05.760 align:start position:0%
+ 
+ 
+
+00:20:05.760 --> 00:20:10.730 align:start position:0%
+ 
+ 
+
+00:20:10.730 --> 00:20:10.740 align:start position:0%
+ 
+ 
+
+00:20:10.740 --> 00:20:36.990 align:start position:0%
+ 
+
+
+00:20:36.990 --> 00:20:41.039 align:start position:0%
+ 
+ 
+
+00:20:41.039 --> 00:20:43.430 align:start position:0%
+ 
+ 
+
+00:20:43.430 --> 00:20:46.169 align:start position:0%
+ 
+ 
+
+00:20:46.169 --> 00:20:48.390 align:start position:0%
+ 
+ 
+
+00:20:48.390 --> 00:20:50.730 align:start position:0%
+ 
+ 
+
+00:20:50.730 --> 00:20:55.169 align:start position:0%
+ 
+ 
+
+00:20:55.169 --> 00:20:57.299 align:start position:0%
+ 
+ 
+
+00:20:57.299 --> 00:21:00.630 align:start position:0%
+ 
+ 
+
+00:21:00.630 --> 00:21:02.130 align:start position:0%
+ 
+ 
+
+00:21:02.130 --> 00:21:05.480 align:start position:0%
+ 
+ 
+
+00:21:05.480 --> 00:21:08.760 align:start position:0%
+ 
+ 
+
+00:21:08.760 --> 00:21:10.710 align:start position:0%
+ 
+ 
+
+00:21:10.710 --> 00:21:12.750 align:start position:0%
+ 
+ 
+
+00:21:12.750 --> 00:21:15.750 align:start position:0%
+ 
+ 
+
+00:21:15.750 --> 00:21:18.529 align:start position:0%
+ 
+ 
+
+00:21:18.529 --> 00:21:24.180 align:start position:0%
+ 
+ 
+
+00:21:24.180 --> 00:21:27.240 align:start position:0%
+ 
+ 
+
+00:21:27.240 --> 00:21:29.190 align:start position:0%
+ 
+ 
+
+00:21:29.190 --> 00:21:32.220 align:start position:0%
+ 
+ 
+
+00:21:32.220 --> 00:21:35.549 align:start position:0%
+ 
+ 
+
+00:21:35.549 --> 00:21:38.820 align:start position:0%
+ 
+ 
+
+00:21:38.820 --> 00:21:43.110 align:start position:0%
+ 
+ 
+
+00:21:43.110 --> 00:21:47.669 align:start position:0%
+ 
+ 
+
+00:21:47.669 --> 00:21:50.100 align:start position:0%
+ 
+ 
+
+00:21:50.100 --> 00:21:54.169 align:start position:0%
+ 
+ 
+
+00:21:54.169 --> 00:21:56.880 align:start position:0%
+ 
+ 
+
+00:21:56.880 --> 00:21:59.700 align:start position:0%
+ 
+ 
+
+00:21:59.700 --> 00:22:07.320 align:start position:0%
+ 
+ 
+
+00:22:07.320 --> 00:22:11.279 align:start position:0%
+ 
+ 
+
+00:22:11.279 --> 00:22:13.500 align:start position:0%
+ 
+ 
+
+00:22:13.500 --> 00:22:14.909 align:start position:0%
+ 
+ 
+
+00:22:14.909 --> 00:22:16.740 align:start position:0%
+ 
+ 
+
+00:22:16.740 --> 00:22:19.700 align:start position:0%
+ 
+ 
+
+00:22:19.700 --> 00:22:25.799 align:start position:0%
+ 
+ 
+
+00:22:25.799 --> 00:22:28.350 align:start position:0%
+ 
+ 
+
+00:22:28.350 --> 00:22:32.070 align:start position:0%
+ 
+ 
+
+00:22:32.070 --> 00:22:36.480 align:start position:0%
+ 
+ 
+
+00:22:36.480 --> 00:22:40.260 align:start position:0%
+ 
+ 
+
+00:22:40.260 --> 00:22:42.750 align:start position:0%
+ 
+ 
+
+00:22:42.750 --> 00:22:46.410 align:start position:0%
+ 
+ 
+
+00:22:46.410 --> 00:22:48.780 align:start position:0%
+ 
+ 
+
+00:22:48.780 --> 00:22:51.210 align:start position:0%
+ 
+ 
+
+00:22:51.210 --> 00:22:54.930 align:start position:0%
+ 
+ 
+
+00:22:54.930 --> 00:22:56.790 align:start position:0%
+ 
+ 
+
+00:22:56.790 --> 00:22:58.980 align:start position:0%
+ 
+ 
+
+00:22:58.980 --> 00:23:01.530 align:start position:0%
+ 
+ 
+
+00:23:01.530 --> 00:23:05.370 align:start position:0%
+ 
+ 
+
+00:23:05.370 --> 00:23:07.470 align:start position:0%
+ 
+ 
+
+00:23:07.470 --> 00:23:10.980 align:start position:0%
+ 
+ 
+
+00:23:10.980 --> 00:23:14.580 align:start position:0%
+ 
+ 
+
+00:23:14.580 --> 00:23:17.280 align:start position:0%
+ 
+ 
+
+00:23:17.280 --> 00:23:20.580 align:start position:0%
+ 
+ 
+
+00:23:20.580 --> 00:23:23.040 align:start position:0%
+ 
+ 
+
+00:23:23.040 --> 00:23:28.530 align:start position:0%
+ 
+ 
+
+00:23:28.530 --> 00:23:30.900 align:start position:0%
+ 
+ 
+
+00:23:30.900 --> 00:23:33.470 align:start position:0%
+ 
+ 
+
+00:23:33.470 --> 00:23:37.920 align:start position:0%
+ 
+ 
+
+00:23:37.920 --> 00:23:39.900 align:start position:0%
+ 
+ 
+
+00:23:39.900 --> 00:23:42.060 align:start position:0%
+ 
+ 
+
+00:23:42.060 --> 00:23:44.280 align:start position:0%
+ 
+ 
+
+00:23:44.280 --> 00:23:52.020 align:start position:0%
+ 
+ 
+
+00:23:52.020 --> 00:23:54.360 align:start position:0%
+ 
+ 
+
+00:23:54.360 --> 00:23:57.660 align:start position:0%
+ 
+ 
+
+00:23:57.660 --> 00:24:04.140 align:start position:0%
+ 
+ 
+
+00:24:04.140 --> 00:24:06.840 align:start position:0%
+ 
+ 
+
+00:24:06.840 --> 00:24:09.660 align:start position:0%
+ 
+ 
+
+00:24:09.660 --> 00:24:12.420 align:start position:0%
+ 
+ 
+
+00:24:12.420 --> 00:24:14.840 align:start position:0%
+ 
+ 
+
+00:24:14.840 --> 00:24:16.890 align:start position:0%
+ 
+ 
+
+00:24:16.890 --> 00:24:20.940 align:start position:0%
+ 
+ 
+
+00:24:20.940 --> 00:24:23.700 align:start position:0%
+ 
+ 
+
+00:24:23.700 --> 00:24:26.820 align:start position:0%
+ 
+ 
+
+00:24:26.820 --> 00:24:29.190 align:start position:0%
+ 
+ 
+
+00:24:29.190 --> 00:24:30.920 align:start position:0%
+ 
+ 
+
+00:24:30.920 --> 00:24:33.870 align:start position:0%
+ 
+ 
+
+00:24:33.870 --> 00:24:36.810 align:start position:0%
+ 
+ 
+
+00:24:36.810 --> 00:24:39.780 align:start position:0%
+ 
+ 
+
+00:24:39.780 --> 00:24:42.570 align:start position:0%
+ 
+ 
+
+00:24:42.570 --> 00:24:45.210 align:start position:0%
+ 
+ 
+
+00:24:45.210 --> 00:24:47.850 align:start position:0%
+ 
+ 
+
+00:24:47.850 --> 00:24:51.090 align:start position:0%
+ 
+ 
+
+00:24:51.090 --> 00:24:55.740 align:start position:0%
+ 
+ 
+
+00:24:55.740 --> 00:25:00.029 align:start position:0%
+ 
+ 
+
+00:25:00.029 --> 00:25:03.719 align:start position:0%
+ 
+ 
+
+00:25:03.719 --> 00:25:05.669 align:start position:0%
+ 
+ 
+
+00:25:05.669 --> 00:25:08.580 align:start position:0%
+ 
+ 
+
+00:25:08.580 --> 00:25:11.399 align:start position:0%
+ 
+ 
+
+00:25:11.399 --> 00:25:14.180 align:start position:0%
+ 
+ 
+
+00:25:14.180 --> 00:25:17.849 align:start position:0%
+ 
+ 
+
+00:25:17.849 --> 00:25:21.419 align:start position:0%
+ 
+ 
+
+00:25:21.419 --> 00:25:23.700 align:start position:0%
+ 
+ 
+
+00:25:23.700 --> 00:25:26.249 align:start position:0%
+ 
+ 
+
+00:25:26.249 --> 00:25:35.759 align:start position:0%
+ 
+ 
+
+00:25:35.759 --> 00:25:37.589 align:start position:0%
+ 
+ 
+
+00:25:37.589 --> 00:25:40.560 align:start position:0%
+ 
+ 
+
+00:25:40.560 --> 00:25:42.839 align:start position:0%
+ 
+ 
+
+00:25:42.839 --> 00:25:44.639 align:start position:0%
+ 
+ 
+
+00:25:44.639 --> 00:25:48.419 align:start position:0%
+ 
+ 
+
+00:25:48.419 --> 00:25:50.519 align:start position:0%
+ 
+ 
+
+00:25:50.519 --> 00:25:57.749 align:start position:0%
+ 
+ 
+
+00:25:57.749 --> 00:25:59.549 align:start position:0%
+ 
+ 
+
+00:25:59.549 --> 00:26:01.979 align:start position:0%
+ 
+ 
+
+00:26:01.979 --> 00:26:04.349 align:start position:0%
+ 
+ 
+
+00:26:04.349 --> 00:26:06.520 align:start position:0%
+ 
+ 
+
+00:26:06.520 --> 00:26:06.530 align:start position:0%
+ 
+ 
+
+00:26:06.530 --> 00:26:28.200 align:start position:0%
+ 
+
+

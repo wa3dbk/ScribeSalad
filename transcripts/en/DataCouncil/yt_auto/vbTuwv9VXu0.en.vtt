@@ -1,0 +1,3764 @@
+WEBVTT
+Kind: captions
+Language: en
+
+00:00:03.050 --> 00:00:08.100 align:start position:0%
+ 
+[Music]  the idea of kind of deconstructing the  database has been a project that's been  happening maybe over the last ten years  or so the you know the Hadoop revolution  was in part about that and this talk is  kind of this isn't about any particular  database system I will be talking about  calcite from time to time but really  it's a talk about the kind of the laws  of physics that determine what makes a  good data system and some of the tricks  that are being used really since the  very first days of databases and how we  can apply those to you know the next  generation of systems and if you're not  writing your database which I expect  most of you are not writing your  database it's useful to know these  things simply to just to evaluate  whether this is a sound data  architecture so I hope that it's useful  for people that are doing data  engineering and not necessarily building  their own database management systems so  yeah quick intro to me I do a lot of  open-source work with the Apache  Software Foundation in part because  that's where a lot of interesting Big  Data stuff is happening I've been doing  open source for a very long time going  back to I built the Mondrian OLAP engine  which is the first open source or lap  engine back in 2001 and yeah contributed  to a variety of projects but the main  one I'm involved with is Apache calcite  more about that later I just I was at  Hortonworks until recently and a month  ago I joined Luca so not much of this  talk is going to be about looker because  I'm still learning about the company but  just a couple of things I wanted to say  about it first of all is everyone seems  to love looker  you know I the reason I joined look it  was because I met various people that  were customers of the company and they  loved it and the employees the the work  environment is extremely respectful  which is important to me and everyone is  you know functioning as a team and what  look it is the quick description of it  is a business intelligence tool but what  they're trying to do is create is to  create a data culture and a company  which means making it easy for the  business users to get hold of the data  that they that they want without writing  sequel or without bothering IT but the  way you achieve that is to basically to  provide this data model and they have a  language called look ml which is a human  readable and human writable it's it's  code you you you write your business  model in code and then deploy that and  everyone in the company is basically  seeing the same definition of all of the  measures and dimensions that they're  using so and the fact that it's code is  I've worked in bi a long time the fact  that it's code as opposed to a blob of  data in a repository is a very big deal  because it means you can put it in get  you can dip it you can push that patches  you can do all the things you do with  source code so bringing some of that  software engineering approach to  business intelligence I think is huge so  that's why I joined Lucca you can  surmise some of the ideas that I'm doing  in this talk I am hoping to bring into  looking over the next few months okay  so as to kind of motivate this here is a  so called simple query there's no  database management system involved and  the reason is because this is I'm kind  of thinking about the laws of physics  here imagine if you have the 2010 US  Census and 100 million household records  and each record is a kilobyte so you've  got 100 gigabytes of data and you  basically want to sum up that data  the goal is to sum up all the data in  five seconds  and the data stored on four disks and  the disks have sata3 through port the  short answer is it's impossible to  achieve the goal the reason is because  the disks you know a hundred gigabytes  of data one gigabyte per second it's  going to take a hundred seconds of disk  activity to pull the data off those  disks and yet we all query data systems  that are much bigger than that on a  daily basis so you know how do they do  it what is the trick so there's a  variety of solutions and all of these  all of these solutions are implemented  to some degree in your favorite database  management system the simple solution is  a sequential scan and it takes obviously  a hundred seconds if you paralyze the  query if you have if you've spread the  data over 40 discs then you still have  to kind of coordinate the data and bring  it back again the query takes maybe ten  seconds because you've you've basically  just got more i/o  capacity the kind of that so this is the  you know that that's the that's the fast  in my talk title caching the data if you  execute the query once and you cache the  query result or you cache all of the  data in memory if you happen to have a  hundred gigabytes of memory you cache  the results and then you you know you  can answer the question much more  quickly but the absolute fastest way  that you can compute the answer to this  is to materialize it in the words in  other words cheat pre compute the result  store the result  and when someone when someone asks that  question how many households are there  in the US you can basically in one  millisecond you can basically answer  that question so and that that is the  the you know that is the reality that's  the dirty truth that all database  management systems basically cheat they  don't answer the question you ask they  answer some similar question they pre  computed so I  I use the word materialized there I'm  gonna be talking a lot about  materialized views or materialized  queries so don't be put off by that  terminology but as I'll explain this  materialized queries is a pattern which  has existed a very long time and in  database management systems way before  the Oracle got the create materialized  view command in probably nineteen you  know we're all probably 2003 and even  better  sometimes you can't anticipate all of  the questions that people might ask that  the the very best solution is to  materialized cache the results and adapt  so if people start asking questions  they've never asked before start  building new materializations to answer  the question that they may ask in ten  minutes time so yeah lazy beat smart and  fast lazy meaning pre compute the  answers in advance so you just know the  answer so yeah here are some of the  questions I'm going to answer this talk  answer in this talk how do you tune a  data system or how should the data  system tune itself because you just  don't the data system on the day that  you load the first data set is not going  to be perfect because it doesn't know  what the query load is going to be and  so forth how did we implement this in  the Patrick owl site I'll explain a  little bit about what Apache calcite is  and and the the features that you would  use if you're building a database  management system how what are some of  the techniques you can use to organize  data and how to make the system  self-organizing so how can we bring in  techniques kind of like the term self  driving database has been used this idea  of systems that learn and adapt  automatically we're gonna be using a lot  of I'm well I think in terms of  relational algebra I think I dream in  relational algebra  relational algebra is what is underneath  every sequel system you use and probably  a lot of the no sequel systems as well  it's based on it's based on set theory  and a small number of basic operators  like  project and filter filters like the  where Clause aggregators like the group  by clause in a sequel statement and it  turns out using 8 or 10 of these core  operators you can represent a kind of  data flow graph which is logically the  question that you're asking for and  building a relational building  relational algebra is complicated  because you need to you need to build a  query optimizer and things like  statistics in order to execute a query  based on relational algebra that's the  that's the kind of bad news but the good  news is that once you've built a query  optimizer and you've built relational  algebra you can kind of start doing a  lot of really exciting things like well  what the database folks call data  independence which is now your  application is no longer dependent on  the way that your data is physically  stored on disk so you could for example  load your data kind of so it's scattered  randomly or throughout your disks and  then you notice you're doing a lot of  joins on product ID so you could  reorganize your data so it's partitioned  on product ID so product based joins are  now gonna run really fast if you've  built your data using cysts using sequel  or in fact anything with a query  optimizer you can reorganize your data  and your application doesn't have to  know about it at all if you build your  if you haven't done that and you've  organized your data into files then  you're going to have to completely  rewrite your application if you  reorganize the data like that and so  partitioning is just one of you know are  a hundred different techniques you can  use to reorganize your data to make the  queries run faster and also I'm not  really going to talk about query  optimization but you know a query  optimizer can achieve you know stunning  you know thousandfold improvements in  the in the performance of queries so  calcite is a it's an Apache top-level  project not many people have heard of it  actually who's heard of Apache calcite  before ok so about a third of the room  well that's good that's good because  it's not an end-user tool at all you  know it it probably only has 100  customers in the whole world people  people who are writing database  management systems are the people that  want to use calcite so if you're using  hive or flink or map D or Apache beam  sequel or Phoenix then you're using  calcite under the covers anyway it makes  a lot of good things possible we use the  Apache community development model which  means we're not dominated by any one  vendor we have people form from  competing companies all working together  under the Apache process and they all  basically put on their Apache hat which  means they are working for the good of  the project and leaving their particular  employers interests at the door and they  resulted with is we've created this  really useful thing that keeps on  getting better and if you want to get  involved that doesn't mean writing code  if you just want to talk to us ask  questions and join the the dev list the  email list and we'd be happy to help so  there's lots of ways of organizing data  there's lots of dimensions you can use  to organize data data format is just one  of them right whether you store your  data in orc or parque and if you just  store the data raw or indoor  column-oriented but there's a class of  organizations of data which I call  logical organizations which is if you  know that the data is if you know that  data from 2016 is over there in 2017 is  over there those kinds of organizations  of the data enable some kind of massive  performance improvements because the  system actually knows something kind of  about the semantics of the data and it  can turn a query on a billion rows to  what is really a query on a thousand  rows in other words it allows the  optimizer to rewrite the question in  terms of it makes it into a simpler  question so a lot of the stuff I'm going  to be talking about I'd call logical  optimizations or logical reorganizations  of the data lossy copies of the data  is actually one that's really  interesting it was I was talking to  someone today about Vertica which is a  kind of the first mainstream  column-oriented database came out in the  early 2000s and when you load it ate it  in a table in vertigo it will create you  might have columns  you know ABC X Y Z it will create one  projection of the data on maybe columns  a BZ and another projection on columns B  and C and so and it will just choose  which of the projections most closely  answers your query those kinds of things  where it's producing multiple copies of  the data in different sort orders is a  very powerful thing so the first kind of  materialized view the one that everyone  knows is the B tree index and so one of  the things I learned when I joined years  ago I work for the case of the kernel  development team in Oracle and I was  surprised to learn that in index in  Oracle is just a table it doesn't appear  in the catalog as a table but it's  structured just like a table and in fact  so when I created index you know I've  got an employee table with employee  number and name and department number if  I created an index on Department number  and name then it creates a table with  Department number name and r ID and that  table is physically sorted on Department  number I mean it creates a b-tree  structure above it but the the actual  records in a sorted on Department number  so it kind of has the same data as the  table and if I want to like look up all  employees in Department 20 it's kind of  like a joint I first of all find the  department 20 I find the Rorie's of the  records in the department number 20 and  then I go to the the actual table and  get those righties and that's kind of a  joint on row ID so an index is yeah it's  a redundant copy of the data as  evidenced by the fact you can say drop  index and create index and you get it  gets the data back again you can  recreate the contents of the index from  the contents of the table and it  accelerates queries if you say just you  know select count distinct Department  number it can more easily do that from  the index because the department numbers  are saw  it than going to the table so yeah it  accelerates a bunch of queries that you  wouldn't even think of as index queries  so the next thing is a covering index so  let's suppose we take that same index  and rather than storing row IDs we store  the employee number so now we've got the  same number of columns in the index as  we have the table in other words this  really is just it's a copy of the table  just in a different sort order now we  don't need their IDs anymore which is  good news because analytic databases  don't handle row ID lookups you know a  variety lookup is a random access to  something which is three server rooms  over and it's a very expensive roundtrip  so analytic databases don't even bother  with with row IDs so now we've basically  just got two copies of the tip of the  table and when someone sends a query we  could just choose a or b whichever one  is more suitable for that particular  query in fact you could say which table  is actually you know the primary copy  you could say well the one sorted on  Department number is the primary copy  and the other one is a redundant copy  there's the same information content in  both now if I'm writing a query  optimizer how do I tell the optimizer  this thing exists that's kind of the  what motivated me to add this kind of  stuff into calcite you know I didn't  want to write covering index support  into calcite I wanted to build some kind  of theory that allows me to model these  redundant copies of data and that thing  is something I call a materialized query  I hope you're beginning to see a pattern  here that's given another example which  is a bit further away or I preempted  myself so here's a materialized view  with literally the create the  materialized view DDL and in Oracle or  other systems that support these I'm  saying here's the table here's a query  the contents of the table are always the  same as the contents of the query and  the most important thing is I can write  the I don't have to reference that table  the mSpy depth no I don't have to  reference that in the query if I do a  query which can be satisfied by this  if I write a query that can be satisfied  by that relational expression it will  use the materialized view transparently  without without mean needing to do  anything so this is exactly the same as  that covering index on the previous  slide but the interesting thing is that  sequel in the metric crate materialized  view can be something very complex it  can be joins group bys exists unions or  all kinds of things here's another case  where a materialized views help let's  suppose who's used a spatial or  geospatial system ok probably used post  juice or something post just was a huge  amount of effort to develop adding  geospatial support into an existing  relational database there have been some  there's been some research done have had  how do I add spatial support to a date  and and sorry to backtrack the reason  why it's so difficult is spatial data is  difficult to deal with using the same  usually with relational data you there's  two ways of accessing the data you  either do access it by range so  everything between you know department  numbers between 100 and 200 or you  access it by hash code so all Department  numbers that hash to 7 spatial data you  can't use either of those techniques you  can't develop 1 dimensional range range  scan and you can't hash so you have to  add these dedicated spatial data  structures and that's what they did in  post yes and it was an awful lot of work  but there's a trick to add  spatial support to databases without  altering the underlying storage  structures of the database which I'm  about to show you and we're thinking  about this query so we've got a bunch of  restaurants in two-dimensional space and  we're interested in restaurants that are  within  let me see two squares of that yellow  circle and them in the top right-hand  corner a 1.5 just within 1.5 a distance  of 1.5 from the coordinate 6 comma 7 so  the trick is to convert this  two-dimensional space which is the  latitude and longitude coordinates into  a one dimensional space but we still  want to the trick is to ensure that if  two points are close to each other in  two-dimensional space then they are  sorry then they are likely to be close  to each other in this 1 dimensional  space so a space-filling curve the  Hilbert curve is the most famous  space-filling curve but there are other  space-filling curves every point in this  two-dimensional space is reached once is  the this this curve travels through  every point exactly once so everything  has a coordinate every point on this  base has a coordinate on the one  dimensional curve and the the locality  thing is really important because I want  to be able to do our range scan on this  along this curve in order to be able to  find all those restaurants in that  particular area of the map it's not  always 1 range scan maybe so in some  cases you need to arrange scans or three  range scans but anyway you're still  accessing only a small proportion of the  of the curve and by the way I think I  think if it is the easiest way of  thinking about this is that is that the  the coordinates on the curve is a value  between 0 and 1  so the rather than going from 1 to 4  think of it as going from 0 to 0.25 to  0.5 to 1 so so how do we use this in a  materialized view what we do is we  compute a column we've got our  restaurants table with x and y we  compute a column H which is the distance  along this hilbert curve and so here on  the bottom right of the screen there it  is and then when I see this you know dis  less than 1.5 I actually changed the  query to convert this into a range scan  and the database that's storing this  let's suppose this is HBase HBase is you  know has tables which are sorted by a  particular key if that key is age then I  can very easily do a range scan on that  on that key and find all the restaurants  in that in that region there might be  some false positives there might be  things that are on the curve that are  slightly outside that 1.5 kilometer  radius but it works pretty well and  HBase is not a spatial database we're  just using this sorted table which is  the you know the main data structure of  HBase so this is pretty cool and so this  materialized view is not a new data  structure this materialized view is  simply a very small piece of knowledge  the optimizer has when the query is  coming in that says I can safely do this  rewrite with this query in terms of x  and y to use this age column so I think  this is a this is a pretty neat trick so  I think I covered a lot of this we tell  the optimizer we tell it about this H  column we tell it what expression is in  this column and then we put it in the  important part is we put it in a table  which is physically ordered on H and  then we can get a professional  efficiently execute the query another  area that's kind of close to my heart  another area of you know non-traditional  sequel is streaming queries streaming  queries are you know real time data is  ever more important and we need a  declarative way of dealing with  streaming queries in continuous ETL and  sequel is well sequels not a perfect  language for any application but turns  out streaming sequel is a pretty  effective way of defining continuous  continuous queries and I've been doing a  lot of work on this and an apache  working with projects like flink and  sums and beam so and one of the cool  things about using sequel for streaming  queries is  in a streaming database you are  sometimes interested in continuous  queries in other words tell me every  time there's an order over a thousand  units but I'm also interested in  historic queries how many orders larger  than a thousand units did I have between  1st of June and 31st of December that's  a historic query that's a database query  that's not a streaming query at all I'm  interested in both kinds of queries and  I'm also interested in hybrid queries so  give me an order which is larger than  the average size you know an order which  is larger than the average size of  orders average size of orders for that  particular product that's combining you  know streaming data that just arrived 2  milliseconds ago with data that's been  building up over the last year because  we're using sequel are actually able to  combine streaming query and historical  data so sequel helps us solve the first  part of the problem which is how do we  even Express this question it doesn't  help us answer the it doesn't help us  actually implement it so implementing  this is hard now what would we how do we  go ahead and implement this if we're  using say Kafka to represent our stream  the data that's that flowed a year ago  is long gone from Kafka so in order to  implement this we probably need  something like the system kind of needs  to know that data is flowing out of  Kafka and say flowing into park' files  that are managed by hive or something  and so when it receives this hybrid  query it has to know that today's data  or the last week of data is in Kafka and  the last 10 years of data is in hive and  form this query so  that that table of historic data is  essentially a materialized view it's the  the system knows where to find this bit  of data and where to find that bit of  data so a materialized view is a way of  telling the system where all the little  bits of data are and of course I'm a  query optimizer guy so I don't tend to  be very concerned with maintaining the  data maintaining the materialized views  that's someone else's job but that is a  big part of what the system does is  keeps that materialized view up-to-date  as data arrives so I've given you a you  know a list of three examples of things  that can be difficult data problems that  can be modeled by materialized views  that general idea of having a table and  a relational algebra expression that  says what's in that table is incredibly  powerful and I think I think it's a  pattern that we will start seeing over  and over and over again in the next 10  years of data management systems so how  long do I have left okay how do we  design these materialized views you know  simple answer is users can do it but  that's a very imperfect answer so what  we'd yeah the first answer is always  humans to in these systems the second  answer will be we would like the systems  to adapt maybe in fairly minor ways to  start with that get smarter over time so  the in imagine we have this recommender  write the input to this recommender  ideally would be the DML in other words  the definitions of the tables they've  created the queries that have that have  been seen historically and the  statistics in other words this seems to  be a primary key this this column seems  to have you know 20 unique values you  know all of that kind of stuff and this  so this recommender would see all of  this all of this data including queries  that are arriving in real time and say  hey I'm gonna I'm going to start  producing some  materialized views or I'm going to  reorganize this table I'm going to you  know repartition this table on product  ID because I'm seeing a lot of joins on  this and I mean there are simple forms  of adaptation that we don't even think  of as adaptations but simply a cache  isn't as a way of a building an adaptive  system right it's it's just I'm gonna  keep this data around because they just  read it two minutes ago there's a really  good chance they're going to use it in  the next 30 minutes that's what a cache  is so as the system gets systems get  smarter then perhaps we can start having  more forms of adaptation built into our  systems this is kind of where I'm  heading out you know thinking I've been  involved in BI systems analytic  databases for a long time this is kind  of my Holy Grail that I've been working  towards for probably the last 10 years  in memory materialized views so this  idea where the gray bar at the bottom is  the data on disk and the circle at the  top is this user that's you know sending  sending queries via tableau or whatever  whatever tool they're using and when  they hit a piece of data what it should  do is pull that pull that data into  memory such that as far as the tool is  concerned it's still it's still a sequel  data set that it can use but it's a it's  a piece of data in memory and over time  the system is going are they are  interested in analyzing data in Texas  and Arizona from 2014 ok I'm going to  start building some summaries for that  data in memory so they're you know the  queries over the next hour we're going  to get fast I did that the wrong way in  Mondrian I kind of built these caching  but I built it in Java hash tables which  were great that there's just no way you  can join a java hash table to a table in  Oracle so it just kind of right bit  wrong and then the probe these are the  kind of the I don't know research  problems we have to do we have to solve  you know the the human has to deal with  these problems but a the system is going  to have to deal with these problems in  the future  so figure out which materializations to  create populate them perhaps populate  them incrementally rewrite queries a  materialized view is kind of useless if  you have to reference it in your query  so when a query comes in you have to  recognize that this materialized view  could be used to answer that query and  then over time create new  materializations to adapt to the query  load and then lastly it needs to be  expressive so if you if you're dealing  we want to deal with an extended sequel  that can deal with streaming that can  deal with nested collections that can  deal with like machine learning complex  event processing kind of structures not  just select from where  so in calcite we introduced this data  structure called a lattice which is a  it's kind of a space of possible  materialization so we were focusing  initially on the on the problem of  summary tables if if you're if you're  dealing with a bi application then an  awful lot of the queries are select from  where join group by in other words they  join several tables together effect  table and dimension tables and then  aggregate on some combination of  attributes and a summary table is a very  useful form of materialization to create  because it saves you from reading a lot  of data and it doesn't occupy a lot of  space the summary table is often you  know thousands of times smaller than the  original data set so a lattice is kind  of telling the system of that the star  schema what are the dimensions and what  are the measures what are the what are  the join paths here and so once you've  created a lattice it will start the  system will start watching for queries  that are coming in and start thinking  about possible summary tables that could  create the problem is there's a lot of  possible summary tables so if you even  have 10 attributes  you know 10 10 columns for example 10  dimension columns then there's 2 to the  10 possible aggregate tables you could  create so as you can imagine and on this  on this diagram I've kind of diagrammed  out some of the each each of the  ellipses is a possible summary table the  one at the top is the grand total it  only has one row you've got a summary  table summing by zip code which has  43,000 records in it you've got one by  month which has 12 records the one by  year in month has 60 records because  we've got five years of worth of data  and so forth and then at the bottom is  the the raw data which is a million rows  so as you can see as you have more items  in your group by clause the the size of  the summary table gets larger as you  have fewer items in your group by clause  the summary table gets smaller but it  can answer fewer queries so yeah so  here's a typical set of summary tables  that we would that we would choose the  orange ones are the ones we've decided  to materialize and if you look at  virtually every query will hit one of  these if you come down from the top of  the of the graph virtually every query  will hit one of these and therefore  we'll be able to use that so if for  example I have a query on zip code  I will hit the summary table which is on  zip code state and gender which has  twice as many records approximately as  the zip code but that's fine I can  easily roll it up so there I'm going to  skip in the interest of time I'm going  to skip over the algorithm to generate  these  in fact I'm running so short of time I'm  probably gonna skip over a lot  oops there we go the algorithm to  generate these summary tables actually  is a voracious user of statistics so one  of the features we added into calcite  was data profiling an algorithm which  can basically do select count distinct X  select count distinct Y select discount  distinct X comma Y for every combination  of columns in your database and just  figure out which of your primary keys  which you know which you know product  color is functionally dependent on  product ad so it can discover these  functional relationships and therefore  figure out before it goes and builds  them what the size of these summary  tables is going to be and I'm going to  I'm going to skip over this but the long  story short the algorithm makes  extensive use of hyper log log as a way  of doing approximate counts to kind of  grok the contents of your database and  here's a kind of the the algorithm runs  iteratively it starts off by just  looking at single columns you know  select count distinct X select count  testing Y and then when it finds columns  that have unexpectedly high cardinality  it then tries combining them together  and it runs adaptively until it  basically is no longer surprised a  surprising combination is when state and  zipcode have fewer combinations together  than they would have individually which  basically tells you they are in  statistical terms they're not  independent variables so based on this  and if in a small number of iterations  the algorithm can basically come up with  a pretty good estimate of all of the  functional dependencies in a in a star  schema  so I am going to and there's another  feature in calcite which basically you  don't have to specify any business model  at all but can just observe the queries  coming in and noticing that you often  join the sales table to the customer  table and in another query you often  join the sales table to the product  table in the product class table and  therefore infers what your star schemas  are based on the incoming query load so  to summary to summarize materialized  views are yeah the one thing I want you  to take away is materialized views are  important and we're going to see a lot  of them and they enable not just  high-performance systems but the label  systems to learn from the query history  the query activity on the system and  relational algebra is well relational  algebra kicks ass so thank you so much  for your talk it's just so great to  place a face with a name I remember  installing Mondrian for the first time  back in like oh five and I was like oh  my god this guy's crazy he's giving away  sequel server analysis services for free  I know I know open-source people are we  might we find people to employ us yeah  my my question was in terms of I haven't  really looked under the covers at  calcite does it give any guidance in  terms of things like oh I'm pulling  things into memory cache therefore if  I'm on a cluster of query machines that  are providing the compute that I should  shard the cache like is there that kind  of okay yeah indirectly yes so calcite  as a query optimizer has statistics so  you should you know looking at a  particular query you can look at you  know but you can look at the statistics  of that query and figure out what its  memory utilization is  and if you're using more memory than  your cluster has then at least it can  tell you something is wrong calcite  doesn't provide that directly but  indirectly it is it's giving you the  tools to self cheer in the system I  think this is kind of the downside of  open source as we tend to produce tools  but we don't produce full product so  what I'm talking about here are some of  the tools in the toolbox that can be  used that that will be an excellent  product to build and calcite gives you  all of the raw materials to to do it I  mean you know a set of statistics that  can look at a piece of relational  algebra and tell you how much memory  we'll use is it's taken a lot of effort  to build that so you'd be building on  some you know very good foundations  question here so I'm curious what if  anything for your talk is are you plan  or hope to incorporate within Booker my  understandings look or sort of sits on  top of the data warehouse is agnostic -  a lot like the low level planner issues  that you talk about  yeah let's say some of the things I mean  one of the things I liked about looker  is it leans in common with Mondrian  actually it leans very heavily on the  data warehouse it doesn't try and do it  doesn't try and make itself into a data  processing engine so it generates some  very complex queries and sends them to  you know bigquery and redshift but I  still think I think there are some areas  where we are perhaps sending the same  query or very repetitive stuff to the to  the database over and over again so we  maybe can be a bit smarter about what we  send but I have no plans to radically  change the way look at works I think  just a little bit of intelligence and  how we generate queries could improve  things yeah we'll see my brother kind of  noticed that I seem to have kind of a  zigzag in my career you know I will I  will work for a bi company then work for  a database company and then work for a  bi company so I'm on the you know the bi  company in arrow so the work I'd done on  Mondrian motivated what I did in calcite  because I knew the databases were not  providing what I needed to build a fast  I tool now I'm on the bi tool phase and  so we can maybe leverage some of that  some of the stuff in calcite to be more  intelligent about what queries we send  to the database  you
+
+00:00:08.100 --> 00:00:10.810 align:start position:0%
+[Music]  the idea of kind of deconstructing the  database has been a project that's been  happening maybe over the last ten years  or so the you know the Hadoop revolution  was in part about that and this talk is  kind of this isn't about any particular  database system I will be talking about  calcite from time to time but really  it's a talk about the kind of the laws  of physics that determine what makes a  good data system and some of the tricks  that are being used really since the  very first days of databases and how we  can apply those to you know the next  generation of systems and if you're not  writing your database which I expect  most of you are not writing your  database it's useful to know these  things simply to just to evaluate  whether this is a sound data  architecture so I hope that it's useful  for people that are doing data  engineering and not necessarily building  their own database management systems so  yeah quick intro to me I do a lot of  open-source work with the Apache  Software Foundation in part because  that's where a lot of interesting Big  Data stuff is happening I've been doing  open source for a very long time going  back to I built the Mondrian OLAP engine  which is the first open source or lap  engine back in 2001 and yeah contributed  to a variety of projects but the main  one I'm involved with is Apache calcite  more about that later I just I was at  Hortonworks until recently and a month  ago I joined Luca so not much of this  talk is going to be about looker because  I'm still learning about the company but  just a couple of things I wanted to say  about it first of all is everyone seems  to love looker  you know I the reason I joined look it  was because I met various people that  were customers of the company and they  loved it and the employees the the work  environment is extremely respectful  which is important to me and everyone is  you know functioning as a team and what  look it is the quick description of it  is a business intelligence tool but what  they're trying to do is create is to  create a data culture and a company  which means making it easy for the  business users to get hold of the data  that they that they want without writing  sequel or without bothering IT but the  way you achieve that is to basically to  provide this data model and they have a  language called look ml which is a human  readable and human writable it's it's  code you you you write your business  model in code and then deploy that and  everyone in the company is basically  seeing the same definition of all of the  measures and dimensions that they're  using so and the fact that it's code is  I've worked in bi a long time the fact  that it's code as opposed to a blob of  data in a repository is a very big deal  because it means you can put it in get  you can dip it you can push that patches  you can do all the things you do with  source code so bringing some of that  software engineering approach to  business intelligence I think is huge so  that's why I joined Lucca you can  surmise some of the ideas that I'm doing  in this talk I am hoping to bring into  looking over the next few months okay  so as to kind of motivate this here is a  so called simple query there's no  database management system involved and  the reason is because this is I'm kind  of thinking about the laws of physics  here imagine if you have the 2010 US  Census and 100 million household records  and each record is a kilobyte so you've  got 100 gigabytes of data and you  basically want to sum up that data  the goal is to sum up all the data in  five seconds  and the data stored on four disks and  the disks have sata3 through port the  short answer is it's impossible to  achieve the goal the reason is because  the disks you know a hundred gigabytes  of data one gigabyte per second it's  going to take a hundred seconds of disk  activity to pull the data off those  disks and yet we all query data systems  that are much bigger than that on a  daily basis so you know how do they do  it what is the trick so there's a  variety of solutions and all of these  all of these solutions are implemented  to some degree in your favorite database  management system the simple solution is  a sequential scan and it takes obviously  a hundred seconds if you paralyze the  query if you have if you've spread the  data over 40 discs then you still have  to kind of coordinate the data and bring  it back again the query takes maybe ten  seconds because you've you've basically  just got more i/o  capacity the kind of that so this is the  you know that that's the that's the fast  in my talk title caching the data if you  execute the query once and you cache the  query result or you cache all of the  data in memory if you happen to have a  hundred gigabytes of memory you cache  the results and then you you know you  can answer the question much more  quickly but the absolute fastest way  that you can compute the answer to this  is to materialize it in the words in  other words cheat pre compute the result  store the result  and when someone when someone asks that  question how many households are there  in the US you can basically in one  millisecond you can basically answer  that question so and that that is the  the you know that is the reality that's  the dirty truth that all database  management systems basically cheat they  don't answer the question you ask they  answer some similar question they pre  computed so I  I use the word materialized there I'm  gonna be talking a lot about  materialized views or materialized  queries so don't be put off by that  terminology but as I'll explain this  materialized queries is a pattern which  has existed a very long time and in  database management systems way before  the Oracle got the create materialized  view command in probably nineteen you  know we're all probably 2003 and even  better  sometimes you can't anticipate all of  the questions that people might ask that  the the very best solution is to  materialized cache the results and adapt  so if people start asking questions  they've never asked before start  building new materializations to answer  the question that they may ask in ten  minutes time so yeah lazy beat smart and  fast lazy meaning pre compute the  answers in advance so you just know the  answer so yeah here are some of the  questions I'm going to answer this talk  answer in this talk how do you tune a  data system or how should the data  system tune itself because you just  don't the data system on the day that  you load the first data set is not going  to be perfect because it doesn't know  what the query load is going to be and  so forth how did we implement this in  the Patrick owl site I'll explain a  little bit about what Apache calcite is  and and the the features that you would  use if you're building a database  management system how what are some of  the techniques you can use to organize  data and how to make the system  self-organizing so how can we bring in  techniques kind of like the term self  driving database has been used this idea  of systems that learn and adapt  automatically we're gonna be using a lot  of I'm well I think in terms of  relational algebra I think I dream in  relational algebra  relational algebra is what is underneath  every sequel system you use and probably  a lot of the no sequel systems as well  it's based on it's based on set theory  and a small number of basic operators  like  project and filter filters like the  where Clause aggregators like the group  by clause in a sequel statement and it  turns out using 8 or 10 of these core  operators you can represent a kind of  data flow graph which is logically the  question that you're asking for and  building a relational building  relational algebra is complicated  because you need to you need to build a  query optimizer and things like  statistics in order to execute a query  based on relational algebra that's the  that's the kind of bad news but the good  news is that once you've built a query  optimizer and you've built relational  algebra you can kind of start doing a  lot of really exciting things like well  what the database folks call data  independence which is now your  application is no longer dependent on  the way that your data is physically  stored on disk so you could for example  load your data kind of so it's scattered  randomly or throughout your disks and  then you notice you're doing a lot of  joins on product ID so you could  reorganize your data so it's partitioned  on product ID so product based joins are  now gonna run really fast if you've  built your data using cysts using sequel  or in fact anything with a query  optimizer you can reorganize your data  and your application doesn't have to  know about it at all if you build your  if you haven't done that and you've  organized your data into files then  you're going to have to completely  rewrite your application if you  reorganize the data like that and so  partitioning is just one of you know are  a hundred different techniques you can  use to reorganize your data to make the  queries run faster and also I'm not  really going to talk about query  optimization but you know a query  optimizer can achieve you know stunning  you know thousandfold improvements in  the in the performance of queries so  calcite is a it's an Apache top-level  project not many people have heard of it  actually who's heard of Apache calcite  before ok so about a third of the room  well that's good that's good because  it's not an end-user tool at all you  know it it probably only has 100  customers in the whole world people  people who are writing database  management systems are the people that  want to use calcite so if you're using  hive or flink or map D or Apache beam  sequel or Phoenix then you're using  calcite under the covers anyway it makes  a lot of good things possible we use the  Apache community development model which  means we're not dominated by any one  vendor we have people form from  competing companies all working together  under the Apache process and they all  basically put on their Apache hat which  means they are working for the good of  the project and leaving their particular  employers interests at the door and they  resulted with is we've created this  really useful thing that keeps on  getting better and if you want to get  involved that doesn't mean writing code  if you just want to talk to us ask  questions and join the the dev list the  email list and we'd be happy to help so  there's lots of ways of organizing data  there's lots of dimensions you can use  to organize data data format is just one  of them right whether you store your  data in orc or parque and if you just  store the data raw or indoor  column-oriented but there's a class of  organizations of data which I call  logical organizations which is if you  know that the data is if you know that  data from 2016 is over there in 2017 is  over there those kinds of organizations  of the data enable some kind of massive  performance improvements because the  system actually knows something kind of  about the semantics of the data and it  can turn a query on a billion rows to  what is really a query on a thousand  rows in other words it allows the  optimizer to rewrite the question in  terms of it makes it into a simpler  question so a lot of the stuff I'm going  to be talking about I'd call logical  optimizations or logical reorganizations  of the data lossy copies of the data  is actually one that's really  interesting it was I was talking to  someone today about Vertica which is a  kind of the first mainstream  column-oriented database came out in the  early 2000s and when you load it ate it  in a table in vertigo it will create you  might have columns  you know ABC X Y Z it will create one  projection of the data on maybe columns  a BZ and another projection on columns B  and C and so and it will just choose  which of the projections most closely  answers your query those kinds of things  where it's producing multiple copies of  the data in different sort orders is a  very powerful thing so the first kind of  materialized view the one that everyone  knows is the B tree index and so one of  the things I learned when I joined years  ago I work for the case of the kernel  development team in Oracle and I was  surprised to learn that in index in  Oracle is just a table it doesn't appear  in the catalog as a table but it's  structured just like a table and in fact  so when I created index you know I've  got an employee table with employee  number and name and department number if  I created an index on Department number  and name then it creates a table with  Department number name and r ID and that  table is physically sorted on Department  number I mean it creates a b-tree  structure above it but the the actual  records in a sorted on Department number  so it kind of has the same data as the  table and if I want to like look up all  employees in Department 20 it's kind of  like a joint I first of all find the  department 20 I find the Rorie's of the  records in the department number 20 and  then I go to the the actual table and  get those righties and that's kind of a  joint on row ID so an index is yeah it's  a redundant copy of the data as  evidenced by the fact you can say drop  index and create index and you get it  gets the data back again you can  recreate the contents of the index from  the contents of the table and it  accelerates queries if you say just you  know select count distinct Department  number it can more easily do that from  the index because the department numbers  are saw  it than going to the table so yeah it  accelerates a bunch of queries that you  wouldn't even think of as index queries  so the next thing is a covering index so  let's suppose we take that same index  and rather than storing row IDs we store  the employee number so now we've got the  same number of columns in the index as  we have the table in other words this  really is just it's a copy of the table  just in a different sort order now we  don't need their IDs anymore which is  good news because analytic databases  don't handle row ID lookups you know a  variety lookup is a random access to  something which is three server rooms  over and it's a very expensive roundtrip  so analytic databases don't even bother  with with row IDs so now we've basically  just got two copies of the tip of the  table and when someone sends a query we  could just choose a or b whichever one  is more suitable for that particular  query in fact you could say which table  is actually you know the primary copy  you could say well the one sorted on  Department number is the primary copy  and the other one is a redundant copy  there's the same information content in  both now if I'm writing a query  optimizer how do I tell the optimizer  this thing exists that's kind of the  what motivated me to add this kind of  stuff into calcite you know I didn't  want to write covering index support  into calcite I wanted to build some kind  of theory that allows me to model these  redundant copies of data and that thing  is something I call a materialized query  I hope you're beginning to see a pattern  here that's given another example which  is a bit further away or I preempted  myself so here's a materialized view  with literally the create the  materialized view DDL and in Oracle or  other systems that support these I'm  saying here's the table here's a query  the contents of the table are always the  same as the contents of the query and  the most important thing is I can write  the I don't have to reference that table  the mSpy depth no I don't have to  reference that in the query if I do a  query which can be satisfied by this  if I write a query that can be satisfied  by that relational expression it will  use the materialized view transparently  without without mean needing to do  anything so this is exactly the same as  that covering index on the previous  slide but the interesting thing is that  sequel in the metric crate materialized  view can be something very complex it  can be joins group bys exists unions or  all kinds of things here's another case  where a materialized views help let's  suppose who's used a spatial or  geospatial system ok probably used post  juice or something post just was a huge  amount of effort to develop adding  geospatial support into an existing  relational database there have been some  there's been some research done have had  how do I add spatial support to a date  and and sorry to backtrack the reason  why it's so difficult is spatial data is  difficult to deal with using the same  usually with relational data you there's  two ways of accessing the data you  either do access it by range so  everything between you know department  numbers between 100 and 200 or you  access it by hash code so all Department  numbers that hash to 7 spatial data you  can't use either of those techniques you  can't develop 1 dimensional range range  scan and you can't hash so you have to  add these dedicated spatial data  structures and that's what they did in  post yes and it was an awful lot of work  but there's a trick to add  spatial support to databases without  altering the underlying storage  structures of the database which I'm  about to show you and we're thinking  about this query so we've got a bunch of  restaurants in two-dimensional space and  we're interested in restaurants that are  within  let me see two squares of that yellow  circle and them in the top right-hand  corner a 1.5 just within 1.5 a distance  of 1.5 from the coordinate 6 comma 7 so  the trick is to convert this  two-dimensional space which is the  latitude and longitude coordinates into  a one dimensional space but we still  want to the trick is to ensure that if  two points are close to each other in  two-dimensional space then they are  sorry then they are likely to be close  to each other in this 1 dimensional  space so a space-filling curve the  Hilbert curve is the most famous  space-filling curve but there are other  space-filling curves every point in this  two-dimensional space is reached once is  the this this curve travels through  every point exactly once so everything  has a coordinate every point on this  base has a coordinate on the one  dimensional curve and the the locality  thing is really important because I want  to be able to do our range scan on this  along this curve in order to be able to  find all those restaurants in that  particular area of the map it's not  always 1 range scan maybe so in some  cases you need to arrange scans or three  range scans but anyway you're still  accessing only a small proportion of the  of the curve and by the way I think I  think if it is the easiest way of  thinking about this is that is that the  the coordinates on the curve is a value  between 0 and 1  so the rather than going from 1 to 4  think of it as going from 0 to 0.25 to  0.5 to 1 so so how do we use this in a  materialized view what we do is we  compute a column we've got our  restaurants table with x and y we  compute a column H which is the distance  along this hilbert curve and so here on  the bottom right of the screen there it  is and then when I see this you know dis  less than 1.5 I actually changed the  query to convert this into a range scan  and the database that's storing this  let's suppose this is HBase HBase is you  know has tables which are sorted by a  particular key if that key is age then I  can very easily do a range scan on that  on that key and find all the restaurants  in that in that region there might be  some false positives there might be  things that are on the curve that are  slightly outside that 1.5 kilometer  radius but it works pretty well and  HBase is not a spatial database we're  just using this sorted table which is  the you know the main data structure of  HBase so this is pretty cool and so this  materialized view is not a new data  structure this materialized view is  simply a very small piece of knowledge  the optimizer has when the query is  coming in that says I can safely do this  rewrite with this query in terms of x  and y to use this age column so I think  this is a this is a pretty neat trick so  I think I covered a lot of this we tell  the optimizer we tell it about this H  column we tell it what expression is in  this column and then we put it in the  important part is we put it in a table  which is physically ordered on H and  then we can get a professional  efficiently execute the query another  area that's kind of close to my heart  another area of you know non-traditional  sequel is streaming queries streaming  queries are you know real time data is  ever more important and we need a  declarative way of dealing with  streaming queries in continuous ETL and  sequel is well sequels not a perfect  language for any application but turns  out streaming sequel is a pretty  effective way of defining continuous  continuous queries and I've been doing a  lot of work on this and an apache  working with projects like flink and  sums and beam so and one of the cool  things about using sequel for streaming  queries is  in a streaming database you are  sometimes interested in continuous  queries in other words tell me every  time there's an order over a thousand  units but I'm also interested in  historic queries how many orders larger  than a thousand units did I have between  1st of June and 31st of December that's  a historic query that's a database query  that's not a streaming query at all I'm  interested in both kinds of queries and  I'm also interested in hybrid queries so  give me an order which is larger than  the average size you know an order which  is larger than the average size of  orders average size of orders for that  particular product that's combining you  know streaming data that just arrived 2  milliseconds ago with data that's been  building up over the last year because  we're using sequel are actually able to  combine streaming query and historical  data so sequel helps us solve the first  part of the problem which is how do we  even Express this question it doesn't  help us answer the it doesn't help us  actually implement it so implementing  this is hard now what would we how do we  go ahead and implement this if we're  using say Kafka to represent our stream  the data that's that flowed a year ago  is long gone from Kafka so in order to  implement this we probably need  something like the system kind of needs  to know that data is flowing out of  Kafka and say flowing into park' files  that are managed by hive or something  and so when it receives this hybrid  query it has to know that today's data  or the last week of data is in Kafka and  the last 10 years of data is in hive and  form this query so  that that table of historic data is  essentially a materialized view it's the  the system knows where to find this bit  of data and where to find that bit of  data so a materialized view is a way of  telling the system where all the little  bits of data are and of course I'm a  query optimizer guy so I don't tend to  be very concerned with maintaining the  data maintaining the materialized views  that's someone else's job but that is a  big part of what the system does is  keeps that materialized view up-to-date  as data arrives so I've given you a you  know a list of three examples of things  that can be difficult data problems that  can be modeled by materialized views  that general idea of having a table and  a relational algebra expression that  says what's in that table is incredibly  powerful and I think I think it's a  pattern that we will start seeing over  and over and over again in the next 10  years of data management systems so how  long do I have left okay how do we  design these materialized views you know  simple answer is users can do it but  that's a very imperfect answer so what  we'd yeah the first answer is always  humans to in these systems the second  answer will be we would like the systems  to adapt maybe in fairly minor ways to  start with that get smarter over time so  the in imagine we have this recommender  write the input to this recommender  ideally would be the DML in other words  the definitions of the tables they've  created the queries that have that have  been seen historically and the  statistics in other words this seems to  be a primary key this this column seems  to have you know 20 unique values you  know all of that kind of stuff and this  so this recommender would see all of  this all of this data including queries  that are arriving in real time and say  hey I'm gonna I'm going to start  producing some  materialized views or I'm going to  reorganize this table I'm going to you  know repartition this table on product  ID because I'm seeing a lot of joins on  this and I mean there are simple forms  of adaptation that we don't even think  of as adaptations but simply a cache  isn't as a way of a building an adaptive  system right it's it's just I'm gonna  keep this data around because they just  read it two minutes ago there's a really  good chance they're going to use it in  the next 30 minutes that's what a cache  is so as the system gets systems get  smarter then perhaps we can start having  more forms of adaptation built into our  systems this is kind of where I'm  heading out you know thinking I've been  involved in BI systems analytic  databases for a long time this is kind  of my Holy Grail that I've been working  towards for probably the last 10 years  in memory materialized views so this  idea where the gray bar at the bottom is  the data on disk and the circle at the  top is this user that's you know sending  sending queries via tableau or whatever  whatever tool they're using and when  they hit a piece of data what it should  do is pull that pull that data into  memory such that as far as the tool is  concerned it's still it's still a sequel  data set that it can use but it's a it's  a piece of data in memory and over time  the system is going are they are  interested in analyzing data in Texas  and Arizona from 2014 ok I'm going to  start building some summaries for that  data in memory so they're you know the  queries over the next hour we're going  to get fast I did that the wrong way in  Mondrian I kind of built these caching  but I built it in Java hash tables which  were great that there's just no way you  can join a java hash table to a table in  Oracle so it just kind of right bit  wrong and then the probe these are the  kind of the I don't know research  problems we have to do we have to solve  you know the the human has to deal with  these problems but a the system is going  to have to deal with these problems in  the future  so figure out which materializations to  create populate them perhaps populate  them incrementally rewrite queries a  materialized view is kind of useless if  you have to reference it in your query  so when a query comes in you have to  recognize that this materialized view  could be used to answer that query and  then over time create new  materializations to adapt to the query  load and then lastly it needs to be  expressive so if you if you're dealing  we want to deal with an extended sequel  that can deal with streaming that can  deal with nested collections that can  deal with like machine learning complex  event processing kind of structures not  just select from where  so in calcite we introduced this data  structure called a lattice which is a  it's kind of a space of possible  materialization so we were focusing  initially on the on the problem of  summary tables if if you're if you're  dealing with a bi application then an  awful lot of the queries are select from  where join group by in other words they  join several tables together effect  table and dimension tables and then  aggregate on some combination of  attributes and a summary table is a very  useful form of materialization to create  because it saves you from reading a lot  of data and it doesn't occupy a lot of  space the summary table is often you  know thousands of times smaller than the  original data set so a lattice is kind  of telling the system of that the star  schema what are the dimensions and what  are the measures what are the what are  the join paths here and so once you've  created a lattice it will start the  system will start watching for queries  that are coming in and start thinking  about possible summary tables that could  create the problem is there's a lot of  possible summary tables so if you even  have 10 attributes  you know 10 10 columns for example 10  dimension columns then there's 2 to the  10 possible aggregate tables you could  create so as you can imagine and on this  on this diagram I've kind of diagrammed  out some of the each each of the  ellipses is a possible summary table the  one at the top is the grand total it  only has one row you've got a summary  table summing by zip code which has  43,000 records in it you've got one by  month which has 12 records the one by  year in month has 60 records because  we've got five years of worth of data  and so forth and then at the bottom is  the the raw data which is a million rows  so as you can see as you have more items  in your group by clause the the size of  the summary table gets larger as you  have fewer items in your group by clause  the summary table gets smaller but it  can answer fewer queries so yeah so  here's a typical set of summary tables  that we would that we would choose the  orange ones are the ones we've decided  to materialize and if you look at  virtually every query will hit one of  these if you come down from the top of  the of the graph virtually every query  will hit one of these and therefore  we'll be able to use that so if for  example I have a query on zip code  I will hit the summary table which is on  zip code state and gender which has  twice as many records approximately as  the zip code but that's fine I can  easily roll it up so there I'm going to  skip in the interest of time I'm going  to skip over the algorithm to generate  these  in fact I'm running so short of time I'm  probably gonna skip over a lot  oops there we go the algorithm to  generate these summary tables actually  is a voracious user of statistics so one  of the features we added into calcite  was data profiling an algorithm which  can basically do select count distinct X  select count distinct Y select discount  distinct X comma Y for every combination  of columns in your database and just  figure out which of your primary keys  which you know which you know product  color is functionally dependent on  product ad so it can discover these  functional relationships and therefore  figure out before it goes and builds  them what the size of these summary  tables is going to be and I'm going to  I'm going to skip over this but the long  story short the algorithm makes  extensive use of hyper log log as a way  of doing approximate counts to kind of  grok the contents of your database and  here's a kind of the the algorithm runs  iteratively it starts off by just  looking at single columns you know  select count distinct X select count  testing Y and then when it finds columns  that have unexpectedly high cardinality  it then tries combining them together  and it runs adaptively until it  basically is no longer surprised a  surprising combination is when state and  zipcode have fewer combinations together  than they would have individually which  basically tells you they are in  statistical terms they're not  independent variables so based on this  and if in a small number of iterations  the algorithm can basically come up with  a pretty good estimate of all of the  functional dependencies in a in a star  schema  so I am going to and there's another  feature in calcite which basically you  don't have to specify any business model  at all but can just observe the queries  coming in and noticing that you often  join the sales table to the customer  table and in another query you often  join the sales table to the product  table in the product class table and  therefore infers what your star schemas  are based on the incoming query load so  to summary to summarize materialized  views are yeah the one thing I want you  to take away is materialized views are  important and we're going to see a lot  of them and they enable not just  high-performance systems but the label  systems to learn from the query history  the query activity on the system and  relational algebra is well relational  algebra kicks ass so thank you so much  for your talk it's just so great to  place a face with a name I remember  installing Mondrian for the first time  back in like oh five and I was like oh  my god this guy's crazy he's giving away  sequel server analysis services for free  I know I know open-source people are we  might we find people to employ us yeah  my my question was in terms of I haven't  really looked under the covers at  calcite does it give any guidance in  terms of things like oh I'm pulling  things into memory cache therefore if  I'm on a cluster of query machines that  are providing the compute that I should  shard the cache like is there that kind  of okay yeah indirectly yes so calcite  as a query optimizer has statistics so  you should you know looking at a  particular query you can look at you  know but you can look at the statistics  of that query and figure out what its  memory utilization is  and if you're using more memory than  your cluster has then at least it can  tell you something is wrong calcite  doesn't provide that directly but  indirectly it is it's giving you the  tools to self cheer in the system I  think this is kind of the downside of  open source as we tend to produce tools  but we don't produce full product so  what I'm talking about here are some of  the tools in the toolbox that can be  used that that will be an excellent  product to build and calcite gives you  all of the raw materials to to do it I  mean you know a set of statistics that  can look at a piece of relational  algebra and tell you how much memory  we'll use is it's taken a lot of effort  to build that so you'd be building on  some you know very good foundations  question here so I'm curious what if  anything for your talk is are you plan  or hope to incorporate within Booker my  understandings look or sort of sits on  top of the data warehouse is agnostic -  a lot like the low level planner issues  that you talk about  yeah let's say some of the things I mean  one of the things I liked about looker  is it leans in common with Mondrian  actually it leans very heavily on the  data warehouse it doesn't try and do it  doesn't try and make itself into a data  processing engine so it generates some  very complex queries and sends them to  you know bigquery and redshift but I  still think I think there are some areas  where we are perhaps sending the same  query or very repetitive stuff to the to  the database over and over again so we  maybe can be a bit smarter about what we  send but I have no plans to radically  change the way look at works I think  just a little bit of intelligence and  how we generate queries could improve  things yeah we'll see my brother kind of  noticed that I seem to have kind of a  zigzag in my career you know I will I  will work for a bi company then work for  a database company and then work for a  bi company so I'm on the you know the bi  company in arrow so the work I'd done on  Mondrian motivated what I did in calcite  because I knew the databases were not  providing what I needed to build a fast  I tool now I'm on the bi tool phase and  so we can maybe leverage some of that  some of the stuff in calcite to be more  intelligent about what queries we send  to the database  you
+ 
+
+00:00:10.810 --> 00:00:14.080 align:start position:0%
+ 
+ 
+
+00:00:14.080 --> 00:00:15.339 align:start position:0%
+ 
+ 
+
+00:00:15.339 --> 00:00:17.740 align:start position:0%
+ 
+ 
+
+00:00:17.740 --> 00:00:22.269 align:start position:0%
+ 
+ 
+
+00:00:22.269 --> 00:00:24.070 align:start position:0%
+ 
+ 
+
+00:00:24.070 --> 00:00:26.980 align:start position:0%
+ 
+ 
+
+00:00:26.980 --> 00:00:31.390 align:start position:0%
+ 
+ 
+
+00:00:31.390 --> 00:00:33.729 align:start position:0%
+ 
+ 
+
+00:00:33.729 --> 00:00:36.910 align:start position:0%
+ 
+ 
+
+00:00:36.910 --> 00:00:38.620 align:start position:0%
+ 
+ 
+
+00:00:38.620 --> 00:00:40.840 align:start position:0%
+ 
+ 
+
+00:00:40.840 --> 00:00:44.709 align:start position:0%
+ 
+ 
+
+00:00:44.709 --> 00:00:49.869 align:start position:0%
+ 
+ 
+
+00:00:49.869 --> 00:00:54.150 align:start position:0%
+ 
+ 
+
+00:00:54.150 --> 00:00:56.529 align:start position:0%
+ 
+ 
+
+00:00:56.529 --> 00:00:57.700 align:start position:0%
+ 
+ 
+
+00:00:57.700 --> 00:01:00.459 align:start position:0%
+ 
+ 
+
+00:01:00.459 --> 00:01:02.319 align:start position:0%
+ 
+ 
+
+00:01:02.319 --> 00:01:03.999 align:start position:0%
+ 
+ 
+
+00:01:03.999 --> 00:01:10.660 align:start position:0%
+ 
+ 
+
+00:01:10.660 --> 00:01:12.519 align:start position:0%
+ 
+ 
+
+00:01:12.519 --> 00:01:14.590 align:start position:0%
+ 
+ 
+
+00:01:14.590 --> 00:01:18.039 align:start position:0%
+ 
+ 
+
+00:01:18.039 --> 00:01:22.449 align:start position:0%
+ 
+ 
+
+00:01:22.449 --> 00:01:24.279 align:start position:0%
+ 
+ 
+
+00:01:24.279 --> 00:01:27.190 align:start position:0%
+ 
+ 
+
+00:01:27.190 --> 00:01:28.510 align:start position:0%
+ 
+ 
+
+00:01:28.510 --> 00:01:31.870 align:start position:0%
+ 
+ 
+
+00:01:31.870 --> 00:01:34.719 align:start position:0%
+ 
+ 
+
+00:01:34.719 --> 00:01:36.940 align:start position:0%
+ 
+ 
+
+00:01:36.940 --> 00:01:38.889 align:start position:0%
+ 
+ 
+
+00:01:38.889 --> 00:01:45.129 align:start position:0%
+ 
+ 
+
+00:01:45.129 --> 00:01:46.629 align:start position:0%
+ 
+ 
+
+00:01:46.629 --> 00:01:49.169 align:start position:0%
+ 
+ 
+
+00:01:49.169 --> 00:01:54.669 align:start position:0%
+ 
+ 
+
+00:01:54.669 --> 00:01:57.279 align:start position:0%
+ 
+ 
+
+00:01:57.279 --> 00:01:59.919 align:start position:0%
+ 
+ 
+
+00:01:59.919 --> 00:02:01.419 align:start position:0%
+ 
+ 
+
+00:02:01.419 --> 00:02:03.510 align:start position:0%
+ 
+ 
+
+00:02:03.510 --> 00:02:05.559 align:start position:0%
+ 
+ 
+
+00:02:05.559 --> 00:02:09.999 align:start position:0%
+ 
+ 
+
+00:02:09.999 --> 00:02:11.580 align:start position:0%
+ 
+ 
+
+00:02:11.580 --> 00:02:14.190 align:start position:0%
+ 
+ 
+
+00:02:14.190 --> 00:02:15.540 align:start position:0%
+ 
+ 
+
+00:02:15.540 --> 00:02:17.759 align:start position:0%
+ 
+ 
+
+00:02:17.759 --> 00:02:21.150 align:start position:0%
+ 
+ 
+
+00:02:21.150 --> 00:02:24.089 align:start position:0%
+ 
+ 
+
+00:02:24.089 --> 00:02:28.500 align:start position:0%
+ 
+ 
+
+00:02:28.500 --> 00:02:33.479 align:start position:0%
+ 
+ 
+
+00:02:33.479 --> 00:02:36.600 align:start position:0%
+ 
+ 
+
+00:02:36.600 --> 00:02:39.119 align:start position:0%
+ 
+ 
+
+00:02:39.119 --> 00:02:40.680 align:start position:0%
+ 
+ 
+
+00:02:40.680 --> 00:02:42.089 align:start position:0%
+ 
+ 
+
+00:02:42.089 --> 00:02:45.449 align:start position:0%
+ 
+ 
+
+00:02:45.449 --> 00:02:46.920 align:start position:0%
+ 
+ 
+
+00:02:46.920 --> 00:02:49.350 align:start position:0%
+ 
+ 
+
+00:02:49.350 --> 00:02:52.680 align:start position:0%
+ 
+ 
+
+00:02:52.680 --> 00:02:54.960 align:start position:0%
+ 
+ 
+
+00:02:54.960 --> 00:02:57.119 align:start position:0%
+ 
+ 
+
+00:02:57.119 --> 00:02:59.520 align:start position:0%
+ 
+ 
+
+00:02:59.520 --> 00:03:01.650 align:start position:0%
+ 
+ 
+
+00:03:01.650 --> 00:03:05.880 align:start position:0%
+ 
+ 
+
+00:03:05.880 --> 00:03:09.240 align:start position:0%
+ 
+ 
+
+00:03:09.240 --> 00:03:10.500 align:start position:0%
+ 
+ 
+
+00:03:10.500 --> 00:03:12.240 align:start position:0%
+ 
+ 
+
+00:03:12.240 --> 00:03:13.500 align:start position:0%
+ 
+ 
+
+00:03:13.500 --> 00:03:17.160 align:start position:0%
+ 
+ 
+
+00:03:17.160 --> 00:03:20.280 align:start position:0%
+ 
+ 
+
+00:03:20.280 --> 00:03:22.259 align:start position:0%
+ 
+ 
+
+00:03:22.259 --> 00:03:24.750 align:start position:0%
+ 
+ 
+
+00:03:24.750 --> 00:03:26.400 align:start position:0%
+ 
+ 
+
+00:03:26.400 --> 00:03:28.740 align:start position:0%
+ 
+ 
+
+00:03:28.740 --> 00:03:30.000 align:start position:0%
+ 
+ 
+
+00:03:30.000 --> 00:03:32.550 align:start position:0%
+ 
+ 
+
+00:03:32.550 --> 00:03:35.819 align:start position:0%
+ 
+ 
+
+00:03:35.819 --> 00:03:38.640 align:start position:0%
+ 
+ 
+
+00:03:38.640 --> 00:03:44.610 align:start position:0%
+ 
+ 
+
+00:03:44.610 --> 00:03:46.770 align:start position:0%
+ 
+ 
+
+00:03:46.770 --> 00:03:49.020 align:start position:0%
+ 
+ 
+
+00:03:49.020 --> 00:03:52.650 align:start position:0%
+ 
+ 
+
+00:03:52.650 --> 00:03:57.530 align:start position:0%
+ 
+ 
+
+00:03:57.530 --> 00:04:01.530 align:start position:0%
+ 
+ 
+
+00:04:01.530 --> 00:04:04.409 align:start position:0%
+ 
+ 
+
+00:04:04.409 --> 00:04:06.629 align:start position:0%
+ 
+ 
+
+00:04:06.629 --> 00:04:07.710 align:start position:0%
+ 
+ 
+
+00:04:07.710 --> 00:04:11.069 align:start position:0%
+ 
+ 
+
+00:04:11.069 --> 00:04:13.520 align:start position:0%
+ 
+ 
+
+00:04:13.520 --> 00:04:17.610 align:start position:0%
+ 
+ 
+
+00:04:17.610 --> 00:04:19.860 align:start position:0%
+ 
+ 
+
+00:04:19.860 --> 00:04:25.020 align:start position:0%
+ 
+ 
+
+00:04:25.020 --> 00:04:26.880 align:start position:0%
+ 
+ 
+
+00:04:26.880 --> 00:04:29.160 align:start position:0%
+ 
+ 
+
+00:04:29.160 --> 00:04:32.400 align:start position:0%
+ 
+ 
+
+00:04:32.400 --> 00:04:35.880 align:start position:0%
+ 
+ 
+
+00:04:35.880 --> 00:04:37.620 align:start position:0%
+ 
+ 
+
+00:04:37.620 --> 00:04:42.180 align:start position:0%
+ 
+ 
+
+00:04:42.180 --> 00:04:45.450 align:start position:0%
+ 
+ 
+
+00:04:45.450 --> 00:04:47.400 align:start position:0%
+ 
+ 
+
+00:04:47.400 --> 00:04:49.200 align:start position:0%
+ 
+ 
+
+00:04:49.200 --> 00:04:50.910 align:start position:0%
+ 
+ 
+
+00:04:50.910 --> 00:04:55.560 align:start position:0%
+ 
+ 
+
+00:04:55.560 --> 00:04:56.940 align:start position:0%
+ 
+ 
+
+00:04:56.940 --> 00:05:00.000 align:start position:0%
+ 
+ 
+
+00:05:00.000 --> 00:05:05.850 align:start position:0%
+ 
+ 
+
+00:05:05.850 --> 00:05:07.620 align:start position:0%
+ 
+ 
+
+00:05:07.620 --> 00:05:10.170 align:start position:0%
+ 
+ 
+
+00:05:10.170 --> 00:05:12.120 align:start position:0%
+ 
+ 
+
+00:05:12.120 --> 00:05:15.390 align:start position:0%
+ 
+ 
+
+00:05:15.390 --> 00:05:18.450 align:start position:0%
+ 
+ 
+
+00:05:18.450 --> 00:05:21.150 align:start position:0%
+ 
+ 
+
+00:05:21.150 --> 00:05:22.800 align:start position:0%
+ 
+ 
+
+00:05:22.800 --> 00:05:26.880 align:start position:0%
+ 
+ 
+
+00:05:26.880 --> 00:05:28.800 align:start position:0%
+ 
+ 
+
+00:05:28.800 --> 00:05:31.020 align:start position:0%
+ 
+ 
+
+00:05:31.020 --> 00:05:32.940 align:start position:0%
+ 
+ 
+
+00:05:32.940 --> 00:05:34.050 align:start position:0%
+ 
+ 
+
+00:05:34.050 --> 00:05:39.690 align:start position:0%
+ 
+ 
+
+00:05:39.690 --> 00:05:42.240 align:start position:0%
+ 
+ 
+
+00:05:42.240 --> 00:05:45.360 align:start position:0%
+ 
+ 
+
+00:05:45.360 --> 00:05:47.190 align:start position:0%
+ 
+ 
+
+00:05:47.190 --> 00:05:49.110 align:start position:0%
+ 
+ 
+
+00:05:49.110 --> 00:05:50.610 align:start position:0%
+ 
+ 
+
+00:05:50.610 --> 00:05:52.590 align:start position:0%
+ 
+ 
+
+00:05:52.590 --> 00:05:56.400 align:start position:0%
+ 
+ 
+
+00:05:56.400 --> 00:05:57.810 align:start position:0%
+ 
+ 
+
+00:05:57.810 --> 00:06:01.650 align:start position:0%
+ 
+ 
+
+00:06:01.650 --> 00:06:03.990 align:start position:0%
+ 
+ 
+
+00:06:03.990 --> 00:06:06.330 align:start position:0%
+ 
+ 
+
+00:06:06.330 --> 00:06:08.100 align:start position:0%
+ 
+ 
+
+00:06:08.100 --> 00:06:09.660 align:start position:0%
+ 
+ 
+
+00:06:09.660 --> 00:06:12.750 align:start position:0%
+ 
+ 
+
+00:06:12.750 --> 00:06:15.000 align:start position:0%
+ 
+ 
+
+00:06:15.000 --> 00:06:17.250 align:start position:0%
+ 
+ 
+
+00:06:17.250 --> 00:06:19.770 align:start position:0%
+ 
+ 
+
+00:06:19.770 --> 00:06:24.360 align:start position:0%
+ 
+ 
+
+00:06:24.360 --> 00:06:26.730 align:start position:0%
+ 
+ 
+
+00:06:26.730 --> 00:06:28.380 align:start position:0%
+ 
+ 
+
+00:06:28.380 --> 00:06:30.780 align:start position:0%
+ 
+ 
+
+00:06:30.780 --> 00:06:32.460 align:start position:0%
+ 
+ 
+
+00:06:32.460 --> 00:06:34.560 align:start position:0%
+ 
+ 
+
+00:06:34.560 --> 00:06:36.770 align:start position:0%
+ 
+ 
+
+00:06:36.770 --> 00:06:38.450 align:start position:0%
+ 
+ 
+
+00:06:38.450 --> 00:06:40.270 align:start position:0%
+ 
+ 
+
+00:06:40.270 --> 00:06:42.380 align:start position:0%
+ 
+ 
+
+00:06:42.380 --> 00:06:45.470 align:start position:0%
+ 
+ 
+
+00:06:45.470 --> 00:06:48.860 align:start position:0%
+ 
+ 
+
+00:06:48.860 --> 00:06:51.050 align:start position:0%
+ 
+ 
+
+00:06:51.050 --> 00:06:53.330 align:start position:0%
+ 
+ 
+
+00:06:53.330 --> 00:06:55.400 align:start position:0%
+ 
+ 
+
+00:06:55.400 --> 00:06:57.530 align:start position:0%
+ 
+ 
+
+00:06:57.530 --> 00:06:59.720 align:start position:0%
+ 
+ 
+
+00:06:59.720 --> 00:07:05.000 align:start position:0%
+ 
+ 
+
+00:07:05.000 --> 00:07:05.010 align:start position:0%
+ 
+ 
+
+00:07:05.010 --> 00:07:05.570 align:start position:0%
+ 
+
+
+00:07:05.570 --> 00:07:07.490 align:start position:0%
+ 
+ 
+
+00:07:07.490 --> 00:07:09.290 align:start position:0%
+ 
+ 
+
+00:07:09.290 --> 00:07:11.600 align:start position:0%
+ 
+ 
+
+00:07:11.600 --> 00:07:14.300 align:start position:0%
+ 
+ 
+
+00:07:14.300 --> 00:07:15.860 align:start position:0%
+ 
+ 
+
+00:07:15.860 --> 00:07:17.990 align:start position:0%
+ 
+ 
+
+00:07:17.990 --> 00:07:19.760 align:start position:0%
+ 
+ 
+
+00:07:19.760 --> 00:07:21.350 align:start position:0%
+ 
+ 
+
+00:07:21.350 --> 00:07:25.370 align:start position:0%
+ 
+ 
+
+00:07:25.370 --> 00:07:27.740 align:start position:0%
+ 
+ 
+
+00:07:27.740 --> 00:07:29.690 align:start position:0%
+ 
+ 
+
+00:07:29.690 --> 00:07:34.400 align:start position:0%
+ 
+ 
+
+00:07:34.400 --> 00:07:35.570 align:start position:0%
+ 
+ 
+
+00:07:35.570 --> 00:07:37.910 align:start position:0%
+ 
+ 
+
+00:07:37.910 --> 00:07:40.370 align:start position:0%
+ 
+ 
+
+00:07:40.370 --> 00:07:43.400 align:start position:0%
+ 
+ 
+
+00:07:43.400 --> 00:07:48.500 align:start position:0%
+ 
+ 
+
+00:07:48.500 --> 00:07:50.870 align:start position:0%
+ 
+ 
+
+00:07:50.870 --> 00:07:52.580 align:start position:0%
+ 
+ 
+
+00:07:52.580 --> 00:07:54.020 align:start position:0%
+ 
+ 
+
+00:07:54.020 --> 00:07:57.530 align:start position:0%
+ 
+ 
+
+00:07:57.530 --> 00:07:58.940 align:start position:0%
+ 
+ 
+
+00:07:58.940 --> 00:08:00.800 align:start position:0%
+ 
+ 
+
+00:08:00.800 --> 00:08:02.750 align:start position:0%
+ 
+ 
+
+00:08:02.750 --> 00:08:03.740 align:start position:0%
+ 
+ 
+
+00:08:03.740 --> 00:08:09.140 align:start position:0%
+ 
+ 
+
+00:08:09.140 --> 00:08:10.340 align:start position:0%
+ 
+ 
+
+00:08:10.340 --> 00:08:12.370 align:start position:0%
+ 
+ 
+
+00:08:12.370 --> 00:08:14.480 align:start position:0%
+ 
+ 
+
+00:08:14.480 --> 00:08:19.430 align:start position:0%
+ 
+ 
+
+00:08:19.430 --> 00:08:22.160 align:start position:0%
+ 
+ 
+
+00:08:22.160 --> 00:08:26.440 align:start position:0%
+ 
+ 
+
+00:08:26.440 --> 00:08:29.960 align:start position:0%
+ 
+ 
+
+00:08:29.960 --> 00:08:32.420 align:start position:0%
+ 
+ 
+
+00:08:32.420 --> 00:08:34.280 align:start position:0%
+ 
+ 
+
+00:08:34.280 --> 00:08:35.870 align:start position:0%
+ 
+ 
+
+00:08:35.870 --> 00:08:38.170 align:start position:0%
+ 
+ 
+
+00:08:38.170 --> 00:08:41.180 align:start position:0%
+ 
+ 
+
+00:08:41.180 --> 00:08:43.570 align:start position:0%
+ 
+ 
+
+00:08:43.570 --> 00:08:46.580 align:start position:0%
+ 
+ 
+
+00:08:46.580 --> 00:08:48.380 align:start position:0%
+ 
+ 
+
+00:08:48.380 --> 00:08:48.390 align:start position:0%
+ 
+ 
+
+00:08:48.390 --> 00:08:49.700 align:start position:0%
+ 
+
+
+00:08:49.700 --> 00:08:51.680 align:start position:0%
+ 
+ 
+
+00:08:51.680 --> 00:08:54.230 align:start position:0%
+ 
+ 
+
+00:08:54.230 --> 00:08:56.450 align:start position:0%
+ 
+ 
+
+00:08:56.450 --> 00:08:58.700 align:start position:0%
+ 
+ 
+
+00:08:58.700 --> 00:09:00.740 align:start position:0%
+ 
+ 
+
+00:09:00.740 --> 00:09:03.290 align:start position:0%
+ 
+ 
+
+00:09:03.290 --> 00:09:07.120 align:start position:0%
+ 
+ 
+
+00:09:07.120 --> 00:09:09.079 align:start position:0%
+ 
+ 
+
+00:09:09.079 --> 00:09:11.000 align:start position:0%
+ 
+ 
+
+00:09:11.000 --> 00:09:13.160 align:start position:0%
+ 
+ 
+
+00:09:13.160 --> 00:09:15.079 align:start position:0%
+ 
+ 
+
+00:09:15.079 --> 00:09:19.400 align:start position:0%
+ 
+ 
+
+00:09:19.400 --> 00:09:21.920 align:start position:0%
+ 
+ 
+
+00:09:21.920 --> 00:09:23.540 align:start position:0%
+ 
+ 
+
+00:09:23.540 --> 00:09:25.850 align:start position:0%
+ 
+ 
+
+00:09:25.850 --> 00:09:28.040 align:start position:0%
+ 
+ 
+
+00:09:28.040 --> 00:09:31.060 align:start position:0%
+ 
+ 
+
+00:09:31.060 --> 00:09:34.280 align:start position:0%
+ 
+ 
+
+00:09:34.280 --> 00:09:35.570 align:start position:0%
+ 
+ 
+
+00:09:35.570 --> 00:09:38.210 align:start position:0%
+ 
+ 
+
+00:09:38.210 --> 00:09:40.670 align:start position:0%
+ 
+ 
+
+00:09:40.670 --> 00:09:42.230 align:start position:0%
+ 
+ 
+
+00:09:42.230 --> 00:09:44.870 align:start position:0%
+ 
+ 
+
+00:09:44.870 --> 00:09:48.560 align:start position:0%
+ 
+ 
+
+00:09:48.560 --> 00:09:50.389 align:start position:0%
+ 
+ 
+
+00:09:50.389 --> 00:09:51.740 align:start position:0%
+ 
+ 
+
+00:09:51.740 --> 00:09:53.360 align:start position:0%
+ 
+ 
+
+00:09:53.360 --> 00:09:55.160 align:start position:0%
+ 
+ 
+
+00:09:55.160 --> 00:09:57.680 align:start position:0%
+ 
+ 
+
+00:09:57.680 --> 00:09:59.870 align:start position:0%
+ 
+ 
+
+00:09:59.870 --> 00:10:02.360 align:start position:0%
+ 
+ 
+
+00:10:02.360 --> 00:10:04.910 align:start position:0%
+ 
+ 
+
+00:10:04.910 --> 00:10:06.769 align:start position:0%
+ 
+ 
+
+00:10:06.769 --> 00:10:08.210 align:start position:0%
+ 
+ 
+
+00:10:08.210 --> 00:10:11.329 align:start position:0%
+ 
+ 
+
+00:10:11.329 --> 00:10:13.730 align:start position:0%
+ 
+ 
+
+00:10:13.730 --> 00:10:16.010 align:start position:0%
+ 
+ 
+
+00:10:16.010 --> 00:10:17.060 align:start position:0%
+ 
+ 
+
+00:10:17.060 --> 00:10:18.500 align:start position:0%
+ 
+ 
+
+00:10:18.500 --> 00:10:21.680 align:start position:0%
+ 
+ 
+
+00:10:21.680 --> 00:10:23.840 align:start position:0%
+ 
+ 
+
+00:10:23.840 --> 00:10:25.340 align:start position:0%
+ 
+ 
+
+00:10:25.340 --> 00:10:27.470 align:start position:0%
+ 
+ 
+
+00:10:27.470 --> 00:10:31.370 align:start position:0%
+ 
+ 
+
+00:10:31.370 --> 00:10:32.420 align:start position:0%
+ 
+ 
+
+00:10:32.420 --> 00:10:35.930 align:start position:0%
+ 
+ 
+
+00:10:35.930 --> 00:10:39.230 align:start position:0%
+ 
+ 
+
+00:10:39.230 --> 00:10:42.199 align:start position:0%
+ 
+ 
+
+00:10:42.199 --> 00:10:45.620 align:start position:0%
+ 
+ 
+
+00:10:45.620 --> 00:10:48.290 align:start position:0%
+ 
+ 
+
+00:10:48.290 --> 00:10:51.829 align:start position:0%
+ 
+ 
+
+00:10:51.829 --> 00:10:53.449 align:start position:0%
+ 
+ 
+
+00:10:53.449 --> 00:10:56.800 align:start position:0%
+ 
+ 
+
+00:10:56.800 --> 00:10:59.269 align:start position:0%
+ 
+ 
+
+00:10:59.269 --> 00:11:01.430 align:start position:0%
+ 
+ 
+
+00:11:01.430 --> 00:11:03.530 align:start position:0%
+ 
+ 
+
+00:11:03.530 --> 00:11:04.790 align:start position:0%
+ 
+ 
+
+00:11:04.790 --> 00:11:06.139 align:start position:0%
+ 
+ 
+
+00:11:06.139 --> 00:11:07.879 align:start position:0%
+ 
+ 
+
+00:11:07.879 --> 00:11:10.509 align:start position:0%
+ 
+ 
+
+00:11:10.509 --> 00:11:19.040 align:start position:0%
+ 
+ 
+
+00:11:19.040 --> 00:11:21.860 align:start position:0%
+ 
+ 
+
+00:11:21.860 --> 00:11:27.170 align:start position:0%
+ 
+ 
+
+00:11:27.170 --> 00:11:31.639 align:start position:0%
+ 
+ 
+
+00:11:31.639 --> 00:11:33.319 align:start position:0%
+ 
+ 
+
+00:11:33.319 --> 00:11:34.879 align:start position:0%
+ 
+ 
+
+00:11:34.879 --> 00:11:37.579 align:start position:0%
+ 
+ 
+
+00:11:37.579 --> 00:11:39.710 align:start position:0%
+ 
+ 
+
+00:11:39.710 --> 00:11:42.290 align:start position:0%
+ 
+ 
+
+00:11:42.290 --> 00:11:44.180 align:start position:0%
+ 
+ 
+
+00:11:44.180 --> 00:11:46.879 align:start position:0%
+ 
+ 
+
+00:11:46.879 --> 00:11:48.650 align:start position:0%
+ 
+ 
+
+00:11:48.650 --> 00:11:51.439 align:start position:0%
+ 
+ 
+
+00:11:51.439 --> 00:11:53.300 align:start position:0%
+ 
+ 
+
+00:11:53.300 --> 00:11:54.949 align:start position:0%
+ 
+ 
+
+00:11:54.949 --> 00:11:59.900 align:start position:0%
+ 
+ 
+
+00:11:59.900 --> 00:12:02.090 align:start position:0%
+ 
+ 
+
+00:12:02.090 --> 00:12:04.430 align:start position:0%
+ 
+ 
+
+00:12:04.430 --> 00:12:06.949 align:start position:0%
+ 
+ 
+
+00:12:06.949 --> 00:12:11.889 align:start position:0%
+ 
+ 
+
+00:12:11.889 --> 00:12:14.210 align:start position:0%
+ 
+ 
+
+00:12:14.210 --> 00:12:15.769 align:start position:0%
+ 
+ 
+
+00:12:15.769 --> 00:12:17.689 align:start position:0%
+ 
+ 
+
+00:12:17.689 --> 00:12:18.829 align:start position:0%
+ 
+ 
+
+00:12:18.829 --> 00:12:23.509 align:start position:0%
+ 
+ 
+
+00:12:23.509 --> 00:12:25.309 align:start position:0%
+ 
+ 
+
+00:12:25.309 --> 00:12:28.280 align:start position:0%
+ 
+ 
+
+00:12:28.280 --> 00:12:30.170 align:start position:0%
+ 
+ 
+
+00:12:30.170 --> 00:12:33.470 align:start position:0%
+ 
+ 
+
+00:12:33.470 --> 00:12:36.769 align:start position:0%
+ 
+ 
+
+00:12:36.769 --> 00:12:40.069 align:start position:0%
+ 
+ 
+
+00:12:40.069 --> 00:12:44.059 align:start position:0%
+ 
+ 
+
+00:12:44.059 --> 00:12:47.329 align:start position:0%
+ 
+ 
+
+00:12:47.329 --> 00:12:49.490 align:start position:0%
+ 
+ 
+
+00:12:49.490 --> 00:12:51.920 align:start position:0%
+ 
+ 
+
+00:12:51.920 --> 00:12:54.139 align:start position:0%
+ 
+ 
+
+00:12:54.139 --> 00:12:56.059 align:start position:0%
+ 
+ 
+
+00:12:56.059 --> 00:12:57.829 align:start position:0%
+ 
+ 
+
+00:12:57.829 --> 00:13:00.740 align:start position:0%
+ 
+ 
+
+00:13:00.740 --> 00:13:03.499 align:start position:0%
+ 
+ 
+
+00:13:03.499 --> 00:13:05.300 align:start position:0%
+ 
+ 
+
+00:13:05.300 --> 00:13:08.600 align:start position:0%
+ 
+ 
+
+00:13:08.600 --> 00:13:10.249 align:start position:0%
+ 
+ 
+
+00:13:10.249 --> 00:13:13.069 align:start position:0%
+ 
+ 
+
+00:13:13.069 --> 00:13:17.000 align:start position:0%
+ 
+ 
+
+00:13:17.000 --> 00:13:18.170 align:start position:0%
+ 
+ 
+
+00:13:18.170 --> 00:13:19.550 align:start position:0%
+ 
+ 
+
+00:13:19.550 --> 00:13:21.560 align:start position:0%
+ 
+ 
+
+00:13:21.560 --> 00:13:23.960 align:start position:0%
+ 
+ 
+
+00:13:23.960 --> 00:13:25.850 align:start position:0%
+ 
+ 
+
+00:13:25.850 --> 00:13:28.490 align:start position:0%
+ 
+ 
+
+00:13:28.490 --> 00:13:32.180 align:start position:0%
+ 
+ 
+
+00:13:32.180 --> 00:13:33.470 align:start position:0%
+ 
+ 
+
+00:13:33.470 --> 00:13:35.900 align:start position:0%
+ 
+ 
+
+00:13:35.900 --> 00:13:37.940 align:start position:0%
+ 
+ 
+
+00:13:37.940 --> 00:13:40.880 align:start position:0%
+ 
+ 
+
+00:13:40.880 --> 00:13:43.760 align:start position:0%
+ 
+ 
+
+00:13:43.760 --> 00:13:45.680 align:start position:0%
+ 
+ 
+
+00:13:45.680 --> 00:13:48.020 align:start position:0%
+ 
+ 
+
+00:13:48.020 --> 00:13:49.580 align:start position:0%
+ 
+ 
+
+00:13:49.580 --> 00:13:51.260 align:start position:0%
+ 
+ 
+
+00:13:51.260 --> 00:13:55.580 align:start position:0%
+ 
+ 
+
+00:13:55.580 --> 00:13:56.870 align:start position:0%
+ 
+ 
+
+00:13:56.870 --> 00:14:03.530 align:start position:0%
+ 
+ 
+
+00:14:03.530 --> 00:14:06.140 align:start position:0%
+ 
+ 
+
+00:14:06.140 --> 00:14:07.700 align:start position:0%
+ 
+ 
+
+00:14:07.700 --> 00:14:09.740 align:start position:0%
+ 
+ 
+
+00:14:09.740 --> 00:14:11.780 align:start position:0%
+ 
+ 
+
+00:14:11.780 --> 00:14:13.910 align:start position:0%
+ 
+ 
+
+00:14:13.910 --> 00:14:15.320 align:start position:0%
+ 
+ 
+
+00:14:15.320 --> 00:14:18.050 align:start position:0%
+ 
+ 
+
+00:14:18.050 --> 00:14:20.570 align:start position:0%
+ 
+ 
+
+00:14:20.570 --> 00:14:22.550 align:start position:0%
+ 
+ 
+
+00:14:22.550 --> 00:14:25.070 align:start position:0%
+ 
+ 
+
+00:14:25.070 --> 00:14:26.690 align:start position:0%
+ 
+ 
+
+00:14:26.690 --> 00:14:31.640 align:start position:0%
+ 
+ 
+
+00:14:31.640 --> 00:14:34.880 align:start position:0%
+ 
+ 
+
+00:14:34.880 --> 00:14:37.010 align:start position:0%
+ 
+ 
+
+00:14:37.010 --> 00:14:39.020 align:start position:0%
+ 
+ 
+
+00:14:39.020 --> 00:14:40.730 align:start position:0%
+ 
+ 
+
+00:14:40.730 --> 00:14:42.920 align:start position:0%
+ 
+ 
+
+00:14:42.920 --> 00:14:45.440 align:start position:0%
+ 
+ 
+
+00:14:45.440 --> 00:14:47.960 align:start position:0%
+ 
+ 
+
+00:14:47.960 --> 00:14:50.480 align:start position:0%
+ 
+ 
+
+00:14:50.480 --> 00:14:52.640 align:start position:0%
+ 
+ 
+
+00:14:52.640 --> 00:14:54.770 align:start position:0%
+ 
+ 
+
+00:14:54.770 --> 00:14:56.600 align:start position:0%
+ 
+ 
+
+00:14:56.600 --> 00:14:59.060 align:start position:0%
+ 
+ 
+
+00:14:59.060 --> 00:15:00.950 align:start position:0%
+ 
+ 
+
+00:15:00.950 --> 00:15:07.820 align:start position:0%
+ 
+ 
+
+00:15:07.820 --> 00:15:09.760 align:start position:0%
+ 
+ 
+
+00:15:09.760 --> 00:15:11.990 align:start position:0%
+ 
+ 
+
+00:15:11.990 --> 00:15:14.240 align:start position:0%
+ 
+ 
+
+00:15:14.240 --> 00:15:16.670 align:start position:0%
+ 
+ 
+
+00:15:16.670 --> 00:15:18.740 align:start position:0%
+ 
+ 
+
+00:15:18.740 --> 00:15:20.900 align:start position:0%
+ 
+ 
+
+00:15:20.900 --> 00:15:23.000 align:start position:0%
+ 
+ 
+
+00:15:23.000 --> 00:15:24.800 align:start position:0%
+ 
+ 
+
+00:15:24.800 --> 00:15:27.200 align:start position:0%
+ 
+ 
+
+00:15:27.200 --> 00:15:28.820 align:start position:0%
+ 
+ 
+
+00:15:28.820 --> 00:15:29.180 align:start position:0%
+ 
+ 
+
+00:15:29.180 --> 00:15:33.290 align:start position:0%
+ 
+ 
+
+00:15:33.290 --> 00:15:34.730 align:start position:0%
+ 
+ 
+
+00:15:34.730 --> 00:15:37.540 align:start position:0%
+ 
+ 
+
+00:15:37.540 --> 00:15:40.370 align:start position:0%
+ 
+ 
+
+00:15:40.370 --> 00:15:42.370 align:start position:0%
+ 
+ 
+
+00:15:42.370 --> 00:15:45.410 align:start position:0%
+ 
+ 
+
+00:15:45.410 --> 00:15:47.090 align:start position:0%
+ 
+ 
+
+00:15:47.090 --> 00:15:49.010 align:start position:0%
+ 
+ 
+
+00:15:49.010 --> 00:15:51.230 align:start position:0%
+ 
+ 
+
+00:15:51.230 --> 00:15:53.330 align:start position:0%
+ 
+ 
+
+00:15:53.330 --> 00:15:55.820 align:start position:0%
+ 
+ 
+
+00:15:55.820 --> 00:15:57.560 align:start position:0%
+ 
+ 
+
+00:15:57.560 --> 00:15:59.630 align:start position:0%
+ 
+ 
+
+00:15:59.630 --> 00:16:02.300 align:start position:0%
+ 
+ 
+
+00:16:02.300 --> 00:16:04.670 align:start position:0%
+ 
+ 
+
+00:16:04.670 --> 00:16:06.620 align:start position:0%
+ 
+ 
+
+00:16:06.620 --> 00:16:09.350 align:start position:0%
+ 
+ 
+
+00:16:09.350 --> 00:16:11.630 align:start position:0%
+ 
+ 
+
+00:16:11.630 --> 00:16:15.170 align:start position:0%
+ 
+ 
+
+00:16:15.170 --> 00:16:17.120 align:start position:0%
+ 
+ 
+
+00:16:17.120 --> 00:16:18.890 align:start position:0%
+ 
+ 
+
+00:16:18.890 --> 00:16:20.660 align:start position:0%
+ 
+ 
+
+00:16:20.660 --> 00:16:22.040 align:start position:0%
+ 
+ 
+
+00:16:22.040 --> 00:16:24.800 align:start position:0%
+ 
+ 
+
+00:16:24.800 --> 00:16:26.510 align:start position:0%
+ 
+ 
+
+00:16:26.510 --> 00:16:28.760 align:start position:0%
+ 
+ 
+
+00:16:28.760 --> 00:16:30.200 align:start position:0%
+ 
+ 
+
+00:16:30.200 --> 00:16:32.240 align:start position:0%
+ 
+ 
+
+00:16:32.240 --> 00:16:34.010 align:start position:0%
+ 
+ 
+
+00:16:34.010 --> 00:16:37.370 align:start position:0%
+ 
+ 
+
+00:16:37.370 --> 00:16:39.080 align:start position:0%
+ 
+ 
+
+00:16:39.080 --> 00:16:40.970 align:start position:0%
+ 
+ 
+
+00:16:40.970 --> 00:16:43.070 align:start position:0%
+ 
+ 
+
+00:16:43.070 --> 00:16:46.850 align:start position:0%
+ 
+ 
+
+00:16:46.850 --> 00:16:48.740 align:start position:0%
+ 
+ 
+
+00:16:48.740 --> 00:16:50.480 align:start position:0%
+ 
+ 
+
+00:16:50.480 --> 00:16:55.910 align:start position:0%
+ 
+ 
+
+00:16:55.910 --> 00:16:59.030 align:start position:0%
+ 
+ 
+
+00:16:59.030 --> 00:17:00.860 align:start position:0%
+ 
+ 
+
+00:17:00.860 --> 00:17:03.860 align:start position:0%
+ 
+ 
+
+00:17:03.860 --> 00:17:06.980 align:start position:0%
+ 
+ 
+
+00:17:06.980 --> 00:17:09.980 align:start position:0%
+ 
+ 
+
+00:17:09.980 --> 00:17:11.179 align:start position:0%
+ 
+ 
+
+00:17:11.179 --> 00:17:12.620 align:start position:0%
+ 
+ 
+
+00:17:12.620 --> 00:17:16.819 align:start position:0%
+ 
+ 
+
+00:17:16.819 --> 00:17:18.650 align:start position:0%
+ 
+ 
+
+00:17:18.650 --> 00:17:20.990 align:start position:0%
+ 
+ 
+
+00:17:20.990 --> 00:17:23.420 align:start position:0%
+ 
+ 
+
+00:17:23.420 --> 00:17:24.890 align:start position:0%
+ 
+ 
+
+00:17:24.890 --> 00:17:27.290 align:start position:0%
+ 
+ 
+
+00:17:27.290 --> 00:17:29.930 align:start position:0%
+ 
+ 
+
+00:17:29.930 --> 00:17:31.880 align:start position:0%
+ 
+ 
+
+00:17:31.880 --> 00:17:33.950 align:start position:0%
+ 
+ 
+
+00:17:33.950 --> 00:17:39.410 align:start position:0%
+ 
+ 
+
+00:17:39.410 --> 00:17:41.720 align:start position:0%
+ 
+ 
+
+00:17:41.720 --> 00:17:43.790 align:start position:0%
+ 
+ 
+
+00:17:43.790 --> 00:17:46.070 align:start position:0%
+ 
+ 
+
+00:17:46.070 --> 00:17:48.080 align:start position:0%
+ 
+ 
+
+00:17:48.080 --> 00:17:51.110 align:start position:0%
+ 
+ 
+
+00:17:51.110 --> 00:17:52.520 align:start position:0%
+ 
+ 
+
+00:17:52.520 --> 00:17:56.960 align:start position:0%
+ 
+ 
+
+00:17:56.960 --> 00:17:59.030 align:start position:0%
+ 
+ 
+
+00:17:59.030 --> 00:18:01.340 align:start position:0%
+ 
+ 
+
+00:18:01.340 --> 00:18:05.780 align:start position:0%
+ 
+ 
+
+00:18:05.780 --> 00:18:12.530 align:start position:0%
+ 
+ 
+
+00:18:12.530 --> 00:18:14.840 align:start position:0%
+ 
+ 
+
+00:18:14.840 --> 00:18:17.320 align:start position:0%
+ 
+ 
+
+00:18:17.320 --> 00:18:21.560 align:start position:0%
+ 
+ 
+
+00:18:21.560 --> 00:18:25.510 align:start position:0%
+ 
+ 
+
+00:18:25.510 --> 00:18:28.450 align:start position:0%
+ 
+ 
+
+00:18:28.450 --> 00:18:30.740 align:start position:0%
+ 
+ 
+
+00:18:30.740 --> 00:18:36.040 align:start position:0%
+ 
+ 
+
+00:18:36.040 --> 00:18:38.450 align:start position:0%
+ 
+ 
+
+00:18:38.450 --> 00:18:41.900 align:start position:0%
+ 
+ 
+
+00:18:41.900 --> 00:18:44.120 align:start position:0%
+ 
+ 
+
+00:18:44.120 --> 00:18:46.390 align:start position:0%
+ 
+ 
+
+00:18:46.390 --> 00:18:49.430 align:start position:0%
+ 
+ 
+
+00:18:49.430 --> 00:18:52.640 align:start position:0%
+ 
+ 
+
+00:18:52.640 --> 00:18:53.990 align:start position:0%
+ 
+ 
+
+00:18:53.990 --> 00:18:56.030 align:start position:0%
+ 
+ 
+
+00:18:56.030 --> 00:18:58.970 align:start position:0%
+ 
+ 
+
+00:18:58.970 --> 00:19:01.550 align:start position:0%
+ 
+ 
+
+00:19:01.550 --> 00:19:03.530 align:start position:0%
+ 
+ 
+
+00:19:03.530 --> 00:19:07.340 align:start position:0%
+ 
+ 
+
+00:19:07.340 --> 00:19:09.590 align:start position:0%
+ 
+ 
+
+00:19:09.590 --> 00:19:11.480 align:start position:0%
+ 
+ 
+
+00:19:11.480 --> 00:19:15.920 align:start position:0%
+ 
+ 
+
+00:19:15.920 --> 00:19:18.380 align:start position:0%
+ 
+ 
+
+00:19:18.380 --> 00:19:19.640 align:start position:0%
+ 
+ 
+
+00:19:19.640 --> 00:19:23.260 align:start position:0%
+ 
+ 
+
+00:19:23.260 --> 00:19:26.450 align:start position:0%
+ 
+ 
+
+00:19:26.450 --> 00:19:29.590 align:start position:0%
+ 
+ 
+
+00:19:29.590 --> 00:19:31.490 align:start position:0%
+ 
+ 
+
+00:19:31.490 --> 00:19:33.410 align:start position:0%
+ 
+ 
+
+00:19:33.410 --> 00:19:35.750 align:start position:0%
+ 
+ 
+
+00:19:35.750 --> 00:19:37.900 align:start position:0%
+ 
+ 
+
+00:19:37.900 --> 00:19:42.610 align:start position:0%
+ 
+ 
+
+00:19:42.610 --> 00:19:45.830 align:start position:0%
+ 
+ 
+
+00:19:45.830 --> 00:19:45.840 align:start position:0%
+ 
+ 
+
+00:19:45.840 --> 00:19:47.049 align:start position:0%
+ 
+
+
+00:19:47.049 --> 00:19:49.870 align:start position:0%
+ 
+ 
+
+00:19:49.870 --> 00:19:51.220 align:start position:0%
+ 
+ 
+
+00:19:51.220 --> 00:19:56.770 align:start position:0%
+ 
+ 
+
+00:19:56.770 --> 00:20:01.450 align:start position:0%
+ 
+ 
+
+00:20:01.450 --> 00:20:06.000 align:start position:0%
+ 
+ 
+
+00:20:06.000 --> 00:20:08.529 align:start position:0%
+ 
+ 
+
+00:20:08.529 --> 00:20:10.570 align:start position:0%
+ 
+ 
+
+00:20:10.570 --> 00:20:13.360 align:start position:0%
+ 
+ 
+
+00:20:13.360 --> 00:20:19.630 align:start position:0%
+ 
+ 
+
+00:20:19.630 --> 00:20:22.240 align:start position:0%
+ 
+ 
+
+00:20:22.240 --> 00:20:24.520 align:start position:0%
+ 
+ 
+
+00:20:24.520 --> 00:20:27.250 align:start position:0%
+ 
+ 
+
+00:20:27.250 --> 00:20:28.690 align:start position:0%
+ 
+ 
+
+00:20:28.690 --> 00:20:32.230 align:start position:0%
+ 
+ 
+
+00:20:32.230 --> 00:20:33.460 align:start position:0%
+ 
+ 
+
+00:20:33.460 --> 00:20:34.899 align:start position:0%
+ 
+ 
+
+00:20:34.899 --> 00:20:37.510 align:start position:0%
+ 
+ 
+
+00:20:37.510 --> 00:20:41.110 align:start position:0%
+ 
+ 
+
+00:20:41.110 --> 00:20:43.060 align:start position:0%
+ 
+ 
+
+00:20:43.060 --> 00:20:45.789 align:start position:0%
+ 
+ 
+
+00:20:45.789 --> 00:20:48.669 align:start position:0%
+ 
+ 
+
+00:20:48.669 --> 00:20:50.680 align:start position:0%
+ 
+ 
+
+00:20:50.680 --> 00:20:54.220 align:start position:0%
+ 
+ 
+
+00:20:54.220 --> 00:20:56.710 align:start position:0%
+ 
+ 
+
+00:20:56.710 --> 00:20:59.250 align:start position:0%
+ 
+ 
+
+00:20:59.250 --> 00:21:01.960 align:start position:0%
+ 
+ 
+
+00:21:01.960 --> 00:21:03.370 align:start position:0%
+ 
+ 
+
+00:21:03.370 --> 00:21:06.610 align:start position:0%
+ 
+ 
+
+00:21:06.610 --> 00:21:08.830 align:start position:0%
+ 
+ 
+
+00:21:08.830 --> 00:21:10.600 align:start position:0%
+ 
+ 
+
+00:21:10.600 --> 00:21:11.890 align:start position:0%
+ 
+ 
+
+00:21:11.890 --> 00:21:13.899 align:start position:0%
+ 
+ 
+
+00:21:13.899 --> 00:21:17.230 align:start position:0%
+ 
+ 
+
+00:21:17.230 --> 00:21:19.090 align:start position:0%
+ 
+ 
+
+00:21:19.090 --> 00:21:21.549 align:start position:0%
+ 
+ 
+
+00:21:21.549 --> 00:21:25.299 align:start position:0%
+ 
+ 
+
+00:21:25.299 --> 00:21:26.470 align:start position:0%
+ 
+ 
+
+00:21:26.470 --> 00:21:29.500 align:start position:0%
+ 
+ 
+
+00:21:29.500 --> 00:21:33.100 align:start position:0%
+ 
+ 
+
+00:21:33.100 --> 00:21:41.620 align:start position:0%
+ 
+ 
+
+00:21:41.620 --> 00:21:44.500 align:start position:0%
+ 
+ 
+
+00:21:44.500 --> 00:21:46.330 align:start position:0%
+ 
+ 
+
+00:21:46.330 --> 00:21:48.279 align:start position:0%
+ 
+ 
+
+00:21:48.279 --> 00:21:49.810 align:start position:0%
+ 
+ 
+
+00:21:49.810 --> 00:21:54.490 align:start position:0%
+ 
+ 
+
+00:21:54.490 --> 00:21:55.870 align:start position:0%
+ 
+ 
+
+00:21:55.870 --> 00:22:00.200 align:start position:0%
+ 
+ 
+
+00:22:00.200 --> 00:22:03.200 align:start position:0%
+ 
+ 
+
+00:22:03.200 --> 00:22:05.830 align:start position:0%
+ 
+ 
+
+00:22:05.830 --> 00:22:09.230 align:start position:0%
+ 
+ 
+
+00:22:09.230 --> 00:22:11.600 align:start position:0%
+ 
+ 
+
+00:22:11.600 --> 00:22:13.670 align:start position:0%
+ 
+ 
+
+00:22:13.670 --> 00:22:16.880 align:start position:0%
+ 
+ 
+
+00:22:16.880 --> 00:22:19.100 align:start position:0%
+ 
+ 
+
+00:22:19.100 --> 00:22:22.160 align:start position:0%
+ 
+ 
+
+00:22:22.160 --> 00:22:23.960 align:start position:0%
+ 
+ 
+
+00:22:23.960 --> 00:22:25.220 align:start position:0%
+ 
+ 
+
+00:22:25.220 --> 00:22:26.870 align:start position:0%
+ 
+ 
+
+00:22:26.870 --> 00:22:30.440 align:start position:0%
+ 
+ 
+
+00:22:30.440 --> 00:22:34.220 align:start position:0%
+ 
+ 
+
+00:22:34.220 --> 00:22:36.290 align:start position:0%
+ 
+ 
+
+00:22:36.290 --> 00:22:38.330 align:start position:0%
+ 
+ 
+
+00:22:38.330 --> 00:22:40.100 align:start position:0%
+ 
+ 
+
+00:22:40.100 --> 00:22:45.890 align:start position:0%
+ 
+ 
+
+00:22:45.890 --> 00:22:48.170 align:start position:0%
+ 
+ 
+
+00:22:48.170 --> 00:22:50.360 align:start position:0%
+ 
+ 
+
+00:22:50.360 --> 00:22:52.100 align:start position:0%
+ 
+ 
+
+00:22:52.100 --> 00:22:53.840 align:start position:0%
+ 
+ 
+
+00:22:53.840 --> 00:22:55.880 align:start position:0%
+ 
+ 
+
+00:22:55.880 --> 00:22:57.620 align:start position:0%
+ 
+ 
+
+00:22:57.620 --> 00:23:02.540 align:start position:0%
+ 
+ 
+
+00:23:02.540 --> 00:23:07.460 align:start position:0%
+ 
+ 
+
+00:23:07.460 --> 00:23:09.470 align:start position:0%
+ 
+ 
+
+00:23:09.470 --> 00:23:11.360 align:start position:0%
+ 
+ 
+
+00:23:11.360 --> 00:23:13.940 align:start position:0%
+ 
+ 
+
+00:23:13.940 --> 00:23:16.970 align:start position:0%
+ 
+ 
+
+00:23:16.970 --> 00:23:18.620 align:start position:0%
+ 
+ 
+
+00:23:18.620 --> 00:23:21.410 align:start position:0%
+ 
+ 
+
+00:23:21.410 --> 00:23:25.090 align:start position:0%
+ 
+ 
+
+00:23:25.090 --> 00:23:29.030 align:start position:0%
+ 
+ 
+
+00:23:29.030 --> 00:23:31.000 align:start position:0%
+ 
+ 
+
+00:23:31.000 --> 00:23:34.010 align:start position:0%
+ 
+ 
+
+00:23:34.010 --> 00:23:36.230 align:start position:0%
+ 
+ 
+
+00:23:36.230 --> 00:23:39.470 align:start position:0%
+ 
+ 
+
+00:23:39.470 --> 00:23:41.900 align:start position:0%
+ 
+ 
+
+00:23:41.900 --> 00:23:43.580 align:start position:0%
+ 
+ 
+
+00:23:43.580 --> 00:23:45.920 align:start position:0%
+ 
+ 
+
+00:23:45.920 --> 00:23:48.980 align:start position:0%
+ 
+ 
+
+00:23:48.980 --> 00:23:50.750 align:start position:0%
+ 
+ 
+
+00:23:50.750 --> 00:23:52.700 align:start position:0%
+ 
+ 
+
+00:23:52.700 --> 00:23:55.150 align:start position:0%
+ 
+ 
+
+00:23:55.150 --> 00:23:58.940 align:start position:0%
+ 
+ 
+
+00:23:58.940 --> 00:24:00.560 align:start position:0%
+ 
+ 
+
+00:24:00.560 --> 00:24:02.900 align:start position:0%
+ 
+ 
+
+00:24:02.900 --> 00:24:08.450 align:start position:0%
+ 
+ 
+
+00:24:08.450 --> 00:24:10.010 align:start position:0%
+ 
+ 
+
+00:24:10.010 --> 00:24:12.950 align:start position:0%
+ 
+ 
+
+00:24:12.950 --> 00:24:15.650 align:start position:0%
+ 
+ 
+
+00:24:15.650 --> 00:24:17.960 align:start position:0%
+ 
+ 
+
+00:24:17.960 --> 00:24:19.490 align:start position:0%
+ 
+ 
+
+00:24:19.490 --> 00:24:21.080 align:start position:0%
+ 
+ 
+
+00:24:21.080 --> 00:24:23.840 align:start position:0%
+ 
+ 
+
+00:24:23.840 --> 00:24:27.350 align:start position:0%
+ 
+ 
+
+00:24:27.350 --> 00:24:29.950 align:start position:0%
+ 
+ 
+
+00:24:29.950 --> 00:24:33.860 align:start position:0%
+ 
+ 
+
+00:24:33.860 --> 00:24:35.780 align:start position:0%
+ 
+ 
+
+00:24:35.780 --> 00:24:39.170 align:start position:0%
+ 
+ 
+
+00:24:39.170 --> 00:24:41.740 align:start position:0%
+ 
+ 
+
+00:24:41.740 --> 00:24:47.500 align:start position:0%
+ 
+ 
+
+00:24:47.500 --> 00:24:50.330 align:start position:0%
+ 
+ 
+
+00:24:50.330 --> 00:24:56.150 align:start position:0%
+ 
+ 
+
+00:24:56.150 --> 00:24:57.860 align:start position:0%
+ 
+ 
+
+00:24:57.860 --> 00:25:00.620 align:start position:0%
+ 
+ 
+
+00:25:00.620 --> 00:25:03.530 align:start position:0%
+ 
+ 
+
+00:25:03.530 --> 00:25:05.420 align:start position:0%
+ 
+ 
+
+00:25:05.420 --> 00:25:07.520 align:start position:0%
+ 
+ 
+
+00:25:07.520 --> 00:25:10.250 align:start position:0%
+ 
+ 
+
+00:25:10.250 --> 00:25:11.840 align:start position:0%
+ 
+ 
+
+00:25:11.840 --> 00:25:14.660 align:start position:0%
+ 
+ 
+
+00:25:14.660 --> 00:25:21.410 align:start position:0%
+ 
+ 
+
+00:25:21.410 --> 00:25:22.820 align:start position:0%
+ 
+ 
+
+00:25:22.820 --> 00:25:25.550 align:start position:0%
+ 
+ 
+
+00:25:25.550 --> 00:25:27.590 align:start position:0%
+ 
+ 
+
+00:25:27.590 --> 00:25:29.300 align:start position:0%
+ 
+ 
+
+00:25:29.300 --> 00:25:34.850 align:start position:0%
+ 
+ 
+
+00:25:34.850 --> 00:25:36.860 align:start position:0%
+ 
+ 
+
+00:25:36.860 --> 00:25:39.920 align:start position:0%
+ 
+ 
+
+00:25:39.920 --> 00:25:43.490 align:start position:0%
+ 
+ 
+
+00:25:43.490 --> 00:25:47.480 align:start position:0%
+ 
+ 
+
+00:25:47.480 --> 00:25:49.370 align:start position:0%
+ 
+ 
+
+00:25:49.370 --> 00:25:52.160 align:start position:0%
+ 
+ 
+
+00:25:52.160 --> 00:25:53.630 align:start position:0%
+ 
+ 
+
+00:25:53.630 --> 00:25:56.050 align:start position:0%
+ 
+ 
+
+00:25:56.050 --> 00:25:59.710 align:start position:0%
+ 
+ 
+
+00:25:59.710 --> 00:26:02.780 align:start position:0%
+ 
+ 
+
+00:26:02.780 --> 00:26:06.170 align:start position:0%
+ 
+ 
+
+00:26:06.170 --> 00:26:08.360 align:start position:0%
+ 
+ 
+
+00:26:08.360 --> 00:26:13.130 align:start position:0%
+ 
+ 
+
+00:26:13.130 --> 00:26:17.560 align:start position:0%
+ 
+ 
+
+00:26:17.560 --> 00:26:21.460 align:start position:0%
+ 
+ 
+
+00:26:21.460 --> 00:26:23.290 align:start position:0%
+ 
+ 
+
+00:26:23.290 --> 00:26:25.660 align:start position:0%
+ 
+ 
+
+00:26:25.660 --> 00:26:27.100 align:start position:0%
+ 
+ 
+
+00:26:27.100 --> 00:26:29.850 align:start position:0%
+ 
+ 
+
+00:26:29.850 --> 00:26:32.140 align:start position:0%
+ 
+ 
+
+00:26:32.140 --> 00:26:37.840 align:start position:0%
+ 
+ 
+
+00:26:37.840 --> 00:26:39.490 align:start position:0%
+ 
+ 
+
+00:26:39.490 --> 00:26:41.680 align:start position:0%
+ 
+ 
+
+00:26:41.680 --> 00:26:43.930 align:start position:0%
+ 
+ 
+
+00:26:43.930 --> 00:26:45.940 align:start position:0%
+ 
+ 
+
+00:26:45.940 --> 00:26:47.470 align:start position:0%
+ 
+ 
+
+00:26:47.470 --> 00:26:49.210 align:start position:0%
+ 
+ 
+
+00:26:49.210 --> 00:26:54.760 align:start position:0%
+ 
+ 
+
+00:26:54.760 --> 00:26:57.040 align:start position:0%
+ 
+ 
+
+00:26:57.040 --> 00:26:59.170 align:start position:0%
+ 
+ 
+
+00:26:59.170 --> 00:27:00.880 align:start position:0%
+ 
+ 
+
+00:27:00.880 --> 00:27:02.920 align:start position:0%
+ 
+ 
+
+00:27:02.920 --> 00:27:04.810 align:start position:0%
+ 
+ 
+
+00:27:04.810 --> 00:27:07.210 align:start position:0%
+ 
+ 
+
+00:27:07.210 --> 00:27:11.860 align:start position:0%
+ 
+ 
+
+00:27:11.860 --> 00:27:13.690 align:start position:0%
+ 
+ 
+
+00:27:13.690 --> 00:27:15.130 align:start position:0%
+ 
+ 
+
+00:27:15.130 --> 00:27:19.240 align:start position:0%
+ 
+ 
+
+00:27:19.240 --> 00:27:22.870 align:start position:0%
+ 
+ 
+
+00:27:22.870 --> 00:27:28.330 align:start position:0%
+ 
+ 
+
+00:27:28.330 --> 00:27:30.900 align:start position:0%
+ 
+ 
+
+00:27:30.900 --> 00:27:36.190 align:start position:0%
+ 
+ 
+
+00:27:36.190 --> 00:27:39.580 align:start position:0%
+ 
+ 
+
+00:27:39.580 --> 00:27:42.970 align:start position:0%
+ 
+ 
+
+00:27:42.970 --> 00:27:45.340 align:start position:0%
+ 
+ 
+
+00:27:45.340 --> 00:27:48.130 align:start position:0%
+ 
+ 
+
+00:27:48.130 --> 00:27:51.070 align:start position:0%
+ 
+ 
+
+00:27:51.070 --> 00:27:53.500 align:start position:0%
+ 
+ 
+
+00:27:53.500 --> 00:27:55.990 align:start position:0%
+ 
+ 
+
+00:27:55.990 --> 00:27:58.990 align:start position:0%
+ 
+ 
+
+00:27:58.990 --> 00:28:00.940 align:start position:0%
+ 
+ 
+
+00:28:00.940 --> 00:28:05.110 align:start position:0%
+ 
+ 
+
+00:28:05.110 --> 00:28:08.650 align:start position:0%
+ 
+ 
+
+00:28:08.650 --> 00:28:10.390 align:start position:0%
+ 
+ 
+
+00:28:10.390 --> 00:28:12.430 align:start position:0%
+ 
+ 
+
+00:28:12.430 --> 00:28:15.640 align:start position:0%
+ 
+ 
+
+00:28:15.640 --> 00:28:18.700 align:start position:0%
+ 
+ 
+
+00:28:18.700 --> 00:28:22.480 align:start position:0%
+ 
+ 
+
+00:28:22.480 --> 00:28:24.730 align:start position:0%
+ 
+ 
+
+00:28:24.730 --> 00:28:27.070 align:start position:0%
+ 
+ 
+
+00:28:27.070 --> 00:28:29.110 align:start position:0%
+ 
+ 
+
+00:28:29.110 --> 00:28:30.340 align:start position:0%
+ 
+ 
+
+00:28:30.340 --> 00:28:31.900 align:start position:0%
+ 
+ 
+
+00:28:31.900 --> 00:28:33.940 align:start position:0%
+ 
+ 
+
+00:28:33.940 --> 00:28:35.620 align:start position:0%
+ 
+ 
+
+00:28:35.620 --> 00:28:37.360 align:start position:0%
+ 
+ 
+
+00:28:37.360 --> 00:28:42.070 align:start position:0%
+ 
+ 
+
+00:28:42.070 --> 00:28:43.600 align:start position:0%
+ 
+ 
+
+00:28:43.600 --> 00:28:45.310 align:start position:0%
+ 
+ 
+
+00:28:45.310 --> 00:28:47.260 align:start position:0%
+ 
+ 
+
+00:28:47.260 --> 00:28:49.510 align:start position:0%
+ 
+ 
+
+00:28:49.510 --> 00:28:51.549 align:start position:0%
+ 
+ 
+
+00:28:51.549 --> 00:28:53.440 align:start position:0%
+ 
+ 
+
+00:28:53.440 --> 00:28:54.580 align:start position:0%
+ 
+ 
+
+00:28:54.580 --> 00:28:56.080 align:start position:0%
+ 
+ 
+
+00:28:56.080 --> 00:29:01.600 align:start position:0%
+ 
+ 
+
+00:29:01.600 --> 00:29:03.580 align:start position:0%
+ 
+ 
+
+00:29:03.580 --> 00:29:06.850 align:start position:0%
+ 
+ 
+
+00:29:06.850 --> 00:29:10.360 align:start position:0%
+ 
+ 
+
+00:29:10.360 --> 00:29:11.919 align:start position:0%
+ 
+ 
+
+00:29:11.919 --> 00:29:14.289 align:start position:0%
+ 
+ 
+
+00:29:14.289 --> 00:29:15.940 align:start position:0%
+ 
+ 
+
+00:29:15.940 --> 00:29:17.380 align:start position:0%
+ 
+ 
+
+00:29:17.380 --> 00:29:19.649 align:start position:0%
+ 
+ 
+
+00:29:19.649 --> 00:29:22.630 align:start position:0%
+ 
+ 
+
+00:29:22.630 --> 00:29:25.419 align:start position:0%
+ 
+ 
+
+00:29:25.419 --> 00:29:28.299 align:start position:0%
+ 
+ 
+
+00:29:28.299 --> 00:29:31.710 align:start position:0%
+ 
+ 
+
+00:29:31.710 --> 00:29:35.730 align:start position:0%
+ 
+ 
+
+00:29:35.730 --> 00:29:39.820 align:start position:0%
+ 
+ 
+
+00:29:39.820 --> 00:29:41.590 align:start position:0%
+ 
+ 
+
+00:29:41.590 --> 00:29:43.570 align:start position:0%
+ 
+ 
+
+00:29:43.570 --> 00:29:47.110 align:start position:0%
+ 
+ 
+
+00:29:47.110 --> 00:29:49.000 align:start position:0%
+ 
+ 
+
+00:29:49.000 --> 00:29:52.210 align:start position:0%
+ 
+ 
+
+00:29:52.210 --> 00:29:55.419 align:start position:0%
+ 
+ 
+
+00:29:55.419 --> 00:29:57.250 align:start position:0%
+ 
+ 
+
+00:29:57.250 --> 00:30:00.159 align:start position:0%
+ 
+ 
+
+00:30:00.159 --> 00:30:02.980 align:start position:0%
+ 
+ 
+
+00:30:02.980 --> 00:30:04.299 align:start position:0%
+ 
+ 
+
+00:30:04.299 --> 00:30:07.510 align:start position:0%
+ 
+ 
+
+00:30:07.510 --> 00:30:08.680 align:start position:0%
+ 
+ 
+
+00:30:08.680 --> 00:30:14.110 align:start position:0%
+ 
+ 
+
+00:30:14.110 --> 00:30:16.180 align:start position:0%
+ 
+ 
+
+00:30:16.180 --> 00:30:18.789 align:start position:0%
+ 
+ 
+
+00:30:18.789 --> 00:30:20.770 align:start position:0%
+ 
+ 
+
+00:30:20.770 --> 00:30:23.110 align:start position:0%
+ 
+ 
+
+00:30:23.110 --> 00:30:26.860 align:start position:0%
+ 
+ 
+
+00:30:26.860 --> 00:30:30.640 align:start position:0%
+ 
+ 
+
+00:30:30.640 --> 00:30:32.320 align:start position:0%
+ 
+ 
+
+00:30:32.320 --> 00:30:36.060 align:start position:0%
+ 
+ 
+
+00:30:36.060 --> 00:30:38.919 align:start position:0%
+ 
+ 
+
+00:30:38.919 --> 00:30:41.890 align:start position:0%
+ 
+ 
+
+00:30:41.890 --> 00:30:43.090 align:start position:0%
+ 
+ 
+
+00:30:43.090 --> 00:30:43.600 align:start position:0%
+ 
+ 
+
+00:30:43.600 --> 00:30:45.760 align:start position:0%
+ 
+ 
+
+00:30:45.760 --> 00:30:48.490 align:start position:0%
+ 
+ 
+
+00:30:48.490 --> 00:30:51.580 align:start position:0%
+ 
+ 
+
+00:30:51.580 --> 00:30:53.620 align:start position:0%
+ 
+ 
+
+00:30:53.620 --> 00:30:55.960 align:start position:0%
+ 
+ 
+
+00:30:55.960 --> 00:30:58.120 align:start position:0%
+ 
+ 
+
+00:30:58.120 --> 00:30:59.950 align:start position:0%
+ 
+ 
+
+00:30:59.950 --> 00:31:02.799 align:start position:0%
+ 
+ 
+
+00:31:02.799 --> 00:31:05.530 align:start position:0%
+ 
+ 
+
+00:31:05.530 --> 00:31:07.330 align:start position:0%
+ 
+ 
+
+00:31:07.330 --> 00:31:11.140 align:start position:0%
+ 
+ 
+
+00:31:11.140 --> 00:31:13.510 align:start position:0%
+ 
+ 
+
+00:31:13.510 --> 00:31:17.049 align:start position:0%
+ 
+ 
+
+00:31:17.049 --> 00:31:18.520 align:start position:0%
+ 
+ 
+
+00:31:18.520 --> 00:31:20.110 align:start position:0%
+ 
+ 
+
+00:31:20.110 --> 00:31:22.390 align:start position:0%
+ 
+ 
+
+00:31:22.390 --> 00:31:24.310 align:start position:0%
+ 
+ 
+
+00:31:24.310 --> 00:31:30.930 align:start position:0%
+ 
+ 
+
+00:31:30.930 --> 00:31:34.480 align:start position:0%
+ 
+ 
+
+00:31:34.480 --> 00:31:37.260 align:start position:0%
+ 
+ 
+
+00:31:37.260 --> 00:31:40.930 align:start position:0%
+ 
+ 
+
+00:31:40.930 --> 00:31:42.880 align:start position:0%
+ 
+ 
+
+00:31:42.880 --> 00:31:45.070 align:start position:0%
+ 
+ 
+
+00:31:45.070 --> 00:31:50.530 align:start position:0%
+ 
+ 
+
+00:31:50.530 --> 00:31:53.710 align:start position:0%
+ 
+ 
+
+00:31:53.710 --> 00:31:56.730 align:start position:0%
+ 
+ 
+
+00:31:56.730 --> 00:32:00.370 align:start position:0%
+ 
+ 
+
+00:32:00.370 --> 00:32:02.110 align:start position:0%
+ 
+ 
+
+00:32:02.110 --> 00:32:04.090 align:start position:0%
+ 
+ 
+
+00:32:04.090 --> 00:32:05.799 align:start position:0%
+ 
+ 
+
+00:32:05.799 --> 00:32:08.320 align:start position:0%
+ 
+ 
+
+00:32:08.320 --> 00:32:11.530 align:start position:0%
+ 
+ 
+
+00:32:11.530 --> 00:32:13.870 align:start position:0%
+ 
+ 
+
+00:32:13.870 --> 00:32:16.299 align:start position:0%
+ 
+ 
+
+00:32:16.299 --> 00:32:18.580 align:start position:0%
+ 
+ 
+
+00:32:18.580 --> 00:32:20.440 align:start position:0%
+ 
+ 
+
+00:32:20.440 --> 00:32:26.320 align:start position:0%
+ 
+ 
+
+00:32:26.320 --> 00:32:27.850 align:start position:0%
+ 
+ 
+
+00:32:27.850 --> 00:32:29.320 align:start position:0%
+ 
+ 
+
+00:32:29.320 --> 00:32:32.500 align:start position:0%
+ 
+ 
+
+00:32:32.500 --> 00:32:34.990 align:start position:0%
+ 
+ 
+
+00:32:34.990 --> 00:32:37.330 align:start position:0%
+ 
+ 
+
+00:32:37.330 --> 00:32:39.610 align:start position:0%
+ 
+ 
+
+00:32:39.610 --> 00:32:41.650 align:start position:0%
+ 
+ 
+
+00:32:41.650 --> 00:32:43.539 align:start position:0%
+ 
+ 
+
+00:32:43.539 --> 00:32:48.880 align:start position:0%
+ 
+ 
+
+00:32:48.880 --> 00:32:51.909 align:start position:0%
+ 
+ 
+
+00:32:51.909 --> 00:32:54.000 align:start position:0%
+ 
+ 
+
+00:32:54.000 --> 00:32:57.450 align:start position:0%
+ 
+ 
+
+00:32:57.450 --> 00:33:00.780 align:start position:0%
+ 
+ 
+
+00:33:00.780 --> 00:33:02.910 align:start position:0%
+ 
+ 
+
+00:33:02.910 --> 00:33:08.400 align:start position:0%
+ 
+ 
+
+00:33:08.400 --> 00:33:10.890 align:start position:0%
+ 
+ 
+
+00:33:10.890 --> 00:33:12.950 align:start position:0%
+ 
+ 
+
+00:33:12.950 --> 00:33:16.170 align:start position:0%
+ 
+ 
+
+00:33:16.170 --> 00:33:17.850 align:start position:0%
+ 
+ 
+
+00:33:17.850 --> 00:33:20.730 align:start position:0%
+ 
+ 
+
+00:33:20.730 --> 00:33:23.090 align:start position:0%
+ 
+ 
+
+00:33:23.090 --> 00:33:26.630 align:start position:0%
+ 
+ 
+
+00:33:26.630 --> 00:33:30.060 align:start position:0%
+ 
+ 
+
+00:33:30.060 --> 00:33:32.250 align:start position:0%
+ 
+ 
+
+00:33:32.250 --> 00:33:34.020 align:start position:0%
+ 
+ 
+
+00:33:34.020 --> 00:33:36.570 align:start position:0%
+ 
+ 
+
+00:33:36.570 --> 00:33:39.110 align:start position:0%
+ 
+ 
+
+00:33:39.110 --> 00:33:44.010 align:start position:0%
+ 
+ 
+
+00:33:44.010 --> 00:33:47.370 align:start position:0%
+ 
+ 
+
+00:33:47.370 --> 00:33:51.000 align:start position:0%
+ 
+ 
+
+00:33:51.000 --> 00:33:52.830 align:start position:0%
+ 
+ 
+
+00:33:52.830 --> 00:33:55.200 align:start position:0%
+ 
+ 
+
+00:33:55.200 --> 00:34:01.260 align:start position:0%
+ 
+ 
+
+00:34:01.260 --> 00:34:03.060 align:start position:0%
+ 
+ 
+
+00:34:03.060 --> 00:34:06.780 align:start position:0%
+ 
+ 
+
+00:34:06.780 --> 00:34:08.340 align:start position:0%
+ 
+ 
+
+00:34:08.340 --> 00:34:13.040 align:start position:0%
+ 
+ 
+
+00:34:13.040 --> 00:34:16.619 align:start position:0%
+ 
+ 
+
+00:34:16.619 --> 00:34:18.300 align:start position:0%
+ 
+ 
+
+00:34:18.300 --> 00:34:21.030 align:start position:0%
+ 
+ 
+
+00:34:21.030 --> 00:34:23.040 align:start position:0%
+ 
+ 
+
+00:34:23.040 --> 00:34:24.930 align:start position:0%
+ 
+ 
+
+00:34:24.930 --> 00:34:29.340 align:start position:0%
+ 
+ 
+
+00:34:29.340 --> 00:34:31.230 align:start position:0%
+ 
+ 
+
+00:34:31.230 --> 00:34:34.860 align:start position:0%
+ 
+ 
+
+00:34:34.860 --> 00:34:37.169 align:start position:0%
+ 
+ 
+
+00:34:37.169 --> 00:34:38.760 align:start position:0%
+ 
+ 
+
+00:34:38.760 --> 00:34:43.139 align:start position:0%
+ 
+ 
+
+00:34:43.139 --> 00:34:44.399 align:start position:0%
+ 
+ 
+
+00:34:44.399 --> 00:34:45.750 align:start position:0%
+ 
+ 
+
+00:34:45.750 --> 00:34:45.760 align:start position:0%
+ 
+ 
+
+00:34:45.760 --> 00:34:50.290 align:start position:0%
+ 
+
+
+00:34:50.290 --> 00:34:52.720 align:start position:0%
+ 
+ 
+
+00:34:52.720 --> 00:34:54.190 align:start position:0%
+ 
+ 
+
+00:34:54.190 --> 00:35:01.840 align:start position:0%
+ 
+ 
+
+00:35:01.840 --> 00:35:05.020 align:start position:0%
+ 
+ 
+
+00:35:05.020 --> 00:35:08.380 align:start position:0%
+ 
+ 
+
+00:35:08.380 --> 00:35:10.060 align:start position:0%
+ 
+ 
+
+00:35:10.060 --> 00:35:14.290 align:start position:0%
+ 
+ 
+
+00:35:14.290 --> 00:35:18.430 align:start position:0%
+ 
+ 
+
+00:35:18.430 --> 00:35:21.280 align:start position:0%
+ 
+ 
+
+00:35:21.280 --> 00:35:23.590 align:start position:0%
+ 
+ 
+
+00:35:23.590 --> 00:35:25.450 align:start position:0%
+ 
+ 
+
+00:35:25.450 --> 00:35:28.030 align:start position:0%
+ 
+ 
+
+00:35:28.030 --> 00:35:32.590 align:start position:0%
+ 
+ 
+
+00:35:32.590 --> 00:35:34.120 align:start position:0%
+ 
+ 
+
+00:35:34.120 --> 00:35:36.130 align:start position:0%
+ 
+ 
+
+00:35:36.130 --> 00:35:38.260 align:start position:0%
+ 
+ 
+
+00:35:38.260 --> 00:35:39.880 align:start position:0%
+ 
+ 
+
+00:35:39.880 --> 00:35:41.440 align:start position:0%
+ 
+ 
+
+00:35:41.440 --> 00:35:44.950 align:start position:0%
+ 
+ 
+
+00:35:44.950 --> 00:35:49.300 align:start position:0%
+ 
+ 
+
+00:35:49.300 --> 00:35:51.310 align:start position:0%
+ 
+ 
+
+00:35:51.310 --> 00:35:55.270 align:start position:0%
+ 
+ 
+
+00:35:55.270 --> 00:35:58.960 align:start position:0%
+ 
+ 
+
+00:35:58.960 --> 00:36:06.060 align:start position:0%
+ 
+ 
+
+00:36:06.060 --> 00:36:09.460 align:start position:0%
+ 
+ 
+
+00:36:09.460 --> 00:36:11.230 align:start position:0%
+ 
+ 
+
+00:36:11.230 --> 00:36:14.440 align:start position:0%
+ 
+ 
+
+00:36:14.440 --> 00:36:16.570 align:start position:0%
+ 
+ 
+
+00:36:16.570 --> 00:36:18.880 align:start position:0%
+ 
+ 
+
+00:36:18.880 --> 00:36:20.859 align:start position:0%
+ 
+ 
+
+00:36:20.859 --> 00:36:22.450 align:start position:0%
+ 
+ 
+
+00:36:22.450 --> 00:36:25.150 align:start position:0%
+ 
+ 
+
+00:36:25.150 --> 00:36:27.780 align:start position:0%
+ 
+ 
+
+00:36:27.780 --> 00:36:31.180 align:start position:0%
+ 
+ 
+
+00:36:31.180 --> 00:36:33.190 align:start position:0%
+ 
+ 
+
+00:36:33.190 --> 00:36:35.890 align:start position:0%
+ 
+ 
+
+00:36:35.890 --> 00:36:37.830 align:start position:0%
+ 
+ 
+
+00:36:37.830 --> 00:36:39.660 align:start position:0%
+ 
+ 
+
+00:36:39.660 --> 00:36:44.920 align:start position:0%
+ 
+ 
+
+00:36:44.920 --> 00:36:47.190 align:start position:0%
+ 
+ 
+
+00:36:47.190 --> 00:36:50.260 align:start position:0%
+ 
+ 
+
+00:36:50.260 --> 00:36:52.060 align:start position:0%
+ 
+ 
+
+00:36:52.060 --> 00:36:54.880 align:start position:0%
+ 
+ 
+
+00:36:54.880 --> 00:36:54.890 align:start position:0%
+ 
+ 
+
+00:36:54.890 --> 00:36:58.290 align:start position:0%
+ 
+
+
+00:36:58.290 --> 00:37:01.950 align:start position:0%
+ 
+ 
+
+00:37:01.950 --> 00:37:04.170 align:start position:0%
+ 
+ 
+
+00:37:04.170 --> 00:37:06.210 align:start position:0%
+ 
+ 
+
+00:37:06.210 --> 00:37:11.280 align:start position:0%
+ 
+ 
+
+00:37:11.280 --> 00:37:13.470 align:start position:0%
+ 
+ 
+
+00:37:13.470 --> 00:37:16.290 align:start position:0%
+ 
+ 
+
+00:37:16.290 --> 00:37:17.940 align:start position:0%
+ 
+ 
+
+00:37:17.940 --> 00:37:19.530 align:start position:0%
+ 
+ 
+
+00:37:19.530 --> 00:37:21.210 align:start position:0%
+ 
+ 
+
+00:37:21.210 --> 00:37:23.460 align:start position:0%
+ 
+ 
+
+00:37:23.460 --> 00:37:28.400 align:start position:0%
+ 
+ 
+
+00:37:28.400 --> 00:37:32.610 align:start position:0%
+ 
+ 
+
+00:37:32.610 --> 00:37:34.830 align:start position:0%
+ 
+ 
+
+00:37:34.830 --> 00:37:37.920 align:start position:0%
+ 
+ 
+
+00:37:37.920 --> 00:37:39.870 align:start position:0%
+ 
+ 
+
+00:37:39.870 --> 00:37:43.490 align:start position:0%
+ 
+ 
+
+00:37:43.490 --> 00:37:45.570 align:start position:0%
+ 
+ 
+
+00:37:45.570 --> 00:37:49.650 align:start position:0%
+ 
+ 
+
+00:37:49.650 --> 00:37:53.270 align:start position:0%
+ 
+ 
+
+00:37:53.270 --> 00:37:56.730 align:start position:0%
+ 
+ 
+
+00:37:56.730 --> 00:38:00.930 align:start position:0%
+ 
+ 
+
+00:38:00.930 --> 00:38:02.820 align:start position:0%
+ 
+ 
+
+00:38:02.820 --> 00:38:04.560 align:start position:0%
+ 
+ 
+
+00:38:04.560 --> 00:38:06.330 align:start position:0%
+ 
+ 
+
+00:38:06.330 --> 00:38:12.240 align:start position:0%
+ 
+ 
+
+00:38:12.240 --> 00:38:13.980 align:start position:0%
+ 
+ 
+
+00:38:13.980 --> 00:38:15.930 align:start position:0%
+ 
+ 
+
+00:38:15.930 --> 00:38:20.880 align:start position:0%
+ 
+ 
+
+00:38:20.880 --> 00:38:25.680 align:start position:0%
+ 
+ 
+
+00:38:25.680 --> 00:38:29.220 align:start position:0%
+ 
+ 
+
+00:38:29.220 --> 00:38:30.270 align:start position:0%
+ 
+ 
+
+00:38:30.270 --> 00:38:33.750 align:start position:0%
+ 
+ 
+
+00:38:33.750 --> 00:38:36.000 align:start position:0%
+ 
+ 
+
+00:38:36.000 --> 00:38:38.220 align:start position:0%
+ 
+ 
+
+00:38:38.220 --> 00:38:41.850 align:start position:0%
+ 
+ 
+
+00:38:41.850 --> 00:38:44.340 align:start position:0%
+ 
+ 
+
+00:38:44.340 --> 00:38:47.490 align:start position:0%
+ 
+ 
+
+00:38:47.490 --> 00:38:53.370 align:start position:0%
+ 
+ 
+
+00:38:53.370 --> 00:38:56.730 align:start position:0%
+ 
+ 
+
+00:38:56.730 --> 00:38:58.560 align:start position:0%
+ 
+ 
+
+00:38:58.560 --> 00:39:02.370 align:start position:0%
+ 
+ 
+
+00:39:02.370 --> 00:39:04.950 align:start position:0%
+ 
+ 
+
+00:39:04.950 --> 00:39:06.570 align:start position:0%
+ 
+ 
+
+00:39:06.570 --> 00:39:09.420 align:start position:0%
+ 
+ 
+
+00:39:09.420 --> 00:39:11.760 align:start position:0%
+ 
+ 
+
+00:39:11.760 --> 00:39:14.640 align:start position:0%
+ 
+ 
+
+00:39:14.640 --> 00:39:17.940 align:start position:0%
+ 
+ 
+
+00:39:17.940 --> 00:39:19.589 align:start position:0%
+ 
+ 
+
+00:39:19.589 --> 00:39:21.690 align:start position:0%
+ 
+ 
+
+00:39:21.690 --> 00:39:24.720 align:start position:0%
+ 
+ 
+
+00:39:24.720 --> 00:39:26.549 align:start position:0%
+ 
+ 
+
+00:39:26.549 --> 00:39:28.260 align:start position:0%
+ 
+ 
+
+00:39:28.260 --> 00:39:30.540 align:start position:0%
+ 
+ 
+
+00:39:30.540 --> 00:39:32.730 align:start position:0%
+ 
+ 
+
+00:39:32.730 --> 00:39:34.470 align:start position:0%
+ 
+ 
+
+00:39:34.470 --> 00:39:36.750 align:start position:0%
+ 
+ 
+
+00:39:36.750 --> 00:39:40.380 align:start position:0%
+ 
+ 
+
+00:39:40.380 --> 00:39:43.109 align:start position:0%
+ 
+ 
+
+00:39:43.109 --> 00:39:47.480 align:start position:0%
+ 
+ 
+
+00:39:47.480 --> 00:39:49.799 align:start position:0%
+ 
+ 
+
+00:39:49.799 --> 00:39:51.180 align:start position:0%
+ 
+ 
+
+00:39:51.180 --> 00:39:54.540 align:start position:0%
+ 
+ 
+
+00:39:54.540 --> 00:39:56.339 align:start position:0%
+ 
+ 
+
+00:39:56.339 --> 00:39:59.059 align:start position:0%
+ 
+ 
+
+00:39:59.059 --> 00:40:02.520 align:start position:0%
+ 
+ 
+
+00:40:02.520 --> 00:40:04.829 align:start position:0%
+ 
+ 
+
+00:40:04.829 --> 00:40:06.660 align:start position:0%
+ 
+ 
+
+00:40:06.660 --> 00:40:07.890 align:start position:0%
+ 
+ 
+
+00:40:07.890 --> 00:40:09.569 align:start position:0%
+ 
+ 
+
+00:40:09.569 --> 00:40:11.549 align:start position:0%
+ 
+ 
+
+00:40:11.549 --> 00:40:12.290 align:start position:0%
+ 
+ 
+
+00:40:12.290 --> 00:40:18.440 align:start position:0%
+ 
+ 
+
+00:40:18.440 --> 00:40:20.730 align:start position:0%
+ 
+ 
+
+00:40:20.730 --> 00:40:23.339 align:start position:0%
+ 
+ 
+
+00:40:23.339 --> 00:40:25.230 align:start position:0%
+ 
+ 
+
+00:40:25.230 --> 00:40:27.180 align:start position:0%
+ 
+ 
+
+00:40:27.180 --> 00:40:28.799 align:start position:0%
+ 
+ 
+
+00:40:28.799 --> 00:40:31.530 align:start position:0%
+ 
+ 
+
+00:40:31.530 --> 00:40:33.539 align:start position:0%
+ 
+ 
+
+00:40:33.539 --> 00:40:36.960 align:start position:0%
+ 
+ 
+
+00:40:36.960 --> 00:40:38.880 align:start position:0%
+ 
+ 
+
+00:40:38.880 --> 00:40:41.760 align:start position:0%
+ 
+ 
+
+00:40:41.760 --> 00:40:44.220 align:start position:0%
+ 
+ 
+
+00:40:44.220 --> 00:40:47.069 align:start position:0%
+ 
+ 
+
+00:40:47.069 --> 00:40:48.780 align:start position:0%
+ 
+ 
+
+00:40:48.780 --> 00:40:52.349 align:start position:0%
+ 
+ 
+
+00:40:52.349 --> 00:40:54.990 align:start position:0%
+ 
+ 
+
+00:40:54.990 --> 00:40:57.030 align:start position:0%
+ 
+ 
+
+00:40:57.030 --> 00:40:58.589 align:start position:0%
+ 
+ 
+
+00:40:58.589 --> 00:41:02.940 align:start position:0%
+ 
+ 
+
+00:41:02.940 --> 00:41:04.620 align:start position:0%
+ 
+ 
+
+00:41:04.620 --> 00:41:06.809 align:start position:0%
+ 
+ 
+
+00:41:06.809 --> 00:41:08.460 align:start position:0%
+ 
+ 
+
+00:41:08.460 --> 00:41:09.809 align:start position:0%
+ 
+ 
+
+00:41:09.809 --> 00:41:12.450 align:start position:0%
+ 
+ 
+
+00:41:12.450 --> 00:41:15.750 align:start position:0%
+ 
+ 
+
+00:41:15.750 --> 00:41:17.789 align:start position:0%
+ 
+ 
+
+00:41:17.789 --> 00:41:20.039 align:start position:0%
+ 
+ 
+
+00:41:20.039 --> 00:41:22.230 align:start position:0%
+ 
+ 
+
+00:41:22.230 --> 00:41:25.680 align:start position:0%
+ 
+ 
+
+00:41:25.680 --> 00:41:27.359 align:start position:0%
+ 
+ 
+
+00:41:27.359 --> 00:41:30.210 align:start position:0%
+ 
+ 
+
+00:41:30.210 --> 00:41:31.890 align:start position:0%
+ 
+ 
+
+00:41:31.890 --> 00:41:40.320 align:start position:0%
+ 
+ 
+
+00:41:40.320 --> 00:41:40.330 align:start position:0%
+ 
+ 
+
+00:41:40.330 --> 00:41:42.390 align:start position:0%
+ 
+
+

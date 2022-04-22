@@ -1,0 +1,4104 @@
+WEBVTT
+Kind: captions
+Language: en
+
+00:00:04.970 --> 00:00:10.840 align:start position:0%
+ 
+hello strange loop I'd like to talk to  you about distributed column stores and  why we built one  I'm Sam Stokes I'm an engineer at  honeycomb which is a small start-up in  the San Francisco Bay Area as a fearless  in the crowd when I'm not making  software  I'm usually making cocktails and  sometimes bad jokes and I'd like to  introduce you to retriever  what is retriever well Retriever is a  distributed columnstore it's also an  analytic query engine and it's got a  skinless data model and hang on a second  I'm really getting ahead of myself a bit  because you're probably wondering why  would someone build their own datastore  it's pretty much rule one right that you  don't build your own database and if you  do you especially don't call it a  database you call it a datastore which  is why we build the datastore so  Retriever is a special purpose datastore  that we built to power honeycomb and so  to talk about retriever I have to  explain a little bit about what  honeycomb does well you can think of  honeycomb as a debugger for production  systems what does that mean well we want  to help engineers understand and  troubleshoot distributed systems as you  might be aware especially if you've been  to any other tools at this conference  distributed systems can be kind of  tricky beasts or some sometimes so  honeycomb sits in between sort of  traditional metrics tools and  traditional log aggregation tools that's  a bit abstract so let me only get a bit  more concrete how does honeycomb work  well your systems the ones you want to  understand better they send us events  events are kind of similar to structured  logs if you're familiar with that cool  buzzword  they're also JSON blobs here's an  example event  and this represents a server processing  some kind of web request COC events have  a bunch of fields this one has like an  endpoint field what end point on the web  app was being hit the hostname that  processed the request some statistics  about response time and so on so you  send us events we store your events and  you can ask for them back and then you  can issue queries on those events and  the reason you might want to do that is  you can ask us to calculate things for  example here we're saying for every  endpoint that events have come in for  calculate the average response time that  we spent processing the request for that  endpoint and we're going to visualize  something else the amount of time that  was spent in the database processing  those requests okay so we take your  queries and we turned them into pretty  graphs like this there's a lot going on  here so the top graph I'm kind of  showing the this is the average response  time for every endpoint and the bottom  graph this is a visualization called a  heat map so don't worry too much if you  aren't familiar with heat maps because  that's not what this talk is about but  heat maps are a pretty cool way of  visualizing the distribution of response  times so if this is time spent in the  database you can imagine that these two  bands are sort of showing here are some  requests that hit the database cache and  here are some that missed and took  longer but the idea is so we can draw  graphs and graphs are awesome graphs  help you like look for patterns and  detect anomalies but we want you to be  able to always jump back and forth  between the graphs of the calculations  that you've drawn and the raw data that  came in that you sent us that we  generated those graphs from and what  that lets you do is you can find  something we're on the graph and then  you can say well hang on why did that  happen what was actually going on there  and you can go back and look at the real  event with all of the data that you sent  us and all of the detail  and look for signs of weirdness and  there are some other questions you can  ask this kind of system an example is  which of your users are seeing the  highest response times so this isn't a  question about the global average  response time across the whole site this  is saying literally for each user find  the ones that are seeing bad response  times and you might express this in a  query something like show me the average  response time broken down by user ID and  ordered by the average response time  what about I'm running a deploy and my  deploys were all not gradually across a  fleet of servers and I want to know how  many servers has my deploy got - well I  can express that in this kind of system  if I'm tagging my events with a bill by  D and so then as offensive processed I  can say show me the number of unique  host names that have sent me events for  each build ID and you could kind of see  the new builds trending upwards as the  deploy rolls out what about for all of  our customers who are on our most  expensive pricing plan are any of them  affected by this error we're just in  troubleshooting and the idea there is at  the point when you're sending us an  event maybe you're consuming some logs  maybe you've instrumented your code but  the person who's doing that work doesn't  want to care about which customer is  high value they don't know about who's  on which pricing plan they certainly  don't want to have to update their code  when a customer changes pricing plan or  you sign up somebody new but it's still  a really useful query to be able to ask  if you have some other representation of  which customers are on which plan and so  the idea is we need to be able to query  really flexibly on the data that we've  got well how do we do that so what do we  do with all the data that you're sending  us how do we store them in a way that we  can serve those kinds of queries and get  graphs out well spoiler alert  the answer is recruiter so for the rest  of this talk I'd like to describe to you  what it was like building retriever and  some of the decisions that we made I'll  start with a pretty high-level overview  of what it looks like and how it works  I'll dive deeper into how we store the  data on disk and how we read it back and  especially some of the details of how we  read it back really fast when it's  spread across multiple machines and  finally because this is a database we  run in production data store this is a  data store we run in production remember  don't build a database we run this for  for paying customers so there are some  interesting things we need to do to make  that actually work in the face of the  real world so what do you need in a data  store that can serve this kind of  features well we have we need to issue  queries and we have a fairly flexible  sort of query model so we have these  operations like break down saying take  the events that you've sent and break  them down by the value of some field  like break down by end point or break  down by user ID and you can filter which  is you know discard things that don't  match the filter and we want you to be  able to break down and filter by any  field you don't have to say in advance  I'm only going to break down by end  point or I'm only going to break down by  user ID you can make up your mind  afterwards and so you're not pre  defining an index or setting up a schema  and then having to comply with that we  need queries to be able to produce two  different kinds of results so we have  time series graphs and in fact some  weird and wonderful visualizations like  the heatmap thing as well and we also  have queries that can return just the  raw data they came in according to some  filters and we need to calculate the  kinds of statistics that are useful for  operations purposes really that's what  we're trying to solve here is the sort  of problems that operations people face  so percentiles are really useful  Layton sees if you're still measuring  average latency you should really try  percentiles we can calculate the  histogram for an entire distribution of  response times or of packet sizes or  other things like that count distinct is  another really useful operation we need  all of that to be really fast and the  reason for that is we want users to be  able to do a sort of question-and-answer  workflow with their systems so something  goes wrong the user forms a theory about  what went wrong and why so they ask a  question for example is this only  happening for certain users they ask a  question to test the hypothesis they get  an answer back maybe it confirms the  hypothesis in which case they might want  to refine further and drill down  wellmaybe turns up a hypothesis was  wrong and they need to try a different  tack and in both of these cases it's  really important for the QA to be really  fast you don't want to sort of set a  query running and then go have a cup of  tea and then forget what you were doing  we're running this multiple customers  and so we need to be able to do things  like enforce quotas and other properties  that are tied to our business model and  so we need some sort of custom tools  that can manage that sort of thing and  let us go in and you know poke a  customer in chase their quota and maybe  most importantly we're a start-up we  have an extremely limited budget and an  even more limited team an awesome team  but a limited book so this thing needs  to be very simple we are not building a  general-purpose database here and we  don't need to we know exactly what data  is coming in and a what rates with what  access patterns we control the query  interface so we know what kinds of  questions can be asked of our data so we  have this very precisely defined use  case we can write a special-purpose data  store we also don't need to support  updates because once an events come in  it's happened already you don't need to  go and change it and we don't need to  support the kinds of fancy features you  would get in a more general-purpose data  store  like joins or transactional semantics so  we need to keep it simple so again we  need to issue all kinds of queries  really quickly and not spend hundreds of  thirteen years doing it so what does the  system look like that can handle this  sort of workload well it turns out  someone already built one  it's called scuba scuba is a system that  was built at Facebook they released a  paper on it called scuba diving into  data at Facebook and this being strange  loop there's a pretty high chance that  one of these twelve people are sitting  in the audience somewhere and scuba was  built to solve exactly the same problem  because Facebook has this problem as  well they operate at very large systems  of scale and so they built a distributed  event store and the idea behind scuba is  you ingest events a very high volume  from lots of producers lots of systems  at once and you store them all every  single event and you store them  distributed across many servers and that  lets you scale out the amount of stuff  that you're storing and it also lets you  speed up queries because when you want  to query the events you can fan the  query out across all those servers and  do a lot of the processing in parallel  and then to make things even faster they  take those events and they store them in  RAM which is ludicrously fast obviously  so the problem with scuba is it's a  Facebook tool we can't use it  which means our customers can't use it  but we can be inspired by it they were  kind enough to write a paper about it  so we thought well what if we could  build a really simple system that's  inspired by the design of scuba so  Retriever is similar inspired by scuba  we are a distributed event store we  store the events that come in  distributed across servers and we get  fast queries by fanning out the queries  to multiple servers but we do a few  things a little differently from scuba  and the most important and obvious one  is we store data on disk and the reason  why we store data on disk rather than  RAM is because we aren't Facebook and we  don't have the infinite money cheat code  it turns out that Ram is expensive and  it turns out that SSDs are really fast  and especially if you can do certain  things with your access patterns you can  actually get really fast queries just by  reading from SSDs also file system  pretty good at caching stuff these days  because we're storing data on disk that  means we can also depend on the file  system for a lot of the semantics that  we need from our data store and that's  pretty useful it means we can do  something called column-oriented storage  which some of you may be familiar with  this already I'll be doing a recap of  that later for you it'll be more of a  recap but I want to make sure everyone's  on the same page about that and we use  Kafka which I'll talk about more later  for ingesting events and that gives us  all kinds of cool operational properties  which we can rely on so some of you may  prefer to see a map of the territory  before you go on a hike so let's do a  quick overview of what writing and  reading looks like this is the  architecture of Retriever a customer  sends events they are published to a  caf-co topic if you're not sure what  that means yet I'll cover calculator but  I'm sure a lot of you are so we publish  events to kafka retrievers consume from  kafka they receive all the events that  come in and write into disk and we have  retrievers operating in pairs like this  and then to read a query is issued by  our API it's gonna pick a retriever to  run the query  it'll issue the query to that retriever  that retriever will fan out the query to  other retrievers that have the data it  needs  they'll compute the results and send  them back awesome  well that was extremely high level let's  explain how some of that actually works  this is a picture of it's a  column-oriented picture by the way I did  warn you about the bad jokes so our data  model is that customers have one or more  data sets and data sets you can think of  them as basically tables in a  traditional database data sets are  partitioned across multiple servers each  data set is assigned to a number of  partitions typically we have about three  partitions per data set our largest data  set right now is sitting on 39  partitions and those data set partitions  contain events with met events before  let's recap so here are a couple of  different events these are both  processing web requests and so you see  these two events have a slightly  different shape the second event has  this error field but that's the idea  events are just JSON blobs you send us  lots of them so I'd like to visualize  these events in a slightly different  format for a reason that will come  apparent very quickly so I've drawn  these events in a table and what we've  got here is in a fairly traditional way  I've got the fields of the events in the  columns of the table and then each row  is one event so here we've got five  events showing you know a few requests  to the foo path and some two bar and  then we have this one other event that  has none of that data and just has like  a log message in it and the point about  this is there's no schema attached to a  data set like you might get in a  traditional you know my sequel type  database where each table has a data set  that has a schema so you can send us  events of all shapes and sizes into the  same data set and we're just happily  store them we're not going to say like  this one is the wrong type for this data  set and events can have an arbitrary  number of fields we have some events  with hundreds of fields and that's  actually a pretty normal case you might  be thinking well why the hell would I  have an event with a hundred fields in  it well let's imagine these events are  representing the processing of a web  request and there's already some stuff  I've left out here  just for space so we've got the path  we've got the response time to process  the request we've got the status code  but I don't have the host name in here I  don't have the headers of the requests  maybe those are useful maybe while  you're processing web requests you want  to log how much time you spend in the  database for each request that it should  be useful to know if your database  starts running slow maybe you want to  include application level information  such as the user ID that the request was  for or maybe something more specific  like when we did this particular  database call it returned this many rows  and so you can imagine if you have if  you have these really rich events  annotated with lots of data they can  have quite a lot of fields but not all  of those fields are going to be  populated all the time and that's what  we see here that all of these fields can  potentially contain null values a couple  of columns I'd like to point out so we  have this index column on the Left we  assign every event and index as it comes  in and that's going to come in later but  the idea is these are unique for each  event and every event has a timestamp  kind of by definition an event is a  thing that happened at a time so that's  just the time they've even happened  okay so how do we store these we have a  few choices because what we need to do  is take these structured events and  store them on disk as files and files  are just streams of bytes so we need to  take this structure and serialize it  somehow and broadly we have two choices  about how to do this for this sort of  data we can serialize it in what's  called a row oriented way or what's  called a column oriented way so  apologies if you already know about  column oriented storage this part is  going to be very familiar so row  oriented is sort of a traditional choice  this is what a lot of databases do but  what I've done with the table here is  I've cut out some of the fields and  focused in on just a few events just  from for simplicity so the idea behind  row oriented storage is you store  everything pretty much in one file  and you take all of the fields for a  given record a given event and you just  lay them out on disk next to each other  so one request or one event comes in  we're going to store the fields we just  got the path from the response time at  the status and then a nothing for the  error  another event comes in we do the same  thing again another event comes in so we  stole this stuff sequentially and a  couple of things a couple of things to  point out here one is this this empty  space that we have to leave if there's a  null value and there's a few different  ways you can encode this but most of  them you have to somehow indicate that  hey that normally be a record here but I  don't have it in this case and that's  one thing if you've got one null value  but if you have 100 columns and most of  them are null most of the time that's  actually kind of a lot of wasted space  just to say that there's nothing there  and the other thing the way you read  this is you read a whole record and then  you read another whole record and that's  great if what you're doing is mostly  reading if that's what you mostly want  to do to get the entire contents of a  record and a lot of like ORM use cases  that is what you want to do you just  want to load your user object into  memory and then do stuff with it in the  application but if you're only concerned  with a couple of these fields you're  actually doing a lot of i/o that you  don't need so an alternative way of  serializing data like this is called  column-oriented so I've expanded the  table again to include those index and  timestamp fields because I'm going to  need them the idea of column oriented  storage is instead of storing all of  your events in a single file you make a  file for every field in the events  otherwise known as column so you have a  file per column so here's how we would  store as an example the path field we  have a fiat file called path tostring  because it's a string so an event comes  in with index 0 we write the index value  and then we write the value of the field  which is through another event comes in  we write the index we write the value of  the field another event same thing  so this is how we would encode one  column of this table just to hammer home  the point here's how we would do it for  the response time field we write the  index we write the value and so on and  so on  so you might be wondering well how do we  do this when there isn't a value two  right so for the error field the first  event that came in didn't have an error  so we just don't write anything we're  not even gonna create this file in fact  until we have a value two right so the  next event comes in and we do have a  value so we just start at the index one  we pry it in next one we write the value  next event has no error you get the idea  we don't write anything so this is the  whole column file for error and imagine  there were a hundred events that came in  and only one of them had an error you'd  only have written one for one value  there the timestamp column that I  mentioned earlier is stored in a very  similar way we write the index we write  the timestamp the reason this is worth  looking at is because the timestamp is  guaranteed to always be present we can  use this column also as kind of an index  in other words this tells us what index  is exist and because every event has an  index this tells us what events exist  the reason we double up the index of the  timestamp like this is because almost  all your queries are going to be based  on events in some time range and this  lets us do a quick filter against  timestamp but I'll we can talk about  that later so how do we read data that  we've written in this slightly awkward  kind of way well we don't just have one  file to read anymore we have potentially  a variable number of files so the first  question we need to ask if we want to  read is what files do we have what  columns do we have available to scan  well these are just files on disk as I  said earlier which means we can  basically just run LS like we can ask  the file system what files do you have  so in this case it might say I have path  response time status and error  let's say we're calculating the average  response time I know I just told you all  to do percentiles but this is an easier  example let's say we want to do the  average response time for events that  have status 200 and let's go through how  we would read that so first we need to  open the files that we want to read we  can figure out what files we're going to  need by looking at the query that we're  trying to run so we're going to need the  index file because we always need the  index file we need to know what events  there are otherwise - the timestamp  column we're going to need status  because that's what we're filtering on  so we need to check if the events meet  meet our query and we're going to need  the response time column so let's open  all those files and you can think of  this star is like a file pointer so  we're gonna be reading through these  files so the first thing we do is read  an index find out is their event is  there an event to read but we got an  index its index 0 now we need to check  the filter so we'll read from the status  file until we hit that index 0 that we  just read well it just so happens that's  the first value so we get there straight  away now we have the status value we can  check the filter does it match yes it  does so we read from the response time  file until we hit index 0 again well we  find it so we saved that value for later  and we'll do all the calculation at the  end then we start again reading index  it's 1 read from the status file until  we hit index 1 here we go  check the filter well this one doesn't  match so we can skip this event start  again reading index index to read from  the status file until we hit index 2  here we go  it matches great read from the response  time file until we hit index 2 well hang  on this is index 1 that's not what we're  looking for  well that's because this is the event  that we skipped because the previous  status didn't match so we just keep  going here we go index 2 so we forget  about that 23 we don't want that one  here we've got the value 657 so we  collect that and so on so this is how we  scan through all of  files and we can do all these reads in  parallel so long as we have enough i/o  capacity so let's jump back to the table  view to sort of show what it was that we  just did so I've highlighted all of the  values that we looked at so we opened  these files and we read these values and  we skipped over one value in the  response time column but what we didn't  do is go anywhere near the path file we  didn't touch the arrow file if there  were a hundred other files we didn't  touch them either so we read all of this  data without reading most of it this is  kind of the mantra of column-oriented  storages only read what you need and  this is why it's so nice for these  analytical queries because most of those  who's going to run a calculation on a  hundred fields right like what would  that even or that expression even looked  like okay so we've got some data on disk  and that's how we can execute a query  against a single node because everything  I talked about is reading from files on  the disk but this is a distributed  datastore so the data exists across  multiple nodes so how do we how do we  run that query across all of the nodes  well a clients got a query to issue  let's say it's the same average query so  the client knows what data said its  querying for so it's going to check what  partitions that data set exists on and  then the partitions have retriever nodes  listening on them the clients going to  pick one retriever to be the root for  the query and then it sends the query to  that retriever and the retrievers know  what other retrievers exist on that  partition so the root node will forward  on the query to the other nodes on the  other partitions for the same data set  and then they can all scan their their  data on disk in parallel and they can  all do a partial that they can compute  part of the answer to the question and  then they can send their partial results  back to the root  and the route merges the results and  sends them back to the client and then  we have our answer  well that sounds simple but there are a  few things we need to watch out for so  the data is partitioned which means only  every node only has part of the answer  and there are a few things we can trip  up there we need to be careful in the  way that we combine those partial  results so we get the right answer so  here's an example if you're computing an  average of a set of numbers you can't  split that set of numbers into two sets  and average those sets and then average  the averages if you do that you'll get  the wrong answer I don't know if this is  entirely readable but say you're  computing the average of one two three  and three the answers to 2.25 if you  split that up into one two three take  the average of that to get two and then  the average of three is three and the  average of those two is 2.5 which is  different so instead we need to make  sure that the way we're computing the  partial results is something we can send  back to the root in such a way that the  root can combine those results and get  the right answer so for an average you  can do it if you if you compute the sums  of the partial data and the counts of  the partial data and then send both of  those back and then you can add up all  the sums adeb accounts do the division  and get the right average so we have a  few different types of calculation we  can run and we need each of these  calculations to work in this way so that  we can do a distributed query and get  the right answer so some other examples  if we're calculating values for  different groups so this is our  breakdown operator we're basically going  to accumulate the answers so the  statistics for each group in a sort of  map structure and you can each node can  compute its own groups and its own  values then send the group's back to the  root and the root can do the merge and  so long as the values in the group  Armour jabal then you can you can merge  appropriately for count distinct we  don't do this by collecting all the  unique values because that would be  really memory intensive  but there's a trick called hyper log-log  where this is a again this is not what  this talks about but hyper log-log is a  way of estimating the number of unique  values in a given set and it turns out  that hyper log-log is a data structure  that you can actually send across the  network and it combines in this way  similarly for percentiles there's a  probabilistic trick called tea digest  which combines nicely and this is a  property called commutativity which  comes up a whole lot in distributed  systems if you've seen any talks about  CRD teas that's another place where this  sort of pattern comes up there's one  more problem we need to deal with with  distributed queries which is we have  this root node that's merging all the  results but that might be a lot of work  if we've found out to ten nodes or  thirty nine nodes and maybe there's  partial results are all of the groups  were collecting and maybe we have a lot  of groups you know if that's user ID you  might have a million user IDs you might  have more than that in certain cases and  so we don't want to overwhelm the root  node you know run out of memory or just  spend too long computing it's kind of a  shame if we've done all this work to  distribute the query and then we still  have one guy doing all of the  computation at the top so we can sort of  do this recursively and if we have more  than a certain number of nodes that were  querying we just have the leaf nodes  also become roots and they do their own  distributed query pattern and then  because we have the commutativity  property everything rolls out nicely all  right so we can write data and we can  read data so we're done right ship it  well we kind of have to run this thing  right we have customers that pay us  money this is the real world nodes fail  so we do have to solve a few more  problems so let's talk about how we do  that and I need to embark on a brief  detour on this hike to talk about Kafka  can I get a quick show of hands how many  of you are familiar with Kafka Wow  everyone in the room practically  how many of you are using Catherine  production right now about half the room  cool all right well this I'll skate  through this reasonably quickly then  all right so retriever relies pretty  heavily on Kafka for ingesting our  events so as we saw at the start events  go in through Kafka a calf kegger  there's lots of nice properties it gives  us the ability to distribute rights out  across multiple nerds it gives us  replication kind of for free and we rely  on it for fault tolerance and disaster  recovery how exactly well as all of you  probably know Catherine is a distributed  log it's not exactly like a message  qubit you can think of it that way you  publish messages to topics which are  again kind of like tables topics are  partitioned which is the unit of scaling  and within a partition of a given topic  Kafka guarantees that messages are  totally ordered which means messages  will come out of a topic partition in  the same order that they went in which  is really useful and Kafka actually  stores the messages on disk whether or  not anyone is listening to them it's not  a lot of message queues will just when a  message comes in they'll route the  message straight to any consumers and if  there's no one listening they'll just  drop the message on the floor that  caf-co writes everything and you can use  that for a couple of things you can get  a sort of publish/subscribe semantics  because the data is just sitting there  anyone can read it if they like you can  have multiple readers and it also means  you can go back in time and replay  messages from some point so how do we  use this well plans publish events to a  CAF kotappa  and the Kafka topic is partitioned and  our data sets are assigned to partitions  so this is the partitioning I was  talking about earlier we have a number  of partitions on the Kafka topic and the  datasets know which of those partitions  they are assigned to so the client who's  writing the data chooses one of the  partitions for the data set and right  now it just does that at random it turns  out that random partitioning is actually  pretty  for this kind of behavior so what that  means is the clients just randomly  writing data between all of the  partitions on a data set and then we  have retrievers consuming from Kafka on  each partition and writing events to  disk and because Kafka lets us attach as  many subscribers as we want we just have  two retrievers consuming each partition  and that gives us replication for free  because Kafka is guaranteeing that the  events are coming in the units are  coming out in the same order that they  came in then we know we're gonna have an  exact copy of the data on two different  nodes and that's pretty useful so one  problem we need to solve part of our  business model is to price based on  storage so every customer is paying for  a certain amount of storage they have a  quota and we're not in the business of  just storing data forever collecting  infinite amounts of it that would not be  useful so when a customer's nearing the  edge of their quota we want to start  aging out the oldest data that they've  sent us well this is where we can rely  on the file system to do a lot of the  work for us  so as events are coming in we split them  up into segments and you can think of  these as sort of time slices of the data  coming in so at some point we decide  we've written enough data enough events  into this segment so we start a new  segment and because we have just files  on disk  we represent segments just as  directories in which the files live so  when it's time for a new segment we just  open a new directory and start writing  the files into that directory instead of  the old one the old one sits where it  was which means when we need to  calculate how much space our customer is  occupying we can calculate how much  space each segment occupies again we can  just ask the file system hey how much  data is in this directory how big is  this file and when we need to do when we  need to delete data we can just say hey  what segments are there list the  directories find the oldest one they're  numbered  numerically so we can just sort them and  just delete the directory containing the  oldest data we didn't need to do any  kind of in memory manipulation and worry  about concurrency what about fault  tolerance so this is the big bad world  we run on AC 2 nodes go down processes  crash so why might Pro why might receive  a crash well we might have a bug we  might have a network outage which means  it's unable to connect to Kafka we might  just be deploying this this is this is a  piece of software that we're actively  working on we need to deploy to it we  need to take the process down we have to  replicas of the data so that should be  fine but we don't want to miss events as  they're coming in customers are always  writing data we don't want to just drop  those events on the floor we don't want  our two replicas to get out of date so  what we do and this is another thing  where we can just use CAF could have  pretty much solved this problem  so each retriever tracks the kafka  messages have what's called an offset  associated with them and that's just how  far as it's writing on disk how far it's  gone and so offsets are also  incrementing so as every event comes  into retriever we track what offset it  came in with and when we boot up  Retriever we just say hey the last event  I saw had this offset so give me  everything since then Kathir guarantees  the order so we know we we won't have  missed anything and to make sure that  works we right every now and then a  checkpoint file and that says here's the  last offset that I definitely finished  writing to disk but we need to store  something else as well we need to store  the index of the message and this is the  index that we're assigning to the events  as they're coming in so that determines  that the offset tells us where to  reconfirm but we have another problem  because we're writing to multiple files  and we might have had the problem where  we written we wrote to the path file for  example we wrote the value for the path  and then we crashed before we got a  chance to write the value for the  response time or some other field so  we're kind of inconsistent at that point  we've  written half the event and that would be  bad because we don't want to them be  returning inconsistent data so when  weary consume we look at this checkpoint  and we say okay this index checkpoint is  the last message that I'm sure I  finished writing and anything after that  point is suspect so when we start up we  just take all those files and truncate  them at the point where that indexes and  sum between those two together we know  we've truncated at that point we're  rican Suman from the corresponding  offset so we're going to get all the  messages that came since that point and  all the stuff we just deleted we can  continue writing so that's great but  what if a node goes away completely like  ec2 hosts can just disappear well we  have another replica so we find another  node on the same partition it's got all  the data that we need now we need to  copy the data over to the new node so  that it can catch up well these are  files on disk let's use a sync and it  turns out that our sync is really good  at this kind of thing it can even detect  if you've already run so we can sort of  recover from an incomplete bootstrap  once we're done with our sync because  that takes some time  well now we're a little bit behind but  that's fine because we cannot we also  are synced the checkpoint file so we  just reckon soom from whatever the  checkpoint says now we're up to date so  that's sort of how we get some of these  operational properties we get  replication thanks to Kafka we get full  Tolerance thanks to Kafka we get quota  management by using the file system and  we can bootstrap a new nodes using rsync  and Kafka and that is retriever but what  I'd like you to take away from this talk  well one column-oriented storage is  pretty cool especially if you're doing a  sort of analytical query sort of use  case because you only need to read what  you need Kathir is pretty cool it  basically solves a lot of distributed  systems problems for you so if you're  building a distributed system try not to  solve fault tolerance and replication  yourself those are really hard just rely  on Kafka to do it  file systems are pretty cool they have  all kinds of nice semantics they can  speed up breeds for you they can do  atomic renames they let you use a sink  but what all that is really a way of  saying is sometimes it's fine to solve  the really hard problems if that's what  your business needs but make sure first  that you've looked for ways to make them  easy thank you  [Applause]
+
+00:00:10.840 --> 00:00:12.839 align:start position:0%
+hello strange loop I'd like to talk to  you about distributed column stores and  why we built one  I'm Sam Stokes I'm an engineer at  honeycomb which is a small start-up in  the San Francisco Bay Area as a fearless  in the crowd when I'm not making  software  I'm usually making cocktails and  sometimes bad jokes and I'd like to  introduce you to retriever  what is retriever well Retriever is a  distributed columnstore it's also an  analytic query engine and it's got a  skinless data model and hang on a second  I'm really getting ahead of myself a bit  because you're probably wondering why  would someone build their own datastore  it's pretty much rule one right that you  don't build your own database and if you  do you especially don't call it a  database you call it a datastore which  is why we build the datastore so  Retriever is a special purpose datastore  that we built to power honeycomb and so  to talk about retriever I have to  explain a little bit about what  honeycomb does well you can think of  honeycomb as a debugger for production  systems what does that mean well we want  to help engineers understand and  troubleshoot distributed systems as you  might be aware especially if you've been  to any other tools at this conference  distributed systems can be kind of  tricky beasts or some sometimes so  honeycomb sits in between sort of  traditional metrics tools and  traditional log aggregation tools that's  a bit abstract so let me only get a bit  more concrete how does honeycomb work  well your systems the ones you want to  understand better they send us events  events are kind of similar to structured  logs if you're familiar with that cool  buzzword  they're also JSON blobs here's an  example event  and this represents a server processing  some kind of web request COC events have  a bunch of fields this one has like an  endpoint field what end point on the web  app was being hit the hostname that  processed the request some statistics  about response time and so on so you  send us events we store your events and  you can ask for them back and then you  can issue queries on those events and  the reason you might want to do that is  you can ask us to calculate things for  example here we're saying for every  endpoint that events have come in for  calculate the average response time that  we spent processing the request for that  endpoint and we're going to visualize  something else the amount of time that  was spent in the database processing  those requests okay so we take your  queries and we turned them into pretty  graphs like this there's a lot going on  here so the top graph I'm kind of  showing the this is the average response  time for every endpoint and the bottom  graph this is a visualization called a  heat map so don't worry too much if you  aren't familiar with heat maps because  that's not what this talk is about but  heat maps are a pretty cool way of  visualizing the distribution of response  times so if this is time spent in the  database you can imagine that these two  bands are sort of showing here are some  requests that hit the database cache and  here are some that missed and took  longer but the idea is so we can draw  graphs and graphs are awesome graphs  help you like look for patterns and  detect anomalies but we want you to be  able to always jump back and forth  between the graphs of the calculations  that you've drawn and the raw data that  came in that you sent us that we  generated those graphs from and what  that lets you do is you can find  something we're on the graph and then  you can say well hang on why did that  happen what was actually going on there  and you can go back and look at the real  event with all of the data that you sent  us and all of the detail  and look for signs of weirdness and  there are some other questions you can  ask this kind of system an example is  which of your users are seeing the  highest response times so this isn't a  question about the global average  response time across the whole site this  is saying literally for each user find  the ones that are seeing bad response  times and you might express this in a  query something like show me the average  response time broken down by user ID and  ordered by the average response time  what about I'm running a deploy and my  deploys were all not gradually across a  fleet of servers and I want to know how  many servers has my deploy got - well I  can express that in this kind of system  if I'm tagging my events with a bill by  D and so then as offensive processed I  can say show me the number of unique  host names that have sent me events for  each build ID and you could kind of see  the new builds trending upwards as the  deploy rolls out what about for all of  our customers who are on our most  expensive pricing plan are any of them  affected by this error we're just in  troubleshooting and the idea there is at  the point when you're sending us an  event maybe you're consuming some logs  maybe you've instrumented your code but  the person who's doing that work doesn't  want to care about which customer is  high value they don't know about who's  on which pricing plan they certainly  don't want to have to update their code  when a customer changes pricing plan or  you sign up somebody new but it's still  a really useful query to be able to ask  if you have some other representation of  which customers are on which plan and so  the idea is we need to be able to query  really flexibly on the data that we've  got well how do we do that so what do we  do with all the data that you're sending  us how do we store them in a way that we  can serve those kinds of queries and get  graphs out well spoiler alert  the answer is recruiter so for the rest  of this talk I'd like to describe to you  what it was like building retriever and  some of the decisions that we made I'll  start with a pretty high-level overview  of what it looks like and how it works  I'll dive deeper into how we store the  data on disk and how we read it back and  especially some of the details of how we  read it back really fast when it's  spread across multiple machines and  finally because this is a database we  run in production data store this is a  data store we run in production remember  don't build a database we run this for  for paying customers so there are some  interesting things we need to do to make  that actually work in the face of the  real world so what do you need in a data  store that can serve this kind of  features well we have we need to issue  queries and we have a fairly flexible  sort of query model so we have these  operations like break down saying take  the events that you've sent and break  them down by the value of some field  like break down by end point or break  down by user ID and you can filter which  is you know discard things that don't  match the filter and we want you to be  able to break down and filter by any  field you don't have to say in advance  I'm only going to break down by end  point or I'm only going to break down by  user ID you can make up your mind  afterwards and so you're not pre  defining an index or setting up a schema  and then having to comply with that we  need queries to be able to produce two  different kinds of results so we have  time series graphs and in fact some  weird and wonderful visualizations like  the heatmap thing as well and we also  have queries that can return just the  raw data they came in according to some  filters and we need to calculate the  kinds of statistics that are useful for  operations purposes really that's what  we're trying to solve here is the sort  of problems that operations people face  so percentiles are really useful  Layton sees if you're still measuring  average latency you should really try  percentiles we can calculate the  histogram for an entire distribution of  response times or of packet sizes or  other things like that count distinct is  another really useful operation we need  all of that to be really fast and the  reason for that is we want users to be  able to do a sort of question-and-answer  workflow with their systems so something  goes wrong the user forms a theory about  what went wrong and why so they ask a  question for example is this only  happening for certain users they ask a  question to test the hypothesis they get  an answer back maybe it confirms the  hypothesis in which case they might want  to refine further and drill down  wellmaybe turns up a hypothesis was  wrong and they need to try a different  tack and in both of these cases it's  really important for the QA to be really  fast you don't want to sort of set a  query running and then go have a cup of  tea and then forget what you were doing  we're running this multiple customers  and so we need to be able to do things  like enforce quotas and other properties  that are tied to our business model and  so we need some sort of custom tools  that can manage that sort of thing and  let us go in and you know poke a  customer in chase their quota and maybe  most importantly we're a start-up we  have an extremely limited budget and an  even more limited team an awesome team  but a limited book so this thing needs  to be very simple we are not building a  general-purpose database here and we  don't need to we know exactly what data  is coming in and a what rates with what  access patterns we control the query  interface so we know what kinds of  questions can be asked of our data so we  have this very precisely defined use  case we can write a special-purpose data  store we also don't need to support  updates because once an events come in  it's happened already you don't need to  go and change it and we don't need to  support the kinds of fancy features you  would get in a more general-purpose data  store  like joins or transactional semantics so  we need to keep it simple so again we  need to issue all kinds of queries  really quickly and not spend hundreds of  thirteen years doing it so what does the  system look like that can handle this  sort of workload well it turns out  someone already built one  it's called scuba scuba is a system that  was built at Facebook they released a  paper on it called scuba diving into  data at Facebook and this being strange  loop there's a pretty high chance that  one of these twelve people are sitting  in the audience somewhere and scuba was  built to solve exactly the same problem  because Facebook has this problem as  well they operate at very large systems  of scale and so they built a distributed  event store and the idea behind scuba is  you ingest events a very high volume  from lots of producers lots of systems  at once and you store them all every  single event and you store them  distributed across many servers and that  lets you scale out the amount of stuff  that you're storing and it also lets you  speed up queries because when you want  to query the events you can fan the  query out across all those servers and  do a lot of the processing in parallel  and then to make things even faster they  take those events and they store them in  RAM which is ludicrously fast obviously  so the problem with scuba is it's a  Facebook tool we can't use it  which means our customers can't use it  but we can be inspired by it they were  kind enough to write a paper about it  so we thought well what if we could  build a really simple system that's  inspired by the design of scuba so  Retriever is similar inspired by scuba  we are a distributed event store we  store the events that come in  distributed across servers and we get  fast queries by fanning out the queries  to multiple servers but we do a few  things a little differently from scuba  and the most important and obvious one  is we store data on disk and the reason  why we store data on disk rather than  RAM is because we aren't Facebook and we  don't have the infinite money cheat code  it turns out that Ram is expensive and  it turns out that SSDs are really fast  and especially if you can do certain  things with your access patterns you can  actually get really fast queries just by  reading from SSDs also file system  pretty good at caching stuff these days  because we're storing data on disk that  means we can also depend on the file  system for a lot of the semantics that  we need from our data store and that's  pretty useful it means we can do  something called column-oriented storage  which some of you may be familiar with  this already I'll be doing a recap of  that later for you it'll be more of a  recap but I want to make sure everyone's  on the same page about that and we use  Kafka which I'll talk about more later  for ingesting events and that gives us  all kinds of cool operational properties  which we can rely on so some of you may  prefer to see a map of the territory  before you go on a hike so let's do a  quick overview of what writing and  reading looks like this is the  architecture of Retriever a customer  sends events they are published to a  caf-co topic if you're not sure what  that means yet I'll cover calculator but  I'm sure a lot of you are so we publish  events to kafka retrievers consume from  kafka they receive all the events that  come in and write into disk and we have  retrievers operating in pairs like this  and then to read a query is issued by  our API it's gonna pick a retriever to  run the query  it'll issue the query to that retriever  that retriever will fan out the query to  other retrievers that have the data it  needs  they'll compute the results and send  them back awesome  well that was extremely high level let's  explain how some of that actually works  this is a picture of it's a  column-oriented picture by the way I did  warn you about the bad jokes so our data  model is that customers have one or more  data sets and data sets you can think of  them as basically tables in a  traditional database data sets are  partitioned across multiple servers each  data set is assigned to a number of  partitions typically we have about three  partitions per data set our largest data  set right now is sitting on 39  partitions and those data set partitions  contain events with met events before  let's recap so here are a couple of  different events these are both  processing web requests and so you see  these two events have a slightly  different shape the second event has  this error field but that's the idea  events are just JSON blobs you send us  lots of them so I'd like to visualize  these events in a slightly different  format for a reason that will come  apparent very quickly so I've drawn  these events in a table and what we've  got here is in a fairly traditional way  I've got the fields of the events in the  columns of the table and then each row  is one event so here we've got five  events showing you know a few requests  to the foo path and some two bar and  then we have this one other event that  has none of that data and just has like  a log message in it and the point about  this is there's no schema attached to a  data set like you might get in a  traditional you know my sequel type  database where each table has a data set  that has a schema so you can send us  events of all shapes and sizes into the  same data set and we're just happily  store them we're not going to say like  this one is the wrong type for this data  set and events can have an arbitrary  number of fields we have some events  with hundreds of fields and that's  actually a pretty normal case you might  be thinking well why the hell would I  have an event with a hundred fields in  it well let's imagine these events are  representing the processing of a web  request and there's already some stuff  I've left out here  just for space so we've got the path  we've got the response time to process  the request we've got the status code  but I don't have the host name in here I  don't have the headers of the requests  maybe those are useful maybe while  you're processing web requests you want  to log how much time you spend in the  database for each request that it should  be useful to know if your database  starts running slow maybe you want to  include application level information  such as the user ID that the request was  for or maybe something more specific  like when we did this particular  database call it returned this many rows  and so you can imagine if you have if  you have these really rich events  annotated with lots of data they can  have quite a lot of fields but not all  of those fields are going to be  populated all the time and that's what  we see here that all of these fields can  potentially contain null values a couple  of columns I'd like to point out so we  have this index column on the Left we  assign every event and index as it comes  in and that's going to come in later but  the idea is these are unique for each  event and every event has a timestamp  kind of by definition an event is a  thing that happened at a time so that's  just the time they've even happened  okay so how do we store these we have a  few choices because what we need to do  is take these structured events and  store them on disk as files and files  are just streams of bytes so we need to  take this structure and serialize it  somehow and broadly we have two choices  about how to do this for this sort of  data we can serialize it in what's  called a row oriented way or what's  called a column oriented way so  apologies if you already know about  column oriented storage this part is  going to be very familiar so row  oriented is sort of a traditional choice  this is what a lot of databases do but  what I've done with the table here is  I've cut out some of the fields and  focused in on just a few events just  from for simplicity so the idea behind  row oriented storage is you store  everything pretty much in one file  and you take all of the fields for a  given record a given event and you just  lay them out on disk next to each other  so one request or one event comes in  we're going to store the fields we just  got the path from the response time at  the status and then a nothing for the  error  another event comes in we do the same  thing again another event comes in so we  stole this stuff sequentially and a  couple of things a couple of things to  point out here one is this this empty  space that we have to leave if there's a  null value and there's a few different  ways you can encode this but most of  them you have to somehow indicate that  hey that normally be a record here but I  don't have it in this case and that's  one thing if you've got one null value  but if you have 100 columns and most of  them are null most of the time that's  actually kind of a lot of wasted space  just to say that there's nothing there  and the other thing the way you read  this is you read a whole record and then  you read another whole record and that's  great if what you're doing is mostly  reading if that's what you mostly want  to do to get the entire contents of a  record and a lot of like ORM use cases  that is what you want to do you just  want to load your user object into  memory and then do stuff with it in the  application but if you're only concerned  with a couple of these fields you're  actually doing a lot of i/o that you  don't need so an alternative way of  serializing data like this is called  column-oriented so I've expanded the  table again to include those index and  timestamp fields because I'm going to  need them the idea of column oriented  storage is instead of storing all of  your events in a single file you make a  file for every field in the events  otherwise known as column so you have a  file per column so here's how we would  store as an example the path field we  have a fiat file called path tostring  because it's a string so an event comes  in with index 0 we write the index value  and then we write the value of the field  which is through another event comes in  we write the index we write the value of  the field another event same thing  so this is how we would encode one  column of this table just to hammer home  the point here's how we would do it for  the response time field we write the  index we write the value and so on and  so on  so you might be wondering well how do we  do this when there isn't a value two  right so for the error field the first  event that came in didn't have an error  so we just don't write anything we're  not even gonna create this file in fact  until we have a value two right so the  next event comes in and we do have a  value so we just start at the index one  we pry it in next one we write the value  next event has no error you get the idea  we don't write anything so this is the  whole column file for error and imagine  there were a hundred events that came in  and only one of them had an error you'd  only have written one for one value  there the timestamp column that I  mentioned earlier is stored in a very  similar way we write the index we write  the timestamp the reason this is worth  looking at is because the timestamp is  guaranteed to always be present we can  use this column also as kind of an index  in other words this tells us what index  is exist and because every event has an  index this tells us what events exist  the reason we double up the index of the  timestamp like this is because almost  all your queries are going to be based  on events in some time range and this  lets us do a quick filter against  timestamp but I'll we can talk about  that later so how do we read data that  we've written in this slightly awkward  kind of way well we don't just have one  file to read anymore we have potentially  a variable number of files so the first  question we need to ask if we want to  read is what files do we have what  columns do we have available to scan  well these are just files on disk as I  said earlier which means we can  basically just run LS like we can ask  the file system what files do you have  so in this case it might say I have path  response time status and error  let's say we're calculating the average  response time I know I just told you all  to do percentiles but this is an easier  example let's say we want to do the  average response time for events that  have status 200 and let's go through how  we would read that so first we need to  open the files that we want to read we  can figure out what files we're going to  need by looking at the query that we're  trying to run so we're going to need the  index file because we always need the  index file we need to know what events  there are otherwise - the timestamp  column we're going to need status  because that's what we're filtering on  so we need to check if the events meet  meet our query and we're going to need  the response time column so let's open  all those files and you can think of  this star is like a file pointer so  we're gonna be reading through these  files so the first thing we do is read  an index find out is their event is  there an event to read but we got an  index its index 0 now we need to check  the filter so we'll read from the status  file until we hit that index 0 that we  just read well it just so happens that's  the first value so we get there straight  away now we have the status value we can  check the filter does it match yes it  does so we read from the response time  file until we hit index 0 again well we  find it so we saved that value for later  and we'll do all the calculation at the  end then we start again reading index  it's 1 read from the status file until  we hit index 1 here we go  check the filter well this one doesn't  match so we can skip this event start  again reading index index to read from  the status file until we hit index 2  here we go  it matches great read from the response  time file until we hit index 2 well hang  on this is index 1 that's not what we're  looking for  well that's because this is the event  that we skipped because the previous  status didn't match so we just keep  going here we go index 2 so we forget  about that 23 we don't want that one  here we've got the value 657 so we  collect that and so on so this is how we  scan through all of  files and we can do all these reads in  parallel so long as we have enough i/o  capacity so let's jump back to the table  view to sort of show what it was that we  just did so I've highlighted all of the  values that we looked at so we opened  these files and we read these values and  we skipped over one value in the  response time column but what we didn't  do is go anywhere near the path file we  didn't touch the arrow file if there  were a hundred other files we didn't  touch them either so we read all of this  data without reading most of it this is  kind of the mantra of column-oriented  storages only read what you need and  this is why it's so nice for these  analytical queries because most of those  who's going to run a calculation on a  hundred fields right like what would  that even or that expression even looked  like okay so we've got some data on disk  and that's how we can execute a query  against a single node because everything  I talked about is reading from files on  the disk but this is a distributed  datastore so the data exists across  multiple nodes so how do we how do we  run that query across all of the nodes  well a clients got a query to issue  let's say it's the same average query so  the client knows what data said its  querying for so it's going to check what  partitions that data set exists on and  then the partitions have retriever nodes  listening on them the clients going to  pick one retriever to be the root for  the query and then it sends the query to  that retriever and the retrievers know  what other retrievers exist on that  partition so the root node will forward  on the query to the other nodes on the  other partitions for the same data set  and then they can all scan their their  data on disk in parallel and they can  all do a partial that they can compute  part of the answer to the question and  then they can send their partial results  back to the root  and the route merges the results and  sends them back to the client and then  we have our answer  well that sounds simple but there are a  few things we need to watch out for so  the data is partitioned which means only  every node only has part of the answer  and there are a few things we can trip  up there we need to be careful in the  way that we combine those partial  results so we get the right answer so  here's an example if you're computing an  average of a set of numbers you can't  split that set of numbers into two sets  and average those sets and then average  the averages if you do that you'll get  the wrong answer I don't know if this is  entirely readable but say you're  computing the average of one two three  and three the answers to 2.25 if you  split that up into one two three take  the average of that to get two and then  the average of three is three and the  average of those two is 2.5 which is  different so instead we need to make  sure that the way we're computing the  partial results is something we can send  back to the root in such a way that the  root can combine those results and get  the right answer so for an average you  can do it if you if you compute the sums  of the partial data and the counts of  the partial data and then send both of  those back and then you can add up all  the sums adeb accounts do the division  and get the right average so we have a  few different types of calculation we  can run and we need each of these  calculations to work in this way so that  we can do a distributed query and get  the right answer so some other examples  if we're calculating values for  different groups so this is our  breakdown operator we're basically going  to accumulate the answers so the  statistics for each group in a sort of  map structure and you can each node can  compute its own groups and its own  values then send the group's back to the  root and the root can do the merge and  so long as the values in the group  Armour jabal then you can you can merge  appropriately for count distinct we  don't do this by collecting all the  unique values because that would be  really memory intensive  but there's a trick called hyper log-log  where this is a again this is not what  this talks about but hyper log-log is a  way of estimating the number of unique  values in a given set and it turns out  that hyper log-log is a data structure  that you can actually send across the  network and it combines in this way  similarly for percentiles there's a  probabilistic trick called tea digest  which combines nicely and this is a  property called commutativity which  comes up a whole lot in distributed  systems if you've seen any talks about  CRD teas that's another place where this  sort of pattern comes up there's one  more problem we need to deal with with  distributed queries which is we have  this root node that's merging all the  results but that might be a lot of work  if we've found out to ten nodes or  thirty nine nodes and maybe there's  partial results are all of the groups  were collecting and maybe we have a lot  of groups you know if that's user ID you  might have a million user IDs you might  have more than that in certain cases and  so we don't want to overwhelm the root  node you know run out of memory or just  spend too long computing it's kind of a  shame if we've done all this work to  distribute the query and then we still  have one guy doing all of the  computation at the top so we can sort of  do this recursively and if we have more  than a certain number of nodes that were  querying we just have the leaf nodes  also become roots and they do their own  distributed query pattern and then  because we have the commutativity  property everything rolls out nicely all  right so we can write data and we can  read data so we're done right ship it  well we kind of have to run this thing  right we have customers that pay us  money this is the real world nodes fail  so we do have to solve a few more  problems so let's talk about how we do  that and I need to embark on a brief  detour on this hike to talk about Kafka  can I get a quick show of hands how many  of you are familiar with Kafka Wow  everyone in the room practically  how many of you are using Catherine  production right now about half the room  cool all right well this I'll skate  through this reasonably quickly then  all right so retriever relies pretty  heavily on Kafka for ingesting our  events so as we saw at the start events  go in through Kafka a calf kegger  there's lots of nice properties it gives  us the ability to distribute rights out  across multiple nerds it gives us  replication kind of for free and we rely  on it for fault tolerance and disaster  recovery how exactly well as all of you  probably know Catherine is a distributed  log it's not exactly like a message  qubit you can think of it that way you  publish messages to topics which are  again kind of like tables topics are  partitioned which is the unit of scaling  and within a partition of a given topic  Kafka guarantees that messages are  totally ordered which means messages  will come out of a topic partition in  the same order that they went in which  is really useful and Kafka actually  stores the messages on disk whether or  not anyone is listening to them it's not  a lot of message queues will just when a  message comes in they'll route the  message straight to any consumers and if  there's no one listening they'll just  drop the message on the floor that  caf-co writes everything and you can use  that for a couple of things you can get  a sort of publish/subscribe semantics  because the data is just sitting there  anyone can read it if they like you can  have multiple readers and it also means  you can go back in time and replay  messages from some point so how do we  use this well plans publish events to a  CAF kotappa  and the Kafka topic is partitioned and  our data sets are assigned to partitions  so this is the partitioning I was  talking about earlier we have a number  of partitions on the Kafka topic and the  datasets know which of those partitions  they are assigned to so the client who's  writing the data chooses one of the  partitions for the data set and right  now it just does that at random it turns  out that random partitioning is actually  pretty  for this kind of behavior so what that  means is the clients just randomly  writing data between all of the  partitions on a data set and then we  have retrievers consuming from Kafka on  each partition and writing events to  disk and because Kafka lets us attach as  many subscribers as we want we just have  two retrievers consuming each partition  and that gives us replication for free  because Kafka is guaranteeing that the  events are coming in the units are  coming out in the same order that they  came in then we know we're gonna have an  exact copy of the data on two different  nodes and that's pretty useful so one  problem we need to solve part of our  business model is to price based on  storage so every customer is paying for  a certain amount of storage they have a  quota and we're not in the business of  just storing data forever collecting  infinite amounts of it that would not be  useful so when a customer's nearing the  edge of their quota we want to start  aging out the oldest data that they've  sent us well this is where we can rely  on the file system to do a lot of the  work for us  so as events are coming in we split them  up into segments and you can think of  these as sort of time slices of the data  coming in so at some point we decide  we've written enough data enough events  into this segment so we start a new  segment and because we have just files  on disk  we represent segments just as  directories in which the files live so  when it's time for a new segment we just  open a new directory and start writing  the files into that directory instead of  the old one the old one sits where it  was which means when we need to  calculate how much space our customer is  occupying we can calculate how much  space each segment occupies again we can  just ask the file system hey how much  data is in this directory how big is  this file and when we need to do when we  need to delete data we can just say hey  what segments are there list the  directories find the oldest one they're  numbered  numerically so we can just sort them and  just delete the directory containing the  oldest data we didn't need to do any  kind of in memory manipulation and worry  about concurrency what about fault  tolerance so this is the big bad world  we run on AC 2 nodes go down processes  crash so why might Pro why might receive  a crash well we might have a bug we  might have a network outage which means  it's unable to connect to Kafka we might  just be deploying this this is this is a  piece of software that we're actively  working on we need to deploy to it we  need to take the process down we have to  replicas of the data so that should be  fine but we don't want to miss events as  they're coming in customers are always  writing data we don't want to just drop  those events on the floor we don't want  our two replicas to get out of date so  what we do and this is another thing  where we can just use CAF could have  pretty much solved this problem  so each retriever tracks the kafka  messages have what's called an offset  associated with them and that's just how  far as it's writing on disk how far it's  gone and so offsets are also  incrementing so as every event comes  into retriever we track what offset it  came in with and when we boot up  Retriever we just say hey the last event  I saw had this offset so give me  everything since then Kathir guarantees  the order so we know we we won't have  missed anything and to make sure that  works we right every now and then a  checkpoint file and that says here's the  last offset that I definitely finished  writing to disk but we need to store  something else as well we need to store  the index of the message and this is the  index that we're assigning to the events  as they're coming in so that determines  that the offset tells us where to  reconfirm but we have another problem  because we're writing to multiple files  and we might have had the problem where  we written we wrote to the path file for  example we wrote the value for the path  and then we crashed before we got a  chance to write the value for the  response time or some other field so  we're kind of inconsistent at that point  we've  written half the event and that would be  bad because we don't want to them be  returning inconsistent data so when  weary consume we look at this checkpoint  and we say okay this index checkpoint is  the last message that I'm sure I  finished writing and anything after that  point is suspect so when we start up we  just take all those files and truncate  them at the point where that indexes and  sum between those two together we know  we've truncated at that point we're  rican Suman from the corresponding  offset so we're going to get all the  messages that came since that point and  all the stuff we just deleted we can  continue writing so that's great but  what if a node goes away completely like  ec2 hosts can just disappear well we  have another replica so we find another  node on the same partition it's got all  the data that we need now we need to  copy the data over to the new node so  that it can catch up well these are  files on disk let's use a sync and it  turns out that our sync is really good  at this kind of thing it can even detect  if you've already run so we can sort of  recover from an incomplete bootstrap  once we're done with our sync because  that takes some time  well now we're a little bit behind but  that's fine because we cannot we also  are synced the checkpoint file so we  just reckon soom from whatever the  checkpoint says now we're up to date so  that's sort of how we get some of these  operational properties we get  replication thanks to Kafka we get full  Tolerance thanks to Kafka we get quota  management by using the file system and  we can bootstrap a new nodes using rsync  and Kafka and that is retriever but what  I'd like you to take away from this talk  well one column-oriented storage is  pretty cool especially if you're doing a  sort of analytical query sort of use  case because you only need to read what  you need Kathir is pretty cool it  basically solves a lot of distributed  systems problems for you so if you're  building a distributed system try not to  solve fault tolerance and replication  yourself those are really hard just rely  on Kafka to do it  file systems are pretty cool they have  all kinds of nice semantics they can  speed up breeds for you they can do  atomic renames they let you use a sink  but what all that is really a way of  saying is sometimes it's fine to solve  the really hard problems if that's what  your business needs but make sure first  that you've looked for ways to make them  easy thank you  [Applause]
+ 
+
+00:00:12.839 --> 00:00:16.080 align:start position:0%
+ 
+ 
+
+00:00:16.080 --> 00:00:20.160 align:start position:0%
+ 
+ 
+
+00:00:20.160 --> 00:00:23.140 align:start position:0%
+ 
+ 
+
+00:00:23.140 --> 00:00:25.720 align:start position:0%
+ 
+ 
+
+00:00:25.720 --> 00:00:28.060 align:start position:0%
+ 
+ 
+
+00:00:28.060 --> 00:00:28.070 align:start position:0%
+ 
+ 
+
+00:00:28.070 --> 00:00:28.720 align:start position:0%
+ 
+
+
+00:00:28.720 --> 00:00:30.339 align:start position:0%
+ 
+ 
+
+00:00:30.339 --> 00:00:33.310 align:start position:0%
+ 
+ 
+
+00:00:33.310 --> 00:00:37.139 align:start position:0%
+ 
+ 
+
+00:00:37.139 --> 00:00:41.260 align:start position:0%
+ 
+ 
+
+00:00:41.260 --> 00:00:43.750 align:start position:0%
+ 
+ 
+
+00:00:43.750 --> 00:00:45.729 align:start position:0%
+ 
+ 
+
+00:00:45.729 --> 00:00:48.310 align:start position:0%
+ 
+ 
+
+00:00:48.310 --> 00:00:50.290 align:start position:0%
+ 
+ 
+
+00:00:50.290 --> 00:00:58.240 align:start position:0%
+ 
+ 
+
+00:00:58.240 --> 00:01:01.020 align:start position:0%
+ 
+ 
+
+00:01:01.020 --> 00:01:03.759 align:start position:0%
+ 
+ 
+
+00:01:03.759 --> 00:01:06.609 align:start position:0%
+ 
+ 
+
+00:01:06.609 --> 00:01:08.109 align:start position:0%
+ 
+ 
+
+00:01:08.109 --> 00:01:11.050 align:start position:0%
+ 
+ 
+
+00:01:11.050 --> 00:01:13.389 align:start position:0%
+ 
+ 
+
+00:01:13.389 --> 00:01:15.570 align:start position:0%
+ 
+ 
+
+00:01:15.570 --> 00:01:20.499 align:start position:0%
+ 
+ 
+
+00:01:20.499 --> 00:01:22.690 align:start position:0%
+ 
+ 
+
+00:01:22.690 --> 00:01:24.370 align:start position:0%
+ 
+ 
+
+00:01:24.370 --> 00:01:28.510 align:start position:0%
+ 
+ 
+
+00:01:28.510 --> 00:01:31.719 align:start position:0%
+ 
+ 
+
+00:01:31.719 --> 00:01:35.169 align:start position:0%
+ 
+ 
+
+00:01:35.169 --> 00:01:37.180 align:start position:0%
+ 
+ 
+
+00:01:37.180 --> 00:01:40.930 align:start position:0%
+ 
+ 
+
+00:01:40.930 --> 00:01:42.520 align:start position:0%
+ 
+ 
+
+00:01:42.520 --> 00:01:43.719 align:start position:0%
+ 
+ 
+
+00:01:43.719 --> 00:01:45.249 align:start position:0%
+ 
+ 
+
+00:01:45.249 --> 00:01:48.370 align:start position:0%
+ 
+ 
+
+00:01:48.370 --> 00:01:50.410 align:start position:0%
+ 
+ 
+
+00:01:50.410 --> 00:01:52.029 align:start position:0%
+ 
+ 
+
+00:01:52.029 --> 00:01:54.520 align:start position:0%
+ 
+ 
+
+00:01:54.520 --> 00:01:56.919 align:start position:0%
+ 
+ 
+
+00:01:56.919 --> 00:02:00.400 align:start position:0%
+ 
+ 
+
+00:02:00.400 --> 00:02:03.040 align:start position:0%
+ 
+ 
+
+00:02:03.040 --> 00:02:06.419 align:start position:0%
+ 
+ 
+
+00:02:06.419 --> 00:02:09.100 align:start position:0%
+ 
+ 
+
+00:02:09.100 --> 00:02:10.930 align:start position:0%
+ 
+ 
+
+00:02:10.930 --> 00:02:10.940 align:start position:0%
+ 
+ 
+
+00:02:10.940 --> 00:02:11.920 align:start position:0%
+ 
+
+
+00:02:11.920 --> 00:02:15.040 align:start position:0%
+ 
+ 
+
+00:02:15.040 --> 00:02:16.480 align:start position:0%
+ 
+ 
+
+00:02:16.480 --> 00:02:18.700 align:start position:0%
+ 
+ 
+
+00:02:18.700 --> 00:02:21.580 align:start position:0%
+ 
+ 
+
+00:02:21.580 --> 00:02:24.430 align:start position:0%
+ 
+ 
+
+00:02:24.430 --> 00:02:26.830 align:start position:0%
+ 
+ 
+
+00:02:26.830 --> 00:02:29.350 align:start position:0%
+ 
+ 
+
+00:02:29.350 --> 00:02:31.930 align:start position:0%
+ 
+ 
+
+00:02:31.930 --> 00:02:35.200 align:start position:0%
+ 
+ 
+
+00:02:35.200 --> 00:02:38.980 align:start position:0%
+ 
+ 
+
+00:02:38.980 --> 00:02:42.790 align:start position:0%
+ 
+ 
+
+00:02:42.790 --> 00:02:44.970 align:start position:0%
+ 
+ 
+
+00:02:44.970 --> 00:02:47.020 align:start position:0%
+ 
+ 
+
+00:02:47.020 --> 00:02:50.200 align:start position:0%
+ 
+ 
+
+00:02:50.200 --> 00:02:52.930 align:start position:0%
+ 
+ 
+
+00:02:52.930 --> 00:02:55.890 align:start position:0%
+ 
+ 
+
+00:02:55.890 --> 00:02:59.590 align:start position:0%
+ 
+ 
+
+00:02:59.590 --> 00:03:00.940 align:start position:0%
+ 
+ 
+
+00:03:00.940 --> 00:03:04.900 align:start position:0%
+ 
+ 
+
+00:03:04.900 --> 00:03:07.000 align:start position:0%
+ 
+ 
+
+00:03:07.000 --> 00:03:08.590 align:start position:0%
+ 
+ 
+
+00:03:08.590 --> 00:03:12.790 align:start position:0%
+ 
+ 
+
+00:03:12.790 --> 00:03:15.040 align:start position:0%
+ 
+ 
+
+00:03:15.040 --> 00:03:18.400 align:start position:0%
+ 
+ 
+
+00:03:18.400 --> 00:03:22.420 align:start position:0%
+ 
+ 
+
+00:03:22.420 --> 00:03:24.490 align:start position:0%
+ 
+ 
+
+00:03:24.490 --> 00:03:28.780 align:start position:0%
+ 
+ 
+
+00:03:28.780 --> 00:03:31.180 align:start position:0%
+ 
+ 
+
+00:03:31.180 --> 00:03:33.250 align:start position:0%
+ 
+ 
+
+00:03:33.250 --> 00:03:34.720 align:start position:0%
+ 
+ 
+
+00:03:34.720 --> 00:03:36.430 align:start position:0%
+ 
+ 
+
+00:03:36.430 --> 00:03:38.350 align:start position:0%
+ 
+ 
+
+00:03:38.350 --> 00:03:41.620 align:start position:0%
+ 
+ 
+
+00:03:41.620 --> 00:03:44.440 align:start position:0%
+ 
+ 
+
+00:03:44.440 --> 00:03:46.390 align:start position:0%
+ 
+ 
+
+00:03:46.390 --> 00:03:48.760 align:start position:0%
+ 
+ 
+
+00:03:48.760 --> 00:03:51.130 align:start position:0%
+ 
+ 
+
+00:03:51.130 --> 00:03:52.210 align:start position:0%
+ 
+ 
+
+00:03:52.210 --> 00:03:56.380 align:start position:0%
+ 
+ 
+
+00:03:56.380 --> 00:03:58.090 align:start position:0%
+ 
+ 
+
+00:03:58.090 --> 00:04:00.220 align:start position:0%
+ 
+ 
+
+00:04:00.220 --> 00:04:03.940 align:start position:0%
+ 
+ 
+
+00:04:03.940 --> 00:04:05.830 align:start position:0%
+ 
+ 
+
+00:04:05.830 --> 00:04:08.950 align:start position:0%
+ 
+ 
+
+00:04:08.950 --> 00:04:11.650 align:start position:0%
+ 
+ 
+
+00:04:11.650 --> 00:04:14.830 align:start position:0%
+ 
+ 
+
+00:04:14.830 --> 00:04:17.979 align:start position:0%
+ 
+ 
+
+00:04:17.979 --> 00:04:19.510 align:start position:0%
+ 
+ 
+
+00:04:19.510 --> 00:04:21.070 align:start position:0%
+ 
+ 
+
+00:04:21.070 --> 00:04:22.690 align:start position:0%
+ 
+ 
+
+00:04:22.690 --> 00:04:24.190 align:start position:0%
+ 
+ 
+
+00:04:24.190 --> 00:04:25.840 align:start position:0%
+ 
+ 
+
+00:04:25.840 --> 00:04:28.240 align:start position:0%
+ 
+ 
+
+00:04:28.240 --> 00:04:29.770 align:start position:0%
+ 
+ 
+
+00:04:29.770 --> 00:04:35.460 align:start position:0%
+ 
+ 
+
+00:04:35.460 --> 00:04:37.420 align:start position:0%
+ 
+ 
+
+00:04:37.420 --> 00:04:40.800 align:start position:0%
+ 
+ 
+
+00:04:40.800 --> 00:04:43.840 align:start position:0%
+ 
+ 
+
+00:04:43.840 --> 00:04:46.810 align:start position:0%
+ 
+ 
+
+00:04:46.810 --> 00:04:48.490 align:start position:0%
+ 
+ 
+
+00:04:48.490 --> 00:04:50.200 align:start position:0%
+ 
+ 
+
+00:04:50.200 --> 00:04:53.230 align:start position:0%
+ 
+ 
+
+00:04:53.230 --> 00:04:54.640 align:start position:0%
+ 
+ 
+
+00:04:54.640 --> 00:04:57.879 align:start position:0%
+ 
+ 
+
+00:04:57.879 --> 00:04:59.620 align:start position:0%
+ 
+ 
+
+00:04:59.620 --> 00:05:02.880 align:start position:0%
+ 
+ 
+
+00:05:02.880 --> 00:05:06.390 align:start position:0%
+ 
+ 
+
+00:05:06.390 --> 00:05:09.790 align:start position:0%
+ 
+ 
+
+00:05:09.790 --> 00:05:11.290 align:start position:0%
+ 
+ 
+
+00:05:11.290 --> 00:05:13.570 align:start position:0%
+ 
+ 
+
+00:05:13.570 --> 00:05:17.020 align:start position:0%
+ 
+ 
+
+00:05:17.020 --> 00:05:18.610 align:start position:0%
+ 
+ 
+
+00:05:18.610 --> 00:05:21.400 align:start position:0%
+ 
+ 
+
+00:05:21.400 --> 00:05:24.460 align:start position:0%
+ 
+ 
+
+00:05:24.460 --> 00:05:27.159 align:start position:0%
+ 
+ 
+
+00:05:27.159 --> 00:05:30.460 align:start position:0%
+ 
+ 
+
+00:05:30.460 --> 00:05:32.920 align:start position:0%
+ 
+ 
+
+00:05:32.920 --> 00:05:35.860 align:start position:0%
+ 
+ 
+
+00:05:35.860 --> 00:05:40.270 align:start position:0%
+ 
+ 
+
+00:05:40.270 --> 00:05:41.620 align:start position:0%
+ 
+ 
+
+00:05:41.620 --> 00:05:44.440 align:start position:0%
+ 
+ 
+
+00:05:44.440 --> 00:05:45.850 align:start position:0%
+ 
+ 
+
+00:05:45.850 --> 00:05:49.690 align:start position:0%
+ 
+ 
+
+00:05:49.690 --> 00:05:51.400 align:start position:0%
+ 
+ 
+
+00:05:51.400 --> 00:05:53.710 align:start position:0%
+ 
+ 
+
+00:05:53.710 --> 00:05:55.930 align:start position:0%
+ 
+ 
+
+00:05:55.930 --> 00:05:57.490 align:start position:0%
+ 
+ 
+
+00:05:57.490 --> 00:05:59.950 align:start position:0%
+ 
+ 
+
+00:05:59.950 --> 00:06:02.529 align:start position:0%
+ 
+ 
+
+00:06:02.529 --> 00:06:05.890 align:start position:0%
+ 
+ 
+
+00:06:05.890 --> 00:06:07.360 align:start position:0%
+ 
+ 
+
+00:06:07.360 --> 00:06:09.670 align:start position:0%
+ 
+ 
+
+00:06:09.670 --> 00:06:11.920 align:start position:0%
+ 
+ 
+
+00:06:11.920 --> 00:06:13.480 align:start position:0%
+ 
+ 
+
+00:06:13.480 --> 00:06:17.260 align:start position:0%
+ 
+ 
+
+00:06:17.260 --> 00:06:19.570 align:start position:0%
+ 
+ 
+
+00:06:19.570 --> 00:06:21.190 align:start position:0%
+ 
+ 
+
+00:06:21.190 --> 00:06:23.560 align:start position:0%
+ 
+ 
+
+00:06:23.560 --> 00:06:30.190 align:start position:0%
+ 
+ 
+
+00:06:30.190 --> 00:06:31.870 align:start position:0%
+ 
+ 
+
+00:06:31.870 --> 00:06:34.330 align:start position:0%
+ 
+ 
+
+00:06:34.330 --> 00:06:36.940 align:start position:0%
+ 
+ 
+
+00:06:36.940 --> 00:06:40.070 align:start position:0%
+ 
+ 
+
+00:06:40.070 --> 00:06:44.059 align:start position:0%
+ 
+ 
+
+00:06:44.059 --> 00:06:46.879 align:start position:0%
+ 
+ 
+
+00:06:46.879 --> 00:06:50.320 align:start position:0%
+ 
+ 
+
+00:06:50.320 --> 00:06:53.510 align:start position:0%
+ 
+ 
+
+00:06:53.510 --> 00:06:55.159 align:start position:0%
+ 
+ 
+
+00:06:55.159 --> 00:06:57.200 align:start position:0%
+ 
+ 
+
+00:06:57.200 --> 00:07:00.260 align:start position:0%
+ 
+ 
+
+00:07:00.260 --> 00:07:04.059 align:start position:0%
+ 
+ 
+
+00:07:04.059 --> 00:07:06.230 align:start position:0%
+ 
+ 
+
+00:07:06.230 --> 00:07:08.659 align:start position:0%
+ 
+ 
+
+00:07:08.659 --> 00:07:10.779 align:start position:0%
+ 
+ 
+
+00:07:10.779 --> 00:07:13.100 align:start position:0%
+ 
+ 
+
+00:07:13.100 --> 00:07:15.559 align:start position:0%
+ 
+ 
+
+00:07:15.559 --> 00:07:18.170 align:start position:0%
+ 
+ 
+
+00:07:18.170 --> 00:07:20.779 align:start position:0%
+ 
+ 
+
+00:07:20.779 --> 00:07:23.719 align:start position:0%
+ 
+ 
+
+00:07:23.719 --> 00:07:25.339 align:start position:0%
+ 
+ 
+
+00:07:25.339 --> 00:07:27.830 align:start position:0%
+ 
+ 
+
+00:07:27.830 --> 00:07:34.249 align:start position:0%
+ 
+ 
+
+00:07:34.249 --> 00:07:35.659 align:start position:0%
+ 
+ 
+
+00:07:35.659 --> 00:07:40.249 align:start position:0%
+ 
+ 
+
+00:07:40.249 --> 00:07:42.170 align:start position:0%
+ 
+ 
+
+00:07:42.170 --> 00:07:44.899 align:start position:0%
+ 
+ 
+
+00:07:44.899 --> 00:07:47.870 align:start position:0%
+ 
+ 
+
+00:07:47.870 --> 00:07:49.790 align:start position:0%
+ 
+ 
+
+00:07:49.790 --> 00:07:51.649 align:start position:0%
+ 
+ 
+
+00:07:51.649 --> 00:07:54.140 align:start position:0%
+ 
+ 
+
+00:07:54.140 --> 00:07:56.629 align:start position:0%
+ 
+ 
+
+00:07:56.629 --> 00:07:58.399 align:start position:0%
+ 
+ 
+
+00:07:58.399 --> 00:08:01.879 align:start position:0%
+ 
+ 
+
+00:08:01.879 --> 00:08:03.830 align:start position:0%
+ 
+ 
+
+00:08:03.830 --> 00:08:06.830 align:start position:0%
+ 
+ 
+
+00:08:06.830 --> 00:08:09.350 align:start position:0%
+ 
+ 
+
+00:08:09.350 --> 00:08:10.790 align:start position:0%
+ 
+ 
+
+00:08:10.790 --> 00:08:12.350 align:start position:0%
+ 
+ 
+
+00:08:12.350 --> 00:08:14.629 align:start position:0%
+ 
+ 
+
+00:08:14.629 --> 00:08:17.300 align:start position:0%
+ 
+ 
+
+00:08:17.300 --> 00:08:20.300 align:start position:0%
+ 
+ 
+
+00:08:20.300 --> 00:08:22.159 align:start position:0%
+ 
+ 
+
+00:08:22.159 --> 00:08:25.760 align:start position:0%
+ 
+ 
+
+00:08:25.760 --> 00:08:28.490 align:start position:0%
+ 
+ 
+
+00:08:28.490 --> 00:08:30.350 align:start position:0%
+ 
+ 
+
+00:08:30.350 --> 00:08:32.959 align:start position:0%
+ 
+ 
+
+00:08:32.959 --> 00:08:35.540 align:start position:0%
+ 
+ 
+
+00:08:35.540 --> 00:08:37.610 align:start position:0%
+ 
+ 
+
+00:08:37.610 --> 00:08:40.670 align:start position:0%
+ 
+ 
+
+00:08:40.670 --> 00:08:43.279 align:start position:0%
+ 
+ 
+
+00:08:43.279 --> 00:08:45.980 align:start position:0%
+ 
+ 
+
+00:08:45.980 --> 00:08:47.630 align:start position:0%
+ 
+ 
+
+00:08:47.630 --> 00:08:49.569 align:start position:0%
+ 
+ 
+
+00:08:49.569 --> 00:08:53.570 align:start position:0%
+ 
+ 
+
+00:08:53.570 --> 00:08:55.040 align:start position:0%
+ 
+ 
+
+00:08:55.040 --> 00:08:57.410 align:start position:0%
+ 
+ 
+
+00:08:57.410 --> 00:08:59.660 align:start position:0%
+ 
+ 
+
+00:08:59.660 --> 00:09:01.790 align:start position:0%
+ 
+ 
+
+00:09:01.790 --> 00:09:05.210 align:start position:0%
+ 
+ 
+
+00:09:05.210 --> 00:09:07.970 align:start position:0%
+ 
+ 
+
+00:09:07.970 --> 00:09:11.120 align:start position:0%
+ 
+ 
+
+00:09:11.120 --> 00:09:14.420 align:start position:0%
+ 
+ 
+
+00:09:14.420 --> 00:09:17.060 align:start position:0%
+ 
+ 
+
+00:09:17.060 --> 00:09:19.540 align:start position:0%
+ 
+ 
+
+00:09:19.540 --> 00:09:23.660 align:start position:0%
+ 
+ 
+
+00:09:23.660 --> 00:09:26.810 align:start position:0%
+ 
+ 
+
+00:09:26.810 --> 00:09:30.980 align:start position:0%
+ 
+ 
+
+00:09:30.980 --> 00:09:34.430 align:start position:0%
+ 
+ 
+
+00:09:34.430 --> 00:09:36.380 align:start position:0%
+ 
+ 
+
+00:09:36.380 --> 00:09:39.889 align:start position:0%
+ 
+ 
+
+00:09:39.889 --> 00:09:41.690 align:start position:0%
+ 
+ 
+
+00:09:41.690 --> 00:09:44.389 align:start position:0%
+ 
+ 
+
+00:09:44.389 --> 00:09:45.880 align:start position:0%
+ 
+ 
+
+00:09:45.880 --> 00:09:48.769 align:start position:0%
+ 
+ 
+
+00:09:48.769 --> 00:09:49.730 align:start position:0%
+ 
+ 
+
+00:09:49.730 --> 00:09:53.060 align:start position:0%
+ 
+ 
+
+00:09:53.060 --> 00:09:55.220 align:start position:0%
+ 
+ 
+
+00:09:55.220 --> 00:09:56.900 align:start position:0%
+ 
+ 
+
+00:09:56.900 --> 00:09:58.610 align:start position:0%
+ 
+ 
+
+00:09:58.610 --> 00:10:01.569 align:start position:0%
+ 
+ 
+
+00:10:01.569 --> 00:10:03.680 align:start position:0%
+ 
+ 
+
+00:10:03.680 --> 00:10:05.300 align:start position:0%
+ 
+ 
+
+00:10:05.300 --> 00:10:08.930 align:start position:0%
+ 
+ 
+
+00:10:08.930 --> 00:10:10.610 align:start position:0%
+ 
+ 
+
+00:10:10.610 --> 00:10:12.050 align:start position:0%
+ 
+ 
+
+00:10:12.050 --> 00:10:14.030 align:start position:0%
+ 
+ 
+
+00:10:14.030 --> 00:10:15.829 align:start position:0%
+ 
+ 
+
+00:10:15.829 --> 00:10:19.340 align:start position:0%
+ 
+ 
+
+00:10:19.340 --> 00:10:22.250 align:start position:0%
+ 
+ 
+
+00:10:22.250 --> 00:10:24.710 align:start position:0%
+ 
+ 
+
+00:10:24.710 --> 00:10:27.470 align:start position:0%
+ 
+ 
+
+00:10:27.470 --> 00:10:30.319 align:start position:0%
+ 
+ 
+
+00:10:30.319 --> 00:10:34.310 align:start position:0%
+ 
+ 
+
+00:10:34.310 --> 00:10:36.620 align:start position:0%
+ 
+ 
+
+00:10:36.620 --> 00:10:39.860 align:start position:0%
+ 
+ 
+
+00:10:39.860 --> 00:10:42.740 align:start position:0%
+ 
+ 
+
+00:10:42.740 --> 00:10:45.260 align:start position:0%
+ 
+ 
+
+00:10:45.260 --> 00:10:46.880 align:start position:0%
+ 
+ 
+
+00:10:46.880 --> 00:10:50.720 align:start position:0%
+ 
+ 
+
+00:10:50.720 --> 00:10:52.189 align:start position:0%
+ 
+ 
+
+00:10:52.189 --> 00:10:54.319 align:start position:0%
+ 
+ 
+
+00:10:54.319 --> 00:10:56.960 align:start position:0%
+ 
+ 
+
+00:10:56.960 --> 00:10:59.960 align:start position:0%
+ 
+ 
+
+00:10:59.960 --> 00:11:01.519 align:start position:0%
+ 
+ 
+
+00:11:01.519 --> 00:11:03.829 align:start position:0%
+ 
+ 
+
+00:11:03.829 --> 00:11:05.240 align:start position:0%
+ 
+ 
+
+00:11:05.240 --> 00:11:06.560 align:start position:0%
+ 
+ 
+
+00:11:06.560 --> 00:11:06.570 align:start position:0%
+ 
+ 
+
+00:11:06.570 --> 00:11:07.319 align:start position:0%
+ 
+
+
+00:11:07.319 --> 00:11:09.629 align:start position:0%
+ 
+ 
+
+00:11:09.629 --> 00:11:14.160 align:start position:0%
+ 
+ 
+
+00:11:14.160 --> 00:11:15.780 align:start position:0%
+ 
+ 
+
+00:11:15.780 --> 00:11:19.439 align:start position:0%
+ 
+ 
+
+00:11:19.439 --> 00:11:24.239 align:start position:0%
+ 
+ 
+
+00:11:24.239 --> 00:11:26.579 align:start position:0%
+ 
+ 
+
+00:11:26.579 --> 00:11:28.350 align:start position:0%
+ 
+ 
+
+00:11:28.350 --> 00:11:30.259 align:start position:0%
+ 
+ 
+
+00:11:30.259 --> 00:11:34.470 align:start position:0%
+ 
+ 
+
+00:11:34.470 --> 00:11:37.379 align:start position:0%
+ 
+ 
+
+00:11:37.379 --> 00:11:39.749 align:start position:0%
+ 
+ 
+
+00:11:39.749 --> 00:11:42.090 align:start position:0%
+ 
+ 
+
+00:11:42.090 --> 00:11:43.350 align:start position:0%
+ 
+ 
+
+00:11:43.350 --> 00:11:44.639 align:start position:0%
+ 
+ 
+
+00:11:44.639 --> 00:11:49.259 align:start position:0%
+ 
+ 
+
+00:11:49.259 --> 00:11:50.789 align:start position:0%
+ 
+ 
+
+00:11:50.789 --> 00:11:52.109 align:start position:0%
+ 
+ 
+
+00:11:52.109 --> 00:11:53.939 align:start position:0%
+ 
+ 
+
+00:11:53.939 --> 00:11:57.840 align:start position:0%
+ 
+ 
+
+00:11:57.840 --> 00:12:03.530 align:start position:0%
+ 
+ 
+
+00:12:03.530 --> 00:12:06.720 align:start position:0%
+ 
+ 
+
+00:12:06.720 --> 00:12:09.150 align:start position:0%
+ 
+ 
+
+00:12:09.150 --> 00:12:12.629 align:start position:0%
+ 
+ 
+
+00:12:12.629 --> 00:12:15.239 align:start position:0%
+ 
+ 
+
+00:12:15.239 --> 00:12:18.419 align:start position:0%
+ 
+ 
+
+00:12:18.419 --> 00:12:20.159 align:start position:0%
+ 
+ 
+
+00:12:20.159 --> 00:12:22.439 align:start position:0%
+ 
+ 
+
+00:12:22.439 --> 00:12:24.659 align:start position:0%
+ 
+ 
+
+00:12:24.659 --> 00:12:26.460 align:start position:0%
+ 
+ 
+
+00:12:26.460 --> 00:12:28.519 align:start position:0%
+ 
+ 
+
+00:12:28.519 --> 00:12:30.749 align:start position:0%
+ 
+ 
+
+00:12:30.749 --> 00:12:34.229 align:start position:0%
+ 
+ 
+
+00:12:34.229 --> 00:12:35.519 align:start position:0%
+ 
+ 
+
+00:12:35.519 --> 00:12:41.359 align:start position:0%
+ 
+ 
+
+00:12:41.359 --> 00:12:45.119 align:start position:0%
+ 
+ 
+
+00:12:45.119 --> 00:12:46.590 align:start position:0%
+ 
+ 
+
+00:12:46.590 --> 00:12:48.859 align:start position:0%
+ 
+ 
+
+00:12:48.859 --> 00:12:51.600 align:start position:0%
+ 
+ 
+
+00:12:51.600 --> 00:12:53.659 align:start position:0%
+ 
+ 
+
+00:12:53.659 --> 00:12:55.710 align:start position:0%
+ 
+ 
+
+00:12:55.710 --> 00:12:57.239 align:start position:0%
+ 
+ 
+
+00:12:57.239 --> 00:13:00.329 align:start position:0%
+ 
+ 
+
+00:13:00.329 --> 00:13:04.199 align:start position:0%
+ 
+ 
+
+00:13:04.199 --> 00:13:06.720 align:start position:0%
+ 
+ 
+
+00:13:06.720 --> 00:13:08.069 align:start position:0%
+ 
+ 
+
+00:13:08.069 --> 00:13:10.889 align:start position:0%
+ 
+ 
+
+00:13:10.889 --> 00:13:12.600 align:start position:0%
+ 
+ 
+
+00:13:12.600 --> 00:13:15.779 align:start position:0%
+ 
+ 
+
+00:13:15.779 --> 00:13:18.889 align:start position:0%
+ 
+ 
+
+00:13:18.889 --> 00:13:21.570 align:start position:0%
+ 
+ 
+
+00:13:21.570 --> 00:13:26.040 align:start position:0%
+ 
+ 
+
+00:13:26.040 --> 00:13:27.750 align:start position:0%
+ 
+ 
+
+00:13:27.750 --> 00:13:30.300 align:start position:0%
+ 
+ 
+
+00:13:30.300 --> 00:13:33.259 align:start position:0%
+ 
+ 
+
+00:13:33.259 --> 00:13:36.500 align:start position:0%
+ 
+ 
+
+00:13:36.500 --> 00:13:39.870 align:start position:0%
+ 
+ 
+
+00:13:39.870 --> 00:13:42.480 align:start position:0%
+ 
+ 
+
+00:13:42.480 --> 00:13:44.190 align:start position:0%
+ 
+ 
+
+00:13:44.190 --> 00:13:46.560 align:start position:0%
+ 
+ 
+
+00:13:46.560 --> 00:13:49.470 align:start position:0%
+ 
+ 
+
+00:13:49.470 --> 00:13:51.530 align:start position:0%
+ 
+ 
+
+00:13:51.530 --> 00:13:54.810 align:start position:0%
+ 
+ 
+
+00:13:54.810 --> 00:13:56.430 align:start position:0%
+ 
+ 
+
+00:13:56.430 --> 00:13:58.829 align:start position:0%
+ 
+ 
+
+00:13:58.829 --> 00:14:01.980 align:start position:0%
+ 
+ 
+
+00:14:01.980 --> 00:14:05.490 align:start position:0%
+ 
+ 
+
+00:14:05.490 --> 00:14:07.639 align:start position:0%
+ 
+ 
+
+00:14:07.639 --> 00:14:09.870 align:start position:0%
+ 
+ 
+
+00:14:09.870 --> 00:14:11.819 align:start position:0%
+ 
+ 
+
+00:14:11.819 --> 00:14:14.009 align:start position:0%
+ 
+ 
+
+00:14:14.009 --> 00:14:15.389 align:start position:0%
+ 
+ 
+
+00:14:15.389 --> 00:14:20.340 align:start position:0%
+ 
+ 
+
+00:14:20.340 --> 00:14:22.500 align:start position:0%
+ 
+ 
+
+00:14:22.500 --> 00:14:25.079 align:start position:0%
+ 
+ 
+
+00:14:25.079 --> 00:14:27.090 align:start position:0%
+ 
+ 
+
+00:14:27.090 --> 00:14:33.540 align:start position:0%
+ 
+ 
+
+00:14:33.540 --> 00:14:35.250 align:start position:0%
+ 
+ 
+
+00:14:35.250 --> 00:14:38.819 align:start position:0%
+ 
+ 
+
+00:14:38.819 --> 00:14:40.230 align:start position:0%
+ 
+ 
+
+00:14:40.230 --> 00:14:42.420 align:start position:0%
+ 
+ 
+
+00:14:42.420 --> 00:14:44.540 align:start position:0%
+ 
+ 
+
+00:14:44.540 --> 00:14:47.579 align:start position:0%
+ 
+ 
+
+00:14:47.579 --> 00:14:51.030 align:start position:0%
+ 
+ 
+
+00:14:51.030 --> 00:14:52.769 align:start position:0%
+ 
+ 
+
+00:14:52.769 --> 00:14:55.139 align:start position:0%
+ 
+ 
+
+00:14:55.139 --> 00:14:57.510 align:start position:0%
+ 
+ 
+
+00:14:57.510 --> 00:14:59.699 align:start position:0%
+ 
+ 
+
+00:14:59.699 --> 00:15:02.550 align:start position:0%
+ 
+ 
+
+00:15:02.550 --> 00:15:05.060 align:start position:0%
+ 
+ 
+
+00:15:05.060 --> 00:15:09.720 align:start position:0%
+ 
+ 
+
+00:15:09.720 --> 00:15:12.569 align:start position:0%
+ 
+ 
+
+00:15:12.569 --> 00:15:13.230 align:start position:0%
+ 
+ 
+
+00:15:13.230 --> 00:15:15.180 align:start position:0%
+ 
+ 
+
+00:15:15.180 --> 00:15:17.759 align:start position:0%
+ 
+ 
+
+00:15:17.759 --> 00:15:19.620 align:start position:0%
+ 
+ 
+
+00:15:19.620 --> 00:15:19.630 align:start position:0%
+ 
+ 
+
+00:15:19.630 --> 00:15:20.030 align:start position:0%
+ 
+
+
+00:15:20.030 --> 00:15:22.170 align:start position:0%
+ 
+ 
+
+00:15:22.170 --> 00:15:26.010 align:start position:0%
+ 
+ 
+
+00:15:26.010 --> 00:15:27.870 align:start position:0%
+ 
+ 
+
+00:15:27.870 --> 00:15:31.390 align:start position:0%
+ 
+ 
+
+00:15:31.390 --> 00:15:33.740 align:start position:0%
+ 
+ 
+
+00:15:33.740 --> 00:15:37.190 align:start position:0%
+ 
+ 
+
+00:15:37.190 --> 00:15:42.410 align:start position:0%
+ 
+ 
+
+00:15:42.410 --> 00:15:44.540 align:start position:0%
+ 
+ 
+
+00:15:44.540 --> 00:15:47.240 align:start position:0%
+ 
+ 
+
+00:15:47.240 --> 00:15:48.920 align:start position:0%
+ 
+ 
+
+00:15:48.920 --> 00:15:51.320 align:start position:0%
+ 
+ 
+
+00:15:51.320 --> 00:15:55.970 align:start position:0%
+ 
+ 
+
+00:15:55.970 --> 00:15:57.890 align:start position:0%
+ 
+ 
+
+00:15:57.890 --> 00:16:00.020 align:start position:0%
+ 
+ 
+
+00:16:00.020 --> 00:16:02.930 align:start position:0%
+ 
+ 
+
+00:16:02.930 --> 00:16:04.280 align:start position:0%
+ 
+ 
+
+00:16:04.280 --> 00:16:07.670 align:start position:0%
+ 
+ 
+
+00:16:07.670 --> 00:16:10.210 align:start position:0%
+ 
+ 
+
+00:16:10.210 --> 00:16:13.340 align:start position:0%
+ 
+ 
+
+00:16:13.340 --> 00:16:15.020 align:start position:0%
+ 
+ 
+
+00:16:15.020 --> 00:16:17.750 align:start position:0%
+ 
+ 
+
+00:16:17.750 --> 00:16:18.920 align:start position:0%
+ 
+ 
+
+00:16:18.920 --> 00:16:21.650 align:start position:0%
+ 
+ 
+
+00:16:21.650 --> 00:16:25.280 align:start position:0%
+ 
+ 
+
+00:16:25.280 --> 00:16:26.810 align:start position:0%
+ 
+ 
+
+00:16:26.810 --> 00:16:31.070 align:start position:0%
+ 
+ 
+
+00:16:31.070 --> 00:16:32.450 align:start position:0%
+ 
+ 
+
+00:16:32.450 --> 00:16:34.280 align:start position:0%
+ 
+ 
+
+00:16:34.280 --> 00:16:37.220 align:start position:0%
+ 
+ 
+
+00:16:37.220 --> 00:16:38.990 align:start position:0%
+ 
+ 
+
+00:16:38.990 --> 00:16:41.000 align:start position:0%
+ 
+ 
+
+00:16:41.000 --> 00:16:43.400 align:start position:0%
+ 
+ 
+
+00:16:43.400 --> 00:16:45.410 align:start position:0%
+ 
+ 
+
+00:16:45.410 --> 00:16:48.200 align:start position:0%
+ 
+ 
+
+00:16:48.200 --> 00:16:50.570 align:start position:0%
+ 
+ 
+
+00:16:50.570 --> 00:16:53.090 align:start position:0%
+ 
+ 
+
+00:16:53.090 --> 00:16:55.370 align:start position:0%
+ 
+ 
+
+00:16:55.370 --> 00:16:57.230 align:start position:0%
+ 
+ 
+
+00:16:57.230 --> 00:17:00.440 align:start position:0%
+ 
+ 
+
+00:17:00.440 --> 00:17:03.680 align:start position:0%
+ 
+ 
+
+00:17:03.680 --> 00:17:05.840 align:start position:0%
+ 
+ 
+
+00:17:05.840 --> 00:17:07.910 align:start position:0%
+ 
+ 
+
+00:17:07.910 --> 00:17:10.160 align:start position:0%
+ 
+ 
+
+00:17:10.160 --> 00:17:14.990 align:start position:0%
+ 
+ 
+
+00:17:14.990 --> 00:17:16.670 align:start position:0%
+ 
+ 
+
+00:17:16.670 --> 00:17:17.960 align:start position:0%
+ 
+ 
+
+00:17:17.960 --> 00:17:19.100 align:start position:0%
+ 
+ 
+
+00:17:19.100 --> 00:17:21.530 align:start position:0%
+ 
+ 
+
+00:17:21.530 --> 00:17:25.310 align:start position:0%
+ 
+ 
+
+00:17:25.310 --> 00:17:28.520 align:start position:0%
+ 
+ 
+
+00:17:28.520 --> 00:17:29.810 align:start position:0%
+ 
+ 
+
+00:17:29.810 --> 00:17:31.940 align:start position:0%
+ 
+ 
+
+00:17:31.940 --> 00:17:33.110 align:start position:0%
+ 
+ 
+
+00:17:33.110 --> 00:17:34.640 align:start position:0%
+ 
+ 
+
+00:17:34.640 --> 00:17:38.110 align:start position:0%
+ 
+ 
+
+00:17:38.110 --> 00:17:40.250 align:start position:0%
+ 
+ 
+
+00:17:40.250 --> 00:17:42.530 align:start position:0%
+ 
+ 
+
+00:17:42.530 --> 00:17:43.400 align:start position:0%
+ 
+ 
+
+00:17:43.400 --> 00:17:45.050 align:start position:0%
+ 
+ 
+
+00:17:45.050 --> 00:17:46.820 align:start position:0%
+ 
+ 
+
+00:17:46.820 --> 00:17:49.780 align:start position:0%
+ 
+ 
+
+00:17:49.780 --> 00:17:52.880 align:start position:0%
+ 
+ 
+
+00:17:52.880 --> 00:17:55.640 align:start position:0%
+ 
+ 
+
+00:17:55.640 --> 00:17:58.070 align:start position:0%
+ 
+ 
+
+00:17:58.070 --> 00:17:59.840 align:start position:0%
+ 
+ 
+
+00:17:59.840 --> 00:18:01.700 align:start position:0%
+ 
+ 
+
+00:18:01.700 --> 00:18:04.190 align:start position:0%
+ 
+ 
+
+00:18:04.190 --> 00:18:05.270 align:start position:0%
+ 
+ 
+
+00:18:05.270 --> 00:18:07.670 align:start position:0%
+ 
+ 
+
+00:18:07.670 --> 00:18:09.500 align:start position:0%
+ 
+ 
+
+00:18:09.500 --> 00:18:12.470 align:start position:0%
+ 
+ 
+
+00:18:12.470 --> 00:18:14.810 align:start position:0%
+ 
+ 
+
+00:18:14.810 --> 00:18:17.030 align:start position:0%
+ 
+ 
+
+00:18:17.030 --> 00:18:19.000 align:start position:0%
+ 
+ 
+
+00:18:19.000 --> 00:18:22.400 align:start position:0%
+ 
+ 
+
+00:18:22.400 --> 00:18:24.110 align:start position:0%
+ 
+ 
+
+00:18:24.110 --> 00:18:26.360 align:start position:0%
+ 
+ 
+
+00:18:26.360 --> 00:18:28.460 align:start position:0%
+ 
+ 
+
+00:18:28.460 --> 00:18:29.360 align:start position:0%
+ 
+ 
+
+00:18:29.360 --> 00:18:32.540 align:start position:0%
+ 
+ 
+
+00:18:32.540 --> 00:18:35.330 align:start position:0%
+ 
+ 
+
+00:18:35.330 --> 00:18:41.630 align:start position:0%
+ 
+ 
+
+00:18:41.630 --> 00:18:43.280 align:start position:0%
+ 
+ 
+
+00:18:43.280 --> 00:18:45.470 align:start position:0%
+ 
+ 
+
+00:18:45.470 --> 00:18:48.320 align:start position:0%
+ 
+ 
+
+00:18:48.320 --> 00:18:51.410 align:start position:0%
+ 
+ 
+
+00:18:51.410 --> 00:18:52.910 align:start position:0%
+ 
+ 
+
+00:18:52.910 --> 00:18:56.000 align:start position:0%
+ 
+ 
+
+00:18:56.000 --> 00:18:57.890 align:start position:0%
+ 
+ 
+
+00:18:57.890 --> 00:18:59.480 align:start position:0%
+ 
+ 
+
+00:18:59.480 --> 00:19:01.630 align:start position:0%
+ 
+ 
+
+00:19:01.630 --> 00:19:07.370 align:start position:0%
+ 
+ 
+
+00:19:07.370 --> 00:19:09.200 align:start position:0%
+ 
+ 
+
+00:19:09.200 --> 00:19:12.160 align:start position:0%
+ 
+ 
+
+00:19:12.160 --> 00:19:16.790 align:start position:0%
+ 
+ 
+
+00:19:16.790 --> 00:19:19.490 align:start position:0%
+ 
+ 
+
+00:19:19.490 --> 00:19:21.920 align:start position:0%
+ 
+ 
+
+00:19:21.920 --> 00:19:24.470 align:start position:0%
+ 
+ 
+
+00:19:24.470 --> 00:19:26.210 align:start position:0%
+ 
+ 
+
+00:19:26.210 --> 00:19:28.190 align:start position:0%
+ 
+ 
+
+00:19:28.190 --> 00:19:30.410 align:start position:0%
+ 
+ 
+
+00:19:30.410 --> 00:19:32.330 align:start position:0%
+ 
+ 
+
+00:19:32.330 --> 00:19:33.380 align:start position:0%
+ 
+ 
+
+00:19:33.380 --> 00:19:35.270 align:start position:0%
+ 
+ 
+
+00:19:35.270 --> 00:19:38.630 align:start position:0%
+ 
+ 
+
+00:19:38.630 --> 00:19:40.460 align:start position:0%
+ 
+ 
+
+00:19:40.460 --> 00:19:43.850 align:start position:0%
+ 
+ 
+
+00:19:43.850 --> 00:19:44.930 align:start position:0%
+ 
+ 
+
+00:19:44.930 --> 00:19:46.430 align:start position:0%
+ 
+ 
+
+00:19:46.430 --> 00:19:48.980 align:start position:0%
+ 
+ 
+
+00:19:48.980 --> 00:19:53.540 align:start position:0%
+ 
+ 
+
+00:19:53.540 --> 00:19:55.460 align:start position:0%
+ 
+ 
+
+00:19:55.460 --> 00:19:56.989 align:start position:0%
+ 
+ 
+
+00:19:56.989 --> 00:19:59.929 align:start position:0%
+ 
+ 
+
+00:19:59.929 --> 00:20:02.779 align:start position:0%
+ 
+ 
+
+00:20:02.779 --> 00:20:04.659 align:start position:0%
+ 
+ 
+
+00:20:04.659 --> 00:20:07.759 align:start position:0%
+ 
+ 
+
+00:20:07.759 --> 00:20:09.709 align:start position:0%
+ 
+ 
+
+00:20:09.709 --> 00:20:10.999 align:start position:0%
+ 
+ 
+
+00:20:10.999 --> 00:20:13.429 align:start position:0%
+ 
+ 
+
+00:20:13.429 --> 00:20:13.439 align:start position:0%
+ 
+ 
+
+00:20:13.439 --> 00:20:14.889 align:start position:0%
+ 
+
+
+00:20:14.889 --> 00:20:17.509 align:start position:0%
+ 
+ 
+
+00:20:17.509 --> 00:20:20.239 align:start position:0%
+ 
+ 
+
+00:20:20.239 --> 00:20:22.879 align:start position:0%
+ 
+ 
+
+00:20:22.879 --> 00:20:24.409 align:start position:0%
+ 
+ 
+
+00:20:24.409 --> 00:20:27.979 align:start position:0%
+ 
+ 
+
+00:20:27.979 --> 00:20:30.349 align:start position:0%
+ 
+ 
+
+00:20:30.349 --> 00:20:31.999 align:start position:0%
+ 
+ 
+
+00:20:31.999 --> 00:20:34.129 align:start position:0%
+ 
+ 
+
+00:20:34.129 --> 00:20:35.839 align:start position:0%
+ 
+ 
+
+00:20:35.839 --> 00:20:37.999 align:start position:0%
+ 
+ 
+
+00:20:37.999 --> 00:20:40.849 align:start position:0%
+ 
+ 
+
+00:20:40.849 --> 00:20:42.589 align:start position:0%
+ 
+ 
+
+00:20:42.589 --> 00:20:44.899 align:start position:0%
+ 
+ 
+
+00:20:44.899 --> 00:20:46.699 align:start position:0%
+ 
+ 
+
+00:20:46.699 --> 00:20:47.989 align:start position:0%
+ 
+ 
+
+00:20:47.989 --> 00:20:50.859 align:start position:0%
+ 
+ 
+
+00:20:50.859 --> 00:20:54.289 align:start position:0%
+ 
+ 
+
+00:20:54.289 --> 00:20:57.889 align:start position:0%
+ 
+ 
+
+00:20:57.889 --> 00:20:59.959 align:start position:0%
+ 
+ 
+
+00:20:59.959 --> 00:21:01.729 align:start position:0%
+ 
+ 
+
+00:21:01.729 --> 00:21:04.429 align:start position:0%
+ 
+ 
+
+00:21:04.429 --> 00:21:06.289 align:start position:0%
+ 
+ 
+
+00:21:06.289 --> 00:21:08.899 align:start position:0%
+ 
+ 
+
+00:21:08.899 --> 00:21:09.889 align:start position:0%
+ 
+ 
+
+00:21:09.889 --> 00:21:12.109 align:start position:0%
+ 
+ 
+
+00:21:12.109 --> 00:21:13.489 align:start position:0%
+ 
+ 
+
+00:21:13.489 --> 00:21:15.769 align:start position:0%
+ 
+ 
+
+00:21:15.769 --> 00:21:17.869 align:start position:0%
+ 
+ 
+
+00:21:17.869 --> 00:21:19.819 align:start position:0%
+ 
+ 
+
+00:21:19.819 --> 00:21:24.579 align:start position:0%
+ 
+ 
+
+00:21:24.579 --> 00:21:26.899 align:start position:0%
+ 
+ 
+
+00:21:26.899 --> 00:21:30.529 align:start position:0%
+ 
+ 
+
+00:21:30.529 --> 00:21:32.509 align:start position:0%
+ 
+ 
+
+00:21:32.509 --> 00:21:33.709 align:start position:0%
+ 
+ 
+
+00:21:33.709 --> 00:21:36.409 align:start position:0%
+ 
+ 
+
+00:21:36.409 --> 00:21:38.239 align:start position:0%
+ 
+ 
+
+00:21:38.239 --> 00:21:41.269 align:start position:0%
+ 
+ 
+
+00:21:41.269 --> 00:21:44.679 align:start position:0%
+ 
+ 
+
+00:21:44.679 --> 00:21:46.879 align:start position:0%
+ 
+ 
+
+00:21:46.879 --> 00:21:49.909 align:start position:0%
+ 
+ 
+
+00:21:49.909 --> 00:21:53.509 align:start position:0%
+ 
+ 
+
+00:21:53.509 --> 00:21:55.069 align:start position:0%
+ 
+ 
+
+00:21:55.069 --> 00:21:57.949 align:start position:0%
+ 
+ 
+
+00:21:57.949 --> 00:22:00.709 align:start position:0%
+ 
+ 
+
+00:22:00.709 --> 00:22:02.659 align:start position:0%
+ 
+ 
+
+00:22:02.659 --> 00:22:05.329 align:start position:0%
+ 
+ 
+
+00:22:05.329 --> 00:22:07.369 align:start position:0%
+ 
+ 
+
+00:22:07.369 --> 00:22:10.180 align:start position:0%
+ 
+ 
+
+00:22:10.180 --> 00:22:12.520 align:start position:0%
+ 
+ 
+
+00:22:12.520 --> 00:22:17.890 align:start position:0%
+ 
+ 
+
+00:22:17.890 --> 00:22:19.630 align:start position:0%
+ 
+ 
+
+00:22:19.630 --> 00:22:21.760 align:start position:0%
+ 
+ 
+
+00:22:21.760 --> 00:22:23.470 align:start position:0%
+ 
+ 
+
+00:22:23.470 --> 00:22:25.140 align:start position:0%
+ 
+ 
+
+00:22:25.140 --> 00:22:27.190 align:start position:0%
+ 
+ 
+
+00:22:27.190 --> 00:22:29.020 align:start position:0%
+ 
+ 
+
+00:22:29.020 --> 00:22:32.290 align:start position:0%
+ 
+ 
+
+00:22:32.290 --> 00:22:33.690 align:start position:0%
+ 
+ 
+
+00:22:33.690 --> 00:22:36.790 align:start position:0%
+ 
+ 
+
+00:22:36.790 --> 00:22:39.510 align:start position:0%
+ 
+ 
+
+00:22:39.510 --> 00:22:42.160 align:start position:0%
+ 
+ 
+
+00:22:42.160 --> 00:22:43.450 align:start position:0%
+ 
+ 
+
+00:22:43.450 --> 00:22:45.610 align:start position:0%
+ 
+ 
+
+00:22:45.610 --> 00:22:47.520 align:start position:0%
+ 
+ 
+
+00:22:47.520 --> 00:22:50.800 align:start position:0%
+ 
+ 
+
+00:22:50.800 --> 00:22:53.110 align:start position:0%
+ 
+ 
+
+00:22:53.110 --> 00:22:57.910 align:start position:0%
+ 
+ 
+
+00:22:57.910 --> 00:22:59.590 align:start position:0%
+ 
+ 
+
+00:22:59.590 --> 00:23:01.720 align:start position:0%
+ 
+ 
+
+00:23:01.720 --> 00:23:03.340 align:start position:0%
+ 
+ 
+
+00:23:03.340 --> 00:23:07.180 align:start position:0%
+ 
+ 
+
+00:23:07.180 --> 00:23:08.800 align:start position:0%
+ 
+ 
+
+00:23:08.800 --> 00:23:10.660 align:start position:0%
+ 
+ 
+
+00:23:10.660 --> 00:23:13.450 align:start position:0%
+ 
+ 
+
+00:23:13.450 --> 00:23:16.210 align:start position:0%
+ 
+ 
+
+00:23:16.210 --> 00:23:19.150 align:start position:0%
+ 
+ 
+
+00:23:19.150 --> 00:23:21.460 align:start position:0%
+ 
+ 
+
+00:23:21.460 --> 00:23:23.500 align:start position:0%
+ 
+ 
+
+00:23:23.500 --> 00:23:26.020 align:start position:0%
+ 
+ 
+
+00:23:26.020 --> 00:23:28.050 align:start position:0%
+ 
+ 
+
+00:23:28.050 --> 00:23:30.580 align:start position:0%
+ 
+ 
+
+00:23:30.580 --> 00:23:32.380 align:start position:0%
+ 
+ 
+
+00:23:32.380 --> 00:23:34.450 align:start position:0%
+ 
+ 
+
+00:23:34.450 --> 00:23:36.640 align:start position:0%
+ 
+ 
+
+00:23:36.640 --> 00:23:38.500 align:start position:0%
+ 
+ 
+
+00:23:38.500 --> 00:23:40.870 align:start position:0%
+ 
+ 
+
+00:23:40.870 --> 00:23:46.360 align:start position:0%
+ 
+ 
+
+00:23:46.360 --> 00:23:48.490 align:start position:0%
+ 
+ 
+
+00:23:48.490 --> 00:23:52.630 align:start position:0%
+ 
+ 
+
+00:23:52.630 --> 00:23:54.940 align:start position:0%
+ 
+ 
+
+00:23:54.940 --> 00:23:57.100 align:start position:0%
+ 
+ 
+
+00:23:57.100 --> 00:23:58.450 align:start position:0%
+ 
+ 
+
+00:23:58.450 --> 00:24:01.570 align:start position:0%
+ 
+ 
+
+00:24:01.570 --> 00:24:03.390 align:start position:0%
+ 
+ 
+
+00:24:03.390 --> 00:24:08.050 align:start position:0%
+ 
+ 
+
+00:24:08.050 --> 00:24:10.000 align:start position:0%
+ 
+ 
+
+00:24:10.000 --> 00:24:12.640 align:start position:0%
+ 
+ 
+
+00:24:12.640 --> 00:24:14.220 align:start position:0%
+ 
+ 
+
+00:24:14.220 --> 00:24:16.810 align:start position:0%
+ 
+ 
+
+00:24:16.810 --> 00:24:21.650 align:start position:0%
+ 
+ 
+
+00:24:21.650 --> 00:24:24.180 align:start position:0%
+ 
+ 
+
+00:24:24.180 --> 00:24:25.920 align:start position:0%
+ 
+ 
+
+00:24:25.920 --> 00:24:27.570 align:start position:0%
+ 
+ 
+
+00:24:27.570 --> 00:24:29.430 align:start position:0%
+ 
+ 
+
+00:24:29.430 --> 00:24:31.560 align:start position:0%
+ 
+ 
+
+00:24:31.560 --> 00:24:33.990 align:start position:0%
+ 
+ 
+
+00:24:33.990 --> 00:24:37.650 align:start position:0%
+ 
+ 
+
+00:24:37.650 --> 00:24:41.130 align:start position:0%
+ 
+ 
+
+00:24:41.130 --> 00:24:42.810 align:start position:0%
+ 
+ 
+
+00:24:42.810 --> 00:24:44.160 align:start position:0%
+ 
+ 
+
+00:24:44.160 --> 00:24:46.800 align:start position:0%
+ 
+ 
+
+00:24:46.800 --> 00:24:48.780 align:start position:0%
+ 
+ 
+
+00:24:48.780 --> 00:24:50.100 align:start position:0%
+ 
+ 
+
+00:24:50.100 --> 00:24:52.140 align:start position:0%
+ 
+ 
+
+00:24:52.140 --> 00:24:55.230 align:start position:0%
+ 
+ 
+
+00:24:55.230 --> 00:24:56.580 align:start position:0%
+ 
+ 
+
+00:24:56.580 --> 00:24:58.710 align:start position:0%
+ 
+ 
+
+00:24:58.710 --> 00:25:01.440 align:start position:0%
+ 
+ 
+
+00:25:01.440 --> 00:25:03.750 align:start position:0%
+ 
+ 
+
+00:25:03.750 --> 00:25:07.050 align:start position:0%
+ 
+ 
+
+00:25:07.050 --> 00:25:09.330 align:start position:0%
+ 
+ 
+
+00:25:09.330 --> 00:25:10.260 align:start position:0%
+ 
+ 
+
+00:25:10.260 --> 00:25:13.920 align:start position:0%
+ 
+ 
+
+00:25:13.920 --> 00:25:16.770 align:start position:0%
+ 
+ 
+
+00:25:16.770 --> 00:25:18.540 align:start position:0%
+ 
+ 
+
+00:25:18.540 --> 00:25:21.840 align:start position:0%
+ 
+ 
+
+00:25:21.840 --> 00:25:24.660 align:start position:0%
+ 
+ 
+
+00:25:24.660 --> 00:25:27.240 align:start position:0%
+ 
+ 
+
+00:25:27.240 --> 00:25:29.790 align:start position:0%
+ 
+ 
+
+00:25:29.790 --> 00:25:31.200 align:start position:0%
+ 
+ 
+
+00:25:31.200 --> 00:25:33.930 align:start position:0%
+ 
+ 
+
+00:25:33.930 --> 00:25:35.940 align:start position:0%
+ 
+ 
+
+00:25:35.940 --> 00:25:38.250 align:start position:0%
+ 
+ 
+
+00:25:38.250 --> 00:25:42.060 align:start position:0%
+ 
+ 
+
+00:25:42.060 --> 00:25:44.250 align:start position:0%
+ 
+ 
+
+00:25:44.250 --> 00:25:46.080 align:start position:0%
+ 
+ 
+
+00:25:46.080 --> 00:25:49.410 align:start position:0%
+ 
+ 
+
+00:25:49.410 --> 00:25:52.110 align:start position:0%
+ 
+ 
+
+00:25:52.110 --> 00:25:53.910 align:start position:0%
+ 
+ 
+
+00:25:53.910 --> 00:25:57.000 align:start position:0%
+ 
+ 
+
+00:25:57.000 --> 00:26:02.010 align:start position:0%
+ 
+ 
+
+00:26:02.010 --> 00:26:05.310 align:start position:0%
+ 
+ 
+
+00:26:05.310 --> 00:26:06.660 align:start position:0%
+ 
+ 
+
+00:26:06.660 --> 00:26:07.380 align:start position:0%
+ 
+ 
+
+00:26:07.380 --> 00:26:09.900 align:start position:0%
+ 
+ 
+
+00:26:09.900 --> 00:26:11.970 align:start position:0%
+ 
+ 
+
+00:26:11.970 --> 00:26:15.210 align:start position:0%
+ 
+ 
+
+00:26:15.210 --> 00:26:16.100 align:start position:0%
+ 
+ 
+
+00:26:16.100 --> 00:26:18.210 align:start position:0%
+ 
+ 
+
+00:26:18.210 --> 00:26:19.800 align:start position:0%
+ 
+ 
+
+00:26:19.800 --> 00:26:21.570 align:start position:0%
+ 
+ 
+
+00:26:21.570 --> 00:26:24.780 align:start position:0%
+ 
+ 
+
+00:26:24.780 --> 00:26:26.280 align:start position:0%
+ 
+ 
+
+00:26:26.280 --> 00:26:30.630 align:start position:0%
+ 
+ 
+
+00:26:30.630 --> 00:26:33.660 align:start position:0%
+ 
+ 
+
+00:26:33.660 --> 00:26:34.560 align:start position:0%
+ 
+ 
+
+00:26:34.560 --> 00:26:36.810 align:start position:0%
+ 
+ 
+
+00:26:36.810 --> 00:26:40.830 align:start position:0%
+ 
+ 
+
+00:26:40.830 --> 00:26:46.019 align:start position:0%
+ 
+ 
+
+00:26:46.019 --> 00:26:47.970 align:start position:0%
+ 
+ 
+
+00:26:47.970 --> 00:26:50.220 align:start position:0%
+ 
+ 
+
+00:26:50.220 --> 00:26:53.610 align:start position:0%
+ 
+ 
+
+00:26:53.610 --> 00:26:56.039 align:start position:0%
+ 
+ 
+
+00:26:56.039 --> 00:26:57.269 align:start position:0%
+ 
+ 
+
+00:26:57.269 --> 00:26:59.580 align:start position:0%
+ 
+ 
+
+00:26:59.580 --> 00:27:02.850 align:start position:0%
+ 
+ 
+
+00:27:02.850 --> 00:27:05.490 align:start position:0%
+ 
+ 
+
+00:27:05.490 --> 00:27:06.629 align:start position:0%
+ 
+ 
+
+00:27:06.629 --> 00:27:09.899 align:start position:0%
+ 
+ 
+
+00:27:09.899 --> 00:27:13.590 align:start position:0%
+ 
+ 
+
+00:27:13.590 --> 00:27:14.820 align:start position:0%
+ 
+ 
+
+00:27:14.820 --> 00:27:17.210 align:start position:0%
+ 
+ 
+
+00:27:17.210 --> 00:27:19.259 align:start position:0%
+ 
+ 
+
+00:27:19.259 --> 00:27:20.960 align:start position:0%
+ 
+ 
+
+00:27:20.960 --> 00:27:22.980 align:start position:0%
+ 
+ 
+
+00:27:22.980 --> 00:27:24.480 align:start position:0%
+ 
+ 
+
+00:27:24.480 --> 00:27:26.100 align:start position:0%
+ 
+ 
+
+00:27:26.100 --> 00:27:34.049 align:start position:0%
+ 
+ 
+
+00:27:34.049 --> 00:27:36.289 align:start position:0%
+ 
+ 
+
+00:27:36.289 --> 00:27:38.970 align:start position:0%
+ 
+ 
+
+00:27:38.970 --> 00:27:41.669 align:start position:0%
+ 
+ 
+
+00:27:41.669 --> 00:27:43.680 align:start position:0%
+ 
+ 
+
+00:27:43.680 --> 00:27:46.830 align:start position:0%
+ 
+ 
+
+00:27:46.830 --> 00:27:50.070 align:start position:0%
+ 
+ 
+
+00:27:50.070 --> 00:27:53.090 align:start position:0%
+ 
+ 
+
+00:27:53.090 --> 00:27:57.600 align:start position:0%
+ 
+ 
+
+00:27:57.600 --> 00:28:00.930 align:start position:0%
+ 
+ 
+
+00:28:00.930 --> 00:28:02.549 align:start position:0%
+ 
+ 
+
+00:28:02.549 --> 00:28:06.690 align:start position:0%
+ 
+ 
+
+00:28:06.690 --> 00:28:08.779 align:start position:0%
+ 
+ 
+
+00:28:08.779 --> 00:28:11.999 align:start position:0%
+ 
+ 
+
+00:28:11.999 --> 00:28:13.710 align:start position:0%
+ 
+ 
+
+00:28:13.710 --> 00:28:16.259 align:start position:0%
+ 
+ 
+
+00:28:16.259 --> 00:28:18.570 align:start position:0%
+ 
+ 
+
+00:28:18.570 --> 00:28:21.960 align:start position:0%
+ 
+ 
+
+00:28:21.960 --> 00:28:24.119 align:start position:0%
+ 
+ 
+
+00:28:24.119 --> 00:28:28.049 align:start position:0%
+ 
+ 
+
+00:28:28.049 --> 00:28:30.539 align:start position:0%
+ 
+ 
+
+00:28:30.539 --> 00:28:33.019 align:start position:0%
+ 
+ 
+
+00:28:33.019 --> 00:28:36.149 align:start position:0%
+ 
+ 
+
+00:28:36.149 --> 00:28:38.940 align:start position:0%
+ 
+ 
+
+00:28:38.940 --> 00:28:41.909 align:start position:0%
+ 
+ 
+
+00:28:41.909 --> 00:28:44.129 align:start position:0%
+ 
+ 
+
+00:28:44.129 --> 00:28:45.899 align:start position:0%
+ 
+ 
+
+00:28:45.899 --> 00:28:47.770 align:start position:0%
+ 
+ 
+
+00:28:47.770 --> 00:28:49.510 align:start position:0%
+ 
+ 
+
+00:28:49.510 --> 00:28:51.340 align:start position:0%
+ 
+ 
+
+00:28:51.340 --> 00:28:52.920 align:start position:0%
+ 
+ 
+
+00:28:52.920 --> 00:28:55.030 align:start position:0%
+ 
+ 
+
+00:28:55.030 --> 00:28:57.370 align:start position:0%
+ 
+ 
+
+00:28:57.370 --> 00:28:59.850 align:start position:0%
+ 
+ 
+
+00:28:59.850 --> 00:29:02.440 align:start position:0%
+ 
+ 
+
+00:29:02.440 --> 00:29:06.010 align:start position:0%
+ 
+ 
+
+00:29:06.010 --> 00:29:08.200 align:start position:0%
+ 
+ 
+
+00:29:08.200 --> 00:29:09.430 align:start position:0%
+ 
+ 
+
+00:29:09.430 --> 00:29:13.630 align:start position:0%
+ 
+ 
+
+00:29:13.630 --> 00:29:15.430 align:start position:0%
+ 
+ 
+
+00:29:15.430 --> 00:29:18.430 align:start position:0%
+ 
+ 
+
+00:29:18.430 --> 00:29:20.320 align:start position:0%
+ 
+ 
+
+00:29:20.320 --> 00:29:23.530 align:start position:0%
+ 
+ 
+
+00:29:23.530 --> 00:29:26.200 align:start position:0%
+ 
+ 
+
+00:29:26.200 --> 00:29:28.090 align:start position:0%
+ 
+ 
+
+00:29:28.090 --> 00:29:30.730 align:start position:0%
+ 
+ 
+
+00:29:30.730 --> 00:29:32.080 align:start position:0%
+ 
+ 
+
+00:29:32.080 --> 00:29:35.260 align:start position:0%
+ 
+ 
+
+00:29:35.260 --> 00:29:37.210 align:start position:0%
+ 
+ 
+
+00:29:37.210 --> 00:29:40.120 align:start position:0%
+ 
+ 
+
+00:29:40.120 --> 00:29:42.400 align:start position:0%
+ 
+ 
+
+00:29:42.400 --> 00:29:44.110 align:start position:0%
+ 
+ 
+
+00:29:44.110 --> 00:29:48.070 align:start position:0%
+ 
+ 
+
+00:29:48.070 --> 00:29:49.390 align:start position:0%
+ 
+ 
+
+00:29:49.390 --> 00:29:51.400 align:start position:0%
+ 
+ 
+
+00:29:51.400 --> 00:29:54.040 align:start position:0%
+ 
+ 
+
+00:29:54.040 --> 00:29:56.260 align:start position:0%
+ 
+ 
+
+00:29:56.260 --> 00:29:58.810 align:start position:0%
+ 
+ 
+
+00:29:58.810 --> 00:30:01.330 align:start position:0%
+ 
+ 
+
+00:30:01.330 --> 00:30:03.910 align:start position:0%
+ 
+ 
+
+00:30:03.910 --> 00:30:05.410 align:start position:0%
+ 
+ 
+
+00:30:05.410 --> 00:30:07.990 align:start position:0%
+ 
+ 
+
+00:30:07.990 --> 00:30:09.670 align:start position:0%
+ 
+ 
+
+00:30:09.670 --> 00:30:13.270 align:start position:0%
+ 
+ 
+
+00:30:13.270 --> 00:30:14.770 align:start position:0%
+ 
+ 
+
+00:30:14.770 --> 00:30:17.530 align:start position:0%
+ 
+ 
+
+00:30:17.530 --> 00:30:19.570 align:start position:0%
+ 
+ 
+
+00:30:19.570 --> 00:30:21.010 align:start position:0%
+ 
+ 
+
+00:30:21.010 --> 00:30:23.880 align:start position:0%
+ 
+ 
+
+00:30:23.880 --> 00:30:26.650 align:start position:0%
+ 
+ 
+
+00:30:26.650 --> 00:30:28.150 align:start position:0%
+ 
+ 
+
+00:30:28.150 --> 00:30:31.480 align:start position:0%
+ 
+ 
+
+00:30:31.480 --> 00:30:35.170 align:start position:0%
+ 
+ 
+
+00:30:35.170 --> 00:30:37.570 align:start position:0%
+ 
+ 
+
+00:30:37.570 --> 00:30:43.330 align:start position:0%
+ 
+ 
+
+00:30:43.330 --> 00:30:45.100 align:start position:0%
+ 
+ 
+
+00:30:45.100 --> 00:30:47.110 align:start position:0%
+ 
+ 
+
+00:30:47.110 --> 00:30:49.090 align:start position:0%
+ 
+ 
+
+00:30:49.090 --> 00:30:50.590 align:start position:0%
+ 
+ 
+
+00:30:50.590 --> 00:30:52.570 align:start position:0%
+ 
+ 
+
+00:30:52.570 --> 00:30:57.430 align:start position:0%
+ 
+ 
+
+00:30:57.430 --> 00:30:58.780 align:start position:0%
+ 
+ 
+
+00:30:58.780 --> 00:30:59.950 align:start position:0%
+ 
+ 
+
+00:30:59.950 --> 00:31:01.180 align:start position:0%
+ 
+ 
+
+00:31:01.180 --> 00:31:02.800 align:start position:0%
+ 
+ 
+
+00:31:02.800 --> 00:31:06.340 align:start position:0%
+ 
+ 
+
+00:31:06.340 --> 00:31:07.840 align:start position:0%
+ 
+ 
+
+00:31:07.840 --> 00:31:09.970 align:start position:0%
+ 
+ 
+
+00:31:09.970 --> 00:31:12.310 align:start position:0%
+ 
+ 
+
+00:31:12.310 --> 00:31:14.440 align:start position:0%
+ 
+ 
+
+00:31:14.440 --> 00:31:16.240 align:start position:0%
+ 
+ 
+
+00:31:16.240 --> 00:31:19.620 align:start position:0%
+ 
+ 
+
+00:31:19.620 --> 00:31:21.670 align:start position:0%
+ 
+ 
+
+00:31:21.670 --> 00:31:23.590 align:start position:0%
+ 
+ 
+
+00:31:23.590 --> 00:31:26.560 align:start position:0%
+ 
+ 
+
+00:31:26.560 --> 00:31:28.180 align:start position:0%
+ 
+ 
+
+00:31:28.180 --> 00:31:29.500 align:start position:0%
+ 
+ 
+
+00:31:29.500 --> 00:31:31.900 align:start position:0%
+ 
+ 
+
+00:31:31.900 --> 00:31:34.030 align:start position:0%
+ 
+ 
+
+00:31:34.030 --> 00:31:39.010 align:start position:0%
+ 
+ 
+
+00:31:39.010 --> 00:31:40.840 align:start position:0%
+ 
+ 
+
+00:31:40.840 --> 00:31:43.780 align:start position:0%
+ 
+ 
+
+00:31:43.780 --> 00:31:45.700 align:start position:0%
+ 
+ 
+
+00:31:45.700 --> 00:31:48.430 align:start position:0%
+ 
+ 
+
+00:31:48.430 --> 00:31:51.730 align:start position:0%
+ 
+ 
+
+00:31:51.730 --> 00:31:54.250 align:start position:0%
+ 
+ 
+
+00:31:54.250 --> 00:31:56.740 align:start position:0%
+ 
+ 
+
+00:31:56.740 --> 00:31:58.210 align:start position:0%
+ 
+ 
+
+00:31:58.210 --> 00:32:00.790 align:start position:0%
+ 
+ 
+
+00:32:00.790 --> 00:32:03.070 align:start position:0%
+ 
+ 
+
+00:32:03.070 --> 00:32:05.860 align:start position:0%
+ 
+ 
+
+00:32:05.860 --> 00:32:07.750 align:start position:0%
+ 
+ 
+
+00:32:07.750 --> 00:32:10.870 align:start position:0%
+ 
+ 
+
+00:32:10.870 --> 00:32:14.020 align:start position:0%
+ 
+ 
+
+00:32:14.020 --> 00:32:15.370 align:start position:0%
+ 
+ 
+
+00:32:15.370 --> 00:32:16.570 align:start position:0%
+ 
+ 
+
+00:32:16.570 --> 00:32:17.680 align:start position:0%
+ 
+ 
+
+00:32:17.680 --> 00:32:21.160 align:start position:0%
+ 
+ 
+
+00:32:21.160 --> 00:32:23.350 align:start position:0%
+ 
+ 
+
+00:32:23.350 --> 00:32:24.640 align:start position:0%
+ 
+ 
+
+00:32:24.640 --> 00:32:27.910 align:start position:0%
+ 
+ 
+
+00:32:27.910 --> 00:32:30.250 align:start position:0%
+ 
+ 
+
+00:32:30.250 --> 00:32:32.140 align:start position:0%
+ 
+ 
+
+00:32:32.140 --> 00:32:33.220 align:start position:0%
+ 
+ 
+
+00:32:33.220 --> 00:32:39.400 align:start position:0%
+ 
+ 
+
+00:32:39.400 --> 00:32:41.920 align:start position:0%
+ 
+ 
+
+00:32:41.920 --> 00:32:45.750 align:start position:0%
+ 
+ 
+
+00:32:45.750 --> 00:32:49.870 align:start position:0%
+ 
+ 
+
+00:32:49.870 --> 00:32:52.180 align:start position:0%
+ 
+ 
+
+00:32:52.180 --> 00:32:55.090 align:start position:0%
+ 
+ 
+
+00:32:55.090 --> 00:32:57.940 align:start position:0%
+ 
+ 
+
+00:32:57.940 --> 00:33:00.220 align:start position:0%
+ 
+ 
+
+00:33:00.220 --> 00:33:03.580 align:start position:0%
+ 
+ 
+
+00:33:03.580 --> 00:33:07.000 align:start position:0%
+ 
+ 
+
+00:33:07.000 --> 00:33:09.400 align:start position:0%
+ 
+ 
+
+00:33:09.400 --> 00:33:12.310 align:start position:0%
+ 
+ 
+
+00:33:12.310 --> 00:33:15.400 align:start position:0%
+ 
+ 
+
+00:33:15.400 --> 00:33:17.380 align:start position:0%
+ 
+ 
+
+00:33:17.380 --> 00:33:20.050 align:start position:0%
+ 
+ 
+
+00:33:20.050 --> 00:33:23.350 align:start position:0%
+ 
+ 
+
+00:33:23.350 --> 00:33:24.670 align:start position:0%
+ 
+ 
+
+00:33:24.670 --> 00:33:26.500 align:start position:0%
+ 
+ 
+
+00:33:26.500 --> 00:33:29.650 align:start position:0%
+ 
+ 
+
+00:33:29.650 --> 00:33:31.990 align:start position:0%
+ 
+ 
+
+00:33:31.990 --> 00:33:34.480 align:start position:0%
+ 
+ 
+
+00:33:34.480 --> 00:33:37.690 align:start position:0%
+ 
+ 
+
+00:33:37.690 --> 00:33:39.130 align:start position:0%
+ 
+ 
+
+00:33:39.130 --> 00:33:41.140 align:start position:0%
+ 
+ 
+
+00:33:41.140 --> 00:33:44.380 align:start position:0%
+ 
+ 
+
+00:33:44.380 --> 00:33:46.060 align:start position:0%
+ 
+ 
+
+00:33:46.060 --> 00:33:50.860 align:start position:0%
+ 
+ 
+
+00:33:50.860 --> 00:33:52.900 align:start position:0%
+ 
+ 
+
+00:33:52.900 --> 00:33:55.300 align:start position:0%
+ 
+ 
+
+00:33:55.300 --> 00:33:57.340 align:start position:0%
+ 
+ 
+
+00:33:57.340 --> 00:34:01.120 align:start position:0%
+ 
+ 
+
+00:34:01.120 --> 00:34:03.310 align:start position:0%
+ 
+ 
+
+00:34:03.310 --> 00:34:04.990 align:start position:0%
+ 
+ 
+
+00:34:04.990 --> 00:34:09.370 align:start position:0%
+ 
+ 
+
+00:34:09.370 --> 00:34:11.770 align:start position:0%
+ 
+ 
+
+00:34:11.770 --> 00:34:14.590 align:start position:0%
+ 
+ 
+
+00:34:14.590 --> 00:34:16.780 align:start position:0%
+ 
+ 
+
+00:34:16.780 --> 00:34:19.720 align:start position:0%
+ 
+ 
+
+00:34:19.720 --> 00:34:22.960 align:start position:0%
+ 
+ 
+
+00:34:22.960 --> 00:34:24.430 align:start position:0%
+ 
+ 
+
+00:34:24.430 --> 00:34:27.100 align:start position:0%
+ 
+ 
+
+00:34:27.100 --> 00:34:30.250 align:start position:0%
+ 
+ 
+
+00:34:30.250 --> 00:34:31.750 align:start position:0%
+ 
+ 
+
+00:34:31.750 --> 00:34:34.570 align:start position:0%
+ 
+ 
+
+00:34:34.570 --> 00:34:35.620 align:start position:0%
+ 
+ 
+
+00:34:35.620 --> 00:34:36.970 align:start position:0%
+ 
+ 
+
+00:34:36.970 --> 00:34:42.010 align:start position:0%
+ 
+ 
+
+00:34:42.010 --> 00:34:43.270 align:start position:0%
+ 
+ 
+
+00:34:43.270 --> 00:34:45.159 align:start position:0%
+ 
+ 
+
+00:34:45.159 --> 00:34:47.040 align:start position:0%
+ 
+ 
+
+00:34:47.040 --> 00:34:49.120 align:start position:0%
+ 
+ 
+
+00:34:49.120 --> 00:34:51.040 align:start position:0%
+ 
+ 
+
+00:34:51.040 --> 00:34:52.690 align:start position:0%
+ 
+ 
+
+00:34:52.690 --> 00:34:58.390 align:start position:0%
+ 
+ 
+
+00:34:58.390 --> 00:35:01.900 align:start position:0%
+ 
+ 
+
+00:35:01.900 --> 00:35:02.680 align:start position:0%
+ 
+ 
+
+00:35:02.680 --> 00:35:04.780 align:start position:0%
+ 
+ 
+
+00:35:04.780 --> 00:35:07.540 align:start position:0%
+ 
+ 
+
+00:35:07.540 --> 00:35:09.790 align:start position:0%
+ 
+ 
+
+00:35:09.790 --> 00:35:11.530 align:start position:0%
+ 
+ 
+
+00:35:11.530 --> 00:35:13.090 align:start position:0%
+ 
+ 
+
+00:35:13.090 --> 00:35:14.800 align:start position:0%
+ 
+ 
+
+00:35:14.800 --> 00:35:19.150 align:start position:0%
+ 
+ 
+
+00:35:19.150 --> 00:35:21.190 align:start position:0%
+ 
+ 
+
+00:35:21.190 --> 00:35:23.590 align:start position:0%
+ 
+ 
+
+00:35:23.590 --> 00:35:25.810 align:start position:0%
+ 
+ 
+
+00:35:25.810 --> 00:35:27.130 align:start position:0%
+ 
+ 
+
+00:35:27.130 --> 00:35:27.140 align:start position:0%
+ 
+ 
+
+00:35:27.140 --> 00:35:27.470 align:start position:0%
+ 
+
+
+00:35:27.470 --> 00:35:30.290 align:start position:0%
+ 
+ 
+
+00:35:30.290 --> 00:35:31.580 align:start position:0%
+ 
+ 
+
+00:35:31.580 --> 00:35:32.840 align:start position:0%
+ 
+ 
+
+00:35:32.840 --> 00:35:36.140 align:start position:0%
+ 
+ 
+
+00:35:36.140 --> 00:35:38.840 align:start position:0%
+ 
+ 
+
+00:35:38.840 --> 00:35:41.270 align:start position:0%
+ 
+ 
+
+00:35:41.270 --> 00:35:45.950 align:start position:0%
+ 
+ 
+
+00:35:45.950 --> 00:35:47.930 align:start position:0%
+ 
+ 
+
+00:35:47.930 --> 00:35:49.910 align:start position:0%
+ 
+ 
+
+00:35:49.910 --> 00:35:52.300 align:start position:0%
+ 
+ 
+
+00:35:52.300 --> 00:35:55.520 align:start position:0%
+ 
+ 
+
+00:35:55.520 --> 00:35:57.590 align:start position:0%
+ 
+ 
+
+00:35:57.590 --> 00:35:58.940 align:start position:0%
+ 
+ 
+
+00:35:58.940 --> 00:36:02.359 align:start position:0%
+ 
+ 
+
+00:36:02.359 --> 00:36:04.790 align:start position:0%
+ 
+ 
+
+00:36:04.790 --> 00:36:10.220 align:start position:0%
+ 
+ 
+
+00:36:10.220 --> 00:36:13.099 align:start position:0%
+ 
+ 
+
+00:36:13.099 --> 00:36:15.260 align:start position:0%
+ 
+ 
+
+00:36:15.260 --> 00:36:17.300 align:start position:0%
+ 
+ 
+
+00:36:17.300 --> 00:36:18.859 align:start position:0%
+ 
+ 
+
+00:36:18.859 --> 00:36:21.590 align:start position:0%
+ 
+ 
+
+00:36:21.590 --> 00:36:23.240 align:start position:0%
+ 
+ 
+
+00:36:23.240 --> 00:36:24.680 align:start position:0%
+ 
+ 
+
+00:36:24.680 --> 00:36:27.440 align:start position:0%
+ 
+ 
+
+00:36:27.440 --> 00:36:29.150 align:start position:0%
+ 
+ 
+
+00:36:29.150 --> 00:36:31.640 align:start position:0%
+ 
+ 
+
+00:36:31.640 --> 00:36:37.520 align:start position:0%
+ 
+ 
+
+00:36:37.520 --> 00:36:39.470 align:start position:0%
+ 
+ 
+
+00:36:39.470 --> 00:36:41.140 align:start position:0%
+ 
+ 
+
+00:36:41.140 --> 00:36:43.970 align:start position:0%
+ 
+ 
+
+00:36:43.970 --> 00:36:45.859 align:start position:0%
+ 
+ 
+
+00:36:45.859 --> 00:36:48.260 align:start position:0%
+ 
+ 
+
+00:36:48.260 --> 00:36:51.830 align:start position:0%
+ 
+ 
+
+00:36:51.830 --> 00:36:54.590 align:start position:0%
+ 
+ 
+
+00:36:54.590 --> 00:36:57.080 align:start position:0%
+ 
+ 
+
+00:36:57.080 --> 00:37:00.710 align:start position:0%
+ 
+ 
+
+00:37:00.710 --> 00:37:01.280 align:start position:0%
+ 
+ 
+
+00:37:01.280 --> 00:37:02.810 align:start position:0%
+ 
+ 
+
+00:37:02.810 --> 00:37:05.359 align:start position:0%
+ 
+ 
+
+00:37:05.359 --> 00:37:07.010 align:start position:0%
+ 
+ 
+
+00:37:07.010 --> 00:37:09.320 align:start position:0%
+ 
+ 
+
+00:37:09.320 --> 00:37:10.970 align:start position:0%
+ 
+ 
+
+00:37:10.970 --> 00:37:12.470 align:start position:0%
+ 
+ 
+
+00:37:12.470 --> 00:37:15.700 align:start position:0%
+ 
+ 
+
+00:37:15.700 --> 00:37:18.020 align:start position:0%
+ 
+ 
+
+00:37:18.020 --> 00:37:20.840 align:start position:0%
+ 
+ 
+
+00:37:20.840 --> 00:37:23.450 align:start position:0%
+ 
+ 
+
+00:37:23.450 --> 00:37:24.920 align:start position:0%
+ 
+ 
+
+00:37:24.920 --> 00:37:26.630 align:start position:0%
+ 
+ 
+
+00:37:26.630 --> 00:37:29.630 align:start position:0%
+ 
+ 
+
+00:37:29.630 --> 00:37:31.550 align:start position:0%
+ 
+ 
+
+00:37:31.550 --> 00:37:33.590 align:start position:0%
+ 
+ 
+
+00:37:33.590 --> 00:37:36.620 align:start position:0%
+ 
+ 
+
+00:37:36.620 --> 00:37:36.630 align:start position:0%
+ 
+ 
+
+00:37:36.630 --> 00:37:37.700 align:start position:0%
+ 
+
+
+00:37:37.700 --> 00:37:41.210 align:start position:0%
+ 
+ 
+
+00:37:41.210 --> 00:37:42.770 align:start position:0%
+ 
+ 
+
+00:37:42.770 --> 00:37:45.470 align:start position:0%
+ 
+ 
+
+00:37:45.470 --> 00:37:47.599 align:start position:0%
+ 
+ 
+
+00:37:47.599 --> 00:37:53.089 align:start position:0%
+ 
+ 
+
+00:37:53.089 --> 00:37:55.250 align:start position:0%
+ 
+ 
+
+00:37:55.250 --> 00:37:59.300 align:start position:0%
+ 
+ 
+
+00:37:59.300 --> 00:38:02.810 align:start position:0%
+ 
+ 
+
+00:38:02.810 --> 00:38:04.700 align:start position:0%
+ 
+ 
+
+00:38:04.700 --> 00:38:06.349 align:start position:0%
+ 
+ 
+
+00:38:06.349 --> 00:38:09.080 align:start position:0%
+ 
+ 
+
+00:38:09.080 --> 00:38:12.260 align:start position:0%
+ 
+ 
+
+00:38:12.260 --> 00:38:13.339 align:start position:0%
+ 
+ 
+
+00:38:13.339 --> 00:38:15.440 align:start position:0%
+ 
+ 
+
+00:38:15.440 --> 00:38:17.930 align:start position:0%
+ 
+ 
+
+00:38:17.930 --> 00:38:19.550 align:start position:0%
+ 
+ 
+
+00:38:19.550 --> 00:38:23.270 align:start position:0%
+ 
+ 
+
+00:38:23.270 --> 00:38:24.830 align:start position:0%
+ 
+ 
+
+00:38:24.830 --> 00:38:26.690 align:start position:0%
+ 
+ 
+
+00:38:26.690 --> 00:38:28.460 align:start position:0%
+ 
+ 
+
+00:38:28.460 --> 00:38:32.200 align:start position:0%
+ 
+ 
+
+00:38:32.200 --> 00:38:34.490 align:start position:0%
+ 
+ 
+
+00:38:34.490 --> 00:38:35.810 align:start position:0%
+ 
+ 
+
+00:38:35.810 --> 00:38:37.310 align:start position:0%
+ 
+ 
+
+00:38:37.310 --> 00:38:40.940 align:start position:0%
+ 
+ 
+
+00:38:40.940 --> 00:38:42.920 align:start position:0%
+ 
+ 
+
+00:38:42.920 --> 00:38:45.080 align:start position:0%
+ 
+ 
+
+00:38:45.080 --> 00:38:47.630 align:start position:0%
+ 
+ 
+
+00:38:47.630 --> 00:38:49.400 align:start position:0%
+ 
+ 
+
+00:38:49.400 --> 00:38:52.190 align:start position:0%
+ 
+ 
+
+00:38:52.190 --> 00:38:54.560 align:start position:0%
+ 
+ 
+
+00:38:54.560 --> 00:38:58.640 align:start position:0%
+ 
+ 
+
+00:38:58.640 --> 00:39:01.849 align:start position:0%
+ 
+ 
+
+00:39:01.849 --> 00:39:03.470 align:start position:0%
+ 
+ 
+
+00:39:03.470 --> 00:39:07.370 align:start position:0%
+ 
+ 
+
+00:39:07.370 --> 00:39:09.410 align:start position:0%
+ 
+ 
+
+00:39:09.410 --> 00:39:13.070 align:start position:0%
+ 
+ 
+
+00:39:13.070 --> 00:39:15.290 align:start position:0%
+ 
+ 
+
+00:39:15.290 --> 00:39:19.310 align:start position:0%
+ 
+ 
+
+00:39:19.310 --> 00:39:21.200 align:start position:0%
+ 
+ 
+
+00:39:21.200 --> 00:39:24.829 align:start position:0%
+ 
+ 
+
+00:39:24.829 --> 00:39:26.210 align:start position:0%
+ 
+ 
+
+00:39:26.210 --> 00:39:29.180 align:start position:0%
+ 
+ 
+
+00:39:29.180 --> 00:39:31.010 align:start position:0%
+ 
+ 
+
+00:39:31.010 --> 00:39:34.089 align:start position:0%
+ 
+ 
+
+00:39:34.089 --> 00:39:36.050 align:start position:0%
+ 
+ 
+
+00:39:36.050 --> 00:39:38.780 align:start position:0%
+ 
+ 
+
+00:39:38.780 --> 00:39:40.990 align:start position:0%
+ 
+ 
+
+00:39:40.990 --> 00:39:43.339 align:start position:0%
+ 
+ 
+
+00:39:43.339 --> 00:39:46.160 align:start position:0%
+ 
+ 
+
+00:39:46.160 --> 00:39:47.420 align:start position:0%
+ 
+ 
+
+00:39:47.420 --> 00:39:49.940 align:start position:0%
+ 
+ 
+
+00:39:49.940 --> 00:39:51.050 align:start position:0%
+ 
+ 
+
+00:39:51.050 --> 00:39:53.120 align:start position:0%
+ 
+ 
+
+00:39:53.120 --> 00:39:54.620 align:start position:0%
+ 
+ 
+
+00:39:54.620 --> 00:39:54.630 align:start position:0%
+ 
+ 
+
+00:39:54.630 --> 00:39:54.890 align:start position:0%
+ 
+
+
+00:39:54.890 --> 00:39:57.950 align:start position:0%
+ 
+ 
+
+00:39:57.950 --> 00:39:59.450 align:start position:0%
+ 
+ 
+
+00:39:59.450 --> 00:40:01.760 align:start position:0%
+ 
+ 
+
+00:40:01.760 --> 00:40:04.400 align:start position:0%
+ 
+ 
+
+00:40:04.400 --> 00:40:07.670 align:start position:0%
+ 
+ 
+
+00:40:07.670 --> 00:40:09.230 align:start position:0%
+ 
+ 
+
+00:40:09.230 --> 00:40:12.019 align:start position:0%
+ 
+ 
+
+00:40:12.019 --> 00:40:14.990 align:start position:0%
+ 
+ 
+
+00:40:14.990 --> 00:40:16.579 align:start position:0%
+ 
+ 
+
+00:40:16.579 --> 00:40:19.960 align:start position:0%
+ 
+ 
+
+00:40:19.960 --> 00:40:22.250 align:start position:0%
+ 
+ 
+
+00:40:22.250 --> 00:40:24.140 align:start position:0%
+ 
+ 
+
+00:40:24.140 --> 00:40:25.490 align:start position:0%
+ 
+ 
+
+00:40:25.490 --> 00:40:26.930 align:start position:0%
+ 
+ 
+
+00:40:26.930 --> 00:40:28.670 align:start position:0%
+ 
+ 
+
+00:40:28.670 --> 00:40:31.160 align:start position:0%
+ 
+ 
+
+00:40:31.160 --> 00:40:35.569 align:start position:0%
+ 
+ 
+
+00:40:35.569 --> 00:40:37.279 align:start position:0%
+ 
+ 
+
+00:40:37.279 --> 00:40:40.700 align:start position:0%
+ 
+ 
+
+00:40:40.700 --> 00:40:43.250 align:start position:0%
+ 
+ 
+
+00:40:43.250 --> 00:40:44.930 align:start position:0%
+ 
+ 
+
+00:40:44.930 --> 00:40:47.329 align:start position:0%
+ 
+ 
+
+00:40:47.329 --> 00:40:49.370 align:start position:0%
+ 
+ 
+
+00:40:49.370 --> 00:40:51.380 align:start position:0%
+ 
+ 
+
+00:40:51.380 --> 00:40:54.500 align:start position:0%
+ 
+ 
+
+00:40:54.500 --> 00:40:56.029 align:start position:0%
+ 
+ 
+
+00:40:56.029 --> 00:40:58.339 align:start position:0%
+ 
+ 
+
+00:40:58.339 --> 00:40:59.809 align:start position:0%
+ 
+ 
+
+00:40:59.809 --> 00:41:01.779 align:start position:0%
+ 
+ 
+
+00:41:01.779 --> 00:41:04.099 align:start position:0%
+ 
+ 
+
+00:41:04.099 --> 00:41:05.200 align:start position:0%
+ 
+ 
+
+00:41:05.200 --> 00:41:09.079 align:start position:0%
+ 
+ 
+
+00:41:09.079 --> 00:41:10.549 align:start position:0%
+ 
+ 
+
+00:41:10.549 --> 00:41:13.609 align:start position:0%
+ 
+ 
+
+00:41:13.609 --> 00:41:14.990 align:start position:0%
+ 
+ 
+
+00:41:14.990 --> 00:41:21.339 align:start position:0%
+ 
+ 
+
+00:41:21.339 --> 00:41:23.809 align:start position:0%
+ 
+ 
+
+00:41:23.809 --> 00:41:25.220 align:start position:0%
+ 
+ 
+
+00:41:25.220 --> 00:41:27.170 align:start position:0%
+ 
+ 
+
+00:41:27.170 --> 00:41:30.079 align:start position:0%
+ 
+ 
+
+00:41:30.079 --> 00:41:32.569 align:start position:0%
+ 
+ 
+
+00:41:32.569 --> 00:41:34.880 align:start position:0%
+ 
+ 
+
+00:41:34.880 --> 00:41:41.870 align:start position:0%
+ 
+ 
+
+00:41:41.870 --> 00:41:43.569 align:start position:0%
+ 
+ 
+
+00:41:43.569 --> 00:41:45.799 align:start position:0%
+ 
+ 
+
+00:41:45.799 --> 00:41:47.809 align:start position:0%
+ 
+ 
+
+00:41:47.809 --> 00:41:50.839 align:start position:0%
+ 
+ 
+
+00:41:50.839 --> 00:41:52.819 align:start position:0%
+ 
+ 
+
+00:41:52.819 --> 00:41:57.170 align:start position:0%
+ 
+ 
+
+00:41:57.170 --> 00:41:59.180 align:start position:0%
+ 
+ 
+
+00:41:59.180 --> 00:42:01.430 align:start position:0%
+ 
+ 
+
+00:42:01.430 --> 00:42:03.559 align:start position:0%
+ 
+ 
+
+00:42:03.559 --> 00:42:04.970 align:start position:0%
+ 
+ 
+
+00:42:04.970 --> 00:42:07.430 align:start position:0%
+ 
+ 
+
+00:42:07.430 --> 00:42:09.910 align:start position:0%
+ 
+ 
+
+00:42:09.910 --> 00:42:12.230 align:start position:0%
+ 
+ 
+
+00:42:12.230 --> 00:42:14.060 align:start position:0%
+ 
+ 
+
+00:42:14.060 --> 00:42:15.680 align:start position:0%
+ 
+ 
+
+00:42:15.680 --> 00:42:17.900 align:start position:0%
+ 
+ 
+
+00:42:17.900 --> 00:42:19.850 align:start position:0%
+ 
+ 
+
+00:42:19.850 --> 00:42:23.870 align:start position:0%
+ 
+ 
+
+00:42:23.870 --> 00:42:26.060 align:start position:0%
+ 
+ 
+
+00:42:26.060 --> 00:42:28.760 align:start position:0%
+ 
+ 
+
+00:42:28.760 --> 00:42:30.680 align:start position:0%
+ 
+ 
+
+00:42:30.680 --> 00:42:34.840 align:start position:0%
+ 
+ 
+
+00:42:34.840 --> 00:42:34.850 align:start position:0%
+ 
+ 
+
+00:42:34.850 --> 00:42:38.760 align:start position:0%
+ 
+
+
