@@ -1,0 +1,4168 @@
+WEBVTT
+Kind: captions
+Language: en
+
+00:00:21.320 --> 00:00:23.870 align:start position:0%
+ 
+everyone so I'm here today to talk about  how we've scaled our data pipeline  throughout billions of events every  month and maintain a very high level  develop low variability and this is  especially in the face of third-party  api's which might go down Atimonan stoma  moment's notice so for this talk in  particular I first like to talk about  the constraints of the problem that  we're trying to solve here then I'll  talk through our particular architecture  and how we started and how we've grown  that over time as we've on board more  and more customers finally I'll talk  about how we use micro services to all  run all this infrastructure in  production and then I'll finally wrap up  with monitoring how we actually make  sure that everything is working together  so first up what are the constraints of  the problem we're solving here now i'm  going to hedge this talk a little bit  since it primarily deals with the  problems that segment solves but even  though that's the case a lot of these  lessons can be taken if you're running  an in-house ETL process or any sort of  big data analytics pipeline where you're  trying to fan the data out from one  place to another so let's make this a  little more concrete suppose that you're  running an online business let's say you  sell running shoes as part of a website  if you're running this business there  are a few different people at your  business doing different jobs perhaps  you have customer support people who are  responding to incoming tickets or people  are complaining about shipments or wine  to return certain items you have sales  people who are maybe arranging those  like really big sneaker deals you know  like the ones that steph curry does or  something like that I don't watch sports  really but hopefully that was a good  reference and let's say you also have  marketing people who whenever you  launched a new sneaker brand or a new  campaign they want to email all of your  customer base and say hey we've got  these new sneakers for you to come check  out and then finally you have analysts  who say no no none of that just give me  the data I want the raw thing and sequel  or some other data warehouse  so ordinarily if you had all these  places that you wanted to get the data  and each of them has a very well-defined  workflow you'd be using different tools  but the key insight here is that they  all want the same data in every single  tool so what you do is you dad little  pieces of code for each one's you get it  into each cruel but that creates a  problem right you end up with a tight  coupling problem where you say hey  whenever I want to add a new tool I have  to add a new piece of code so how do we  solve a tight coupling problem well Joba  people will tell you I had a layer of  abstraction boom but in our case that  layer of abstraction is actually just  segment right it's a single API that  sits in the middle and you replace all  of this custom code into each individual  API with a single line where you send  data to our API and we'll fan it out  into all these other tools and then once  you've decided to set the data you can  configure them with the flip of a switch  so for this particular problem we need  an API that can deal with thousands of  incoming requests per second it has to  be able to track things like clicks  adding items to your cards ad  impressions anything under the Sun and  then it has to fan those out into tens  and hundreds of thousands of requests to  these external third-party tools  additionally the system is a little bit  different than some of the other systems  you've heard about today and then that's  it that it needs to be real time we're  not talking a batch ETL process or a  MapReduce job a lot of these events that  come into other tools actually perform  triggers based upon real time data say  when a user signs up or add something to  their cart so we want to make sure that  these things are delivered roughly under  10 seconds but anywhere up to a minute  is reasonable we're not talking about  dealing with finance or stop trading  data here and lastly the system needs to  be able to scale out in the face of  hundreds of unreliable AP is now there  are a few golden metrics that we use to  kind of hold ourselves to the standard  of deliverability here and these are  what all use throughout the talk is kind  of a benchmark for how well our system  is for  forming the first one is delivery rate  this is the rate at which segments can  deliver messages to third party AAP is  now you might be wondering why on earth  with us ever be under a hundred percent  right well and there are a few reasons  for that the first off is that these  partner api's could go down at a  moment's notice so we're dealing with a  pretty hostile environments the second  is that a client might unbeknownst to  the partner be trying to send more data  in then the partner can actually handle  in which case why there have to back up  limit or eventually drop the message the  second one is the end-to-end latency  this is the point from when the event is  actually created to when it enters the  third party tool and like I said before  we want to keep this below 10 seconds on  average though anywhere to a minute is  probably reasonable and then the last  one which isn't quite as hard quite as  much of a hard and fast metric is our  data fidelity we want to make sure that  if we're sending data through that it  doesn't get lost and what I mean by that  is say if we're sending an email through  we want to make sure that that email  ends up in all the different fields and  all the different third-party tools  rather than dropping at one point or  another so now that we have a good sense  of the problem that segment or really  any data et al pipeline at a large  company is trying to solve I wanted to  dive into the system architecture in  particular I wanted to talk about where  we started and then talk about a few of  this lessons that we've learned over  time while scaling out the system so to  really set the scene here I wanted to  share a picture from our first office  and so a little bit hard to see in the  light but calling in office is slightly  generous this is one of the apartments  out of which segment was born and as you  can see here our walls were covered with  white boards we had four twenty-dollar  desks from costco we had about a 30  second commute walking from our bedroom  to our living room and over the course  of the time we had actually spent a long  time building other products now it  might be unbeknownst to most of you but  we spent about 18 months  building products that were totally  unrelated to what we do today over the  course of that time we were starting to  fail and really run out of money so as  you might guess when we launch this  first version of segment in about a week  and a half scalability wasn't quite the  top of mind so here's what we built it  with and these were all technologies  that were using at the time and some of  them we've still kept and some of them  we've moved off everything was node  where we were able to work with  JavaScript both on the server and  clients at able enable us to prototype  really really rapidly we're using  RabbitMQ as our messaging layer in the  middle we used amazon from day one  working on top of their ec2 and VPC  infrastructure and then we use [ __ ] and  Redis as our primary data stores and  here's a rough architecture diagram of  exactly how that all fit together as you  might guess we presented an API to  clients that was all written in node the  API I would process incoming events and  for each one it would check out given  their API key does this belong to a  project that we're aware of if it does  and everything checked out we then fan  it into RabbitMQ which SATA is our  reliable queueing layer and from there  rabbit delivered it to two places one is  our integration workers and the workers  actually deliver messages into each  third-party tool and the second is our  archiver the archiver is just a bunch of  flat files split by a particular project  which gives us a really good backup in  the case that anything goes wrong with  other parts of the code and that's  sitting on s3 so for the first part of  our scaling we had to scale this data  collection API oh man this is really  hard to see well I'll annotate here so  after about three three months post  launch we are doing a handy 80 request a  second which really doesn't sound like  much though it felt like a lot to us at  the time and we were running about 3 a  p.i instances and over the course of  that time we've scaled pretty  significantly to about 13 to 15 thousand  per second of incoming messages per day  at the moment though we're only running  rough  30 api machines to actually handle this  load so the question is oh thank you  that is beautiful so the question is  what did we actually do in order to  scale this system out and what lessons  did we learn over time well there are  three things that we did to actually  scale this API the first is running  changing from rabbit to NS q as our  queuing system the second is moving from  node to go and the third is making the  edge entirely stateless and I'll talk  about each of these in turn so first  moving from rabbit to NS q for those of  you who are familiar with rabbit rabbit  is a brokered queue which means that  individual rabbit nodes are tracking  exactly what sort of messages are being  processed and this worked okay for a  while but after a certain point we  started getting running into problems  dealing with more messages than one  rabbit instance could handle so we  started coming up with a complex  sharding scheme to split different  rabbit instances but over time this drew  to be really operationally complex so we  eventually ditch the whole thing and  moved over to NS q which is a  distributed q by default and I'll talk  about the architecture for that in a  second the second thing that this did  was actually remove the amqp protocol  and for any of you who have actually  tried to implement the amqp protocol or  look through the drivers for it it is  nuts there's believe it or not a  seven-way handshake in order to set up  the connection to this queue which is  great if you need really really high  deliverability guarantees but it makes  implementing drivers a huge pain so we  actually built our own driver for NS qjs  running a node and it's worked pretty  flawlessly honestly for the past two two  and a half years and finally n SQ has  been simple and rock-solid to deploy  operationally how simple in rock-solid  you might ask four hundred trillion  messages rock solid and we're passing  through roughly a hundred thousand per  second right now and the great part is  for most of this we haven't had to do  anything with n SQ we simply boot more  of them and because they're distributed  they all take care of themselves so how  does this architecture actually work  well n SQ distributes you what they call  an NS QD node and this is simply a  process which you publish to and what's  called a topic you say hey I want to  record that there's a quick coming in  and then you have various channels which  represent the fan at now the key here is  that this n sqd is all one single  program so if you're publishing to it  you're writing for this program and that  program will first write to memory and  then spill over to disk it means that if  you're running different consumers the  consumers each connect to each single  one of these NS q DS and so what this  looks like in a network topology is you  have a bunch of an excuse running  independently none of them have to know  about each other they simply just  publish their metrics and their look up  addresses to the central set of look up  servers which operate in a similar  fashion to [ __ ] config servers and then  you have consumers which can connect to  either a subset or a full amount of NS q  DS it doesn't really matter how many  they're connecting to so long as you're  able to drain all these messages from  one to the other additionally NS key  recommends that you actually co-located  each n sqd with the publisher so here  you can see our revised set up for the  API and you can see that we have  individual nodes that are running and we  have individual and sq instances running  right alongside them that then consumers  will pull from and i'll talk about why  this was a significantly improved change  for our scaling in a second but even  with this setup we still ran into some  issues now if you're like me you might  have guessed hey I'm dealing with a  bunch of website data chances are  everyone's going to have more or less  the same load pattern we're going to  have some spikes during the day weekends  are going to be a little bit more light  evenings probably not that much traffic  well I was dead wrong here you can see  metrics from nine different projects on  the segment platform you can see that  their load patterns very pretty wildly  you have some which go down during the  day you have some which go up at night  and you have some which are really noisy  because they're batching every minute or  so what ends up happening is your API  servers get  with very varied load and this can cause  problems especially when the load is big  now here's what would happen when we  were checking individual problems with  our API servers we'd see a single  message come in that was relatively big  say a few hundred kilobytes and then  we'd see the entire sliver server start  grinding to a halt like we were seeing  what should have been a 20 to 50  millisecond response time grow at a 15  to 20 seconds and we were digging into  this and trying to figure out what was  causing these issues and eventually what  we discovered was the event loop totally  blocking now for those of you who are  unfamiliar with node node operates in a  single threaded event loop model and  kind of like Nettie and the balance a  little bit different and supports multi  threads node essentially schedules some  sort of work to be done and as long as  you're running synchronous code the  scheduler work will continue just  letting you run that code synchronously  until you tell it hey I'm ready to be  done and you can perform some io now at  that point you push more work to be done  on to what's called the next tick of the  event loop and from that point forward  the scheduler continued running until  all of those have finished it will read  the IO and then perform the next batch  of work unfortunately in our case we had  some things that were very very  synchronous one of these is just parsing  JSON JSON and node is really quick to  parse the v8 parser is very highly  implement or optimized but you can still  run into problems especially with big  JSON bodies additionally we'd often  clone these requests and part of our  functions to make sure hey that if I'm  modifying some sort of nested field it's  not making it back to the original  request or other functions that might  deal with it but this runs into problems  say for example that your load balancer  hypothetically or York you use  heartbeats in order to detect whether a  server is alive or not what would happen  when we were dealing with this very  desta JSON and basically blocking the  event loop the server would disconnect  from load balancer and disconnect from  the queue that was probably  too meaning that we basically drop the  data and nothing would get through so we  did two things here one of them is that  we actually switch this outer edge layer  to use go now I'm not saying that you  can't do the same exact thing and go  it's just a lot harder go by default  provides you with a scheduler between  different go routines and of those most  things that you do within a single go  routine will end up yielding to the  scheduler at one point or another the  second is that we actually split out  this tracking API edge here on one  condition it'd be totally stateless now  in our case messages come in we do some  basic validation around JSON and message  size and then from there those messages  are immediately queued but the number  one thing is that they don't have to  talk to [ __ ] they don't have to talk to  the rest of the system they don't really  have to talk to anything and what's  great about this is that even if you  have some sort of problem further down  the line like a network partition or a  zombie apocalypse no matter what the  rest of the infrastructure or this edge  layer will stay up and we'll stay  processing messages it means that if we  need to we can scale to multi-region  very easily we can scale to more and  more of these edge servers without  having to worry about the rest of the  infrastructure knowing that those  messages will just continue to queue and  sit on their local n SQ instances so to  wrap this part up we've scaled the API  by making these edge notes stateless  though I'll caveat this that this only  works if you control the client as well  otherwise you're basically forcing a  poor API on to all the developers who  are building on in we've used n SQ for  simplicity and reliability and we've  used go to achieve better parallelism so  remember we started with this initial  node API I was checking a database we  move to something that's a little more  scalable in terms of our data collection  but I still haven't talked about the  ingestion and fan out layers right how  do we get messages from our system into  all these different systems now in our  case these are actual third parties but  you could imagine them at a  really large company these being  internal teams which actually just have  different guarantees on their AP is so  for scaling the fan app we're going to  first talk about how we changed around  our cute apology how we decided to  abstract everything and how we same  leery try in the face of these failures  and discuss a few of the concerns around  those so let me talk first about  queueing now basically from day one I'd  always view skews as giving you  flexibility or right let's say you're  running a service and the service has  the ability to either go down or it  processes requests in seconds or minutes  even it doesn't get overloaded with any  sort of like batch of messages because  you have a queue sitting in front of it  right they give you a little bit of  leeway and how you're actually running  these services so needless to say we run  queues everywhere because they provide  us a lot better fault tolerance but what  I hadn't really considered until  recently is that ques also give you a  form of scheduling and let me talk about  what I mean by that let's say you have  some unit of work to be done and say  you're writing an operating system  scheduler you could represent that as a  queue where you're giving work to each  individual core and if you're doing this  naively you can just take work off of  the front of the queue give it to an  individual core take work give it to the  next one take work give is the next one  and you get actually get the highest  overall throughput this way in terms of  total work but the problem is that you  end up not being the most fair for  certain things that are more require a  higher priority which is the whole  reason that processes end up having  priority and it's something that these  queuing systems don't give you by  default so instead what if we could  break up the work and actually logically  separate cues such that we basically  bend them up by priority or complexity  so we know that for all these green  tasks here they can be accomplished  really quickly while the blue and grey  tests might take a little bit longer but  they won't block the green tests so  let's slide that back to our example  here  initially we started out with just a  single queue where we have these  integration workers which were sending  events to Mixpanel sending events to  enter column google analytics maybe  these hundred other tools the problem  though happens when one of these tools  goes down in a way that causes each  request to timeout now we want to be  relatively generous with how we're doing  timeouts here because we don't want to  try and abort the request too early so  we give maybe a three maybe a ten second  time out to each of these tools to make  sure that we're actually doing our best  effort to deliver the message but the  problem happens when one of these tools  gets low right then the integration  workers are just spending all their time  waiting which is disrupting the fairness  for every other integration so what do  we do well we changed around the queuing  topology here instead we created a cube  per each integration that gave us better  fairness between them and meant that  integrations could fail independently if  you look at this graph of queue depth  here you can see that per each  integration some of them will go down  and some of them will have spikes at  various times some of them will even  just be hey with various batches of data  but they won't affect one another  because we have individual queues for  them as well as individual workers for  each one the fact that we have  individual workers means that we can  also scale the throughput of those so if  we want to say sends 50x the data for  Google Analytics we can run 50 X the  containers of any other integration so  our n system looks a bit more like this  and I'm simplifying here since there are  a few hundred services running inside of  segments but this can give you the gist  there's a tracking API which is  stateless forwarding to an internal API  and then that forwards into individual  accuse which workers take off and send  to these third-party a tools now besides  queues the second thing that we learned  very early on is too abstract everything  and I'll talk a bit more about what I  mean by that now micro grounder Ian  often says if you're building a hundred  and fifty of anything you're probably  going to want to err on the side of over  abstraction because at that point  you don't want have to change something  at 150 different places and so that's  why we split things up we keep every  single integration that we run in its  own repo actually so that there's  individual commit logs individual change  logs and a single release doesn't batch  together updates from multiple  integrations additionally we've created  a factory to actually generate these  integrations which is totally  configurable via our own dsl and for  those of you who aren't familiar with  javascript i'll get to exactly how this  works in a second but essentially what  you can do is create immigration just by  passing it a name you tell it which  channels it's enabled on and what  endpoint it's supposed to hit and then a  few of the settings that you need one of  the best things we did here as well  comes down to this mapper layer the  mapper basically takes a certain JSON  input and says hey I'm expecting this  call to end up with a certain JSON  output which is in a sense what you  really want to do with all these  different data transformations right you  want to say hey I'm going to glue this  one layer layer a two layer B and  eventually I'll get my format from one  point to the other and the holy grail of  this is that eventually we could build  some sort of visual interface or store  these dynamically maybe even on the fly  such that we are able to dynamically  generate transforms from one service to  another without doing hardly any extra  integration work additionally because  this stuff is all abstracted into a core  integration prototype it means that  writing new integrations is really  simple pretty much all you have to do is  say I want to hit this particular  endpoint with this particular query  string or maybe this particular payload  and then all the error handling is more  or less handled for you but on the  subject of error handling I couldn't  talk about only that without talking  about our retry behavior and why it's  important to talk about retries is these  integrations fail all the time if you  think about say you're running a service  and say it goes down maybe once a year  that's pretty good up time in terms of  nines right not too bad but in terms of  the services that we're dealing with if  every service goes down on average  once a year that means we're dealing  with downtime once every two days so we  have to be really smart about how we  deal with all of these retries and do  our best effort to actually deliver data  so we do two things when it comes to  retries will retry any time the server  indicates there's a problem on its end  these are all just 500 statuses and then  we also retry for rate limits in the  case where say a particular customer  tried to batch too much data into a  service well back off and then send it  later additionally will try for any sort  of network errors for most of you this  should be pretty evidence since network  is definitely not reliable but in our  case it's something that whenever we  experience a timeout network disconnect  couldn't reach a host dns failure will  then actually send the data again at a  later point and when thinking about  retries there's two key metrics to keep  in mind here the first is how long  should you wait to deliver a message  which is honestly an open question in  our case we decided we're going to wait  up to 30 minutes to deliver a message if  after 30 minutes it's no good then  chances are that that the API is down  for an extended period of time secondly  you can consider the attempts to deliver  a message how many times am I going to  try this API in order to actually get  the message across in our case we  decided five times is probably about it  right if after that point in time we  drop five messages then chances are that  is just poorly formatted for that API  and there's something else going on  that's causing it to 500 what this looks  like here which is relatively simple  it's just an exponential back-off  strategy the key point is that we also  add a little bit of jitter roughly plus  or minus thirty percent duration in the  case of rate limits so that way if a  customer is sending in data and all in  one batch it immediately gets rejected  we're able to then spread out the  delivery of their messages I  to talk about how this is all abstracted  basically all day but I'd like to switch  gears here and talk about how we  actually run this stuff now by using  different micro services and the key  points here that we've basically adopted  microservices everywhere like most of  you we've used docker to get better  isolation and we've done a lot to ensure  that these are easy to boot now I wrote  a blog post a while ago about why  microservices work for us and most of  discussion out there i'm around  microservices revolves around scaling  teams often is the case where you have a  software engineering team that's now  fifty a hundred people and you need to  figure out how you can actually split up  those teams so they're not all working  on the same code base and stomping on  each other's feet additionally people  talk about micro services as being able  to scale certain parts of your stack  let's say we want to run more Google  Analytics workers if that's only one  thing that we can run 50 of those  whereas if we're running total  integration workers then we have to  scale those up even though not all of  them might be doing the work I'd like to  add a third point that's not often  discussed as far as microservices go and  that's visibility it turns out that most  of the tools out there all center around  the idea of hosts processes and network  and the problem here is that often times  it's very hard to figure out what's  going on in a really big app just using  those tools I mean what was the last  time you like fired up top or H top to  figure out what exactly a 10 or 20,000  line program was doing you probably  don't that's the whole reason that flame  graphs exist in fact but let's suppose  now instead of running that 10,000 line  file you're analyzing a hundred line  file that's running as part of its own  process in a docker container what you  can see here is its immediately evident  that this service has a memory leak and  it has a go routine leak but it's very  clear to figure out exactly what's going  on here because there's only a hundred  lines in the file since the service  itself is so small we can forget about  it most of the time and then when it's  having issues we can pinpoint exactly  where problems are occurring  which is what the nice thing that  microservices have given us additionally  we split these micro services and what  we call different clusters so each  cluster is separated by concerns so in  addition to monitoring at the service  level we get a little more insight into  what particular hosts are doing of  course I couldn't talk only about the  clusters without explaining what exactly  the services look like so this is a  typical segment service and I'll explain  each of these in non AWS terms as well  route 53 is a waw SS dns service this is  indicating which load balancer we should  point something at say if we connect to  auth service segment local will register  a DNS entry for it additionally every  service will have its own load balancer  and that load balancer will point to  particular instances or containers on  that are running on those instances that  register themselves with the load  balancer what this means is that we  don't need any form of service discovery  there's nothing like console or at CD  running here and admittedly there's some  performance overhead from that and it  doesn't work in all cases say if you  have a driver which actually needs to  connect to multiple instances for  redundancy or failover but it does work  fairly well for most of our apps I can't  be out this that this is only this will  only work well for you if microservices  are actually easy to boot right  otherwise now you have two problems you  have a bunch of services and it's really  hard to orchestrate and run them do this  we use terraform for those of you who  haven't used terraform it's pretty  similar to amazon's cloud formation  service it basically describes your  infrastructure in the form of JSON or  terra forms HCL I guess hachey corp  configuration language but basically  what this does is it provides minimal  work for a programmer who's trying to  create their own micro service in their  case they just say which cluster they  want it to run on the name and version  of the docker container and then give it  some memory and CPU and boom we're off  to the races in terms of actually  creating this thing and running it in  production additionally we built  significant tooling around actually  deploy  knowing these so that deploying them is  easy fast and safe whenever you get  pushed to a repo github will trigger a  build in circle our CI tool and from  there it will actually build a docker  image whenever the CI tool passes from  there we can deploy be a slack or via  CLI tool which updates the image that's  running in ecs amazon scheduler and then  it pulls new versions of the code down  from docker hub in this way it makes  running new containers very easy and  safe it means that we can roll back  pretty much instantly since all the old  versions are also tagged in docker hub  additionally it means that we can run  the same versions in stage as well as  production lastly I'd like to talk about  monitoring how we ensure that the system  continues to run in production now I  like to say that the more surface area  you have the more visibility that you  need into that system in our case it's  really true so since we have 150  different external touch points which  could possibly fail yet fail at any time  we require a lot of visibility and  really invest in this religiously in  terms of the metrics that we record and  so we keep track for every integration  delivery rate success rate of that  partner API end-to-end latency and any  top errors that we see coming in and  like I said we have a lot of these  metrics here but giving us splitting  each of them out into their own category  gives us the ability to really figure  out where problems are happening and  find them quickly additionally we keep a  roll up of these so we can see for a  particular integration or for the system  at large exactly what's happening with  any key area and we built our own  service toolkit to automatically record  most of these metrics they could be  things like the duration that it takes  to process a message the CPU time the  number of go routines the memory all of  these things should be things that the  programmer gets out of the box when  they're building a service from day one  so as far as the big lessons for scaling  our data pipeline which hopefully you  can use for your own internal data  pipeline or if you're building your own  ETL platform if you control the clients  you should try and make the edge as  stateless as possible this is something  that honestly I hadn't considered was a  good idea for the longest time I was  wondered about why Google Analytics or  these other large tail providers so  basically 200 on everything until I got  to the realization that none of them  care about supporting third-party  clients really for then they have a  single client and their number one  concern is preventing data loss so if  your system operates under similar  constraints I'd recommend make the edge  stateless make it just a bin for  incoming data and build clients around  that so that people can easily send data  to it the second one is that ques not  only defined service boundaries where  places can fail but they also define  scheduling and rate limiting so it's  worth thinking about when building your  queuing topology do I want everything in  this queue to have the same priority or  do I want to actually split it out and  to possibly different workers or  different topics third you want to have  micro services and workers if they can  provide great visibility and scalability  only so long as they are easy to boot it  requires a significant investment on the  infrastructure side but it's paid off  immensely for us in terms of providing  better visibility into what the running  system is doing and finally the bigger  your surface area the more visibility  and metrics you need to provide this is  something that we've learned the hard  way by not having good visibility into  the system and anywhere you can't ask is  the system working what's going wrong  right now how many messages in my  delivering is a case where you should  record stats and metrics I'd like to end  its talk with a few open questions about  what's next and what things were  considering since this system itself is  far from complete the first one is just  finding more search of fairness and what  do I mean by that well right now where  we operate with  at the integration level right messages  come in they get grouped into different  integrations or third-party services and  from there none of those will affect  each other we can spin up different  workers and essentially that system is  fair where we don't operate with  complete fairness comes down to how  customers are sending data let's say a  really large customers start sending a  giant batch of data it could mean that a  smaller customer actually has to wait  for their data to come through at all so  we're considering various options there  around either encoding the jobs within  the queue format or coming up with some  sort of internal scheduling system built  into the queue itself that would provide  good fairness on keys passing through  the queue the second idea that we kicked  around is moving over to Kafka like I  said n SQ has provided incredible scale  out and very very low operational  overhead but where it loses out comes  down to replication like I said before  each n sqd is actually operating  independently and since these are  operating since these are backed by EBS  Amazon's scalable hard drive system we  don't worry that much about losing an  individual node except for the case  where there's some sort of n SQ problem  that writes bad data Kafka would take  care of this replication for us in  addition in addition to giving us crazy  throughput third we'd like to create a  standard micro services toolkit that are  hoping to open source in q3 or q4 of  this year ideally this would give you  everything that you need out of the box  like metrics reporting logging error  handling everything if you're coming and  creating a new service such that you get  all of these other visibility pieces for  free the last one I want to ponder is  the idea around custom data transforms  right now we control all of the code  that's running in the system but what if  we didn't what if customers who could  support code or partners really anyone  I'm aware that this is a total isolation  and security nightmare especially given  the current state of running them as  docker containers but if we could find a  way to either give people an interface  like lambda does to run custom  JavaScript functions or run custom  containers we could potentially scale  out the system to support arbitrary  integrations with customer data so in  that I'd like to open it up for  questions and thank you all for coming  today thank you questions rather than a  long few days going once okay this is uh  probably could be handled by customer  support as we use you guys but since I  got you here so we're just recently  moved over to using segments and looking  at your stack because we were using  another provider who just accidentally  lost the day of data which was not great  so my question is with your stateless  edge what is your fallback for a failure  at that level I understand you have  you're queuing with the the NS q but  what if I don't know the data center  gets hit by a natural disaster or  something yeah so currently all the NS q  nodes are backed by EBS which provides  pretty good guarantees in the case of  failure since that's all stateless what  we could do say if an entire region gets  Newt is then we can move to another  region pretty easily because we have all  that code we have the instances and we  can spin up the infrastructure basically  at the drop of the hat for then it's  still persisted yes yes oh sorry yes it  is stateful but only local to the  machine yo le  how's using docker hub in production bin  for you guys we use them as well and  they go down all the time yeah we also  have that problem is the short answer  and eventually we plan to move to the  Amazon container registry which should  provide a lot better like both security  guarantees and reliability because we  have had problems as well pushing and  pulling to them and for the most part it  ends up not being that big of a deal but  yeah occasionally when our developers  try to push a build then we run into  issues what else  yeah you didn't really talk about the  redshift integration that you guys have  I just wanted to expand on it a little  bit yes and so for those of you who are  unfamiliar recently we added support for  warehouses to our platform and what  happens here is well basically bunch up  all this data on an hourly basis that is  where the archiver comes in it will  upload to s3 unbend by each particular  project that is for and then from there  we'll run an ETL step where we actually  load it into the redshift cluster so I  didn't talk about that as much since  it's a relatively recent and B and we  don't have quite the volume of traffic  going through there since it's running  on an hourly basis and per each customer  it's only dealing with their redshift  instance for some of these partner api's  which are receiving like thousands or  tens of thousands of calls per second  but it is something that uh yeah what do  you want to know Joker's like is there a  custom API like so like I've got my own  events that are not going to mix panel  or to Google Analytics like can that be  right at through segments into redshift  yes yeah basically anything that you  send in to our API and we'll batch up  and then put in your into your data  warehouse whether that's red ship for  postgres
+
+00:00:23.870 --> 00:00:26.179 align:start position:0%
+everyone so I'm here today to talk about  how we've scaled our data pipeline  throughout billions of events every  month and maintain a very high level  develop low variability and this is  especially in the face of third-party  api's which might go down Atimonan stoma  moment's notice so for this talk in  particular I first like to talk about  the constraints of the problem that  we're trying to solve here then I'll  talk through our particular architecture  and how we started and how we've grown  that over time as we've on board more  and more customers finally I'll talk  about how we use micro services to all  run all this infrastructure in  production and then I'll finally wrap up  with monitoring how we actually make  sure that everything is working together  so first up what are the constraints of  the problem we're solving here now i'm  going to hedge this talk a little bit  since it primarily deals with the  problems that segment solves but even  though that's the case a lot of these  lessons can be taken if you're running  an in-house ETL process or any sort of  big data analytics pipeline where you're  trying to fan the data out from one  place to another so let's make this a  little more concrete suppose that you're  running an online business let's say you  sell running shoes as part of a website  if you're running this business there  are a few different people at your  business doing different jobs perhaps  you have customer support people who are  responding to incoming tickets or people  are complaining about shipments or wine  to return certain items you have sales  people who are maybe arranging those  like really big sneaker deals you know  like the ones that steph curry does or  something like that I don't watch sports  really but hopefully that was a good  reference and let's say you also have  marketing people who whenever you  launched a new sneaker brand or a new  campaign they want to email all of your  customer base and say hey we've got  these new sneakers for you to come check  out and then finally you have analysts  who say no no none of that just give me  the data I want the raw thing and sequel  or some other data warehouse  so ordinarily if you had all these  places that you wanted to get the data  and each of them has a very well-defined  workflow you'd be using different tools  but the key insight here is that they  all want the same data in every single  tool so what you do is you dad little  pieces of code for each one's you get it  into each cruel but that creates a  problem right you end up with a tight  coupling problem where you say hey  whenever I want to add a new tool I have  to add a new piece of code so how do we  solve a tight coupling problem well Joba  people will tell you I had a layer of  abstraction boom but in our case that  layer of abstraction is actually just  segment right it's a single API that  sits in the middle and you replace all  of this custom code into each individual  API with a single line where you send  data to our API and we'll fan it out  into all these other tools and then once  you've decided to set the data you can  configure them with the flip of a switch  so for this particular problem we need  an API that can deal with thousands of  incoming requests per second it has to  be able to track things like clicks  adding items to your cards ad  impressions anything under the Sun and  then it has to fan those out into tens  and hundreds of thousands of requests to  these external third-party tools  additionally the system is a little bit  different than some of the other systems  you've heard about today and then that's  it that it needs to be real time we're  not talking a batch ETL process or a  MapReduce job a lot of these events that  come into other tools actually perform  triggers based upon real time data say  when a user signs up or add something to  their cart so we want to make sure that  these things are delivered roughly under  10 seconds but anywhere up to a minute  is reasonable we're not talking about  dealing with finance or stop trading  data here and lastly the system needs to  be able to scale out in the face of  hundreds of unreliable AP is now there  are a few golden metrics that we use to  kind of hold ourselves to the standard  of deliverability here and these are  what all use throughout the talk is kind  of a benchmark for how well our system  is for  forming the first one is delivery rate  this is the rate at which segments can  deliver messages to third party AAP is  now you might be wondering why on earth  with us ever be under a hundred percent  right well and there are a few reasons  for that the first off is that these  partner api's could go down at a  moment's notice so we're dealing with a  pretty hostile environments the second  is that a client might unbeknownst to  the partner be trying to send more data  in then the partner can actually handle  in which case why there have to back up  limit or eventually drop the message the  second one is the end-to-end latency  this is the point from when the event is  actually created to when it enters the  third party tool and like I said before  we want to keep this below 10 seconds on  average though anywhere to a minute is  probably reasonable and then the last  one which isn't quite as hard quite as  much of a hard and fast metric is our  data fidelity we want to make sure that  if we're sending data through that it  doesn't get lost and what I mean by that  is say if we're sending an email through  we want to make sure that that email  ends up in all the different fields and  all the different third-party tools  rather than dropping at one point or  another so now that we have a good sense  of the problem that segment or really  any data et al pipeline at a large  company is trying to solve I wanted to  dive into the system architecture in  particular I wanted to talk about where  we started and then talk about a few of  this lessons that we've learned over  time while scaling out the system so to  really set the scene here I wanted to  share a picture from our first office  and so a little bit hard to see in the  light but calling in office is slightly  generous this is one of the apartments  out of which segment was born and as you  can see here our walls were covered with  white boards we had four twenty-dollar  desks from costco we had about a 30  second commute walking from our bedroom  to our living room and over the course  of the time we had actually spent a long  time building other products now it  might be unbeknownst to most of you but  we spent about 18 months  building products that were totally  unrelated to what we do today over the  course of that time we were starting to  fail and really run out of money so as  you might guess when we launch this  first version of segment in about a week  and a half scalability wasn't quite the  top of mind so here's what we built it  with and these were all technologies  that were using at the time and some of  them we've still kept and some of them  we've moved off everything was node  where we were able to work with  JavaScript both on the server and  clients at able enable us to prototype  really really rapidly we're using  RabbitMQ as our messaging layer in the  middle we used amazon from day one  working on top of their ec2 and VPC  infrastructure and then we use [ __ ] and  Redis as our primary data stores and  here's a rough architecture diagram of  exactly how that all fit together as you  might guess we presented an API to  clients that was all written in node the  API I would process incoming events and  for each one it would check out given  their API key does this belong to a  project that we're aware of if it does  and everything checked out we then fan  it into RabbitMQ which SATA is our  reliable queueing layer and from there  rabbit delivered it to two places one is  our integration workers and the workers  actually deliver messages into each  third-party tool and the second is our  archiver the archiver is just a bunch of  flat files split by a particular project  which gives us a really good backup in  the case that anything goes wrong with  other parts of the code and that's  sitting on s3 so for the first part of  our scaling we had to scale this data  collection API oh man this is really  hard to see well I'll annotate here so  after about three three months post  launch we are doing a handy 80 request a  second which really doesn't sound like  much though it felt like a lot to us at  the time and we were running about 3 a  p.i instances and over the course of  that time we've scaled pretty  significantly to about 13 to 15 thousand  per second of incoming messages per day  at the moment though we're only running  rough  30 api machines to actually handle this  load so the question is oh thank you  that is beautiful so the question is  what did we actually do in order to  scale this system out and what lessons  did we learn over time well there are  three things that we did to actually  scale this API the first is running  changing from rabbit to NS q as our  queuing system the second is moving from  node to go and the third is making the  edge entirely stateless and I'll talk  about each of these in turn so first  moving from rabbit to NS q for those of  you who are familiar with rabbit rabbit  is a brokered queue which means that  individual rabbit nodes are tracking  exactly what sort of messages are being  processed and this worked okay for a  while but after a certain point we  started getting running into problems  dealing with more messages than one  rabbit instance could handle so we  started coming up with a complex  sharding scheme to split different  rabbit instances but over time this drew  to be really operationally complex so we  eventually ditch the whole thing and  moved over to NS q which is a  distributed q by default and I'll talk  about the architecture for that in a  second the second thing that this did  was actually remove the amqp protocol  and for any of you who have actually  tried to implement the amqp protocol or  look through the drivers for it it is  nuts there's believe it or not a  seven-way handshake in order to set up  the connection to this queue which is  great if you need really really high  deliverability guarantees but it makes  implementing drivers a huge pain so we  actually built our own driver for NS qjs  running a node and it's worked pretty  flawlessly honestly for the past two two  and a half years and finally n SQ has  been simple and rock-solid to deploy  operationally how simple in rock-solid  you might ask four hundred trillion  messages rock solid and we're passing  through roughly a hundred thousand per  second right now and the great part is  for most of this we haven't had to do  anything with n SQ we simply boot more  of them and because they're distributed  they all take care of themselves so how  does this architecture actually work  well n SQ distributes you what they call  an NS QD node and this is simply a  process which you publish to and what's  called a topic you say hey I want to  record that there's a quick coming in  and then you have various channels which  represent the fan at now the key here is  that this n sqd is all one single  program so if you're publishing to it  you're writing for this program and that  program will first write to memory and  then spill over to disk it means that if  you're running different consumers the  consumers each connect to each single  one of these NS q DS and so what this  looks like in a network topology is you  have a bunch of an excuse running  independently none of them have to know  about each other they simply just  publish their metrics and their look up  addresses to the central set of look up  servers which operate in a similar  fashion to [ __ ] config servers and then  you have consumers which can connect to  either a subset or a full amount of NS q  DS it doesn't really matter how many  they're connecting to so long as you're  able to drain all these messages from  one to the other additionally NS key  recommends that you actually co-located  each n sqd with the publisher so here  you can see our revised set up for the  API and you can see that we have  individual nodes that are running and we  have individual and sq instances running  right alongside them that then consumers  will pull from and i'll talk about why  this was a significantly improved change  for our scaling in a second but even  with this setup we still ran into some  issues now if you're like me you might  have guessed hey I'm dealing with a  bunch of website data chances are  everyone's going to have more or less  the same load pattern we're going to  have some spikes during the day weekends  are going to be a little bit more light  evenings probably not that much traffic  well I was dead wrong here you can see  metrics from nine different projects on  the segment platform you can see that  their load patterns very pretty wildly  you have some which go down during the  day you have some which go up at night  and you have some which are really noisy  because they're batching every minute or  so what ends up happening is your API  servers get  with very varied load and this can cause  problems especially when the load is big  now here's what would happen when we  were checking individual problems with  our API servers we'd see a single  message come in that was relatively big  say a few hundred kilobytes and then  we'd see the entire sliver server start  grinding to a halt like we were seeing  what should have been a 20 to 50  millisecond response time grow at a 15  to 20 seconds and we were digging into  this and trying to figure out what was  causing these issues and eventually what  we discovered was the event loop totally  blocking now for those of you who are  unfamiliar with node node operates in a  single threaded event loop model and  kind of like Nettie and the balance a  little bit different and supports multi  threads node essentially schedules some  sort of work to be done and as long as  you're running synchronous code the  scheduler work will continue just  letting you run that code synchronously  until you tell it hey I'm ready to be  done and you can perform some io now at  that point you push more work to be done  on to what's called the next tick of the  event loop and from that point forward  the scheduler continued running until  all of those have finished it will read  the IO and then perform the next batch  of work unfortunately in our case we had  some things that were very very  synchronous one of these is just parsing  JSON JSON and node is really quick to  parse the v8 parser is very highly  implement or optimized but you can still  run into problems especially with big  JSON bodies additionally we'd often  clone these requests and part of our  functions to make sure hey that if I'm  modifying some sort of nested field it's  not making it back to the original  request or other functions that might  deal with it but this runs into problems  say for example that your load balancer  hypothetically or York you use  heartbeats in order to detect whether a  server is alive or not what would happen  when we were dealing with this very  desta JSON and basically blocking the  event loop the server would disconnect  from load balancer and disconnect from  the queue that was probably  too meaning that we basically drop the  data and nothing would get through so we  did two things here one of them is that  we actually switch this outer edge layer  to use go now I'm not saying that you  can't do the same exact thing and go  it's just a lot harder go by default  provides you with a scheduler between  different go routines and of those most  things that you do within a single go  routine will end up yielding to the  scheduler at one point or another the  second is that we actually split out  this tracking API edge here on one  condition it'd be totally stateless now  in our case messages come in we do some  basic validation around JSON and message  size and then from there those messages  are immediately queued but the number  one thing is that they don't have to  talk to [ __ ] they don't have to talk to  the rest of the system they don't really  have to talk to anything and what's  great about this is that even if you  have some sort of problem further down  the line like a network partition or a  zombie apocalypse no matter what the  rest of the infrastructure or this edge  layer will stay up and we'll stay  processing messages it means that if we  need to we can scale to multi-region  very easily we can scale to more and  more of these edge servers without  having to worry about the rest of the  infrastructure knowing that those  messages will just continue to queue and  sit on their local n SQ instances so to  wrap this part up we've scaled the API  by making these edge notes stateless  though I'll caveat this that this only  works if you control the client as well  otherwise you're basically forcing a  poor API on to all the developers who  are building on in we've used n SQ for  simplicity and reliability and we've  used go to achieve better parallelism so  remember we started with this initial  node API I was checking a database we  move to something that's a little more  scalable in terms of our data collection  but I still haven't talked about the  ingestion and fan out layers right how  do we get messages from our system into  all these different systems now in our  case these are actual third parties but  you could imagine them at a  really large company these being  internal teams which actually just have  different guarantees on their AP is so  for scaling the fan app we're going to  first talk about how we changed around  our cute apology how we decided to  abstract everything and how we same  leery try in the face of these failures  and discuss a few of the concerns around  those so let me talk first about  queueing now basically from day one I'd  always view skews as giving you  flexibility or right let's say you're  running a service and the service has  the ability to either go down or it  processes requests in seconds or minutes  even it doesn't get overloaded with any  sort of like batch of messages because  you have a queue sitting in front of it  right they give you a little bit of  leeway and how you're actually running  these services so needless to say we run  queues everywhere because they provide  us a lot better fault tolerance but what  I hadn't really considered until  recently is that ques also give you a  form of scheduling and let me talk about  what I mean by that let's say you have  some unit of work to be done and say  you're writing an operating system  scheduler you could represent that as a  queue where you're giving work to each  individual core and if you're doing this  naively you can just take work off of  the front of the queue give it to an  individual core take work give it to the  next one take work give is the next one  and you get actually get the highest  overall throughput this way in terms of  total work but the problem is that you  end up not being the most fair for  certain things that are more require a  higher priority which is the whole  reason that processes end up having  priority and it's something that these  queuing systems don't give you by  default so instead what if we could  break up the work and actually logically  separate cues such that we basically  bend them up by priority or complexity  so we know that for all these green  tasks here they can be accomplished  really quickly while the blue and grey  tests might take a little bit longer but  they won't block the green tests so  let's slide that back to our example  here  initially we started out with just a  single queue where we have these  integration workers which were sending  events to Mixpanel sending events to  enter column google analytics maybe  these hundred other tools the problem  though happens when one of these tools  goes down in a way that causes each  request to timeout now we want to be  relatively generous with how we're doing  timeouts here because we don't want to  try and abort the request too early so  we give maybe a three maybe a ten second  time out to each of these tools to make  sure that we're actually doing our best  effort to deliver the message but the  problem happens when one of these tools  gets low right then the integration  workers are just spending all their time  waiting which is disrupting the fairness  for every other integration so what do  we do well we changed around the queuing  topology here instead we created a cube  per each integration that gave us better  fairness between them and meant that  integrations could fail independently if  you look at this graph of queue depth  here you can see that per each  integration some of them will go down  and some of them will have spikes at  various times some of them will even  just be hey with various batches of data  but they won't affect one another  because we have individual queues for  them as well as individual workers for  each one the fact that we have  individual workers means that we can  also scale the throughput of those so if  we want to say sends 50x the data for  Google Analytics we can run 50 X the  containers of any other integration so  our n system looks a bit more like this  and I'm simplifying here since there are  a few hundred services running inside of  segments but this can give you the gist  there's a tracking API which is  stateless forwarding to an internal API  and then that forwards into individual  accuse which workers take off and send  to these third-party a tools now besides  queues the second thing that we learned  very early on is too abstract everything  and I'll talk a bit more about what I  mean by that now micro grounder Ian  often says if you're building a hundred  and fifty of anything you're probably  going to want to err on the side of over  abstraction because at that point  you don't want have to change something  at 150 different places and so that's  why we split things up we keep every  single integration that we run in its  own repo actually so that there's  individual commit logs individual change  logs and a single release doesn't batch  together updates from multiple  integrations additionally we've created  a factory to actually generate these  integrations which is totally  configurable via our own dsl and for  those of you who aren't familiar with  javascript i'll get to exactly how this  works in a second but essentially what  you can do is create immigration just by  passing it a name you tell it which  channels it's enabled on and what  endpoint it's supposed to hit and then a  few of the settings that you need one of  the best things we did here as well  comes down to this mapper layer the  mapper basically takes a certain JSON  input and says hey I'm expecting this  call to end up with a certain JSON  output which is in a sense what you  really want to do with all these  different data transformations right you  want to say hey I'm going to glue this  one layer layer a two layer B and  eventually I'll get my format from one  point to the other and the holy grail of  this is that eventually we could build  some sort of visual interface or store  these dynamically maybe even on the fly  such that we are able to dynamically  generate transforms from one service to  another without doing hardly any extra  integration work additionally because  this stuff is all abstracted into a core  integration prototype it means that  writing new integrations is really  simple pretty much all you have to do is  say I want to hit this particular  endpoint with this particular query  string or maybe this particular payload  and then all the error handling is more  or less handled for you but on the  subject of error handling I couldn't  talk about only that without talking  about our retry behavior and why it's  important to talk about retries is these  integrations fail all the time if you  think about say you're running a service  and say it goes down maybe once a year  that's pretty good up time in terms of  nines right not too bad but in terms of  the services that we're dealing with if  every service goes down on average  once a year that means we're dealing  with downtime once every two days so we  have to be really smart about how we  deal with all of these retries and do  our best effort to actually deliver data  so we do two things when it comes to  retries will retry any time the server  indicates there's a problem on its end  these are all just 500 statuses and then  we also retry for rate limits in the  case where say a particular customer  tried to batch too much data into a  service well back off and then send it  later additionally will try for any sort  of network errors for most of you this  should be pretty evidence since network  is definitely not reliable but in our  case it's something that whenever we  experience a timeout network disconnect  couldn't reach a host dns failure will  then actually send the data again at a  later point and when thinking about  retries there's two key metrics to keep  in mind here the first is how long  should you wait to deliver a message  which is honestly an open question in  our case we decided we're going to wait  up to 30 minutes to deliver a message if  after 30 minutes it's no good then  chances are that that the API is down  for an extended period of time secondly  you can consider the attempts to deliver  a message how many times am I going to  try this API in order to actually get  the message across in our case we  decided five times is probably about it  right if after that point in time we  drop five messages then chances are that  is just poorly formatted for that API  and there's something else going on  that's causing it to 500 what this looks  like here which is relatively simple  it's just an exponential back-off  strategy the key point is that we also  add a little bit of jitter roughly plus  or minus thirty percent duration in the  case of rate limits so that way if a  customer is sending in data and all in  one batch it immediately gets rejected  we're able to then spread out the  delivery of their messages I  to talk about how this is all abstracted  basically all day but I'd like to switch  gears here and talk about how we  actually run this stuff now by using  different micro services and the key  points here that we've basically adopted  microservices everywhere like most of  you we've used docker to get better  isolation and we've done a lot to ensure  that these are easy to boot now I wrote  a blog post a while ago about why  microservices work for us and most of  discussion out there i'm around  microservices revolves around scaling  teams often is the case where you have a  software engineering team that's now  fifty a hundred people and you need to  figure out how you can actually split up  those teams so they're not all working  on the same code base and stomping on  each other's feet additionally people  talk about micro services as being able  to scale certain parts of your stack  let's say we want to run more Google  Analytics workers if that's only one  thing that we can run 50 of those  whereas if we're running total  integration workers then we have to  scale those up even though not all of  them might be doing the work I'd like to  add a third point that's not often  discussed as far as microservices go and  that's visibility it turns out that most  of the tools out there all center around  the idea of hosts processes and network  and the problem here is that often times  it's very hard to figure out what's  going on in a really big app just using  those tools I mean what was the last  time you like fired up top or H top to  figure out what exactly a 10 or 20,000  line program was doing you probably  don't that's the whole reason that flame  graphs exist in fact but let's suppose  now instead of running that 10,000 line  file you're analyzing a hundred line  file that's running as part of its own  process in a docker container what you  can see here is its immediately evident  that this service has a memory leak and  it has a go routine leak but it's very  clear to figure out exactly what's going  on here because there's only a hundred  lines in the file since the service  itself is so small we can forget about  it most of the time and then when it's  having issues we can pinpoint exactly  where problems are occurring  which is what the nice thing that  microservices have given us additionally  we split these micro services and what  we call different clusters so each  cluster is separated by concerns so in  addition to monitoring at the service  level we get a little more insight into  what particular hosts are doing of  course I couldn't talk only about the  clusters without explaining what exactly  the services look like so this is a  typical segment service and I'll explain  each of these in non AWS terms as well  route 53 is a waw SS dns service this is  indicating which load balancer we should  point something at say if we connect to  auth service segment local will register  a DNS entry for it additionally every  service will have its own load balancer  and that load balancer will point to  particular instances or containers on  that are running on those instances that  register themselves with the load  balancer what this means is that we  don't need any form of service discovery  there's nothing like console or at CD  running here and admittedly there's some  performance overhead from that and it  doesn't work in all cases say if you  have a driver which actually needs to  connect to multiple instances for  redundancy or failover but it does work  fairly well for most of our apps I can't  be out this that this is only this will  only work well for you if microservices  are actually easy to boot right  otherwise now you have two problems you  have a bunch of services and it's really  hard to orchestrate and run them do this  we use terraform for those of you who  haven't used terraform it's pretty  similar to amazon's cloud formation  service it basically describes your  infrastructure in the form of JSON or  terra forms HCL I guess hachey corp  configuration language but basically  what this does is it provides minimal  work for a programmer who's trying to  create their own micro service in their  case they just say which cluster they  want it to run on the name and version  of the docker container and then give it  some memory and CPU and boom we're off  to the races in terms of actually  creating this thing and running it in  production additionally we built  significant tooling around actually  deploy  knowing these so that deploying them is  easy fast and safe whenever you get  pushed to a repo github will trigger a  build in circle our CI tool and from  there it will actually build a docker  image whenever the CI tool passes from  there we can deploy be a slack or via  CLI tool which updates the image that's  running in ecs amazon scheduler and then  it pulls new versions of the code down  from docker hub in this way it makes  running new containers very easy and  safe it means that we can roll back  pretty much instantly since all the old  versions are also tagged in docker hub  additionally it means that we can run  the same versions in stage as well as  production lastly I'd like to talk about  monitoring how we ensure that the system  continues to run in production now I  like to say that the more surface area  you have the more visibility that you  need into that system in our case it's  really true so since we have 150  different external touch points which  could possibly fail yet fail at any time  we require a lot of visibility and  really invest in this religiously in  terms of the metrics that we record and  so we keep track for every integration  delivery rate success rate of that  partner API end-to-end latency and any  top errors that we see coming in and  like I said we have a lot of these  metrics here but giving us splitting  each of them out into their own category  gives us the ability to really figure  out where problems are happening and  find them quickly additionally we keep a  roll up of these so we can see for a  particular integration or for the system  at large exactly what's happening with  any key area and we built our own  service toolkit to automatically record  most of these metrics they could be  things like the duration that it takes  to process a message the CPU time the  number of go routines the memory all of  these things should be things that the  programmer gets out of the box when  they're building a service from day one  so as far as the big lessons for scaling  our data pipeline which hopefully you  can use for your own internal data  pipeline or if you're building your own  ETL platform if you control the clients  you should try and make the edge as  stateless as possible this is something  that honestly I hadn't considered was a  good idea for the longest time I was  wondered about why Google Analytics or  these other large tail providers so  basically 200 on everything until I got  to the realization that none of them  care about supporting third-party  clients really for then they have a  single client and their number one  concern is preventing data loss so if  your system operates under similar  constraints I'd recommend make the edge  stateless make it just a bin for  incoming data and build clients around  that so that people can easily send data  to it the second one is that ques not  only defined service boundaries where  places can fail but they also define  scheduling and rate limiting so it's  worth thinking about when building your  queuing topology do I want everything in  this queue to have the same priority or  do I want to actually split it out and  to possibly different workers or  different topics third you want to have  micro services and workers if they can  provide great visibility and scalability  only so long as they are easy to boot it  requires a significant investment on the  infrastructure side but it's paid off  immensely for us in terms of providing  better visibility into what the running  system is doing and finally the bigger  your surface area the more visibility  and metrics you need to provide this is  something that we've learned the hard  way by not having good visibility into  the system and anywhere you can't ask is  the system working what's going wrong  right now how many messages in my  delivering is a case where you should  record stats and metrics I'd like to end  its talk with a few open questions about  what's next and what things were  considering since this system itself is  far from complete the first one is just  finding more search of fairness and what  do I mean by that well right now where  we operate with  at the integration level right messages  come in they get grouped into different  integrations or third-party services and  from there none of those will affect  each other we can spin up different  workers and essentially that system is  fair where we don't operate with  complete fairness comes down to how  customers are sending data let's say a  really large customers start sending a  giant batch of data it could mean that a  smaller customer actually has to wait  for their data to come through at all so  we're considering various options there  around either encoding the jobs within  the queue format or coming up with some  sort of internal scheduling system built  into the queue itself that would provide  good fairness on keys passing through  the queue the second idea that we kicked  around is moving over to Kafka like I  said n SQ has provided incredible scale  out and very very low operational  overhead but where it loses out comes  down to replication like I said before  each n sqd is actually operating  independently and since these are  operating since these are backed by EBS  Amazon's scalable hard drive system we  don't worry that much about losing an  individual node except for the case  where there's some sort of n SQ problem  that writes bad data Kafka would take  care of this replication for us in  addition in addition to giving us crazy  throughput third we'd like to create a  standard micro services toolkit that are  hoping to open source in q3 or q4 of  this year ideally this would give you  everything that you need out of the box  like metrics reporting logging error  handling everything if you're coming and  creating a new service such that you get  all of these other visibility pieces for  free the last one I want to ponder is  the idea around custom data transforms  right now we control all of the code  that's running in the system but what if  we didn't what if customers who could  support code or partners really anyone  I'm aware that this is a total isolation  and security nightmare especially given  the current state of running them as  docker containers but if we could find a  way to either give people an interface  like lambda does to run custom  JavaScript functions or run custom  containers we could potentially scale  out the system to support arbitrary  integrations with customer data so in  that I'd like to open it up for  questions and thank you all for coming  today thank you questions rather than a  long few days going once okay this is uh  probably could be handled by customer  support as we use you guys but since I  got you here so we're just recently  moved over to using segments and looking  at your stack because we were using  another provider who just accidentally  lost the day of data which was not great  so my question is with your stateless  edge what is your fallback for a failure  at that level I understand you have  you're queuing with the the NS q but  what if I don't know the data center  gets hit by a natural disaster or  something yeah so currently all the NS q  nodes are backed by EBS which provides  pretty good guarantees in the case of  failure since that's all stateless what  we could do say if an entire region gets  Newt is then we can move to another  region pretty easily because we have all  that code we have the instances and we  can spin up the infrastructure basically  at the drop of the hat for then it's  still persisted yes yes oh sorry yes it  is stateful but only local to the  machine yo le  how's using docker hub in production bin  for you guys we use them as well and  they go down all the time yeah we also  have that problem is the short answer  and eventually we plan to move to the  Amazon container registry which should  provide a lot better like both security  guarantees and reliability because we  have had problems as well pushing and  pulling to them and for the most part it  ends up not being that big of a deal but  yeah occasionally when our developers  try to push a build then we run into  issues what else  yeah you didn't really talk about the  redshift integration that you guys have  I just wanted to expand on it a little  bit yes and so for those of you who are  unfamiliar recently we added support for  warehouses to our platform and what  happens here is well basically bunch up  all this data on an hourly basis that is  where the archiver comes in it will  upload to s3 unbend by each particular  project that is for and then from there  we'll run an ETL step where we actually  load it into the redshift cluster so I  didn't talk about that as much since  it's a relatively recent and B and we  don't have quite the volume of traffic  going through there since it's running  on an hourly basis and per each customer  it's only dealing with their redshift  instance for some of these partner api's  which are receiving like thousands or  tens of thousands of calls per second  but it is something that uh yeah what do  you want to know Joker's like is there a  custom API like so like I've got my own  events that are not going to mix panel  or to Google Analytics like can that be  right at through segments into redshift  yes yeah basically anything that you  send in to our API and we'll batch up  and then put in your into your data  warehouse whether that's red ship for  postgres
+ 
+
+00:00:26.179 --> 00:00:28.370 align:start position:0%
+ 
+ 
+
+00:00:28.370 --> 00:00:30.560 align:start position:0%
+ 
+ 
+
+00:00:30.560 --> 00:00:33.350 align:start position:0%
+ 
+ 
+
+00:00:33.350 --> 00:00:35.960 align:start position:0%
+ 
+ 
+
+00:00:35.960 --> 00:00:38.360 align:start position:0%
+ 
+ 
+
+00:00:38.360 --> 00:00:49.070 align:start position:0%
+ 
+ 
+
+00:00:49.070 --> 00:00:51.290 align:start position:0%
+ 
+ 
+
+00:00:51.290 --> 00:00:52.729 align:start position:0%
+ 
+ 
+
+00:00:52.729 --> 00:00:55.039 align:start position:0%
+ 
+ 
+
+00:00:55.039 --> 00:00:56.450 align:start position:0%
+ 
+ 
+
+00:00:56.450 --> 00:00:59.479 align:start position:0%
+ 
+ 
+
+00:00:59.479 --> 00:01:01.609 align:start position:0%
+ 
+ 
+
+00:01:01.609 --> 00:01:03.770 align:start position:0%
+ 
+ 
+
+00:01:03.770 --> 00:01:06.350 align:start position:0%
+ 
+ 
+
+00:01:06.350 --> 00:01:08.210 align:start position:0%
+ 
+ 
+
+00:01:08.210 --> 00:01:10.820 align:start position:0%
+ 
+ 
+
+00:01:10.820 --> 00:01:12.830 align:start position:0%
+ 
+ 
+
+00:01:12.830 --> 00:01:16.060 align:start position:0%
+ 
+ 
+
+00:01:16.060 --> 00:01:18.859 align:start position:0%
+ 
+ 
+
+00:01:18.859 --> 00:01:21.200 align:start position:0%
+ 
+ 
+
+00:01:21.200 --> 00:01:22.730 align:start position:0%
+ 
+ 
+
+00:01:22.730 --> 00:01:25.459 align:start position:0%
+ 
+ 
+
+00:01:25.459 --> 00:01:28.849 align:start position:0%
+ 
+ 
+
+00:01:28.849 --> 00:01:30.169 align:start position:0%
+ 
+ 
+
+00:01:30.169 --> 00:01:31.669 align:start position:0%
+ 
+ 
+
+00:01:31.669 --> 00:01:34.370 align:start position:0%
+ 
+ 
+
+00:01:34.370 --> 00:01:36.739 align:start position:0%
+ 
+ 
+
+00:01:36.739 --> 00:01:38.239 align:start position:0%
+ 
+ 
+
+00:01:38.239 --> 00:01:43.130 align:start position:0%
+ 
+ 
+
+00:01:43.130 --> 00:01:46.069 align:start position:0%
+ 
+ 
+
+00:01:46.069 --> 00:01:48.289 align:start position:0%
+ 
+ 
+
+00:01:48.289 --> 00:01:50.510 align:start position:0%
+ 
+ 
+
+00:01:50.510 --> 00:01:53.059 align:start position:0%
+ 
+ 
+
+00:01:53.059 --> 00:01:54.410 align:start position:0%
+ 
+ 
+
+00:01:54.410 --> 00:01:56.719 align:start position:0%
+ 
+ 
+
+00:01:56.719 --> 00:01:58.700 align:start position:0%
+ 
+ 
+
+00:01:58.700 --> 00:02:01.309 align:start position:0%
+ 
+ 
+
+00:02:01.309 --> 00:02:03.169 align:start position:0%
+ 
+ 
+
+00:02:03.169 --> 00:02:05.929 align:start position:0%
+ 
+ 
+
+00:02:05.929 --> 00:02:07.340 align:start position:0%
+ 
+ 
+
+00:02:07.340 --> 00:02:09.260 align:start position:0%
+ 
+ 
+
+00:02:09.260 --> 00:02:10.910 align:start position:0%
+ 
+ 
+
+00:02:10.910 --> 00:02:12.950 align:start position:0%
+ 
+ 
+
+00:02:12.950 --> 00:02:14.720 align:start position:0%
+ 
+ 
+
+00:02:14.720 --> 00:02:18.050 align:start position:0%
+ 
+ 
+
+00:02:18.050 --> 00:02:19.760 align:start position:0%
+ 
+ 
+
+00:02:19.760 --> 00:02:21.260 align:start position:0%
+ 
+ 
+
+00:02:21.260 --> 00:02:23.510 align:start position:0%
+ 
+ 
+
+00:02:23.510 --> 00:02:25.220 align:start position:0%
+ 
+ 
+
+00:02:25.220 --> 00:02:26.449 align:start position:0%
+ 
+ 
+
+00:02:26.449 --> 00:02:28.640 align:start position:0%
+ 
+ 
+
+00:02:28.640 --> 00:02:30.380 align:start position:0%
+ 
+ 
+
+00:02:30.380 --> 00:02:32.660 align:start position:0%
+ 
+ 
+
+00:02:32.660 --> 00:02:34.780 align:start position:0%
+ 
+ 
+
+00:02:34.780 --> 00:02:37.040 align:start position:0%
+ 
+ 
+
+00:02:37.040 --> 00:02:38.210 align:start position:0%
+ 
+ 
+
+00:02:38.210 --> 00:02:40.490 align:start position:0%
+ 
+ 
+
+00:02:40.490 --> 00:02:42.559 align:start position:0%
+ 
+ 
+
+00:02:42.559 --> 00:02:44.630 align:start position:0%
+ 
+ 
+
+00:02:44.630 --> 00:02:47.150 align:start position:0%
+ 
+ 
+
+00:02:47.150 --> 00:02:50.030 align:start position:0%
+ 
+ 
+
+00:02:50.030 --> 00:02:51.830 align:start position:0%
+ 
+ 
+
+00:02:51.830 --> 00:02:54.530 align:start position:0%
+ 
+ 
+
+00:02:54.530 --> 00:02:56.600 align:start position:0%
+ 
+ 
+
+00:02:56.600 --> 00:02:58.160 align:start position:0%
+ 
+ 
+
+00:02:58.160 --> 00:03:00.380 align:start position:0%
+ 
+ 
+
+00:03:00.380 --> 00:03:02.900 align:start position:0%
+ 
+ 
+
+00:03:02.900 --> 00:03:05.930 align:start position:0%
+ 
+ 
+
+00:03:05.930 --> 00:03:07.790 align:start position:0%
+ 
+ 
+
+00:03:07.790 --> 00:03:11.420 align:start position:0%
+ 
+ 
+
+00:03:11.420 --> 00:03:12.620 align:start position:0%
+ 
+ 
+
+00:03:12.620 --> 00:03:14.509 align:start position:0%
+ 
+ 
+
+00:03:14.509 --> 00:03:17.630 align:start position:0%
+ 
+ 
+
+00:03:17.630 --> 00:03:19.490 align:start position:0%
+ 
+ 
+
+00:03:19.490 --> 00:03:21.890 align:start position:0%
+ 
+ 
+
+00:03:21.890 --> 00:03:23.539 align:start position:0%
+ 
+ 
+
+00:03:23.539 --> 00:03:28.130 align:start position:0%
+ 
+ 
+
+00:03:28.130 --> 00:03:29.809 align:start position:0%
+ 
+ 
+
+00:03:29.809 --> 00:03:34.390 align:start position:0%
+ 
+ 
+
+00:03:34.390 --> 00:03:37.070 align:start position:0%
+ 
+ 
+
+00:03:37.070 --> 00:03:38.870 align:start position:0%
+ 
+ 
+
+00:03:38.870 --> 00:03:41.090 align:start position:0%
+ 
+ 
+
+00:03:41.090 --> 00:03:43.150 align:start position:0%
+ 
+ 
+
+00:03:43.150 --> 00:03:45.410 align:start position:0%
+ 
+ 
+
+00:03:45.410 --> 00:03:48.110 align:start position:0%
+ 
+ 
+
+00:03:48.110 --> 00:03:51.740 align:start position:0%
+ 
+ 
+
+00:03:51.740 --> 00:03:53.539 align:start position:0%
+ 
+ 
+
+00:03:53.539 --> 00:03:56.410 align:start position:0%
+ 
+ 
+
+00:03:56.410 --> 00:03:58.610 align:start position:0%
+ 
+ 
+
+00:03:58.610 --> 00:03:59.810 align:start position:0%
+ 
+ 
+
+00:03:59.810 --> 00:04:03.110 align:start position:0%
+ 
+ 
+
+00:04:03.110 --> 00:04:05.090 align:start position:0%
+ 
+ 
+
+00:04:05.090 --> 00:04:07.370 align:start position:0%
+ 
+ 
+
+00:04:07.370 --> 00:04:10.009 align:start position:0%
+ 
+ 
+
+00:04:10.009 --> 00:04:12.259 align:start position:0%
+ 
+ 
+
+00:04:12.259 --> 00:04:14.720 align:start position:0%
+ 
+ 
+
+00:04:14.720 --> 00:04:16.490 align:start position:0%
+ 
+ 
+
+00:04:16.490 --> 00:04:18.800 align:start position:0%
+ 
+ 
+
+00:04:18.800 --> 00:04:20.900 align:start position:0%
+ 
+ 
+
+00:04:20.900 --> 00:04:22.909 align:start position:0%
+ 
+ 
+
+00:04:22.909 --> 00:04:24.620 align:start position:0%
+ 
+ 
+
+00:04:24.620 --> 00:04:26.210 align:start position:0%
+ 
+ 
+
+00:04:26.210 --> 00:04:30.350 align:start position:0%
+ 
+ 
+
+00:04:30.350 --> 00:04:32.029 align:start position:0%
+ 
+ 
+
+00:04:32.029 --> 00:04:38.029 align:start position:0%
+ 
+ 
+
+00:04:38.029 --> 00:04:40.129 align:start position:0%
+ 
+ 
+
+00:04:40.129 --> 00:04:42.290 align:start position:0%
+ 
+ 
+
+00:04:42.290 --> 00:04:44.240 align:start position:0%
+ 
+ 
+
+00:04:44.240 --> 00:04:46.070 align:start position:0%
+ 
+ 
+
+00:04:46.070 --> 00:04:48.230 align:start position:0%
+ 
+ 
+
+00:04:48.230 --> 00:04:48.530 align:start position:0%
+ 
+ 
+
+00:04:48.530 --> 00:04:51.170 align:start position:0%
+ 
+ 
+
+00:04:51.170 --> 00:04:53.570 align:start position:0%
+ 
+ 
+
+00:04:53.570 --> 00:04:56.230 align:start position:0%
+ 
+ 
+
+00:04:56.230 --> 00:04:58.700 align:start position:0%
+ 
+ 
+
+00:04:58.700 --> 00:05:00.470 align:start position:0%
+ 
+ 
+
+00:05:00.470 --> 00:05:03.050 align:start position:0%
+ 
+ 
+
+00:05:03.050 --> 00:05:05.660 align:start position:0%
+ 
+ 
+
+00:05:05.660 --> 00:05:07.370 align:start position:0%
+ 
+ 
+
+00:05:07.370 --> 00:05:08.900 align:start position:0%
+ 
+ 
+
+00:05:08.900 --> 00:05:11.300 align:start position:0%
+ 
+ 
+
+00:05:11.300 --> 00:05:14.090 align:start position:0%
+ 
+ 
+
+00:05:14.090 --> 00:05:15.920 align:start position:0%
+ 
+ 
+
+00:05:15.920 --> 00:05:18.170 align:start position:0%
+ 
+ 
+
+00:05:18.170 --> 00:05:20.350 align:start position:0%
+ 
+ 
+
+00:05:20.350 --> 00:05:24.770 align:start position:0%
+ 
+ 
+
+00:05:24.770 --> 00:05:26.180 align:start position:0%
+ 
+ 
+
+00:05:26.180 --> 00:05:28.430 align:start position:0%
+ 
+ 
+
+00:05:28.430 --> 00:05:30.530 align:start position:0%
+ 
+ 
+
+00:05:30.530 --> 00:05:32.630 align:start position:0%
+ 
+ 
+
+00:05:32.630 --> 00:05:35.150 align:start position:0%
+ 
+ 
+
+00:05:35.150 --> 00:05:37.280 align:start position:0%
+ 
+ 
+
+00:05:37.280 --> 00:05:39.620 align:start position:0%
+ 
+ 
+
+00:05:39.620 --> 00:05:42.110 align:start position:0%
+ 
+ 
+
+00:05:42.110 --> 00:05:43.760 align:start position:0%
+ 
+ 
+
+00:05:43.760 --> 00:05:45.830 align:start position:0%
+ 
+ 
+
+00:05:45.830 --> 00:05:47.540 align:start position:0%
+ 
+ 
+
+00:05:47.540 --> 00:05:49.730 align:start position:0%
+ 
+ 
+
+00:05:49.730 --> 00:05:51.260 align:start position:0%
+ 
+ 
+
+00:05:51.260 --> 00:05:52.670 align:start position:0%
+ 
+ 
+
+00:05:52.670 --> 00:05:54.500 align:start position:0%
+ 
+ 
+
+00:05:54.500 --> 00:05:56.030 align:start position:0%
+ 
+ 
+
+00:05:56.030 --> 00:05:58.700 align:start position:0%
+ 
+ 
+
+00:05:58.700 --> 00:06:03.470 align:start position:0%
+ 
+ 
+
+00:06:03.470 --> 00:06:06.230 align:start position:0%
+ 
+ 
+
+00:06:06.230 --> 00:06:08.720 align:start position:0%
+ 
+ 
+
+00:06:08.720 --> 00:06:10.610 align:start position:0%
+ 
+ 
+
+00:06:10.610 --> 00:06:12.440 align:start position:0%
+ 
+ 
+
+00:06:12.440 --> 00:06:14.240 align:start position:0%
+ 
+ 
+
+00:06:14.240 --> 00:06:16.130 align:start position:0%
+ 
+ 
+
+00:06:16.130 --> 00:06:18.050 align:start position:0%
+ 
+ 
+
+00:06:18.050 --> 00:06:21.830 align:start position:0%
+ 
+ 
+
+00:06:21.830 --> 00:06:23.720 align:start position:0%
+ 
+ 
+
+00:06:23.720 --> 00:06:25.370 align:start position:0%
+ 
+ 
+
+00:06:25.370 --> 00:06:27.770 align:start position:0%
+ 
+ 
+
+00:06:27.770 --> 00:06:30.500 align:start position:0%
+ 
+ 
+
+00:06:30.500 --> 00:06:33.500 align:start position:0%
+ 
+ 
+
+00:06:33.500 --> 00:06:36.830 align:start position:0%
+ 
+ 
+
+00:06:36.830 --> 00:06:38.810 align:start position:0%
+ 
+ 
+
+00:06:38.810 --> 00:06:41.030 align:start position:0%
+ 
+ 
+
+00:06:41.030 --> 00:06:44.930 align:start position:0%
+ 
+ 
+
+00:06:44.930 --> 00:06:46.640 align:start position:0%
+ 
+ 
+
+00:06:46.640 --> 00:06:50.390 align:start position:0%
+ 
+ 
+
+00:06:50.390 --> 00:06:54.470 align:start position:0%
+ 
+ 
+
+00:06:54.470 --> 00:06:56.600 align:start position:0%
+ 
+ 
+
+00:06:56.600 --> 00:06:58.760 align:start position:0%
+ 
+ 
+
+00:06:58.760 --> 00:07:02.090 align:start position:0%
+ 
+ 
+
+00:07:02.090 --> 00:07:03.290 align:start position:0%
+ 
+ 
+
+00:07:03.290 --> 00:07:06.050 align:start position:0%
+ 
+ 
+
+00:07:06.050 --> 00:07:07.730 align:start position:0%
+ 
+ 
+
+00:07:07.730 --> 00:07:11.150 align:start position:0%
+ 
+ 
+
+00:07:11.150 --> 00:07:12.440 align:start position:0%
+ 
+ 
+
+00:07:12.440 --> 00:07:14.150 align:start position:0%
+ 
+ 
+
+00:07:14.150 --> 00:07:16.340 align:start position:0%
+ 
+ 
+
+00:07:16.340 --> 00:07:20.390 align:start position:0%
+ 
+ 
+
+00:07:20.390 --> 00:07:21.770 align:start position:0%
+ 
+ 
+
+00:07:21.770 --> 00:07:23.900 align:start position:0%
+ 
+ 
+
+00:07:23.900 --> 00:07:25.460 align:start position:0%
+ 
+ 
+
+00:07:25.460 --> 00:07:28.010 align:start position:0%
+ 
+ 
+
+00:07:28.010 --> 00:07:30.230 align:start position:0%
+ 
+ 
+
+00:07:30.230 --> 00:07:31.760 align:start position:0%
+ 
+ 
+
+00:07:31.760 --> 00:07:34.100 align:start position:0%
+ 
+ 
+
+00:07:34.100 --> 00:07:36.320 align:start position:0%
+ 
+ 
+
+00:07:36.320 --> 00:07:38.300 align:start position:0%
+ 
+ 
+
+00:07:38.300 --> 00:07:41.120 align:start position:0%
+ 
+ 
+
+00:07:41.120 --> 00:07:43.610 align:start position:0%
+ 
+ 
+
+00:07:43.610 --> 00:07:45.740 align:start position:0%
+ 
+ 
+
+00:07:45.740 --> 00:07:49.120 align:start position:0%
+ 
+ 
+
+00:07:49.120 --> 00:07:51.560 align:start position:0%
+ 
+ 
+
+00:07:51.560 --> 00:07:54.170 align:start position:0%
+ 
+ 
+
+00:07:54.170 --> 00:07:56.840 align:start position:0%
+ 
+ 
+
+00:07:56.840 --> 00:07:59.300 align:start position:0%
+ 
+ 
+
+00:07:59.300 --> 00:08:01.400 align:start position:0%
+ 
+ 
+
+00:08:01.400 --> 00:08:03.650 align:start position:0%
+ 
+ 
+
+00:08:03.650 --> 00:08:05.810 align:start position:0%
+ 
+ 
+
+00:08:05.810 --> 00:08:08.480 align:start position:0%
+ 
+ 
+
+00:08:08.480 --> 00:08:10.370 align:start position:0%
+ 
+ 
+
+00:08:10.370 --> 00:08:12.470 align:start position:0%
+ 
+ 
+
+00:08:12.470 --> 00:08:14.840 align:start position:0%
+ 
+ 
+
+00:08:14.840 --> 00:08:18.110 align:start position:0%
+ 
+ 
+
+00:08:18.110 --> 00:08:20.120 align:start position:0%
+ 
+ 
+
+00:08:20.120 --> 00:08:21.710 align:start position:0%
+ 
+ 
+
+00:08:21.710 --> 00:08:24.230 align:start position:0%
+ 
+ 
+
+00:08:24.230 --> 00:08:27.350 align:start position:0%
+ 
+ 
+
+00:08:27.350 --> 00:08:29.390 align:start position:0%
+ 
+ 
+
+00:08:29.390 --> 00:08:32.150 align:start position:0%
+ 
+ 
+
+00:08:32.150 --> 00:08:33.500 align:start position:0%
+ 
+ 
+
+00:08:33.500 --> 00:08:35.420 align:start position:0%
+ 
+ 
+
+00:08:35.420 --> 00:08:39.740 align:start position:0%
+ 
+ 
+
+00:08:39.740 --> 00:08:41.659 align:start position:0%
+ 
+ 
+
+00:08:41.659 --> 00:08:46.580 align:start position:0%
+ 
+ 
+
+00:08:46.580 --> 00:08:50.210 align:start position:0%
+ 
+ 
+
+00:08:50.210 --> 00:08:52.730 align:start position:0%
+ 
+ 
+
+00:08:52.730 --> 00:08:55.790 align:start position:0%
+ 
+ 
+
+00:08:55.790 --> 00:08:57.350 align:start position:0%
+ 
+ 
+
+00:08:57.350 --> 00:08:58.910 align:start position:0%
+ 
+ 
+
+00:08:58.910 --> 00:09:00.890 align:start position:0%
+ 
+ 
+
+00:09:00.890 --> 00:09:04.670 align:start position:0%
+ 
+ 
+
+00:09:04.670 --> 00:09:06.050 align:start position:0%
+ 
+ 
+
+00:09:06.050 --> 00:09:10.190 align:start position:0%
+ 
+ 
+
+00:09:10.190 --> 00:09:12.290 align:start position:0%
+ 
+ 
+
+00:09:12.290 --> 00:09:14.960 align:start position:0%
+ 
+ 
+
+00:09:14.960 --> 00:09:14.970 align:start position:0%
+ 
+ 
+
+00:09:14.970 --> 00:09:15.740 align:start position:0%
+ 
+
+
+00:09:15.740 --> 00:09:17.780 align:start position:0%
+ 
+ 
+
+00:09:17.780 --> 00:09:20.780 align:start position:0%
+ 
+ 
+
+00:09:20.780 --> 00:09:23.330 align:start position:0%
+ 
+ 
+
+00:09:23.330 --> 00:09:25.190 align:start position:0%
+ 
+ 
+
+00:09:25.190 --> 00:09:27.260 align:start position:0%
+ 
+ 
+
+00:09:27.260 --> 00:09:31.670 align:start position:0%
+ 
+ 
+
+00:09:31.670 --> 00:09:32.930 align:start position:0%
+ 
+ 
+
+00:09:32.930 --> 00:09:35.390 align:start position:0%
+ 
+ 
+
+00:09:35.390 --> 00:09:37.880 align:start position:0%
+ 
+ 
+
+00:09:37.880 --> 00:09:40.460 align:start position:0%
+ 
+ 
+
+00:09:40.460 --> 00:09:43.580 align:start position:0%
+ 
+ 
+
+00:09:43.580 --> 00:09:45.500 align:start position:0%
+ 
+ 
+
+00:09:45.500 --> 00:09:48.980 align:start position:0%
+ 
+ 
+
+00:09:48.980 --> 00:09:51.680 align:start position:0%
+ 
+ 
+
+00:09:51.680 --> 00:09:53.120 align:start position:0%
+ 
+ 
+
+00:09:53.120 --> 00:09:55.780 align:start position:0%
+ 
+ 
+
+00:09:55.780 --> 00:09:57.920 align:start position:0%
+ 
+ 
+
+00:09:57.920 --> 00:09:59.810 align:start position:0%
+ 
+ 
+
+00:09:59.810 --> 00:10:02.540 align:start position:0%
+ 
+ 
+
+00:10:02.540 --> 00:10:04.100 align:start position:0%
+ 
+ 
+
+00:10:04.100 --> 00:10:05.530 align:start position:0%
+ 
+ 
+
+00:10:05.530 --> 00:10:07.940 align:start position:0%
+ 
+ 
+
+00:10:07.940 --> 00:10:09.500 align:start position:0%
+ 
+ 
+
+00:10:09.500 --> 00:10:10.970 align:start position:0%
+ 
+ 
+
+00:10:10.970 --> 00:10:12.980 align:start position:0%
+ 
+ 
+
+00:10:12.980 --> 00:10:16.370 align:start position:0%
+ 
+ 
+
+00:10:16.370 --> 00:10:18.800 align:start position:0%
+ 
+ 
+
+00:10:18.800 --> 00:10:20.120 align:start position:0%
+ 
+ 
+
+00:10:20.120 --> 00:10:21.470 align:start position:0%
+ 
+ 
+
+00:10:21.470 --> 00:10:23.900 align:start position:0%
+ 
+ 
+
+00:10:23.900 --> 00:10:25.010 align:start position:0%
+ 
+ 
+
+00:10:25.010 --> 00:10:27.710 align:start position:0%
+ 
+ 
+
+00:10:27.710 --> 00:10:29.600 align:start position:0%
+ 
+ 
+
+00:10:29.600 --> 00:10:31.670 align:start position:0%
+ 
+ 
+
+00:10:31.670 --> 00:10:33.650 align:start position:0%
+ 
+ 
+
+00:10:33.650 --> 00:10:35.270 align:start position:0%
+ 
+ 
+
+00:10:35.270 --> 00:10:38.329 align:start position:0%
+ 
+ 
+
+00:10:38.329 --> 00:10:40.820 align:start position:0%
+ 
+ 
+
+00:10:40.820 --> 00:10:42.650 align:start position:0%
+ 
+ 
+
+00:10:42.650 --> 00:10:44.329 align:start position:0%
+ 
+ 
+
+00:10:44.329 --> 00:10:46.280 align:start position:0%
+ 
+ 
+
+00:10:46.280 --> 00:10:49.370 align:start position:0%
+ 
+ 
+
+00:10:49.370 --> 00:10:51.740 align:start position:0%
+ 
+ 
+
+00:10:51.740 --> 00:10:54.460 align:start position:0%
+ 
+ 
+
+00:10:54.460 --> 00:10:57.800 align:start position:0%
+ 
+ 
+
+00:10:57.800 --> 00:11:01.370 align:start position:0%
+ 
+ 
+
+00:11:01.370 --> 00:11:03.890 align:start position:0%
+ 
+ 
+
+00:11:03.890 --> 00:11:06.650 align:start position:0%
+ 
+ 
+
+00:11:06.650 --> 00:11:09.560 align:start position:0%
+ 
+ 
+
+00:11:09.560 --> 00:11:12.680 align:start position:0%
+ 
+ 
+
+00:11:12.680 --> 00:11:14.390 align:start position:0%
+ 
+ 
+
+00:11:14.390 --> 00:11:18.320 align:start position:0%
+ 
+ 
+
+00:11:18.320 --> 00:11:19.940 align:start position:0%
+ 
+ 
+
+00:11:19.940 --> 00:11:22.340 align:start position:0%
+ 
+ 
+
+00:11:22.340 --> 00:11:24.230 align:start position:0%
+ 
+ 
+
+00:11:24.230 --> 00:11:27.170 align:start position:0%
+ 
+ 
+
+00:11:27.170 --> 00:11:29.120 align:start position:0%
+ 
+ 
+
+00:11:29.120 --> 00:11:32.240 align:start position:0%
+ 
+ 
+
+00:11:32.240 --> 00:11:35.030 align:start position:0%
+ 
+ 
+
+00:11:35.030 --> 00:11:37.370 align:start position:0%
+ 
+ 
+
+00:11:37.370 --> 00:11:40.220 align:start position:0%
+ 
+ 
+
+00:11:40.220 --> 00:11:41.720 align:start position:0%
+ 
+ 
+
+00:11:41.720 --> 00:11:43.400 align:start position:0%
+ 
+ 
+
+00:11:43.400 --> 00:11:45.800 align:start position:0%
+ 
+ 
+
+00:11:45.800 --> 00:11:48.170 align:start position:0%
+ 
+ 
+
+00:11:48.170 --> 00:11:50.360 align:start position:0%
+ 
+ 
+
+00:11:50.360 --> 00:11:52.010 align:start position:0%
+ 
+ 
+
+00:11:52.010 --> 00:11:53.570 align:start position:0%
+ 
+ 
+
+00:11:53.570 --> 00:11:57.530 align:start position:0%
+ 
+ 
+
+00:11:57.530 --> 00:11:59.390 align:start position:0%
+ 
+ 
+
+00:11:59.390 --> 00:12:02.360 align:start position:0%
+ 
+ 
+
+00:12:02.360 --> 00:12:05.300 align:start position:0%
+ 
+ 
+
+00:12:05.300 --> 00:12:07.190 align:start position:0%
+ 
+ 
+
+00:12:07.190 --> 00:12:08.720 align:start position:0%
+ 
+ 
+
+00:12:08.720 --> 00:12:10.550 align:start position:0%
+ 
+ 
+
+00:12:10.550 --> 00:12:12.050 align:start position:0%
+ 
+ 
+
+00:12:12.050 --> 00:12:13.820 align:start position:0%
+ 
+ 
+
+00:12:13.820 --> 00:12:16.430 align:start position:0%
+ 
+ 
+
+00:12:16.430 --> 00:12:17.960 align:start position:0%
+ 
+ 
+
+00:12:17.960 --> 00:12:21.380 align:start position:0%
+ 
+ 
+
+00:12:21.380 --> 00:12:23.270 align:start position:0%
+ 
+ 
+
+00:12:23.270 --> 00:12:25.400 align:start position:0%
+ 
+ 
+
+00:12:25.400 --> 00:12:27.530 align:start position:0%
+ 
+ 
+
+00:12:27.530 --> 00:12:29.420 align:start position:0%
+ 
+ 
+
+00:12:29.420 --> 00:12:30.890 align:start position:0%
+ 
+ 
+
+00:12:30.890 --> 00:12:35.210 align:start position:0%
+ 
+ 
+
+00:12:35.210 --> 00:12:37.220 align:start position:0%
+ 
+ 
+
+00:12:37.220 --> 00:12:41.030 align:start position:0%
+ 
+ 
+
+00:12:41.030 --> 00:12:42.410 align:start position:0%
+ 
+ 
+
+00:12:42.410 --> 00:12:43.640 align:start position:0%
+ 
+ 
+
+00:12:43.640 --> 00:12:46.040 align:start position:0%
+ 
+ 
+
+00:12:46.040 --> 00:12:47.900 align:start position:0%
+ 
+ 
+
+00:12:47.900 --> 00:12:50.090 align:start position:0%
+ 
+ 
+
+00:12:50.090 --> 00:12:52.310 align:start position:0%
+ 
+ 
+
+00:12:52.310 --> 00:12:56.270 align:start position:0%
+ 
+ 
+
+00:12:56.270 --> 00:13:01.040 align:start position:0%
+ 
+ 
+
+00:13:01.040 --> 00:13:02.900 align:start position:0%
+ 
+ 
+
+00:13:02.900 --> 00:13:05.750 align:start position:0%
+ 
+ 
+
+00:13:05.750 --> 00:13:07.610 align:start position:0%
+ 
+ 
+
+00:13:07.610 --> 00:13:09.740 align:start position:0%
+ 
+ 
+
+00:13:09.740 --> 00:13:11.450 align:start position:0%
+ 
+ 
+
+00:13:11.450 --> 00:13:13.250 align:start position:0%
+ 
+ 
+
+00:13:13.250 --> 00:13:15.770 align:start position:0%
+ 
+ 
+
+00:13:15.770 --> 00:13:16.990 align:start position:0%
+ 
+ 
+
+00:13:16.990 --> 00:13:19.510 align:start position:0%
+ 
+ 
+
+00:13:19.510 --> 00:13:23.560 align:start position:0%
+ 
+ 
+
+00:13:23.560 --> 00:13:26.420 align:start position:0%
+ 
+ 
+
+00:13:26.420 --> 00:13:28.970 align:start position:0%
+ 
+ 
+
+00:13:28.970 --> 00:13:31.160 align:start position:0%
+ 
+ 
+
+00:13:31.160 --> 00:13:33.200 align:start position:0%
+ 
+ 
+
+00:13:33.200 --> 00:13:34.880 align:start position:0%
+ 
+ 
+
+00:13:34.880 --> 00:13:36.470 align:start position:0%
+ 
+ 
+
+00:13:36.470 --> 00:13:38.240 align:start position:0%
+ 
+ 
+
+00:13:38.240 --> 00:13:41.690 align:start position:0%
+ 
+ 
+
+00:13:41.690 --> 00:13:42.690 align:start position:0%
+ 
+ 
+
+00:13:42.690 --> 00:13:47.910 align:start position:0%
+ 
+ 
+
+00:13:47.910 --> 00:13:51.320 align:start position:0%
+ 
+ 
+
+00:13:51.320 --> 00:13:54.150 align:start position:0%
+ 
+ 
+
+00:13:54.150 --> 00:13:56.400 align:start position:0%
+ 
+ 
+
+00:13:56.400 --> 00:13:58.230 align:start position:0%
+ 
+ 
+
+00:13:58.230 --> 00:14:00.360 align:start position:0%
+ 
+ 
+
+00:14:00.360 --> 00:14:03.930 align:start position:0%
+ 
+ 
+
+00:14:03.930 --> 00:14:06.510 align:start position:0%
+ 
+ 
+
+00:14:06.510 --> 00:14:08.550 align:start position:0%
+ 
+ 
+
+00:14:08.550 --> 00:14:10.380 align:start position:0%
+ 
+ 
+
+00:14:10.380 --> 00:14:12.690 align:start position:0%
+ 
+ 
+
+00:14:12.690 --> 00:14:15.720 align:start position:0%
+ 
+ 
+
+00:14:15.720 --> 00:14:16.800 align:start position:0%
+ 
+ 
+
+00:14:16.800 --> 00:14:19.800 align:start position:0%
+ 
+ 
+
+00:14:19.800 --> 00:14:23.160 align:start position:0%
+ 
+ 
+
+00:14:23.160 --> 00:14:25.500 align:start position:0%
+ 
+ 
+
+00:14:25.500 --> 00:14:28.200 align:start position:0%
+ 
+ 
+
+00:14:28.200 --> 00:14:29.670 align:start position:0%
+ 
+ 
+
+00:14:29.670 --> 00:14:32.340 align:start position:0%
+ 
+ 
+
+00:14:32.340 --> 00:14:33.930 align:start position:0%
+ 
+ 
+
+00:14:33.930 --> 00:14:37.560 align:start position:0%
+ 
+ 
+
+00:14:37.560 --> 00:14:39.510 align:start position:0%
+ 
+ 
+
+00:14:39.510 --> 00:14:41.580 align:start position:0%
+ 
+ 
+
+00:14:41.580 --> 00:14:43.440 align:start position:0%
+ 
+ 
+
+00:14:43.440 --> 00:14:45.450 align:start position:0%
+ 
+ 
+
+00:14:45.450 --> 00:14:47.790 align:start position:0%
+ 
+ 
+
+00:14:47.790 --> 00:14:50.910 align:start position:0%
+ 
+ 
+
+00:14:50.910 --> 00:14:52.440 align:start position:0%
+ 
+ 
+
+00:14:52.440 --> 00:14:53.910 align:start position:0%
+ 
+ 
+
+00:14:53.910 --> 00:14:55.460 align:start position:0%
+ 
+ 
+
+00:14:55.460 --> 00:14:57.960 align:start position:0%
+ 
+ 
+
+00:14:57.960 --> 00:14:59.760 align:start position:0%
+ 
+ 
+
+00:14:59.760 --> 00:15:01.710 align:start position:0%
+ 
+ 
+
+00:15:01.710 --> 00:15:05.070 align:start position:0%
+ 
+ 
+
+00:15:05.070 --> 00:15:06.780 align:start position:0%
+ 
+ 
+
+00:15:06.780 --> 00:15:09.750 align:start position:0%
+ 
+ 
+
+00:15:09.750 --> 00:15:13.230 align:start position:0%
+ 
+ 
+
+00:15:13.230 --> 00:15:16.080 align:start position:0%
+ 
+ 
+
+00:15:16.080 --> 00:15:19.260 align:start position:0%
+ 
+ 
+
+00:15:19.260 --> 00:15:21.360 align:start position:0%
+ 
+ 
+
+00:15:21.360 --> 00:15:24.780 align:start position:0%
+ 
+ 
+
+00:15:24.780 --> 00:15:26.430 align:start position:0%
+ 
+ 
+
+00:15:26.430 --> 00:15:27.930 align:start position:0%
+ 
+ 
+
+00:15:27.930 --> 00:15:30.000 align:start position:0%
+ 
+ 
+
+00:15:30.000 --> 00:15:31.320 align:start position:0%
+ 
+ 
+
+00:15:31.320 --> 00:15:32.970 align:start position:0%
+ 
+ 
+
+00:15:32.970 --> 00:15:37.550 align:start position:0%
+ 
+ 
+
+00:15:37.550 --> 00:15:41.070 align:start position:0%
+ 
+ 
+
+00:15:41.070 --> 00:15:43.860 align:start position:0%
+ 
+ 
+
+00:15:43.860 --> 00:15:45.810 align:start position:0%
+ 
+ 
+
+00:15:45.810 --> 00:15:48.150 align:start position:0%
+ 
+ 
+
+00:15:48.150 --> 00:15:49.080 align:start position:0%
+ 
+ 
+
+00:15:49.080 --> 00:15:51.240 align:start position:0%
+ 
+ 
+
+00:15:51.240 --> 00:15:52.980 align:start position:0%
+ 
+ 
+
+00:15:52.980 --> 00:15:55.170 align:start position:0%
+ 
+ 
+
+00:15:55.170 --> 00:15:56.160 align:start position:0%
+ 
+ 
+
+00:15:56.160 --> 00:15:58.319 align:start position:0%
+ 
+ 
+
+00:15:58.319 --> 00:16:03.240 align:start position:0%
+ 
+ 
+
+00:16:03.240 --> 00:16:05.790 align:start position:0%
+ 
+ 
+
+00:16:05.790 --> 00:16:07.740 align:start position:0%
+ 
+ 
+
+00:16:07.740 --> 00:16:10.259 align:start position:0%
+ 
+ 
+
+00:16:10.259 --> 00:16:11.910 align:start position:0%
+ 
+ 
+
+00:16:11.910 --> 00:16:14.939 align:start position:0%
+ 
+ 
+
+00:16:14.939 --> 00:16:16.860 align:start position:0%
+ 
+ 
+
+00:16:16.860 --> 00:16:20.310 align:start position:0%
+ 
+ 
+
+00:16:20.310 --> 00:16:22.079 align:start position:0%
+ 
+ 
+
+00:16:22.079 --> 00:16:23.819 align:start position:0%
+ 
+ 
+
+00:16:23.819 --> 00:16:27.030 align:start position:0%
+ 
+ 
+
+00:16:27.030 --> 00:16:28.769 align:start position:0%
+ 
+ 
+
+00:16:28.769 --> 00:16:31.530 align:start position:0%
+ 
+ 
+
+00:16:31.530 --> 00:16:35.400 align:start position:0%
+ 
+ 
+
+00:16:35.400 --> 00:16:39.269 align:start position:0%
+ 
+ 
+
+00:16:39.269 --> 00:16:42.780 align:start position:0%
+ 
+ 
+
+00:16:42.780 --> 00:16:45.060 align:start position:0%
+ 
+ 
+
+00:16:45.060 --> 00:16:46.829 align:start position:0%
+ 
+ 
+
+00:16:46.829 --> 00:16:47.970 align:start position:0%
+ 
+ 
+
+00:16:47.970 --> 00:16:49.769 align:start position:0%
+ 
+ 
+
+00:16:49.769 --> 00:16:51.240 align:start position:0%
+ 
+ 
+
+00:16:51.240 --> 00:16:53.939 align:start position:0%
+ 
+ 
+
+00:16:53.939 --> 00:16:55.439 align:start position:0%
+ 
+ 
+
+00:16:55.439 --> 00:16:57.180 align:start position:0%
+ 
+ 
+
+00:16:57.180 --> 00:16:58.710 align:start position:0%
+ 
+ 
+
+00:16:58.710 --> 00:17:01.530 align:start position:0%
+ 
+ 
+
+00:17:01.530 --> 00:17:03.689 align:start position:0%
+ 
+ 
+
+00:17:03.689 --> 00:17:05.699 align:start position:0%
+ 
+ 
+
+00:17:05.699 --> 00:17:07.860 align:start position:0%
+ 
+ 
+
+00:17:07.860 --> 00:17:09.630 align:start position:0%
+ 
+ 
+
+00:17:09.630 --> 00:17:12.809 align:start position:0%
+ 
+ 
+
+00:17:12.809 --> 00:17:14.130 align:start position:0%
+ 
+ 
+
+00:17:14.130 --> 00:17:15.750 align:start position:0%
+ 
+ 
+
+00:17:15.750 --> 00:17:17.280 align:start position:0%
+ 
+ 
+
+00:17:17.280 --> 00:17:19.020 align:start position:0%
+ 
+ 
+
+00:17:19.020 --> 00:17:24.419 align:start position:0%
+ 
+ 
+
+00:17:24.419 --> 00:17:26.850 align:start position:0%
+ 
+ 
+
+00:17:26.850 --> 00:17:28.470 align:start position:0%
+ 
+ 
+
+00:17:28.470 --> 00:17:30.570 align:start position:0%
+ 
+ 
+
+00:17:30.570 --> 00:17:32.510 align:start position:0%
+ 
+ 
+
+00:17:32.510 --> 00:17:34.919 align:start position:0%
+ 
+ 
+
+00:17:34.919 --> 00:17:37.140 align:start position:0%
+ 
+ 
+
+00:17:37.140 --> 00:17:39.930 align:start position:0%
+ 
+ 
+
+00:17:39.930 --> 00:17:41.850 align:start position:0%
+ 
+ 
+
+00:17:41.850 --> 00:17:47.100 align:start position:0%
+ 
+ 
+
+00:17:47.100 --> 00:17:49.590 align:start position:0%
+ 
+ 
+
+00:17:49.590 --> 00:17:52.890 align:start position:0%
+ 
+ 
+
+00:17:52.890 --> 00:17:54.360 align:start position:0%
+ 
+ 
+
+00:17:54.360 --> 00:17:56.039 align:start position:0%
+ 
+ 
+
+00:17:56.039 --> 00:17:57.780 align:start position:0%
+ 
+ 
+
+00:17:57.780 --> 00:18:00.780 align:start position:0%
+ 
+ 
+
+00:18:00.780 --> 00:18:03.870 align:start position:0%
+ 
+ 
+
+00:18:03.870 --> 00:18:05.909 align:start position:0%
+ 
+ 
+
+00:18:05.909 --> 00:18:07.740 align:start position:0%
+ 
+ 
+
+00:18:07.740 --> 00:18:09.160 align:start position:0%
+ 
+ 
+
+00:18:09.160 --> 00:18:10.630 align:start position:0%
+ 
+ 
+
+00:18:10.630 --> 00:18:12.160 align:start position:0%
+ 
+ 
+
+00:18:12.160 --> 00:18:16.600 align:start position:0%
+ 
+ 
+
+00:18:16.600 --> 00:18:18.520 align:start position:0%
+ 
+ 
+
+00:18:18.520 --> 00:18:19.930 align:start position:0%
+ 
+ 
+
+00:18:19.930 --> 00:18:22.630 align:start position:0%
+ 
+ 
+
+00:18:22.630 --> 00:18:26.050 align:start position:0%
+ 
+ 
+
+00:18:26.050 --> 00:18:27.520 align:start position:0%
+ 
+ 
+
+00:18:27.520 --> 00:18:29.710 align:start position:0%
+ 
+ 
+
+00:18:29.710 --> 00:18:33.130 align:start position:0%
+ 
+ 
+
+00:18:33.130 --> 00:18:37.660 align:start position:0%
+ 
+ 
+
+00:18:37.660 --> 00:18:39.190 align:start position:0%
+ 
+ 
+
+00:18:39.190 --> 00:18:41.080 align:start position:0%
+ 
+ 
+
+00:18:41.080 --> 00:18:43.570 align:start position:0%
+ 
+ 
+
+00:18:43.570 --> 00:18:46.000 align:start position:0%
+ 
+ 
+
+00:18:46.000 --> 00:18:49.120 align:start position:0%
+ 
+ 
+
+00:18:49.120 --> 00:18:53.560 align:start position:0%
+ 
+ 
+
+00:18:53.560 --> 00:18:57.040 align:start position:0%
+ 
+ 
+
+00:18:57.040 --> 00:18:58.780 align:start position:0%
+ 
+ 
+
+00:18:58.780 --> 00:19:00.430 align:start position:0%
+ 
+ 
+
+00:19:00.430 --> 00:19:01.720 align:start position:0%
+ 
+ 
+
+00:19:01.720 --> 00:19:04.270 align:start position:0%
+ 
+ 
+
+00:19:04.270 --> 00:19:05.950 align:start position:0%
+ 
+ 
+
+00:19:05.950 --> 00:19:08.920 align:start position:0%
+ 
+ 
+
+00:19:08.920 --> 00:19:10.090 align:start position:0%
+ 
+ 
+
+00:19:10.090 --> 00:19:12.460 align:start position:0%
+ 
+ 
+
+00:19:12.460 --> 00:19:15.340 align:start position:0%
+ 
+ 
+
+00:19:15.340 --> 00:19:18.580 align:start position:0%
+ 
+ 
+
+00:19:18.580 --> 00:19:20.710 align:start position:0%
+ 
+ 
+
+00:19:20.710 --> 00:19:22.120 align:start position:0%
+ 
+ 
+
+00:19:22.120 --> 00:19:24.640 align:start position:0%
+ 
+ 
+
+00:19:24.640 --> 00:19:26.830 align:start position:0%
+ 
+ 
+
+00:19:26.830 --> 00:19:30.730 align:start position:0%
+ 
+ 
+
+00:19:30.730 --> 00:19:32.620 align:start position:0%
+ 
+ 
+
+00:19:32.620 --> 00:19:34.510 align:start position:0%
+ 
+ 
+
+00:19:34.510 --> 00:19:36.610 align:start position:0%
+ 
+ 
+
+00:19:36.610 --> 00:19:38.230 align:start position:0%
+ 
+ 
+
+00:19:38.230 --> 00:19:39.730 align:start position:0%
+ 
+ 
+
+00:19:39.730 --> 00:19:42.010 align:start position:0%
+ 
+ 
+
+00:19:42.010 --> 00:19:44.440 align:start position:0%
+ 
+ 
+
+00:19:44.440 --> 00:19:47.080 align:start position:0%
+ 
+ 
+
+00:19:47.080 --> 00:19:48.850 align:start position:0%
+ 
+ 
+
+00:19:48.850 --> 00:19:51.580 align:start position:0%
+ 
+ 
+
+00:19:51.580 --> 00:19:54.100 align:start position:0%
+ 
+ 
+
+00:19:54.100 --> 00:19:57.310 align:start position:0%
+ 
+ 
+
+00:19:57.310 --> 00:19:59.380 align:start position:0%
+ 
+ 
+
+00:19:59.380 --> 00:20:02.680 align:start position:0%
+ 
+ 
+
+00:20:02.680 --> 00:20:04.240 align:start position:0%
+ 
+ 
+
+00:20:04.240 --> 00:20:07.810 align:start position:0%
+ 
+ 
+
+00:20:07.810 --> 00:20:09.640 align:start position:0%
+ 
+ 
+
+00:20:09.640 --> 00:20:11.650 align:start position:0%
+ 
+ 
+
+00:20:11.650 --> 00:20:13.600 align:start position:0%
+ 
+ 
+
+00:20:13.600 --> 00:20:15.910 align:start position:0%
+ 
+ 
+
+00:20:15.910 --> 00:20:17.710 align:start position:0%
+ 
+ 
+
+00:20:17.710 --> 00:20:21.130 align:start position:0%
+ 
+ 
+
+00:20:21.130 --> 00:20:21.970 align:start position:0%
+ 
+ 
+
+00:20:21.970 --> 00:20:21.980 align:start position:0%
+ 
+ 
+
+00:20:21.980 --> 00:20:23.020 align:start position:0%
+ 
+
+
+00:20:23.020 --> 00:20:24.580 align:start position:0%
+ 
+ 
+
+00:20:24.580 --> 00:20:25.870 align:start position:0%
+ 
+ 
+
+00:20:25.870 --> 00:20:27.670 align:start position:0%
+ 
+ 
+
+00:20:27.670 --> 00:20:29.590 align:start position:0%
+ 
+ 
+
+00:20:29.590 --> 00:20:31.660 align:start position:0%
+ 
+ 
+
+00:20:31.660 --> 00:20:34.390 align:start position:0%
+ 
+ 
+
+00:20:34.390 --> 00:20:35.740 align:start position:0%
+ 
+ 
+
+00:20:35.740 --> 00:20:38.410 align:start position:0%
+ 
+ 
+
+00:20:38.410 --> 00:20:40.690 align:start position:0%
+ 
+ 
+
+00:20:40.690 --> 00:20:42.820 align:start position:0%
+ 
+ 
+
+00:20:42.820 --> 00:20:44.110 align:start position:0%
+ 
+ 
+
+00:20:44.110 --> 00:20:46.240 align:start position:0%
+ 
+ 
+
+00:20:46.240 --> 00:20:48.250 align:start position:0%
+ 
+ 
+
+00:20:48.250 --> 00:20:49.480 align:start position:0%
+ 
+ 
+
+00:20:49.480 --> 00:20:50.650 align:start position:0%
+ 
+ 
+
+00:20:50.650 --> 00:20:54.220 align:start position:0%
+ 
+ 
+
+00:20:54.220 --> 00:20:55.630 align:start position:0%
+ 
+ 
+
+00:20:55.630 --> 00:20:58.570 align:start position:0%
+ 
+ 
+
+00:20:58.570 --> 00:20:59.740 align:start position:0%
+ 
+ 
+
+00:20:59.740 --> 00:21:02.050 align:start position:0%
+ 
+ 
+
+00:21:02.050 --> 00:21:06.430 align:start position:0%
+ 
+ 
+
+00:21:06.430 --> 00:21:09.370 align:start position:0%
+ 
+ 
+
+00:21:09.370 --> 00:21:12.160 align:start position:0%
+ 
+ 
+
+00:21:12.160 --> 00:21:15.100 align:start position:0%
+ 
+ 
+
+00:21:15.100 --> 00:21:16.840 align:start position:0%
+ 
+ 
+
+00:21:16.840 --> 00:21:20.170 align:start position:0%
+ 
+ 
+
+00:21:20.170 --> 00:21:21.430 align:start position:0%
+ 
+ 
+
+00:21:21.430 --> 00:21:23.710 align:start position:0%
+ 
+ 
+
+00:21:23.710 --> 00:21:25.450 align:start position:0%
+ 
+ 
+
+00:21:25.450 --> 00:21:26.980 align:start position:0%
+ 
+ 
+
+00:21:26.980 --> 00:21:28.630 align:start position:0%
+ 
+ 
+
+00:21:28.630 --> 00:21:30.280 align:start position:0%
+ 
+ 
+
+00:21:30.280 --> 00:21:31.930 align:start position:0%
+ 
+ 
+
+00:21:31.930 --> 00:21:34.900 align:start position:0%
+ 
+ 
+
+00:21:34.900 --> 00:21:37.600 align:start position:0%
+ 
+ 
+
+00:21:37.600 --> 00:21:39.520 align:start position:0%
+ 
+ 
+
+00:21:39.520 --> 00:21:40.990 align:start position:0%
+ 
+ 
+
+00:21:40.990 --> 00:21:43.780 align:start position:0%
+ 
+ 
+
+00:21:43.780 --> 00:21:47.650 align:start position:0%
+ 
+ 
+
+00:21:47.650 --> 00:21:50.020 align:start position:0%
+ 
+ 
+
+00:21:50.020 --> 00:21:55.180 align:start position:0%
+ 
+ 
+
+00:21:55.180 --> 00:21:57.040 align:start position:0%
+ 
+ 
+
+00:21:57.040 --> 00:21:59.830 align:start position:0%
+ 
+ 
+
+00:21:59.830 --> 00:22:01.780 align:start position:0%
+ 
+ 
+
+00:22:01.780 --> 00:22:03.630 align:start position:0%
+ 
+ 
+
+00:22:03.630 --> 00:22:05.650 align:start position:0%
+ 
+ 
+
+00:22:05.650 --> 00:22:08.140 align:start position:0%
+ 
+ 
+
+00:22:08.140 --> 00:22:11.380 align:start position:0%
+ 
+ 
+
+00:22:11.380 --> 00:22:13.330 align:start position:0%
+ 
+ 
+
+00:22:13.330 --> 00:22:19.240 align:start position:0%
+ 
+ 
+
+00:22:19.240 --> 00:22:20.620 align:start position:0%
+ 
+ 
+
+00:22:20.620 --> 00:22:23.590 align:start position:0%
+ 
+ 
+
+00:22:23.590 --> 00:22:25.270 align:start position:0%
+ 
+ 
+
+00:22:25.270 --> 00:22:28.810 align:start position:0%
+ 
+ 
+
+00:22:28.810 --> 00:22:30.700 align:start position:0%
+ 
+ 
+
+00:22:30.700 --> 00:22:33.190 align:start position:0%
+ 
+ 
+
+00:22:33.190 --> 00:22:34.900 align:start position:0%
+ 
+ 
+
+00:22:34.900 --> 00:22:36.880 align:start position:0%
+ 
+ 
+
+00:22:36.880 --> 00:22:38.140 align:start position:0%
+ 
+ 
+
+00:22:38.140 --> 00:22:41.920 align:start position:0%
+ 
+ 
+
+00:22:41.920 --> 00:22:44.710 align:start position:0%
+ 
+ 
+
+00:22:44.710 --> 00:22:46.360 align:start position:0%
+ 
+ 
+
+00:22:46.360 --> 00:22:48.460 align:start position:0%
+ 
+ 
+
+00:22:48.460 --> 00:22:50.740 align:start position:0%
+ 
+ 
+
+00:22:50.740 --> 00:22:52.660 align:start position:0%
+ 
+ 
+
+00:22:52.660 --> 00:22:55.000 align:start position:0%
+ 
+ 
+
+00:22:55.000 --> 00:22:58.510 align:start position:0%
+ 
+ 
+
+00:22:58.510 --> 00:23:00.370 align:start position:0%
+ 
+ 
+
+00:23:00.370 --> 00:23:02.080 align:start position:0%
+ 
+ 
+
+00:23:02.080 --> 00:23:04.900 align:start position:0%
+ 
+ 
+
+00:23:04.900 --> 00:23:05.950 align:start position:0%
+ 
+ 
+
+00:23:05.950 --> 00:23:07.870 align:start position:0%
+ 
+ 
+
+00:23:07.870 --> 00:23:10.180 align:start position:0%
+ 
+ 
+
+00:23:10.180 --> 00:23:12.430 align:start position:0%
+ 
+ 
+
+00:23:12.430 --> 00:23:14.140 align:start position:0%
+ 
+ 
+
+00:23:14.140 --> 00:23:15.610 align:start position:0%
+ 
+ 
+
+00:23:15.610 --> 00:23:17.410 align:start position:0%
+ 
+ 
+
+00:23:17.410 --> 00:23:20.290 align:start position:0%
+ 
+ 
+
+00:23:20.290 --> 00:23:21.730 align:start position:0%
+ 
+ 
+
+00:23:21.730 --> 00:23:24.460 align:start position:0%
+ 
+ 
+
+00:23:24.460 --> 00:23:26.770 align:start position:0%
+ 
+ 
+
+00:23:26.770 --> 00:23:28.870 align:start position:0%
+ 
+ 
+
+00:23:28.870 --> 00:23:30.550 align:start position:0%
+ 
+ 
+
+00:23:30.550 --> 00:23:32.680 align:start position:0%
+ 
+ 
+
+00:23:32.680 --> 00:23:33.850 align:start position:0%
+ 
+ 
+
+00:23:33.850 --> 00:23:36.730 align:start position:0%
+ 
+ 
+
+00:23:36.730 --> 00:23:39.010 align:start position:0%
+ 
+ 
+
+00:23:39.010 --> 00:23:42.510 align:start position:0%
+ 
+ 
+
+00:23:42.510 --> 00:23:44.860 align:start position:0%
+ 
+ 
+
+00:23:44.860 --> 00:23:47.530 align:start position:0%
+ 
+ 
+
+00:23:47.530 --> 00:23:48.910 align:start position:0%
+ 
+ 
+
+00:23:48.910 --> 00:23:50.980 align:start position:0%
+ 
+ 
+
+00:23:50.980 --> 00:23:52.980 align:start position:0%
+ 
+ 
+
+00:23:52.980 --> 00:23:56.350 align:start position:0%
+ 
+ 
+
+00:23:56.350 --> 00:23:58.360 align:start position:0%
+ 
+ 
+
+00:23:58.360 --> 00:24:01.630 align:start position:0%
+ 
+ 
+
+00:24:01.630 --> 00:24:05.470 align:start position:0%
+ 
+ 
+
+00:24:05.470 --> 00:24:08.590 align:start position:0%
+ 
+ 
+
+00:24:08.590 --> 00:24:10.570 align:start position:0%
+ 
+ 
+
+00:24:10.570 --> 00:24:12.280 align:start position:0%
+ 
+ 
+
+00:24:12.280 --> 00:24:14.350 align:start position:0%
+ 
+ 
+
+00:24:14.350 --> 00:24:15.430 align:start position:0%
+ 
+ 
+
+00:24:15.430 --> 00:24:17.170 align:start position:0%
+ 
+ 
+
+00:24:17.170 --> 00:24:19.000 align:start position:0%
+ 
+ 
+
+00:24:19.000 --> 00:24:22.120 align:start position:0%
+ 
+ 
+
+00:24:22.120 --> 00:24:26.710 align:start position:0%
+ 
+ 
+
+00:24:26.710 --> 00:24:28.150 align:start position:0%
+ 
+ 
+
+00:24:28.150 --> 00:24:29.830 align:start position:0%
+ 
+ 
+
+00:24:29.830 --> 00:24:32.890 align:start position:0%
+ 
+ 
+
+00:24:32.890 --> 00:24:34.570 align:start position:0%
+ 
+ 
+
+00:24:34.570 --> 00:24:37.540 align:start position:0%
+ 
+ 
+
+00:24:37.540 --> 00:24:39.550 align:start position:0%
+ 
+ 
+
+00:24:39.550 --> 00:24:41.110 align:start position:0%
+ 
+ 
+
+00:24:41.110 --> 00:24:43.150 align:start position:0%
+ 
+ 
+
+00:24:43.150 --> 00:24:46.210 align:start position:0%
+ 
+ 
+
+00:24:46.210 --> 00:24:48.370 align:start position:0%
+ 
+ 
+
+00:24:48.370 --> 00:24:50.259 align:start position:0%
+ 
+ 
+
+00:24:50.259 --> 00:24:51.820 align:start position:0%
+ 
+ 
+
+00:24:51.820 --> 00:24:54.039 align:start position:0%
+ 
+ 
+
+00:24:54.039 --> 00:24:55.690 align:start position:0%
+ 
+ 
+
+00:24:55.690 --> 00:24:57.969 align:start position:0%
+ 
+ 
+
+00:24:57.969 --> 00:25:01.199 align:start position:0%
+ 
+ 
+
+00:25:01.199 --> 00:25:03.399 align:start position:0%
+ 
+ 
+
+00:25:03.399 --> 00:25:05.739 align:start position:0%
+ 
+ 
+
+00:25:05.739 --> 00:25:08.249 align:start position:0%
+ 
+ 
+
+00:25:08.249 --> 00:25:11.440 align:start position:0%
+ 
+ 
+
+00:25:11.440 --> 00:25:14.349 align:start position:0%
+ 
+ 
+
+00:25:14.349 --> 00:25:16.479 align:start position:0%
+ 
+ 
+
+00:25:16.479 --> 00:25:17.889 align:start position:0%
+ 
+ 
+
+00:25:17.889 --> 00:25:20.409 align:start position:0%
+ 
+ 
+
+00:25:20.409 --> 00:25:23.169 align:start position:0%
+ 
+ 
+
+00:25:23.169 --> 00:25:25.690 align:start position:0%
+ 
+ 
+
+00:25:25.690 --> 00:25:28.479 align:start position:0%
+ 
+ 
+
+00:25:28.479 --> 00:25:30.999 align:start position:0%
+ 
+ 
+
+00:25:30.999 --> 00:25:32.529 align:start position:0%
+ 
+ 
+
+00:25:32.529 --> 00:25:35.019 align:start position:0%
+ 
+ 
+
+00:25:35.019 --> 00:25:37.810 align:start position:0%
+ 
+ 
+
+00:25:37.810 --> 00:25:39.819 align:start position:0%
+ 
+ 
+
+00:25:39.819 --> 00:25:42.669 align:start position:0%
+ 
+ 
+
+00:25:42.669 --> 00:25:44.859 align:start position:0%
+ 
+ 
+
+00:25:44.859 --> 00:25:47.889 align:start position:0%
+ 
+ 
+
+00:25:47.889 --> 00:25:49.239 align:start position:0%
+ 
+ 
+
+00:25:49.239 --> 00:25:51.609 align:start position:0%
+ 
+ 
+
+00:25:51.609 --> 00:25:54.339 align:start position:0%
+ 
+ 
+
+00:25:54.339 --> 00:25:56.859 align:start position:0%
+ 
+ 
+
+00:25:56.859 --> 00:25:59.739 align:start position:0%
+ 
+ 
+
+00:25:59.739 --> 00:26:02.049 align:start position:0%
+ 
+ 
+
+00:26:02.049 --> 00:26:06.369 align:start position:0%
+ 
+ 
+
+00:26:06.369 --> 00:26:08.829 align:start position:0%
+ 
+ 
+
+00:26:08.829 --> 00:26:11.349 align:start position:0%
+ 
+ 
+
+00:26:11.349 --> 00:26:13.359 align:start position:0%
+ 
+ 
+
+00:26:13.359 --> 00:26:15.940 align:start position:0%
+ 
+ 
+
+00:26:15.940 --> 00:26:18.009 align:start position:0%
+ 
+ 
+
+00:26:18.009 --> 00:26:21.310 align:start position:0%
+ 
+ 
+
+00:26:21.310 --> 00:26:23.919 align:start position:0%
+ 
+ 
+
+00:26:23.919 --> 00:26:25.810 align:start position:0%
+ 
+ 
+
+00:26:25.810 --> 00:26:27.219 align:start position:0%
+ 
+ 
+
+00:26:27.219 --> 00:26:32.139 align:start position:0%
+ 
+ 
+
+00:26:32.139 --> 00:26:33.579 align:start position:0%
+ 
+ 
+
+00:26:33.579 --> 00:26:35.199 align:start position:0%
+ 
+ 
+
+00:26:35.199 --> 00:26:37.569 align:start position:0%
+ 
+ 
+
+00:26:37.569 --> 00:26:40.449 align:start position:0%
+ 
+ 
+
+00:26:40.449 --> 00:26:44.079 align:start position:0%
+ 
+ 
+
+00:26:44.079 --> 00:26:45.909 align:start position:0%
+ 
+ 
+
+00:26:45.909 --> 00:26:47.649 align:start position:0%
+ 
+ 
+
+00:26:47.649 --> 00:26:49.569 align:start position:0%
+ 
+ 
+
+00:26:49.569 --> 00:26:52.719 align:start position:0%
+ 
+ 
+
+00:26:52.719 --> 00:26:58.870 align:start position:0%
+ 
+ 
+
+00:26:58.870 --> 00:27:00.910 align:start position:0%
+ 
+ 
+
+00:27:00.910 --> 00:27:02.830 align:start position:0%
+ 
+ 
+
+00:27:02.830 --> 00:27:04.060 align:start position:0%
+ 
+ 
+
+00:27:04.060 --> 00:27:05.800 align:start position:0%
+ 
+ 
+
+00:27:05.800 --> 00:27:10.540 align:start position:0%
+ 
+ 
+
+00:27:10.540 --> 00:27:12.220 align:start position:0%
+ 
+ 
+
+00:27:12.220 --> 00:27:15.130 align:start position:0%
+ 
+ 
+
+00:27:15.130 --> 00:27:17.050 align:start position:0%
+ 
+ 
+
+00:27:17.050 --> 00:27:19.810 align:start position:0%
+ 
+ 
+
+00:27:19.810 --> 00:27:24.070 align:start position:0%
+ 
+ 
+
+00:27:24.070 --> 00:27:25.450 align:start position:0%
+ 
+ 
+
+00:27:25.450 --> 00:27:29.200 align:start position:0%
+ 
+ 
+
+00:27:29.200 --> 00:27:30.220 align:start position:0%
+ 
+ 
+
+00:27:30.220 --> 00:27:32.080 align:start position:0%
+ 
+ 
+
+00:27:32.080 --> 00:27:35.170 align:start position:0%
+ 
+ 
+
+00:27:35.170 --> 00:27:37.170 align:start position:0%
+ 
+ 
+
+00:27:37.170 --> 00:27:39.730 align:start position:0%
+ 
+ 
+
+00:27:39.730 --> 00:27:41.500 align:start position:0%
+ 
+ 
+
+00:27:41.500 --> 00:27:43.030 align:start position:0%
+ 
+ 
+
+00:27:43.030 --> 00:27:44.890 align:start position:0%
+ 
+ 
+
+00:27:44.890 --> 00:27:47.560 align:start position:0%
+ 
+ 
+
+00:27:47.560 --> 00:27:49.150 align:start position:0%
+ 
+ 
+
+00:27:49.150 --> 00:27:50.440 align:start position:0%
+ 
+ 
+
+00:27:50.440 --> 00:27:52.990 align:start position:0%
+ 
+ 
+
+00:27:52.990 --> 00:27:54.790 align:start position:0%
+ 
+ 
+
+00:27:54.790 --> 00:27:56.260 align:start position:0%
+ 
+ 
+
+00:27:56.260 --> 00:27:57.850 align:start position:0%
+ 
+ 
+
+00:27:57.850 --> 00:27:59.080 align:start position:0%
+ 
+ 
+
+00:27:59.080 --> 00:28:01.180 align:start position:0%
+ 
+ 
+
+00:28:01.180 --> 00:28:04.060 align:start position:0%
+ 
+ 
+
+00:28:04.060 --> 00:28:05.380 align:start position:0%
+ 
+ 
+
+00:28:05.380 --> 00:28:07.470 align:start position:0%
+ 
+ 
+
+00:28:07.470 --> 00:28:11.590 align:start position:0%
+ 
+ 
+
+00:28:11.590 --> 00:28:13.870 align:start position:0%
+ 
+ 
+
+00:28:13.870 --> 00:28:17.350 align:start position:0%
+ 
+ 
+
+00:28:17.350 --> 00:28:20.800 align:start position:0%
+ 
+ 
+
+00:28:20.800 --> 00:28:22.510 align:start position:0%
+ 
+ 
+
+00:28:22.510 --> 00:28:24.970 align:start position:0%
+ 
+ 
+
+00:28:24.970 --> 00:28:27.400 align:start position:0%
+ 
+ 
+
+00:28:27.400 --> 00:28:30.550 align:start position:0%
+ 
+ 
+
+00:28:30.550 --> 00:28:33.640 align:start position:0%
+ 
+ 
+
+00:28:33.640 --> 00:28:35.170 align:start position:0%
+ 
+ 
+
+00:28:35.170 --> 00:28:37.360 align:start position:0%
+ 
+ 
+
+00:28:37.360 --> 00:28:41.050 align:start position:0%
+ 
+ 
+
+00:28:41.050 --> 00:28:43.600 align:start position:0%
+ 
+ 
+
+00:28:43.600 --> 00:28:45.910 align:start position:0%
+ 
+ 
+
+00:28:45.910 --> 00:28:48.220 align:start position:0%
+ 
+ 
+
+00:28:48.220 --> 00:28:51.070 align:start position:0%
+ 
+ 
+
+00:28:51.070 --> 00:28:52.810 align:start position:0%
+ 
+ 
+
+00:28:52.810 --> 00:28:56.310 align:start position:0%
+ 
+ 
+
+00:28:56.310 --> 00:28:59.710 align:start position:0%
+ 
+ 
+
+00:28:59.710 --> 00:29:01.390 align:start position:0%
+ 
+ 
+
+00:29:01.390 --> 00:29:03.130 align:start position:0%
+ 
+ 
+
+00:29:03.130 --> 00:29:05.260 align:start position:0%
+ 
+ 
+
+00:29:05.260 --> 00:29:07.450 align:start position:0%
+ 
+ 
+
+00:29:07.450 --> 00:29:08.950 align:start position:0%
+ 
+ 
+
+00:29:08.950 --> 00:29:11.230 align:start position:0%
+ 
+ 
+
+00:29:11.230 --> 00:29:12.520 align:start position:0%
+ 
+ 
+
+00:29:12.520 --> 00:29:13.990 align:start position:0%
+ 
+ 
+
+00:29:13.990 --> 00:29:18.580 align:start position:0%
+ 
+ 
+
+00:29:18.580 --> 00:29:20.380 align:start position:0%
+ 
+ 
+
+00:29:20.380 --> 00:29:22.270 align:start position:0%
+ 
+ 
+
+00:29:22.270 --> 00:29:24.490 align:start position:0%
+ 
+ 
+
+00:29:24.490 --> 00:29:25.990 align:start position:0%
+ 
+ 
+
+00:29:25.990 --> 00:29:28.030 align:start position:0%
+ 
+ 
+
+00:29:28.030 --> 00:29:31.330 align:start position:0%
+ 
+ 
+
+00:29:31.330 --> 00:29:33.160 align:start position:0%
+ 
+ 
+
+00:29:33.160 --> 00:29:35.620 align:start position:0%
+ 
+ 
+
+00:29:35.620 --> 00:29:38.200 align:start position:0%
+ 
+ 
+
+00:29:38.200 --> 00:29:41.200 align:start position:0%
+ 
+ 
+
+00:29:41.200 --> 00:29:43.620 align:start position:0%
+ 
+ 
+
+00:29:43.620 --> 00:29:48.970 align:start position:0%
+ 
+ 
+
+00:29:48.970 --> 00:29:51.940 align:start position:0%
+ 
+ 
+
+00:29:51.940 --> 00:29:53.530 align:start position:0%
+ 
+ 
+
+00:29:53.530 --> 00:29:56.320 align:start position:0%
+ 
+ 
+
+00:29:56.320 --> 00:29:59.530 align:start position:0%
+ 
+ 
+
+00:29:59.530 --> 00:30:01.300 align:start position:0%
+ 
+ 
+
+00:30:01.300 --> 00:30:04.000 align:start position:0%
+ 
+ 
+
+00:30:04.000 --> 00:30:06.220 align:start position:0%
+ 
+ 
+
+00:30:06.220 --> 00:30:07.900 align:start position:0%
+ 
+ 
+
+00:30:07.900 --> 00:30:09.160 align:start position:0%
+ 
+ 
+
+00:30:09.160 --> 00:30:11.680 align:start position:0%
+ 
+ 
+
+00:30:11.680 --> 00:30:13.810 align:start position:0%
+ 
+ 
+
+00:30:13.810 --> 00:30:15.820 align:start position:0%
+ 
+ 
+
+00:30:15.820 --> 00:30:18.220 align:start position:0%
+ 
+ 
+
+00:30:18.220 --> 00:30:20.110 align:start position:0%
+ 
+ 
+
+00:30:20.110 --> 00:30:21.850 align:start position:0%
+ 
+ 
+
+00:30:21.850 --> 00:30:23.380 align:start position:0%
+ 
+ 
+
+00:30:23.380 --> 00:30:24.700 align:start position:0%
+ 
+ 
+
+00:30:24.700 --> 00:30:27.550 align:start position:0%
+ 
+ 
+
+00:30:27.550 --> 00:30:32.500 align:start position:0%
+ 
+ 
+
+00:30:32.500 --> 00:30:34.990 align:start position:0%
+ 
+ 
+
+00:30:34.990 --> 00:30:37.270 align:start position:0%
+ 
+ 
+
+00:30:37.270 --> 00:30:38.950 align:start position:0%
+ 
+ 
+
+00:30:38.950 --> 00:30:41.380 align:start position:0%
+ 
+ 
+
+00:30:41.380 --> 00:30:43.210 align:start position:0%
+ 
+ 
+
+00:30:43.210 --> 00:30:45.970 align:start position:0%
+ 
+ 
+
+00:30:45.970 --> 00:30:48.670 align:start position:0%
+ 
+ 
+
+00:30:48.670 --> 00:30:50.080 align:start position:0%
+ 
+ 
+
+00:30:50.080 --> 00:30:52.030 align:start position:0%
+ 
+ 
+
+00:30:52.030 --> 00:30:54.190 align:start position:0%
+ 
+ 
+
+00:30:54.190 --> 00:30:56.850 align:start position:0%
+ 
+ 
+
+00:30:56.850 --> 00:31:00.810 align:start position:0%
+ 
+ 
+
+00:31:00.810 --> 00:31:03.310 align:start position:0%
+ 
+ 
+
+00:31:03.310 --> 00:31:04.900 align:start position:0%
+ 
+ 
+
+00:31:04.900 --> 00:31:07.300 align:start position:0%
+ 
+ 
+
+00:31:07.300 --> 00:31:09.340 align:start position:0%
+ 
+ 
+
+00:31:09.340 --> 00:31:10.930 align:start position:0%
+ 
+ 
+
+00:31:10.930 --> 00:31:13.060 align:start position:0%
+ 
+ 
+
+00:31:13.060 --> 00:31:14.920 align:start position:0%
+ 
+ 
+
+00:31:14.920 --> 00:31:17.560 align:start position:0%
+ 
+ 
+
+00:31:17.560 --> 00:31:19.090 align:start position:0%
+ 
+ 
+
+00:31:19.090 --> 00:31:20.470 align:start position:0%
+ 
+ 
+
+00:31:20.470 --> 00:31:24.220 align:start position:0%
+ 
+ 
+
+00:31:24.220 --> 00:31:25.840 align:start position:0%
+ 
+ 
+
+00:31:25.840 --> 00:31:25.850 align:start position:0%
+ 
+ 
+
+00:31:25.850 --> 00:31:26.180 align:start position:0%
+ 
+
+
+00:31:26.180 --> 00:31:27.680 align:start position:0%
+ 
+ 
+
+00:31:27.680 --> 00:31:31.279 align:start position:0%
+ 
+ 
+
+00:31:31.279 --> 00:31:33.889 align:start position:0%
+ 
+ 
+
+00:31:33.889 --> 00:31:36.139 align:start position:0%
+ 
+ 
+
+00:31:36.139 --> 00:31:38.539 align:start position:0%
+ 
+ 
+
+00:31:38.539 --> 00:31:42.950 align:start position:0%
+ 
+ 
+
+00:31:42.950 --> 00:31:45.169 align:start position:0%
+ 
+ 
+
+00:31:45.169 --> 00:31:47.779 align:start position:0%
+ 
+ 
+
+00:31:47.779 --> 00:31:51.080 align:start position:0%
+ 
+ 
+
+00:31:51.080 --> 00:31:52.639 align:start position:0%
+ 
+ 
+
+00:31:52.639 --> 00:31:55.039 align:start position:0%
+ 
+ 
+
+00:31:55.039 --> 00:31:57.649 align:start position:0%
+ 
+ 
+
+00:31:57.649 --> 00:31:59.180 align:start position:0%
+ 
+ 
+
+00:31:59.180 --> 00:32:01.129 align:start position:0%
+ 
+ 
+
+00:32:01.129 --> 00:32:02.830 align:start position:0%
+ 
+ 
+
+00:32:02.830 --> 00:32:04.759 align:start position:0%
+ 
+ 
+
+00:32:04.759 --> 00:32:07.789 align:start position:0%
+ 
+ 
+
+00:32:07.789 --> 00:32:12.919 align:start position:0%
+ 
+ 
+
+00:32:12.919 --> 00:32:15.710 align:start position:0%
+ 
+ 
+
+00:32:15.710 --> 00:32:20.869 align:start position:0%
+ 
+ 
+
+00:32:20.869 --> 00:32:22.549 align:start position:0%
+ 
+ 
+
+00:32:22.549 --> 00:32:25.039 align:start position:0%
+ 
+ 
+
+00:32:25.039 --> 00:32:27.740 align:start position:0%
+ 
+ 
+
+00:32:27.740 --> 00:32:31.789 align:start position:0%
+ 
+ 
+
+00:32:31.789 --> 00:32:33.649 align:start position:0%
+ 
+ 
+
+00:32:33.649 --> 00:32:35.600 align:start position:0%
+ 
+ 
+
+00:32:35.600 --> 00:32:38.450 align:start position:0%
+ 
+ 
+
+00:32:38.450 --> 00:32:40.490 align:start position:0%
+ 
+ 
+
+00:32:40.490 --> 00:32:43.330 align:start position:0%
+ 
+ 
+
+00:32:43.330 --> 00:32:46.279 align:start position:0%
+ 
+ 
+
+00:32:46.279 --> 00:32:48.830 align:start position:0%
+ 
+ 
+
+00:32:48.830 --> 00:32:51.619 align:start position:0%
+ 
+ 
+
+00:32:51.619 --> 00:32:55.759 align:start position:0%
+ 
+ 
+
+00:32:55.759 --> 00:32:58.639 align:start position:0%
+ 
+ 
+
+00:32:58.639 --> 00:33:01.999 align:start position:0%
+ 
+ 
+
+00:33:01.999 --> 00:33:04.340 align:start position:0%
+ 
+ 
+
+00:33:04.340 --> 00:33:06.259 align:start position:0%
+ 
+ 
+
+00:33:06.259 --> 00:33:07.700 align:start position:0%
+ 
+ 
+
+00:33:07.700 --> 00:33:10.999 align:start position:0%
+ 
+ 
+
+00:33:10.999 --> 00:33:13.279 align:start position:0%
+ 
+ 
+
+00:33:13.279 --> 00:33:15.139 align:start position:0%
+ 
+ 
+
+00:33:15.139 --> 00:33:16.940 align:start position:0%
+ 
+ 
+
+00:33:16.940 --> 00:33:19.159 align:start position:0%
+ 
+ 
+
+00:33:19.159 --> 00:33:21.019 align:start position:0%
+ 
+ 
+
+00:33:21.019 --> 00:33:22.850 align:start position:0%
+ 
+ 
+
+00:33:22.850 --> 00:33:24.710 align:start position:0%
+ 
+ 
+
+00:33:24.710 --> 00:33:27.860 align:start position:0%
+ 
+ 
+
+00:33:27.860 --> 00:33:31.100 align:start position:0%
+ 
+ 
+
+00:33:31.100 --> 00:33:32.240 align:start position:0%
+ 
+ 
+
+00:33:32.240 --> 00:33:34.669 align:start position:0%
+ 
+ 
+
+00:33:34.669 --> 00:33:38.790 align:start position:0%
+ 
+ 
+
+00:33:38.790 --> 00:33:41.440 align:start position:0%
+ 
+ 
+
+00:33:41.440 --> 00:33:43.090 align:start position:0%
+ 
+ 
+
+00:33:43.090 --> 00:33:44.500 align:start position:0%
+ 
+ 
+
+00:33:44.500 --> 00:33:46.150 align:start position:0%
+ 
+ 
+
+00:33:46.150 --> 00:33:51.940 align:start position:0%
+ 
+ 
+
+00:33:51.940 --> 00:33:53.560 align:start position:0%
+ 
+ 
+
+00:33:53.560 --> 00:33:55.360 align:start position:0%
+ 
+ 
+
+00:33:55.360 --> 00:33:58.240 align:start position:0%
+ 
+ 
+
+00:33:58.240 --> 00:34:00.460 align:start position:0%
+ 
+ 
+
+00:34:00.460 --> 00:34:02.470 align:start position:0%
+ 
+ 
+
+00:34:02.470 --> 00:34:03.880 align:start position:0%
+ 
+ 
+
+00:34:03.880 --> 00:34:06.820 align:start position:0%
+ 
+ 
+
+00:34:06.820 --> 00:34:09.280 align:start position:0%
+ 
+ 
+
+00:34:09.280 --> 00:34:11.409 align:start position:0%
+ 
+ 
+
+00:34:11.409 --> 00:34:13.690 align:start position:0%
+ 
+ 
+
+00:34:13.690 --> 00:34:15.550 align:start position:0%
+ 
+ 
+
+00:34:15.550 --> 00:34:18.580 align:start position:0%
+ 
+ 
+
+00:34:18.580 --> 00:34:20.860 align:start position:0%
+ 
+ 
+
+00:34:20.860 --> 00:34:23.770 align:start position:0%
+ 
+ 
+
+00:34:23.770 --> 00:34:25.869 align:start position:0%
+ 
+ 
+
+00:34:25.869 --> 00:34:28.540 align:start position:0%
+ 
+ 
+
+00:34:28.540 --> 00:34:30.399 align:start position:0%
+ 
+ 
+
+00:34:30.399 --> 00:34:34.240 align:start position:0%
+ 
+ 
+
+00:34:34.240 --> 00:34:36.310 align:start position:0%
+ 
+ 
+
+00:34:36.310 --> 00:34:38.409 align:start position:0%
+ 
+ 
+
+00:34:38.409 --> 00:34:40.780 align:start position:0%
+ 
+ 
+
+00:34:40.780 --> 00:34:42.580 align:start position:0%
+ 
+ 
+
+00:34:42.580 --> 00:34:45.310 align:start position:0%
+ 
+ 
+
+00:34:45.310 --> 00:34:46.930 align:start position:0%
+ 
+ 
+
+00:34:46.930 --> 00:34:48.970 align:start position:0%
+ 
+ 
+
+00:34:48.970 --> 00:34:50.350 align:start position:0%
+ 
+ 
+
+00:34:50.350 --> 00:34:55.810 align:start position:0%
+ 
+ 
+
+00:34:55.810 --> 00:34:58.180 align:start position:0%
+ 
+ 
+
+00:34:58.180 --> 00:35:00.210 align:start position:0%
+ 
+ 
+
+00:35:00.210 --> 00:35:03.820 align:start position:0%
+ 
+ 
+
+00:35:03.820 --> 00:35:05.260 align:start position:0%
+ 
+ 
+
+00:35:05.260 --> 00:35:06.820 align:start position:0%
+ 
+ 
+
+00:35:06.820 --> 00:35:08.860 align:start position:0%
+ 
+ 
+
+00:35:08.860 --> 00:35:10.510 align:start position:0%
+ 
+ 
+
+00:35:10.510 --> 00:35:15.100 align:start position:0%
+ 
+ 
+
+00:35:15.100 --> 00:35:16.900 align:start position:0%
+ 
+ 
+
+00:35:16.900 --> 00:35:19.870 align:start position:0%
+ 
+ 
+
+00:35:19.870 --> 00:35:20.890 align:start position:0%
+ 
+ 
+
+00:35:20.890 --> 00:35:22.780 align:start position:0%
+ 
+ 
+
+00:35:22.780 --> 00:35:25.030 align:start position:0%
+ 
+ 
+
+00:35:25.030 --> 00:35:26.890 align:start position:0%
+ 
+ 
+
+00:35:26.890 --> 00:35:29.050 align:start position:0%
+ 
+ 
+
+00:35:29.050 --> 00:35:30.700 align:start position:0%
+ 
+ 
+
+00:35:30.700 --> 00:35:35.620 align:start position:0%
+ 
+ 
+
+00:35:35.620 --> 00:35:37.720 align:start position:0%
+ 
+ 
+
+00:35:37.720 --> 00:35:39.280 align:start position:0%
+ 
+ 
+
+00:35:39.280 --> 00:35:41.380 align:start position:0%
+ 
+ 
+
+00:35:41.380 --> 00:35:45.730 align:start position:0%
+ 
+ 
+
+00:35:45.730 --> 00:35:49.000 align:start position:0%
+ 
+ 
+
+00:35:49.000 --> 00:35:51.490 align:start position:0%
+ 
+ 
+
+00:35:51.490 --> 00:35:52.420 align:start position:0%
+ 
+ 
+
+00:35:52.420 --> 00:35:54.880 align:start position:0%
+ 
+ 
+
+00:35:54.880 --> 00:35:56.830 align:start position:0%
+ 
+ 
+
+00:35:56.830 --> 00:35:58.570 align:start position:0%
+ 
+ 
+
+00:35:58.570 --> 00:36:00.550 align:start position:0%
+ 
+ 
+
+00:36:00.550 --> 00:36:01.840 align:start position:0%
+ 
+ 
+
+00:36:01.840 --> 00:36:03.490 align:start position:0%
+ 
+ 
+
+00:36:03.490 --> 00:36:05.890 align:start position:0%
+ 
+ 
+
+00:36:05.890 --> 00:36:07.960 align:start position:0%
+ 
+ 
+
+00:36:07.960 --> 00:36:10.210 align:start position:0%
+ 
+ 
+
+00:36:10.210 --> 00:36:12.040 align:start position:0%
+ 
+ 
+
+00:36:12.040 --> 00:36:14.320 align:start position:0%
+ 
+ 
+
+00:36:14.320 --> 00:36:16.450 align:start position:0%
+ 
+ 
+
+00:36:16.450 --> 00:36:19.540 align:start position:0%
+ 
+ 
+
+00:36:19.540 --> 00:36:21.250 align:start position:0%
+ 
+ 
+
+00:36:21.250 --> 00:36:23.500 align:start position:0%
+ 
+ 
+
+00:36:23.500 --> 00:36:25.360 align:start position:0%
+ 
+ 
+
+00:36:25.360 --> 00:36:27.130 align:start position:0%
+ 
+ 
+
+00:36:27.130 --> 00:36:29.020 align:start position:0%
+ 
+ 
+
+00:36:29.020 --> 00:36:31.120 align:start position:0%
+ 
+ 
+
+00:36:31.120 --> 00:36:35.410 align:start position:0%
+ 
+ 
+
+00:36:35.410 --> 00:36:37.840 align:start position:0%
+ 
+ 
+
+00:36:37.840 --> 00:36:40.990 align:start position:0%
+ 
+ 
+
+00:36:40.990 --> 00:36:43.330 align:start position:0%
+ 
+ 
+
+00:36:43.330 --> 00:36:46.120 align:start position:0%
+ 
+ 
+
+00:36:46.120 --> 00:36:48.160 align:start position:0%
+ 
+ 
+
+00:36:48.160 --> 00:36:50.290 align:start position:0%
+ 
+ 
+
+00:36:50.290 --> 00:36:52.030 align:start position:0%
+ 
+ 
+
+00:36:52.030 --> 00:36:54.570 align:start position:0%
+ 
+ 
+
+00:36:54.570 --> 00:36:57.790 align:start position:0%
+ 
+ 
+
+00:36:57.790 --> 00:36:59.740 align:start position:0%
+ 
+ 
+
+00:36:59.740 --> 00:37:01.810 align:start position:0%
+ 
+ 
+
+00:37:01.810 --> 00:37:03.910 align:start position:0%
+ 
+ 
+
+00:37:03.910 --> 00:37:06.340 align:start position:0%
+ 
+ 
+
+00:37:06.340 --> 00:37:07.810 align:start position:0%
+ 
+ 
+
+00:37:07.810 --> 00:37:09.940 align:start position:0%
+ 
+ 
+
+00:37:09.940 --> 00:37:15.760 align:start position:0%
+ 
+ 
+
+00:37:15.760 --> 00:37:17.770 align:start position:0%
+ 
+ 
+
+00:37:17.770 --> 00:37:20.290 align:start position:0%
+ 
+ 
+
+00:37:20.290 --> 00:37:22.180 align:start position:0%
+ 
+ 
+
+00:37:22.180 --> 00:37:23.680 align:start position:0%
+ 
+ 
+
+00:37:23.680 --> 00:37:26.770 align:start position:0%
+ 
+ 
+
+00:37:26.770 --> 00:37:29.650 align:start position:0%
+ 
+ 
+
+00:37:29.650 --> 00:37:32.740 align:start position:0%
+ 
+ 
+
+00:37:32.740 --> 00:37:34.900 align:start position:0%
+ 
+ 
+
+00:37:34.900 --> 00:37:39.640 align:start position:0%
+ 
+ 
+
+00:37:39.640 --> 00:37:41.590 align:start position:0%
+ 
+ 
+
+00:37:41.590 --> 00:37:43.720 align:start position:0%
+ 
+ 
+
+00:37:43.720 --> 00:37:45.940 align:start position:0%
+ 
+ 
+
+00:37:45.940 --> 00:37:48.160 align:start position:0%
+ 
+ 
+
+00:37:48.160 --> 00:37:51.010 align:start position:0%
+ 
+ 
+
+00:37:51.010 --> 00:37:52.960 align:start position:0%
+ 
+ 
+
+00:37:52.960 --> 00:37:55.600 align:start position:0%
+ 
+ 
+
+00:37:55.600 --> 00:37:57.010 align:start position:0%
+ 
+ 
+
+00:37:57.010 --> 00:38:00.670 align:start position:0%
+ 
+ 
+
+00:38:00.670 --> 00:38:02.590 align:start position:0%
+ 
+ 
+
+00:38:02.590 --> 00:38:04.120 align:start position:0%
+ 
+ 
+
+00:38:04.120 --> 00:38:05.980 align:start position:0%
+ 
+ 
+
+00:38:05.980 --> 00:38:07.900 align:start position:0%
+ 
+ 
+
+00:38:07.900 --> 00:38:10.230 align:start position:0%
+ 
+ 
+
+00:38:10.230 --> 00:38:16.840 align:start position:0%
+ 
+ 
+
+00:38:16.840 --> 00:38:18.970 align:start position:0%
+ 
+ 
+
+00:38:18.970 --> 00:38:20.620 align:start position:0%
+ 
+ 
+
+00:38:20.620 --> 00:38:34.540 align:start position:0%
+ 
+ 
+
+00:38:34.540 --> 00:38:39.810 align:start position:0%
+ 
+ 
+
+00:38:39.810 --> 00:38:42.370 align:start position:0%
+ 
+ 
+
+00:38:42.370 --> 00:38:44.500 align:start position:0%
+ 
+ 
+
+00:38:44.500 --> 00:38:49.660 align:start position:0%
+ 
+ 
+
+00:38:49.660 --> 00:38:52.300 align:start position:0%
+ 
+ 
+
+00:38:52.300 --> 00:38:54.670 align:start position:0%
+ 
+ 
+
+00:38:54.670 --> 00:38:57.640 align:start position:0%
+ 
+ 
+
+00:38:57.640 --> 00:39:02.280 align:start position:0%
+ 
+ 
+
+00:39:02.280 --> 00:39:07.030 align:start position:0%
+ 
+ 
+
+00:39:07.030 --> 00:39:10.930 align:start position:0%
+ 
+ 
+
+00:39:10.930 --> 00:39:12.520 align:start position:0%
+ 
+ 
+
+00:39:12.520 --> 00:39:16.810 align:start position:0%
+ 
+ 
+
+00:39:16.810 --> 00:39:18.220 align:start position:0%
+ 
+ 
+
+00:39:18.220 --> 00:39:20.650 align:start position:0%
+ 
+ 
+
+00:39:20.650 --> 00:39:24.910 align:start position:0%
+ 
+ 
+
+00:39:24.910 --> 00:39:26.770 align:start position:0%
+ 
+ 
+
+00:39:26.770 --> 00:39:28.450 align:start position:0%
+ 
+ 
+
+00:39:28.450 --> 00:39:31.210 align:start position:0%
+ 
+ 
+
+00:39:31.210 --> 00:39:33.370 align:start position:0%
+ 
+ 
+
+00:39:33.370 --> 00:39:35.320 align:start position:0%
+ 
+ 
+
+00:39:35.320 --> 00:39:37.240 align:start position:0%
+ 
+ 
+
+00:39:37.240 --> 00:39:38.859 align:start position:0%
+ 
+ 
+
+00:39:38.859 --> 00:39:40.750 align:start position:0%
+ 
+ 
+
+00:39:40.750 --> 00:39:49.480 align:start position:0%
+ 
+ 
+
+00:39:49.480 --> 00:39:53.500 align:start position:0%
+ 
+ 
+
+00:39:53.500 --> 00:39:55.359 align:start position:0%
+ 
+ 
+
+00:39:55.359 --> 00:40:08.530 align:start position:0%
+ 
+ 
+
+00:40:08.530 --> 00:40:11.540 align:start position:0%
+ 
+ 
+
+00:40:11.540 --> 00:40:13.220 align:start position:0%
+ 
+ 
+
+00:40:13.220 --> 00:40:16.580 align:start position:0%
+ 
+ 
+
+00:40:16.580 --> 00:40:19.400 align:start position:0%
+ 
+ 
+
+00:40:19.400 --> 00:40:21.260 align:start position:0%
+ 
+ 
+
+00:40:21.260 --> 00:40:24.530 align:start position:0%
+ 
+ 
+
+00:40:24.530 --> 00:40:26.480 align:start position:0%
+ 
+ 
+
+00:40:26.480 --> 00:40:29.600 align:start position:0%
+ 
+ 
+
+00:40:29.600 --> 00:40:31.430 align:start position:0%
+ 
+ 
+
+00:40:31.430 --> 00:40:34.520 align:start position:0%
+ 
+ 
+
+00:40:34.520 --> 00:40:38.240 align:start position:0%
+ 
+ 
+
+00:40:38.240 --> 00:40:40.340 align:start position:0%
+ 
+ 
+
+00:40:40.340 --> 00:40:42.110 align:start position:0%
+ 
+ 
+
+00:40:42.110 --> 00:40:54.560 align:start position:0%
+ 
+ 
+
+00:40:54.560 --> 00:41:01.280 align:start position:0%
+ 
+ 
+
+00:41:01.280 --> 00:41:02.630 align:start position:0%
+ 
+ 
+
+00:41:02.630 --> 00:41:04.940 align:start position:0%
+ 
+ 
+
+00:41:04.940 --> 00:41:08.840 align:start position:0%
+ 
+ 
+
+00:41:08.840 --> 00:41:11.500 align:start position:0%
+ 
+ 
+
+00:41:11.500 --> 00:41:14.390 align:start position:0%
+ 
+ 
+
+00:41:14.390 --> 00:41:16.700 align:start position:0%
+ 
+ 
+
+00:41:16.700 --> 00:41:20.780 align:start position:0%
+ 
+ 
+
+00:41:20.780 --> 00:41:22.160 align:start position:0%
+ 
+ 
+
+00:41:22.160 --> 00:41:25.160 align:start position:0%
+ 
+ 
+
+00:41:25.160 --> 00:41:26.810 align:start position:0%
+ 
+ 
+
+00:41:26.810 --> 00:41:28.820 align:start position:0%
+ 
+ 
+
+00:41:28.820 --> 00:41:32.600 align:start position:0%
+ 
+ 
+
+00:41:32.600 --> 00:41:34.780 align:start position:0%
+ 
+ 
+
+00:41:34.780 --> 00:41:40.940 align:start position:0%
+ 
+ 
+
+00:41:40.940 --> 00:41:42.170 align:start position:0%
+ 
+ 
+
+00:41:42.170 --> 00:41:43.610 align:start position:0%
+ 
+ 
+
+00:41:43.610 --> 00:41:46.130 align:start position:0%
+ 
+ 
+
+00:41:46.130 --> 00:41:47.750 align:start position:0%
+ 
+ 
+
+00:41:47.750 --> 00:41:49.670 align:start position:0%
+ 
+ 
+
+00:41:49.670 --> 00:41:52.250 align:start position:0%
+ 
+ 
+
+00:41:52.250 --> 00:41:53.780 align:start position:0%
+ 
+ 
+
+00:41:53.780 --> 00:41:57.860 align:start position:0%
+ 
+ 
+
+00:41:57.860 --> 00:41:59.930 align:start position:0%
+ 
+ 
+
+00:41:59.930 --> 00:42:01.610 align:start position:0%
+ 
+ 
+
+00:42:01.610 --> 00:42:03.740 align:start position:0%
+ 
+ 
+
+00:42:03.740 --> 00:42:06.320 align:start position:0%
+ 
+ 
+
+00:42:06.320 --> 00:42:08.020 align:start position:0%
+ 
+ 
+
+00:42:08.020 --> 00:42:11.480 align:start position:0%
+ 
+ 
+
+00:42:11.480 --> 00:42:15.380 align:start position:0%
+ 
+ 
+
+00:42:15.380 --> 00:42:17.420 align:start position:0%
+ 
+ 
+
+00:42:17.420 --> 00:42:18.770 align:start position:0%
+ 
+ 
+
+00:42:18.770 --> 00:42:18.780 align:start position:0%
+ 
+ 
+
+00:42:18.780 --> 00:42:21.110 align:start position:0%
+ 
+
+
