@@ -1,0 +1,1956 @@
+WEBVTT
+Kind: captions
+Language: en
+
+00:00:25.680 --> 00:00:25.990 align:start position:0%
+ 
+so  i'm richard this is daniel and we talk  about the circuit breaker pattern  in javascript and it's just saying  before we probably could have done a  better job of titling this because  unless you know what a circuit breaker  pattern is you it might not be that  obvious  but it's essentially a way to isolate  communication between web services in a  distributed system  so go back a little way  yammer started as a pretty standard  rails app  but as we start to scale our project and  add features we found that we hit  scaling problems pretty soon  so he needs to rethink parts of our  architecture  we started by extracting a messaging  service called feedy which we built on  the jvm  so one of the first gaming pros we hit  was with our how he's storing messages  we actually got to over a billion rows  in postgres in our message table  so we clearly need to rethink how we did  this and we  implemented feedy but to represent the  scalable representation  of conversations using just the message  ids  and then the actual content of the  messages was stored in rails still  so whilst that didn't change things that  much  moving this stuff out into a separate  service and a separate data store  allows us to dramatically reduce the  load on our rails app and also reduce  the amount of stuff we need to store in  our postgres  database so feedy worked really well  and as we have continued to scale our  system and add new features we've  essentially followed the same approach  so we now have over 20 services  so things like farvel which is our  upload service  mugshot which resizes images paddy which  is a  like collaborative editor thing  and this has provided us with quite a  few benefits so the most obvious one  probably is  being able to horizontally scale each  service independently so we need to add  capacity  for feedy we can do that really easily  without increasing capacity over the  whole system  um it's also allowed to separate  concerns so  understanding what each service does is  much easier as it's a separate code base  than it would be if it was  part of the like one massive repository  and it's also much easier to deploy  these things so if we make a change to  mugshot we can easily deploy that one  service without having to take the risk  of deploying the entire system  and finally it also improves the fault  tolerance of yammer  so if one service goes down ideally at  least  it shouldn't bring other things down  with it it should be separated  whereas if you have a single app then  that's a single point failure and if  that  goes down then there's not really much  you can do by separating things out into  different services  it's allowed us to degrade gracefully  when things go wrong  so this is a little out of date actually  but it gives you a rough idea of what  our architecture looks like  and also show you some of the problems  with this so whilst  uh building things in a  service-orientated way has given us a  lot of benefits  it dev it does definitely increase the  complexity of the system as a whole  so each service is easier to understand  but that largely just pushes stuff out  into complications with how things  communicate with each other and how  those services are coordinated  maintaining api contracts is also much  more difficult because  you might make a change in one part of  the system and it will have  uh very big profound uh problems in  other parts of the system that you  weren't aware would  would be affected and this also relates  to debugging so  when you get a bug report tracing those  symptoms back to the actual root cause  is far more difficult because  instead of it being due to an isolate  isolated part of the system  it's usually a result of lots of things  interacting together and causing a  problem  and then finally handling failing  dependencies  really needs to be thought of up front  so the fault tolerance  i mentioned on the previous slide  doesn't really come for free you've got  to think about how to  handle the dependencies of each service  when they go down  because if you don't that will also  bring your own service down and that  will potentially cascade through the  rest of the system  so to look at this in a bit more detail  we're going to take a look at our  completey service which is our web  service for providing  autocomplete results so if you pass the  name bob  it will return all of the bobs in your  network  but on a large network that could be  hundreds of names and we don't want to  force our users to search through that  list  so um we use another service called  pranky which  which ranks things in relation to you so  completely uses this  to uh sort its list based on how likely  you are to want to contact that person  and then passes back the most 10 or like  10 or 20 most relevant users  um but with this pattern if pranky goes  down  then if we don't think about this at all  then that's also going to bring down  completing  if it fails quickly with a 500 error we  can at least handle the error  normally and continue on  but if prank is just unavailable then  the request is likely to timeout  which means we'll have to wait for that  to complete before we can pass any  information back to the user  and we also need to do this every time  so every time completely makes a request  to pranky  even if we know that's likely to time  out we still need to make that  call and wait for it to fail before we  can actually continue  um and worse than that if anything  actually relies on completely then this  latency could cause  failures which then start to cascade  through the rest of the system  so one way of dealing with this is the  circuit breaker pattern a circuit  breaker  pattern monitors requests being made  between services  and records any errors that are thrown  and if enough errors are thrown to go  over a specified error threshold  then the circuit breaker is broken at  that point all requests are  short-circuited and don't actually get  passed on to the service  we then allow periodic retries to test  the current health of the system  so we don't want to permanently disable  a feature  for example so in our example the  circuit breaker was sit between  completing and pranking and as long as  these requests are successful  they'll just get passed through as  normal um but if prank key goes down  then it will let a few more requests  through but it will record those as  errors and once enough errors have come  through  it will uh go over the error threshold  and it will open the circuit breaker  so at that point it will short circuit  the requests  and they won't actually get passed on to  pranky this allows completed to fail  fast and not wait for timeouts to  occur and you can actually then specify  fallback which will happen in that case  so in completely sense it will um just  return the unsorted list of results  which obviously isn't as good as  returning more relevant results  but at least means that our application  can continue to function in some way  when there's a failure in part of our  system um it also has some other  benefits over stand there are handling  in  that you can report when a circuit  breaker is opened and then  log that somewhere so you get an idea of  when your system is facing problems  and also prevents you from hammering the  same service when it's already down  which will  make it far more difficult to recover  when there is a problem  so we use histrix on our backend  services which is a java library built  by netflix  there's a few really good blog posts  about how this work and the the  documentation is really great so it's  pretty easy to see what it's doing  um it also has a sister project which  provides the real-time dashboard so this  will  log when any circuit breakers are opened  and you can see that here and monitor  any problems you might have with your  application  um but what about client-side calls  um in our application in our example  sorry  the completed service is only ever  called from the browser  and if completely goes down then we're  going to face the same kind of problems  that we did when pranky went down  we'll have timeouts delaying user  interaction and we won't actually know  that completely has gone down  potentially if it's in a unrecoverable  state  so we really need something to sit  between browser requests and completing  to monitor requests coming through  uh recall error any errors that happen  and then deal with  uh that case when it does um so  we've essentially implemented historics  in the browser or at least a simplified  version of it  and release that on github so daniel's  going to talk a bit more about the  specifics of that  right so our implementation is pretty  similar to what histrix is doing in the  java side of things  what we do is we keep track of the  results of every command that gets  executed through the circuit breaker so  we know the number of  successes failures timeouts and short  circuits  which are commands that failed because  the circuit was open  and we only keep track of these results  for a certain amount of time  which we call the window which in our  example is 10 seconds  we divide the window into buckets in  this case into 10 buckets so  we have each bucket containing one  second of  command executions  what happens is that every second an old  bucket  rolls off the window and the new bucket  rolls in  so we're only keeping track of the last  10 seconds of executions  the values in these buckets determine if  the circuit breaker  is open or closed so what we do is after  every command we calculate the  percentage of failed requests  so we sum up the failures and timeouts  and divided by the total number of  executions  and that gives us the error percentage  if the error percentage  is under a certain threshold which may  be  50 so if the error percentage is under  50  then we let the circuit breaker closed  and commands execute normally but if the  error percentage is  over the threshold then the circuit  breaker will open  and any commands that come after this  one will fail instantly  but the service may recover at some  point so every once in a while  we have to check the status of the  service somehow  what we do is after the circuit breaker  has opened  we let we wait for one full window  so in our example that was 10 seconds so  we wait for 10 seconds  and then we let a single command execute  if the service is still down and the  command fails  then the circuit breaker will remain  open but if the service has recovered  and the the command executes  successfully then  the circuit breaker will become closed  and any commands that come after this  one will execute normally  the api is really straightforward so you  just instantiate a new circuit breaker  for your service  here we have completely breaker and we  pass the necessary configuration  so here we're saying that the length of  the window is 10 seconds  we're dividing that window into ten  buckets we're also saying that the  timeout duration is  three seconds which i'll explain in the  next slide  we're also setting the error threshold  to fifty percent  so when we calculate the error  percentage for a window  if it's over this threshold then the  circuit breaker will open  and we're also setting a volume  threshold  which is the minimum number of commands  that have to execute  before we start calculating stats and  why is this even necessary  well imagine if you instantiate a new  circuit breaker  and the first command that you execute  happens to fail  then you would have a 100 error rate and  the circuit breaker would open  immediately  so you want to avoid that situation and  that's why we have  the volume threshold we wait for in this  example five commands to execute  and then we start calculating the stats  so now we have our circuit breaker and  we want to run commands through it  a command is just a function which  receives a success  and a failure callback and you can do  whatever you need to do  inside that function and then you just  need to notify the circuit breaker of  the result  so here we're calling complete results  which is probably making an  ajax request if the request is  successful we call the success callback  if it fails we call the failure callback  and this is where the timeout comes into  play  if neither the success nor the failure  callbacks  are called after three seconds then we  flag this command as a timeout  so we have our command to run it through  the circuit breaker we just call  breaker.run and we pass the command  we can also pass an optional second  parameter which is the fallback  which only gets executed if the circuit  breaker is open  so if the circuit has broken it skips  the command execution  and invokes the fallback directly in the  fallback you can  call some other service or maybe let the  user know that the system is  in a down state  and after the command is run we update  the statistics  and set the the state of the circuit  breaker to be  open or closed and that's it really it's  pretty simple  all right um so in summary  circuit breakers allow you to fail fast  when there's a problem and degrade  gracefully to other solutions  they can prevent failures cascading  through the rest of your system so you  isolate points of communication to  prevent problems going through to other  services  and they let you discover any problems  early and allow you to more easily  recover when they do  happen and that's it so yeah you have  any questions or  et cetera  pretty cool uh sit beside brian here and  uh he had a question  can you go back to that uh diagram of  services that you have  on your slides yeah this is like about  two years out of day i think but  um is nothing connected to wario because  he's a jerk  um what is wario i think it's only  accessed by the browser  right yeah that's the way it doesn't  appear here  yeah i think i said error yeah i don't  know what that does actually i think  mario never  fails yeah why are they exist in the  browser  sounds about right uh any other  questions  oh we're five minutes late really no no  we're breaking until four i think so  we've got a shitload of time i'm  basically just eating time right now  all right well people have the questions  they can we'll be around so  cool all right thanks guys uh we'll be  back at four  you
+
+00:00:25.990 --> 00:00:27.910 align:start position:0%
+so  i'm richard this is daniel and we talk  about the circuit breaker pattern  in javascript and it's just saying  before we probably could have done a  better job of titling this because  unless you know what a circuit breaker  pattern is you it might not be that  obvious  but it's essentially a way to isolate  communication between web services in a  distributed system  so go back a little way  yammer started as a pretty standard  rails app  but as we start to scale our project and  add features we found that we hit  scaling problems pretty soon  so he needs to rethink parts of our  architecture  we started by extracting a messaging  service called feedy which we built on  the jvm  so one of the first gaming pros we hit  was with our how he's storing messages  we actually got to over a billion rows  in postgres in our message table  so we clearly need to rethink how we did  this and we  implemented feedy but to represent the  scalable representation  of conversations using just the message  ids  and then the actual content of the  messages was stored in rails still  so whilst that didn't change things that  much  moving this stuff out into a separate  service and a separate data store  allows us to dramatically reduce the  load on our rails app and also reduce  the amount of stuff we need to store in  our postgres  database so feedy worked really well  and as we have continued to scale our  system and add new features we've  essentially followed the same approach  so we now have over 20 services  so things like farvel which is our  upload service  mugshot which resizes images paddy which  is a  like collaborative editor thing  and this has provided us with quite a  few benefits so the most obvious one  probably is  being able to horizontally scale each  service independently so we need to add  capacity  for feedy we can do that really easily  without increasing capacity over the  whole system  um it's also allowed to separate  concerns so  understanding what each service does is  much easier as it's a separate code base  than it would be if it was  part of the like one massive repository  and it's also much easier to deploy  these things so if we make a change to  mugshot we can easily deploy that one  service without having to take the risk  of deploying the entire system  and finally it also improves the fault  tolerance of yammer  so if one service goes down ideally at  least  it shouldn't bring other things down  with it it should be separated  whereas if you have a single app then  that's a single point failure and if  that  goes down then there's not really much  you can do by separating things out into  different services  it's allowed us to degrade gracefully  when things go wrong  so this is a little out of date actually  but it gives you a rough idea of what  our architecture looks like  and also show you some of the problems  with this so whilst  uh building things in a  service-orientated way has given us a  lot of benefits  it dev it does definitely increase the  complexity of the system as a whole  so each service is easier to understand  but that largely just pushes stuff out  into complications with how things  communicate with each other and how  those services are coordinated  maintaining api contracts is also much  more difficult because  you might make a change in one part of  the system and it will have  uh very big profound uh problems in  other parts of the system that you  weren't aware would  would be affected and this also relates  to debugging so  when you get a bug report tracing those  symptoms back to the actual root cause  is far more difficult because  instead of it being due to an isolate  isolated part of the system  it's usually a result of lots of things  interacting together and causing a  problem  and then finally handling failing  dependencies  really needs to be thought of up front  so the fault tolerance  i mentioned on the previous slide  doesn't really come for free you've got  to think about how to  handle the dependencies of each service  when they go down  because if you don't that will also  bring your own service down and that  will potentially cascade through the  rest of the system  so to look at this in a bit more detail  we're going to take a look at our  completey service which is our web  service for providing  autocomplete results so if you pass the  name bob  it will return all of the bobs in your  network  but on a large network that could be  hundreds of names and we don't want to  force our users to search through that  list  so um we use another service called  pranky which  which ranks things in relation to you so  completely uses this  to uh sort its list based on how likely  you are to want to contact that person  and then passes back the most 10 or like  10 or 20 most relevant users  um but with this pattern if pranky goes  down  then if we don't think about this at all  then that's also going to bring down  completing  if it fails quickly with a 500 error we  can at least handle the error  normally and continue on  but if prank is just unavailable then  the request is likely to timeout  which means we'll have to wait for that  to complete before we can pass any  information back to the user  and we also need to do this every time  so every time completely makes a request  to pranky  even if we know that's likely to time  out we still need to make that  call and wait for it to fail before we  can actually continue  um and worse than that if anything  actually relies on completely then this  latency could cause  failures which then start to cascade  through the rest of the system  so one way of dealing with this is the  circuit breaker pattern a circuit  breaker  pattern monitors requests being made  between services  and records any errors that are thrown  and if enough errors are thrown to go  over a specified error threshold  then the circuit breaker is broken at  that point all requests are  short-circuited and don't actually get  passed on to the service  we then allow periodic retries to test  the current health of the system  so we don't want to permanently disable  a feature  for example so in our example the  circuit breaker was sit between  completing and pranking and as long as  these requests are successful  they'll just get passed through as  normal um but if prank key goes down  then it will let a few more requests  through but it will record those as  errors and once enough errors have come  through  it will uh go over the error threshold  and it will open the circuit breaker  so at that point it will short circuit  the requests  and they won't actually get passed on to  pranky this allows completed to fail  fast and not wait for timeouts to  occur and you can actually then specify  fallback which will happen in that case  so in completely sense it will um just  return the unsorted list of results  which obviously isn't as good as  returning more relevant results  but at least means that our application  can continue to function in some way  when there's a failure in part of our  system um it also has some other  benefits over stand there are handling  in  that you can report when a circuit  breaker is opened and then  log that somewhere so you get an idea of  when your system is facing problems  and also prevents you from hammering the  same service when it's already down  which will  make it far more difficult to recover  when there is a problem  so we use histrix on our backend  services which is a java library built  by netflix  there's a few really good blog posts  about how this work and the the  documentation is really great so it's  pretty easy to see what it's doing  um it also has a sister project which  provides the real-time dashboard so this  will  log when any circuit breakers are opened  and you can see that here and monitor  any problems you might have with your  application  um but what about client-side calls  um in our application in our example  sorry  the completed service is only ever  called from the browser  and if completely goes down then we're  going to face the same kind of problems  that we did when pranky went down  we'll have timeouts delaying user  interaction and we won't actually know  that completely has gone down  potentially if it's in a unrecoverable  state  so we really need something to sit  between browser requests and completing  to monitor requests coming through  uh recall error any errors that happen  and then deal with  uh that case when it does um so  we've essentially implemented historics  in the browser or at least a simplified  version of it  and release that on github so daniel's  going to talk a bit more about the  specifics of that  right so our implementation is pretty  similar to what histrix is doing in the  java side of things  what we do is we keep track of the  results of every command that gets  executed through the circuit breaker so  we know the number of  successes failures timeouts and short  circuits  which are commands that failed because  the circuit was open  and we only keep track of these results  for a certain amount of time  which we call the window which in our  example is 10 seconds  we divide the window into buckets in  this case into 10 buckets so  we have each bucket containing one  second of  command executions  what happens is that every second an old  bucket  rolls off the window and the new bucket  rolls in  so we're only keeping track of the last  10 seconds of executions  the values in these buckets determine if  the circuit breaker  is open or closed so what we do is after  every command we calculate the  percentage of failed requests  so we sum up the failures and timeouts  and divided by the total number of  executions  and that gives us the error percentage  if the error percentage  is under a certain threshold which may  be  50 so if the error percentage is under  50  then we let the circuit breaker closed  and commands execute normally but if the  error percentage is  over the threshold then the circuit  breaker will open  and any commands that come after this  one will fail instantly  but the service may recover at some  point so every once in a while  we have to check the status of the  service somehow  what we do is after the circuit breaker  has opened  we let we wait for one full window  so in our example that was 10 seconds so  we wait for 10 seconds  and then we let a single command execute  if the service is still down and the  command fails  then the circuit breaker will remain  open but if the service has recovered  and the the command executes  successfully then  the circuit breaker will become closed  and any commands that come after this  one will execute normally  the api is really straightforward so you  just instantiate a new circuit breaker  for your service  here we have completely breaker and we  pass the necessary configuration  so here we're saying that the length of  the window is 10 seconds  we're dividing that window into ten  buckets we're also saying that the  timeout duration is  three seconds which i'll explain in the  next slide  we're also setting the error threshold  to fifty percent  so when we calculate the error  percentage for a window  if it's over this threshold then the  circuit breaker will open  and we're also setting a volume  threshold  which is the minimum number of commands  that have to execute  before we start calculating stats and  why is this even necessary  well imagine if you instantiate a new  circuit breaker  and the first command that you execute  happens to fail  then you would have a 100 error rate and  the circuit breaker would open  immediately  so you want to avoid that situation and  that's why we have  the volume threshold we wait for in this  example five commands to execute  and then we start calculating the stats  so now we have our circuit breaker and  we want to run commands through it  a command is just a function which  receives a success  and a failure callback and you can do  whatever you need to do  inside that function and then you just  need to notify the circuit breaker of  the result  so here we're calling complete results  which is probably making an  ajax request if the request is  successful we call the success callback  if it fails we call the failure callback  and this is where the timeout comes into  play  if neither the success nor the failure  callbacks  are called after three seconds then we  flag this command as a timeout  so we have our command to run it through  the circuit breaker we just call  breaker.run and we pass the command  we can also pass an optional second  parameter which is the fallback  which only gets executed if the circuit  breaker is open  so if the circuit has broken it skips  the command execution  and invokes the fallback directly in the  fallback you can  call some other service or maybe let the  user know that the system is  in a down state  and after the command is run we update  the statistics  and set the the state of the circuit  breaker to be  open or closed and that's it really it's  pretty simple  all right um so in summary  circuit breakers allow you to fail fast  when there's a problem and degrade  gracefully to other solutions  they can prevent failures cascading  through the rest of your system so you  isolate points of communication to  prevent problems going through to other  services  and they let you discover any problems  early and allow you to more easily  recover when they do  happen and that's it so yeah you have  any questions or  et cetera  pretty cool uh sit beside brian here and  uh he had a question  can you go back to that uh diagram of  services that you have  on your slides yeah this is like about  two years out of day i think but  um is nothing connected to wario because  he's a jerk  um what is wario i think it's only  accessed by the browser  right yeah that's the way it doesn't  appear here  yeah i think i said error yeah i don't  know what that does actually i think  mario never  fails yeah why are they exist in the  browser  sounds about right uh any other  questions  oh we're five minutes late really no no  we're breaking until four i think so  we've got a shitload of time i'm  basically just eating time right now  all right well people have the questions  they can we'll be around so  cool all right thanks guys uh we'll be  back at four  you
+ 
+
+00:00:27.910 --> 00:00:29.509 align:start position:0%
+ 
+ 
+
+00:00:29.509 --> 00:00:31.269 align:start position:0%
+ 
+ 
+
+00:00:31.269 --> 00:00:32.310 align:start position:0%
+ 
+ 
+
+00:00:32.310 --> 00:00:34.229 align:start position:0%
+ 
+ 
+
+00:00:34.229 --> 00:00:35.430 align:start position:0%
+ 
+ 
+
+00:00:35.430 --> 00:00:36.950 align:start position:0%
+ 
+ 
+
+00:00:36.950 --> 00:00:36.960 align:start position:0%
+ 
+ 
+
+00:00:36.960 --> 00:00:37.830 align:start position:0%
+ 
+
+
+00:00:37.830 --> 00:00:39.750 align:start position:0%
+ 
+ 
+
+00:00:39.750 --> 00:00:41.750 align:start position:0%
+ 
+ 
+
+00:00:41.750 --> 00:00:43.990 align:start position:0%
+ 
+ 
+
+00:00:43.990 --> 00:00:48.069 align:start position:0%
+ 
+ 
+
+00:00:48.069 --> 00:00:49.990 align:start position:0%
+ 
+ 
+
+00:00:49.990 --> 00:00:52.150 align:start position:0%
+ 
+ 
+
+00:00:52.150 --> 00:00:54.069 align:start position:0%
+ 
+ 
+
+00:00:54.069 --> 00:00:55.670 align:start position:0%
+ 
+ 
+
+00:00:55.670 --> 00:00:57.590 align:start position:0%
+ 
+ 
+
+00:00:57.590 --> 00:00:58.950 align:start position:0%
+ 
+ 
+
+00:00:58.950 --> 00:00:58.960 align:start position:0%
+ 
+ 
+
+00:00:58.960 --> 00:01:01.029 align:start position:0%
+ 
+
+
+00:01:01.029 --> 00:01:02.549 align:start position:0%
+ 
+ 
+
+00:01:02.549 --> 00:01:04.229 align:start position:0%
+ 
+ 
+
+00:01:04.229 --> 00:01:05.509 align:start position:0%
+ 
+ 
+
+00:01:05.509 --> 00:01:07.510 align:start position:0%
+ 
+ 
+
+00:01:07.510 --> 00:01:10.149 align:start position:0%
+ 
+ 
+
+00:01:10.149 --> 00:01:11.910 align:start position:0%
+ 
+ 
+
+00:01:11.910 --> 00:01:14.469 align:start position:0%
+ 
+ 
+
+00:01:14.469 --> 00:01:16.710 align:start position:0%
+ 
+ 
+
+00:01:16.710 --> 00:01:18.230 align:start position:0%
+ 
+ 
+
+00:01:18.230 --> 00:01:20.469 align:start position:0%
+ 
+ 
+
+00:01:20.469 --> 00:01:21.910 align:start position:0%
+ 
+ 
+
+00:01:21.910 --> 00:01:24.469 align:start position:0%
+ 
+ 
+
+00:01:24.469 --> 00:01:24.479 align:start position:0%
+ 
+ 
+
+00:01:24.479 --> 00:01:25.030 align:start position:0%
+ 
+
+
+00:01:25.030 --> 00:01:26.310 align:start position:0%
+ 
+ 
+
+00:01:26.310 --> 00:01:29.190 align:start position:0%
+ 
+ 
+
+00:01:29.190 --> 00:01:31.510 align:start position:0%
+ 
+ 
+
+00:01:31.510 --> 00:01:31.520 align:start position:0%
+ 
+ 
+
+00:01:31.520 --> 00:01:32.390 align:start position:0%
+ 
+
+
+00:01:32.390 --> 00:01:34.230 align:start position:0%
+ 
+ 
+
+00:01:34.230 --> 00:01:36.069 align:start position:0%
+ 
+ 
+
+00:01:36.069 --> 00:01:37.830 align:start position:0%
+ 
+ 
+
+00:01:37.830 --> 00:01:39.670 align:start position:0%
+ 
+ 
+
+00:01:39.670 --> 00:01:40.870 align:start position:0%
+ 
+ 
+
+00:01:40.870 --> 00:01:41.990 align:start position:0%
+ 
+ 
+
+00:01:41.990 --> 00:01:45.830 align:start position:0%
+ 
+ 
+
+00:01:45.830 --> 00:01:48.950 align:start position:0%
+ 
+ 
+
+00:01:48.950 --> 00:01:51.429 align:start position:0%
+ 
+ 
+
+00:01:51.429 --> 00:01:53.190 align:start position:0%
+ 
+ 
+
+00:01:53.190 --> 00:01:56.310 align:start position:0%
+ 
+ 
+
+00:01:56.310 --> 00:01:57.910 align:start position:0%
+ 
+ 
+
+00:01:57.910 --> 00:01:59.350 align:start position:0%
+ 
+ 
+
+00:01:59.350 --> 00:02:02.789 align:start position:0%
+ 
+ 
+
+00:02:02.789 --> 00:02:04.069 align:start position:0%
+ 
+ 
+
+00:02:04.069 --> 00:02:07.270 align:start position:0%
+ 
+ 
+
+00:02:07.270 --> 00:02:08.630 align:start position:0%
+ 
+ 
+
+00:02:08.630 --> 00:02:10.949 align:start position:0%
+ 
+ 
+
+00:02:10.949 --> 00:02:11.750 align:start position:0%
+ 
+ 
+
+00:02:11.750 --> 00:02:13.350 align:start position:0%
+ 
+ 
+
+00:02:13.350 --> 00:02:15.350 align:start position:0%
+ 
+ 
+
+00:02:15.350 --> 00:02:15.360 align:start position:0%
+ 
+ 
+
+00:02:15.360 --> 00:02:16.070 align:start position:0%
+ 
+
+
+00:02:16.070 --> 00:02:17.990 align:start position:0%
+ 
+ 
+
+00:02:17.990 --> 00:02:19.990 align:start position:0%
+ 
+ 
+
+00:02:19.990 --> 00:02:21.190 align:start position:0%
+ 
+ 
+
+00:02:21.190 --> 00:02:22.710 align:start position:0%
+ 
+ 
+
+00:02:22.710 --> 00:02:24.630 align:start position:0%
+ 
+ 
+
+00:02:24.630 --> 00:02:26.229 align:start position:0%
+ 
+ 
+
+00:02:26.229 --> 00:02:28.470 align:start position:0%
+ 
+ 
+
+00:02:28.470 --> 00:02:29.830 align:start position:0%
+ 
+ 
+
+00:02:29.830 --> 00:02:33.670 align:start position:0%
+ 
+ 
+
+00:02:33.670 --> 00:02:35.670 align:start position:0%
+ 
+ 
+
+00:02:35.670 --> 00:02:37.430 align:start position:0%
+ 
+ 
+
+00:02:37.430 --> 00:02:39.910 align:start position:0%
+ 
+ 
+
+00:02:39.910 --> 00:02:41.430 align:start position:0%
+ 
+ 
+
+00:02:41.430 --> 00:02:44.790 align:start position:0%
+ 
+ 
+
+00:02:44.790 --> 00:02:47.509 align:start position:0%
+ 
+ 
+
+00:02:47.509 --> 00:02:48.790 align:start position:0%
+ 
+ 
+
+00:02:48.790 --> 00:02:51.430 align:start position:0%
+ 
+ 
+
+00:02:51.430 --> 00:02:51.440 align:start position:0%
+ 
+ 
+
+00:02:51.440 --> 00:02:51.910 align:start position:0%
+ 
+
+
+00:02:51.910 --> 00:02:53.190 align:start position:0%
+ 
+ 
+
+00:02:53.190 --> 00:02:55.350 align:start position:0%
+ 
+ 
+
+00:02:55.350 --> 00:02:57.589 align:start position:0%
+ 
+ 
+
+00:02:57.589 --> 00:02:58.869 align:start position:0%
+ 
+ 
+
+00:02:58.869 --> 00:02:58.879 align:start position:0%
+ 
+ 
+
+00:02:58.879 --> 00:02:59.270 align:start position:0%
+ 
+
+
+00:02:59.270 --> 00:03:00.550 align:start position:0%
+ 
+ 
+
+00:03:00.550 --> 00:03:03.350 align:start position:0%
+ 
+ 
+
+00:03:03.350 --> 00:03:04.149 align:start position:0%
+ 
+ 
+
+00:03:04.149 --> 00:03:07.110 align:start position:0%
+ 
+ 
+
+00:03:07.110 --> 00:03:09.910 align:start position:0%
+ 
+ 
+
+00:03:09.910 --> 00:03:12.470 align:start position:0%
+ 
+ 
+
+00:03:12.470 --> 00:03:13.750 align:start position:0%
+ 
+ 
+
+00:03:13.750 --> 00:03:16.229 align:start position:0%
+ 
+ 
+
+00:03:16.229 --> 00:03:17.430 align:start position:0%
+ 
+ 
+
+00:03:17.430 --> 00:03:20.470 align:start position:0%
+ 
+ 
+
+00:03:20.470 --> 00:03:21.589 align:start position:0%
+ 
+ 
+
+00:03:21.589 --> 00:03:23.110 align:start position:0%
+ 
+ 
+
+00:03:23.110 --> 00:03:24.309 align:start position:0%
+ 
+ 
+
+00:03:24.309 --> 00:03:26.949 align:start position:0%
+ 
+ 
+
+00:03:26.949 --> 00:03:28.550 align:start position:0%
+ 
+ 
+
+00:03:28.550 --> 00:03:30.630 align:start position:0%
+ 
+ 
+
+00:03:30.630 --> 00:03:32.710 align:start position:0%
+ 
+ 
+
+00:03:32.710 --> 00:03:36.789 align:start position:0%
+ 
+ 
+
+00:03:36.789 --> 00:03:37.910 align:start position:0%
+ 
+ 
+
+00:03:37.910 --> 00:03:40.949 align:start position:0%
+ 
+ 
+
+00:03:40.949 --> 00:03:43.110 align:start position:0%
+ 
+ 
+
+00:03:43.110 --> 00:03:44.390 align:start position:0%
+ 
+ 
+
+00:03:44.390 --> 00:03:46.550 align:start position:0%
+ 
+ 
+
+00:03:46.550 --> 00:03:48.070 align:start position:0%
+ 
+ 
+
+00:03:48.070 --> 00:03:51.190 align:start position:0%
+ 
+ 
+
+00:03:51.190 --> 00:03:52.070 align:start position:0%
+ 
+ 
+
+00:03:52.070 --> 00:03:52.949 align:start position:0%
+ 
+ 
+
+00:03:52.949 --> 00:03:56.550 align:start position:0%
+ 
+ 
+
+00:03:56.550 --> 00:03:57.589 align:start position:0%
+ 
+ 
+
+00:03:57.589 --> 00:04:00.070 align:start position:0%
+ 
+ 
+
+00:04:00.070 --> 00:04:01.750 align:start position:0%
+ 
+ 
+
+00:04:01.750 --> 00:04:03.429 align:start position:0%
+ 
+ 
+
+00:04:03.429 --> 00:04:06.390 align:start position:0%
+ 
+ 
+
+00:04:06.390 --> 00:04:07.990 align:start position:0%
+ 
+ 
+
+00:04:07.990 --> 00:04:09.670 align:start position:0%
+ 
+ 
+
+00:04:09.670 --> 00:04:11.429 align:start position:0%
+ 
+ 
+
+00:04:11.429 --> 00:04:11.439 align:start position:0%
+ 
+ 
+
+00:04:11.439 --> 00:04:12.789 align:start position:0%
+ 
+
+
+00:04:12.789 --> 00:04:14.470 align:start position:0%
+ 
+ 
+
+00:04:14.470 --> 00:04:14.480 align:start position:0%
+ 
+ 
+
+00:04:14.480 --> 00:04:15.990 align:start position:0%
+ 
+
+
+00:04:15.990 --> 00:04:17.909 align:start position:0%
+ 
+ 
+
+00:04:17.909 --> 00:04:19.189 align:start position:0%
+ 
+ 
+
+00:04:19.189 --> 00:04:20.870 align:start position:0%
+ 
+ 
+
+00:04:20.870 --> 00:04:22.310 align:start position:0%
+ 
+ 
+
+00:04:22.310 --> 00:04:23.590 align:start position:0%
+ 
+ 
+
+00:04:23.590 --> 00:04:26.070 align:start position:0%
+ 
+ 
+
+00:04:26.070 --> 00:04:27.590 align:start position:0%
+ 
+ 
+
+00:04:27.590 --> 00:04:28.950 align:start position:0%
+ 
+ 
+
+00:04:28.950 --> 00:04:30.790 align:start position:0%
+ 
+ 
+
+00:04:30.790 --> 00:04:32.070 align:start position:0%
+ 
+ 
+
+00:04:32.070 --> 00:04:33.749 align:start position:0%
+ 
+ 
+
+00:04:33.749 --> 00:04:35.909 align:start position:0%
+ 
+ 
+
+00:04:35.909 --> 00:04:37.350 align:start position:0%
+ 
+ 
+
+00:04:37.350 --> 00:04:39.510 align:start position:0%
+ 
+ 
+
+00:04:39.510 --> 00:04:40.550 align:start position:0%
+ 
+ 
+
+00:04:40.550 --> 00:04:43.510 align:start position:0%
+ 
+ 
+
+00:04:43.510 --> 00:04:44.230 align:start position:0%
+ 
+ 
+
+00:04:44.230 --> 00:04:46.550 align:start position:0%
+ 
+ 
+
+00:04:46.550 --> 00:04:46.560 align:start position:0%
+ 
+ 
+
+00:04:46.560 --> 00:04:47.990 align:start position:0%
+ 
+
+
+00:04:47.990 --> 00:04:50.390 align:start position:0%
+ 
+ 
+
+00:04:50.390 --> 00:04:51.590 align:start position:0%
+ 
+ 
+
+00:04:51.590 --> 00:04:53.270 align:start position:0%
+ 
+ 
+
+00:04:53.270 --> 00:04:53.280 align:start position:0%
+ 
+ 
+
+00:04:53.280 --> 00:04:54.230 align:start position:0%
+ 
+
+
+00:04:54.230 --> 00:04:57.030 align:start position:0%
+ 
+ 
+
+00:04:57.030 --> 00:04:58.230 align:start position:0%
+ 
+ 
+
+00:04:58.230 --> 00:05:01.110 align:start position:0%
+ 
+ 
+
+00:05:01.110 --> 00:05:02.310 align:start position:0%
+ 
+ 
+
+00:05:02.310 --> 00:05:06.070 align:start position:0%
+ 
+ 
+
+00:05:06.070 --> 00:05:07.670 align:start position:0%
+ 
+ 
+
+00:05:07.670 --> 00:05:09.909 align:start position:0%
+ 
+ 
+
+00:05:09.909 --> 00:05:12.070 align:start position:0%
+ 
+ 
+
+00:05:12.070 --> 00:05:15.350 align:start position:0%
+ 
+ 
+
+00:05:15.350 --> 00:05:15.360 align:start position:0%
+ 
+ 
+
+00:05:15.360 --> 00:05:16.150 align:start position:0%
+ 
+
+
+00:05:16.150 --> 00:05:17.749 align:start position:0%
+ 
+ 
+
+00:05:17.749 --> 00:05:18.950 align:start position:0%
+ 
+ 
+
+00:05:18.950 --> 00:05:18.960 align:start position:0%
+ 
+ 
+
+00:05:18.960 --> 00:05:20.710 align:start position:0%
+ 
+
+
+00:05:20.710 --> 00:05:22.950 align:start position:0%
+ 
+ 
+
+00:05:22.950 --> 00:05:23.990 align:start position:0%
+ 
+ 
+
+00:05:23.990 --> 00:05:27.189 align:start position:0%
+ 
+ 
+
+00:05:27.189 --> 00:05:29.029 align:start position:0%
+ 
+ 
+
+00:05:29.029 --> 00:05:30.870 align:start position:0%
+ 
+ 
+
+00:05:30.870 --> 00:05:31.990 align:start position:0%
+ 
+ 
+
+00:05:31.990 --> 00:05:33.350 align:start position:0%
+ 
+ 
+
+00:05:33.350 --> 00:05:35.590 align:start position:0%
+ 
+ 
+
+00:05:35.590 --> 00:05:37.510 align:start position:0%
+ 
+ 
+
+00:05:37.510 --> 00:05:39.189 align:start position:0%
+ 
+ 
+
+00:05:39.189 --> 00:05:40.070 align:start position:0%
+ 
+ 
+
+00:05:40.070 --> 00:05:41.909 align:start position:0%
+ 
+ 
+
+00:05:41.909 --> 00:05:43.189 align:start position:0%
+ 
+ 
+
+00:05:43.189 --> 00:05:45.510 align:start position:0%
+ 
+ 
+
+00:05:45.510 --> 00:05:46.950 align:start position:0%
+ 
+ 
+
+00:05:46.950 --> 00:05:49.029 align:start position:0%
+ 
+ 
+
+00:05:49.029 --> 00:05:50.870 align:start position:0%
+ 
+ 
+
+00:05:50.870 --> 00:05:52.230 align:start position:0%
+ 
+ 
+
+00:05:52.230 --> 00:05:53.830 align:start position:0%
+ 
+ 
+
+00:05:53.830 --> 00:05:56.150 align:start position:0%
+ 
+ 
+
+00:05:56.150 --> 00:05:57.670 align:start position:0%
+ 
+ 
+
+00:05:57.670 --> 00:05:59.510 align:start position:0%
+ 
+ 
+
+00:05:59.510 --> 00:05:59.520 align:start position:0%
+ 
+ 
+
+00:05:59.520 --> 00:06:00.469 align:start position:0%
+ 
+
+
+00:06:00.469 --> 00:06:02.870 align:start position:0%
+ 
+ 
+
+00:06:02.870 --> 00:06:03.830 align:start position:0%
+ 
+ 
+
+00:06:03.830 --> 00:06:05.830 align:start position:0%
+ 
+ 
+
+00:06:05.830 --> 00:06:07.510 align:start position:0%
+ 
+ 
+
+00:06:07.510 --> 00:06:09.749 align:start position:0%
+ 
+ 
+
+00:06:09.749 --> 00:06:12.150 align:start position:0%
+ 
+ 
+
+00:06:12.150 --> 00:06:13.270 align:start position:0%
+ 
+ 
+
+00:06:13.270 --> 00:06:14.629 align:start position:0%
+ 
+ 
+
+00:06:14.629 --> 00:06:16.950 align:start position:0%
+ 
+ 
+
+00:06:16.950 --> 00:06:20.150 align:start position:0%
+ 
+ 
+
+00:06:20.150 --> 00:06:21.830 align:start position:0%
+ 
+ 
+
+00:06:21.830 --> 00:06:24.710 align:start position:0%
+ 
+ 
+
+00:06:24.710 --> 00:06:25.350 align:start position:0%
+ 
+ 
+
+00:06:25.350 --> 00:06:28.710 align:start position:0%
+ 
+ 
+
+00:06:28.710 --> 00:06:30.150 align:start position:0%
+ 
+ 
+
+00:06:30.150 --> 00:06:32.950 align:start position:0%
+ 
+ 
+
+00:06:32.950 --> 00:06:34.309 align:start position:0%
+ 
+ 
+
+00:06:34.309 --> 00:06:35.670 align:start position:0%
+ 
+ 
+
+00:06:35.670 --> 00:06:38.870 align:start position:0%
+ 
+ 
+
+00:06:38.870 --> 00:06:41.670 align:start position:0%
+ 
+ 
+
+00:06:41.670 --> 00:06:42.870 align:start position:0%
+ 
+ 
+
+00:06:42.870 --> 00:06:44.309 align:start position:0%
+ 
+ 
+
+00:06:44.309 --> 00:06:44.319 align:start position:0%
+ 
+ 
+
+00:06:44.319 --> 00:06:45.029 align:start position:0%
+ 
+
+
+00:06:45.029 --> 00:06:46.790 align:start position:0%
+ 
+ 
+
+00:06:46.790 --> 00:06:49.350 align:start position:0%
+ 
+ 
+
+00:06:49.350 --> 00:06:51.510 align:start position:0%
+ 
+ 
+
+00:06:51.510 --> 00:06:52.710 align:start position:0%
+ 
+ 
+
+00:06:52.710 --> 00:06:54.629 align:start position:0%
+ 
+ 
+
+00:06:54.629 --> 00:06:56.950 align:start position:0%
+ 
+ 
+
+00:06:56.950 --> 00:06:58.710 align:start position:0%
+ 
+ 
+
+00:06:58.710 --> 00:07:01.510 align:start position:0%
+ 
+ 
+
+00:07:01.510 --> 00:07:03.430 align:start position:0%
+ 
+ 
+
+00:07:03.430 --> 00:07:06.550 align:start position:0%
+ 
+ 
+
+00:07:06.550 --> 00:07:08.870 align:start position:0%
+ 
+ 
+
+00:07:08.870 --> 00:07:09.990 align:start position:0%
+ 
+ 
+
+00:07:09.990 --> 00:07:11.909 align:start position:0%
+ 
+ 
+
+00:07:11.909 --> 00:07:13.909 align:start position:0%
+ 
+ 
+
+00:07:13.909 --> 00:07:15.990 align:start position:0%
+ 
+ 
+
+00:07:15.990 --> 00:07:17.350 align:start position:0%
+ 
+ 
+
+00:07:17.350 --> 00:07:19.749 align:start position:0%
+ 
+ 
+
+00:07:19.749 --> 00:07:21.350 align:start position:0%
+ 
+ 
+
+00:07:21.350 --> 00:07:21.360 align:start position:0%
+ 
+ 
+
+00:07:21.360 --> 00:07:22.150 align:start position:0%
+ 
+
+
+00:07:22.150 --> 00:07:24.150 align:start position:0%
+ 
+ 
+
+00:07:24.150 --> 00:07:25.430 align:start position:0%
+ 
+ 
+
+00:07:25.430 --> 00:07:27.270 align:start position:0%
+ 
+ 
+
+00:07:27.270 --> 00:07:30.070 align:start position:0%
+ 
+ 
+
+00:07:30.070 --> 00:07:31.510 align:start position:0%
+ 
+ 
+
+00:07:31.510 --> 00:07:32.870 align:start position:0%
+ 
+ 
+
+00:07:32.870 --> 00:07:33.589 align:start position:0%
+ 
+ 
+
+00:07:33.589 --> 00:07:35.189 align:start position:0%
+ 
+ 
+
+00:07:35.189 --> 00:07:37.189 align:start position:0%
+ 
+ 
+
+00:07:37.189 --> 00:07:39.270 align:start position:0%
+ 
+ 
+
+00:07:39.270 --> 00:07:41.430 align:start position:0%
+ 
+ 
+
+00:07:41.430 --> 00:07:43.110 align:start position:0%
+ 
+ 
+
+00:07:43.110 --> 00:07:44.230 align:start position:0%
+ 
+ 
+
+00:07:44.230 --> 00:07:46.390 align:start position:0%
+ 
+ 
+
+00:07:46.390 --> 00:07:48.150 align:start position:0%
+ 
+ 
+
+00:07:48.150 --> 00:07:50.150 align:start position:0%
+ 
+ 
+
+00:07:50.150 --> 00:07:52.390 align:start position:0%
+ 
+ 
+
+00:07:52.390 --> 00:07:54.309 align:start position:0%
+ 
+ 
+
+00:07:54.309 --> 00:07:54.319 align:start position:0%
+ 
+ 
+
+00:07:54.319 --> 00:07:54.950 align:start position:0%
+ 
+
+
+00:07:54.950 --> 00:07:57.909 align:start position:0%
+ 
+ 
+
+00:07:57.909 --> 00:07:59.670 align:start position:0%
+ 
+ 
+
+00:07:59.670 --> 00:08:00.550 align:start position:0%
+ 
+ 
+
+00:08:00.550 --> 00:08:00.560 align:start position:0%
+ 
+ 
+
+00:08:00.560 --> 00:08:01.749 align:start position:0%
+ 
+
+
+00:08:01.749 --> 00:08:05.110 align:start position:0%
+ 
+ 
+
+00:08:05.110 --> 00:08:07.589 align:start position:0%
+ 
+ 
+
+00:08:07.589 --> 00:08:07.599 align:start position:0%
+ 
+ 
+
+00:08:07.599 --> 00:08:08.710 align:start position:0%
+ 
+
+
+00:08:08.710 --> 00:08:10.550 align:start position:0%
+ 
+ 
+
+00:08:10.550 --> 00:08:12.309 align:start position:0%
+ 
+ 
+
+00:08:12.309 --> 00:08:14.390 align:start position:0%
+ 
+ 
+
+00:08:14.390 --> 00:08:15.430 align:start position:0%
+ 
+ 
+
+00:08:15.430 --> 00:08:17.110 align:start position:0%
+ 
+ 
+
+00:08:17.110 --> 00:08:19.029 align:start position:0%
+ 
+ 
+
+00:08:19.029 --> 00:08:20.950 align:start position:0%
+ 
+ 
+
+00:08:20.950 --> 00:08:21.990 align:start position:0%
+ 
+ 
+
+00:08:21.990 --> 00:08:23.589 align:start position:0%
+ 
+ 
+
+00:08:23.589 --> 00:08:23.599 align:start position:0%
+ 
+ 
+
+00:08:23.599 --> 00:08:24.550 align:start position:0%
+ 
+
+
+00:08:24.550 --> 00:08:25.990 align:start position:0%
+ 
+ 
+
+00:08:25.990 --> 00:08:28.150 align:start position:0%
+ 
+ 
+
+00:08:28.150 --> 00:08:30.070 align:start position:0%
+ 
+ 
+
+00:08:30.070 --> 00:08:32.070 align:start position:0%
+ 
+ 
+
+00:08:32.070 --> 00:08:33.190 align:start position:0%
+ 
+ 
+
+00:08:33.190 --> 00:08:36.310 align:start position:0%
+ 
+ 
+
+00:08:36.310 --> 00:08:38.310 align:start position:0%
+ 
+ 
+
+00:08:38.310 --> 00:08:39.829 align:start position:0%
+ 
+ 
+
+00:08:39.829 --> 00:08:41.190 align:start position:0%
+ 
+ 
+
+00:08:41.190 --> 00:08:43.670 align:start position:0%
+ 
+ 
+
+00:08:43.670 --> 00:08:44.949 align:start position:0%
+ 
+ 
+
+00:08:44.949 --> 00:08:46.949 align:start position:0%
+ 
+ 
+
+00:08:46.949 --> 00:08:50.310 align:start position:0%
+ 
+ 
+
+00:08:50.310 --> 00:08:52.389 align:start position:0%
+ 
+ 
+
+00:08:52.389 --> 00:08:54.070 align:start position:0%
+ 
+ 
+
+00:08:54.070 --> 00:08:56.070 align:start position:0%
+ 
+ 
+
+00:08:56.070 --> 00:08:58.150 align:start position:0%
+ 
+ 
+
+00:08:58.150 --> 00:09:00.389 align:start position:0%
+ 
+ 
+
+00:09:00.389 --> 00:09:01.590 align:start position:0%
+ 
+ 
+
+00:09:01.590 --> 00:09:04.710 align:start position:0%
+ 
+ 
+
+00:09:04.710 --> 00:09:04.720 align:start position:0%
+ 
+ 
+
+00:09:04.720 --> 00:09:05.430 align:start position:0%
+ 
+
+
+00:09:05.430 --> 00:09:07.190 align:start position:0%
+ 
+ 
+
+00:09:07.190 --> 00:09:09.110 align:start position:0%
+ 
+ 
+
+00:09:09.110 --> 00:09:11.750 align:start position:0%
+ 
+ 
+
+00:09:11.750 --> 00:09:13.190 align:start position:0%
+ 
+ 
+
+00:09:13.190 --> 00:09:15.350 align:start position:0%
+ 
+ 
+
+00:09:15.350 --> 00:09:17.670 align:start position:0%
+ 
+ 
+
+00:09:17.670 --> 00:09:19.910 align:start position:0%
+ 
+ 
+
+00:09:19.910 --> 00:09:22.070 align:start position:0%
+ 
+ 
+
+00:09:22.070 --> 00:09:24.630 align:start position:0%
+ 
+ 
+
+00:09:24.630 --> 00:09:25.509 align:start position:0%
+ 
+ 
+
+00:09:25.509 --> 00:09:28.710 align:start position:0%
+ 
+ 
+
+00:09:28.710 --> 00:09:31.670 align:start position:0%
+ 
+ 
+
+00:09:31.670 --> 00:09:31.680 align:start position:0%
+ 
+ 
+
+00:09:31.680 --> 00:09:32.230 align:start position:0%
+ 
+
+
+00:09:32.230 --> 00:09:35.190 align:start position:0%
+ 
+ 
+
+00:09:35.190 --> 00:09:36.870 align:start position:0%
+ 
+ 
+
+00:09:36.870 --> 00:09:39.030 align:start position:0%
+ 
+ 
+
+00:09:39.030 --> 00:09:42.790 align:start position:0%
+ 
+ 
+
+00:09:42.790 --> 00:09:44.870 align:start position:0%
+ 
+ 
+
+00:09:44.870 --> 00:09:46.070 align:start position:0%
+ 
+ 
+
+00:09:46.070 --> 00:09:49.269 align:start position:0%
+ 
+ 
+
+00:09:49.269 --> 00:09:51.269 align:start position:0%
+ 
+ 
+
+00:09:51.269 --> 00:09:53.110 align:start position:0%
+ 
+ 
+
+00:09:53.110 --> 00:09:56.070 align:start position:0%
+ 
+ 
+
+00:09:56.070 --> 00:09:57.829 align:start position:0%
+ 
+ 
+
+00:09:57.829 --> 00:09:57.839 align:start position:0%
+ 
+ 
+
+00:09:57.839 --> 00:09:59.350 align:start position:0%
+ 
+
+
+00:09:59.350 --> 00:10:01.350 align:start position:0%
+ 
+ 
+
+00:10:01.350 --> 00:10:02.630 align:start position:0%
+ 
+ 
+
+00:10:02.630 --> 00:10:05.350 align:start position:0%
+ 
+ 
+
+00:10:05.350 --> 00:10:05.360 align:start position:0%
+ 
+ 
+
+00:10:05.360 --> 00:10:05.750 align:start position:0%
+ 
+
+
+00:10:05.750 --> 00:10:08.470 align:start position:0%
+ 
+ 
+
+00:10:08.470 --> 00:10:08.480 align:start position:0%
+ 
+ 
+
+00:10:08.480 --> 00:10:09.750 align:start position:0%
+ 
+
+
+00:10:09.750 --> 00:10:13.509 align:start position:0%
+ 
+ 
+
+00:10:13.509 --> 00:10:16.550 align:start position:0%
+ 
+ 
+
+00:10:16.550 --> 00:10:17.750 align:start position:0%
+ 
+ 
+
+00:10:17.750 --> 00:10:19.829 align:start position:0%
+ 
+ 
+
+00:10:19.829 --> 00:10:21.030 align:start position:0%
+ 
+ 
+
+00:10:21.030 --> 00:10:23.269 align:start position:0%
+ 
+ 
+
+00:10:23.269 --> 00:10:27.030 align:start position:0%
+ 
+ 
+
+00:10:27.030 --> 00:10:28.870 align:start position:0%
+ 
+ 
+
+00:10:28.870 --> 00:10:31.110 align:start position:0%
+ 
+ 
+
+00:10:31.110 --> 00:10:33.670 align:start position:0%
+ 
+ 
+
+00:10:33.670 --> 00:10:35.110 align:start position:0%
+ 
+ 
+
+00:10:35.110 --> 00:10:37.829 align:start position:0%
+ 
+ 
+
+00:10:37.829 --> 00:10:39.110 align:start position:0%
+ 
+ 
+
+00:10:39.110 --> 00:10:42.389 align:start position:0%
+ 
+ 
+
+00:10:42.389 --> 00:10:45.110 align:start position:0%
+ 
+ 
+
+00:10:45.110 --> 00:10:46.790 align:start position:0%
+ 
+ 
+
+00:10:46.790 --> 00:10:49.990 align:start position:0%
+ 
+ 
+
+00:10:49.990 --> 00:10:52.470 align:start position:0%
+ 
+ 
+
+00:10:52.470 --> 00:10:53.509 align:start position:0%
+ 
+ 
+
+00:10:53.509 --> 00:10:55.190 align:start position:0%
+ 
+ 
+
+00:10:55.190 --> 00:10:59.269 align:start position:0%
+ 
+ 
+
+00:10:59.269 --> 00:11:01.030 align:start position:0%
+ 
+ 
+
+00:11:01.030 --> 00:11:03.269 align:start position:0%
+ 
+ 
+
+00:11:03.269 --> 00:11:05.110 align:start position:0%
+ 
+ 
+
+00:11:05.110 --> 00:11:06.870 align:start position:0%
+ 
+ 
+
+00:11:06.870 --> 00:11:10.389 align:start position:0%
+ 
+ 
+
+00:11:10.389 --> 00:11:13.509 align:start position:0%
+ 
+ 
+
+00:11:13.509 --> 00:11:15.670 align:start position:0%
+ 
+ 
+
+00:11:15.670 --> 00:11:16.949 align:start position:0%
+ 
+ 
+
+00:11:16.949 --> 00:11:20.150 align:start position:0%
+ 
+ 
+
+00:11:20.150 --> 00:11:22.310 align:start position:0%
+ 
+ 
+
+00:11:22.310 --> 00:11:24.710 align:start position:0%
+ 
+ 
+
+00:11:24.710 --> 00:11:27.110 align:start position:0%
+ 
+ 
+
+00:11:27.110 --> 00:11:28.790 align:start position:0%
+ 
+ 
+
+00:11:28.790 --> 00:11:30.949 align:start position:0%
+ 
+ 
+
+00:11:30.949 --> 00:11:32.310 align:start position:0%
+ 
+ 
+
+00:11:32.310 --> 00:11:34.470 align:start position:0%
+ 
+ 
+
+00:11:34.470 --> 00:11:35.829 align:start position:0%
+ 
+ 
+
+00:11:35.829 --> 00:11:37.990 align:start position:0%
+ 
+ 
+
+00:11:37.990 --> 00:11:39.030 align:start position:0%
+ 
+ 
+
+00:11:39.030 --> 00:11:40.949 align:start position:0%
+ 
+ 
+
+00:11:40.949 --> 00:11:42.470 align:start position:0%
+ 
+ 
+
+00:11:42.470 --> 00:11:44.470 align:start position:0%
+ 
+ 
+
+00:11:44.470 --> 00:11:46.389 align:start position:0%
+ 
+ 
+
+00:11:46.389 --> 00:11:48.630 align:start position:0%
+ 
+ 
+
+00:11:48.630 --> 00:11:48.640 align:start position:0%
+ 
+ 
+
+00:11:48.640 --> 00:11:49.430 align:start position:0%
+ 
+
+
+00:11:49.430 --> 00:11:51.430 align:start position:0%
+ 
+ 
+
+00:11:51.430 --> 00:11:52.790 align:start position:0%
+ 
+ 
+
+00:11:52.790 --> 00:11:55.829 align:start position:0%
+ 
+ 
+
+00:11:55.829 --> 00:11:57.750 align:start position:0%
+ 
+ 
+
+00:11:57.750 --> 00:12:00.389 align:start position:0%
+ 
+ 
+
+00:12:00.389 --> 00:12:01.430 align:start position:0%
+ 
+ 
+
+00:12:01.430 --> 00:12:03.590 align:start position:0%
+ 
+ 
+
+00:12:03.590 --> 00:12:04.949 align:start position:0%
+ 
+ 
+
+00:12:04.949 --> 00:12:07.990 align:start position:0%
+ 
+ 
+
+00:12:07.990 --> 00:12:09.269 align:start position:0%
+ 
+ 
+
+00:12:09.269 --> 00:12:09.279 align:start position:0%
+ 
+ 
+
+00:12:09.279 --> 00:12:10.069 align:start position:0%
+ 
+
+
+00:12:10.069 --> 00:12:12.150 align:start position:0%
+ 
+ 
+
+00:12:12.150 --> 00:12:13.350 align:start position:0%
+ 
+ 
+
+00:12:13.350 --> 00:12:16.230 align:start position:0%
+ 
+ 
+
+00:12:16.230 --> 00:12:18.470 align:start position:0%
+ 
+ 
+
+00:12:18.470 --> 00:12:24.470 align:start position:0%
+ 
+ 
+
+00:12:24.470 --> 00:12:26.790 align:start position:0%
+ 
+ 
+
+00:12:26.790 --> 00:12:28.870 align:start position:0%
+ 
+ 
+
+00:12:28.870 --> 00:12:30.790 align:start position:0%
+ 
+ 
+
+00:12:30.790 --> 00:12:32.150 align:start position:0%
+ 
+ 
+
+00:12:32.150 --> 00:12:35.350 align:start position:0%
+ 
+ 
+
+00:12:35.350 --> 00:12:36.629 align:start position:0%
+ 
+ 
+
+00:12:36.629 --> 00:12:38.710 align:start position:0%
+ 
+ 
+
+00:12:38.710 --> 00:12:40.550 align:start position:0%
+ 
+ 
+
+00:12:40.550 --> 00:12:41.750 align:start position:0%
+ 
+ 
+
+00:12:41.750 --> 00:12:44.629 align:start position:0%
+ 
+ 
+
+00:12:44.629 --> 00:12:46.150 align:start position:0%
+ 
+ 
+
+00:12:46.150 --> 00:12:48.310 align:start position:0%
+ 
+ 
+
+00:12:48.310 --> 00:12:50.230 align:start position:0%
+ 
+ 
+
+00:12:50.230 --> 00:12:53.190 align:start position:0%
+ 
+ 
+
+00:12:53.190 --> 00:12:55.910 align:start position:0%
+ 
+ 
+
+00:12:55.910 --> 00:12:55.920 align:start position:0%
+ 
+ 
+
+00:12:55.920 --> 00:12:56.710 align:start position:0%
+ 
+
+
+00:12:56.710 --> 00:12:59.110 align:start position:0%
+ 
+ 
+
+00:12:59.110 --> 00:12:59.120 align:start position:0%
+ 
+ 
+
+00:12:59.120 --> 00:12:59.829 align:start position:0%
+ 
+
+
+00:12:59.829 --> 00:13:02.230 align:start position:0%
+ 
+ 
+
+00:13:02.230 --> 00:13:05.269 align:start position:0%
+ 
+ 
+
+00:13:05.269 --> 00:13:07.670 align:start position:0%
+ 
+ 
+
+00:13:07.670 --> 00:13:09.350 align:start position:0%
+ 
+ 
+
+00:13:09.350 --> 00:13:12.389 align:start position:0%
+ 
+ 
+
+00:13:12.389 --> 00:13:14.470 align:start position:0%
+ 
+ 
+
+00:13:14.470 --> 00:13:16.230 align:start position:0%
+ 
+ 
+
+00:13:16.230 --> 00:13:18.550 align:start position:0%
+ 
+ 
+
+00:13:18.550 --> 00:13:19.750 align:start position:0%
+ 
+ 
+
+00:13:19.750 --> 00:13:22.710 align:start position:0%
+ 
+ 
+
+00:13:22.710 --> 00:13:23.910 align:start position:0%
+ 
+ 
+
+00:13:23.910 --> 00:13:26.470 align:start position:0%
+ 
+ 
+
+00:13:26.470 --> 00:13:27.509 align:start position:0%
+ 
+ 
+
+00:13:27.509 --> 00:13:30.230 align:start position:0%
+ 
+ 
+
+00:13:30.230 --> 00:13:31.910 align:start position:0%
+ 
+ 
+
+00:13:31.910 --> 00:13:34.949 align:start position:0%
+ 
+ 
+
+00:13:34.949 --> 00:13:37.829 align:start position:0%
+ 
+ 
+
+00:13:37.829 --> 00:13:38.949 align:start position:0%
+ 
+ 
+
+00:13:38.949 --> 00:13:42.150 align:start position:0%
+ 
+ 
+
+00:13:42.150 --> 00:13:43.030 align:start position:0%
+ 
+ 
+
+00:13:43.030 --> 00:13:45.750 align:start position:0%
+ 
+ 
+
+00:13:45.750 --> 00:13:49.350 align:start position:0%
+ 
+ 
+
+00:13:49.350 --> 00:13:52.710 align:start position:0%
+ 
+ 
+
+00:13:52.710 --> 00:13:54.150 align:start position:0%
+ 
+ 
+
+00:13:54.150 --> 00:13:55.990 align:start position:0%
+ 
+ 
+
+00:13:55.990 --> 00:13:58.470 align:start position:0%
+ 
+ 
+
+00:13:58.470 --> 00:14:00.230 align:start position:0%
+ 
+ 
+
+00:14:00.230 --> 00:14:01.829 align:start position:0%
+ 
+ 
+
+00:14:01.829 --> 00:14:04.069 align:start position:0%
+ 
+ 
+
+00:14:04.069 --> 00:14:06.389 align:start position:0%
+ 
+ 
+
+00:14:06.389 --> 00:14:06.399 align:start position:0%
+ 
+ 
+
+00:14:06.399 --> 00:14:07.350 align:start position:0%
+ 
+
+
+00:14:07.350 --> 00:14:09.350 align:start position:0%
+ 
+ 
+
+00:14:09.350 --> 00:14:11.030 align:start position:0%
+ 
+ 
+
+00:14:11.030 --> 00:14:12.150 align:start position:0%
+ 
+ 
+
+00:14:12.150 --> 00:14:15.670 align:start position:0%
+ 
+ 
+
+00:14:15.670 --> 00:14:17.110 align:start position:0%
+ 
+ 
+
+00:14:17.110 --> 00:14:23.189 align:start position:0%
+ 
+ 
+
+00:14:23.189 --> 00:14:25.509 align:start position:0%
+ 
+ 
+
+00:14:25.509 --> 00:14:27.509 align:start position:0%
+ 
+ 
+
+00:14:27.509 --> 00:14:29.509 align:start position:0%
+ 
+ 
+
+00:14:29.509 --> 00:14:30.710 align:start position:0%
+ 
+ 
+
+00:14:30.710 --> 00:14:32.870 align:start position:0%
+ 
+ 
+
+00:14:32.870 --> 00:14:41.590 align:start position:0%
+ 
+ 
+
+00:14:41.590 --> 00:14:43.750 align:start position:0%
+ 
+ 
+
+00:14:43.750 --> 00:14:46.310 align:start position:0%
+ 
+ 
+
+00:14:46.310 --> 00:14:49.829 align:start position:0%
+ 
+ 
+
+00:14:49.829 --> 00:14:51.350 align:start position:0%
+ 
+ 
+
+00:14:51.350 --> 00:14:53.350 align:start position:0%
+ 
+ 
+
+00:14:53.350 --> 00:14:54.710 align:start position:0%
+ 
+ 
+
+00:14:54.710 --> 00:14:57.350 align:start position:0%
+ 
+ 
+
+00:14:57.350 --> 00:14:58.310 align:start position:0%
+ 
+ 
+
+00:14:58.310 --> 00:14:59.110 align:start position:0%
+ 
+ 
+
+00:14:59.110 --> 00:15:01.990 align:start position:0%
+ 
+ 
+
+00:15:01.990 --> 00:15:02.000 align:start position:0%
+ 
+ 
+
+00:15:02.000 --> 00:15:02.790 align:start position:0%
+ 
+
+
+00:15:02.790 --> 00:15:05.110 align:start position:0%
+ 
+ 
+
+00:15:05.110 --> 00:15:05.120 align:start position:0%
+ 
+ 
+
+00:15:05.120 --> 00:15:07.110 align:start position:0%
+ 
+
+
+00:15:07.110 --> 00:15:10.310 align:start position:0%
+ 
+ 
+
+00:15:10.310 --> 00:15:11.990 align:start position:0%
+ 
+ 
+
+00:15:11.990 --> 00:15:13.590 align:start position:0%
+ 
+ 
+
+00:15:13.590 --> 00:15:16.550 align:start position:0%
+ 
+ 
+
+00:15:16.550 --> 00:15:18.230 align:start position:0%
+ 
+ 
+
+00:15:18.230 --> 00:15:19.910 align:start position:0%
+ 
+ 
+
+00:15:19.910 --> 00:15:21.750 align:start position:0%
+ 
+ 
+
+00:15:21.750 --> 00:15:35.829 align:start position:0%
+ 
+ 
+
+00:15:35.829 --> 00:15:35.839 align:start position:0%
+ 
+ 
+
+00:15:35.839 --> 00:15:37.920 align:start position:0%
+ 
+
+
