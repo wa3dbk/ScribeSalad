@@ -1,0 +1,2788 @@
+WEBVTT
+Kind: captions
+Language: en
+
+00:00:00.240 --> 00:00:02.470 align:start position:0%
+ 
+it gives me great pleasure to announce  the next speaker for the conference  uh many of you know him by  many names which i probably don't know  uh but one thing i will do want to share  with you is a he's a good friend  um and b you know it's he's been putting  on a great conference over the last  couple years everyone please welcome  jared up on stage  when you're working on a project there  are many moving parts  and each part of this data pipeline has  its own considerations  and those considerations become  more difficult when you're working with  medium data  medium data is harder to handle than  people think it is  it's  big enough that it doesn't fit into  memory  but small enough that you shouldn't be  using google scale tools  so you need to figure out how you're  going to work with it it takes a little  bit of thought so we're going to discuss  some of those tools  and as our motivating example for today  we are going to be talking about taxis  yes that's cash cab and yes i was on it  very very early as one of the first  contestants  the new york city taxi data is publicly  available on aws for anyone to get and  examine in fact it's been used a lot for  medium data case studies  our goal for today  has a few steps in it  first we are going to pull the data from  s3  but we only want to pull the data if it  has changed because we don't want to pay  for that egress fee  then we are going to keep data only from  certain geographic areas of our data  set and then we want to only keep rides  which are which are represented by a row  where all the rides for that given day  were over some threshold say six million  dollars so if all the rides across all  taxis for a given day was over six  million dollars keep the rides for those  days and not other days  then we want to load our cleaned up  ready to go data set into a database  so first up we have to go get the data  and we can do that using the aws.s3  package  using the save object function we're  going to get this object which is in our  case a file from that bucket and save it  to this file locally on disk  and this brings it down  we can  read in the data set just a few columns  using f read take a sample using slice  sample then convert it into an sf object  so that we can plot it with leaflet  and we very quickly see there are a  bunch of taxi pickups in the middle of  the ocean near africa  we probably want to remove those from  our data set  notice for a moment though instead of  using the  add points function from leaflet i'm  using add gl points from leaf gl because  it uses webgl so it can plot much  quicker and it can plot more points than  the standard function can it's a nice  add-on that makes life really really  good  so now we have our data we want to  geo-filter it  and there are a few strategies we can  take  we can  load it up into post-gis right from the  get-go and do a spatial query  but that's our end goal and the data's  not ready for that yet  so we could read all the data into  memory convert it into an sf object and  filter out the rows  but we can't be so certain that the data  will fit into memory  so we can split this one big file into  multiple files then read and filter each  file individually  so that's the strategy i want to go if i  want to split the files  i wrote a function that first deletes  any files in the destination folder  saves the header row to be used later  and then uses process x which we are  going to use a lot to call the bash  command split we call split we give it a  bunch of extra information how we want  the data split up  and then we keep track of all these  files we generated  when we run this command and we take a  look at the output directory we have 319  files plus a header file  so our data is all split up and we can  operate over that  in order to do the geofiltering we first  need a map of our desired area  luckily that is freely available online  and we can read it straight from the url  which is hosted by arcgis into read sf  and we are going to use this map to keep  just some records  we check out the map to see we have each  borough of new york city and we are just  going to focus on manhattan just make  the problem a little bit quicker for  today  also please note that this map used  exactly four colors and according to the  four color theorem you can plot any map  with just four colors and i think we  just proved it with this one simple  example  so now it's time to do our spatial  filter and we're going to do this for  each of our hundreds of files so i wrote  a function to do that  first it reads in the header because not  all of our split files have headers  then we use f read for its speed to read  in this one file  convert it to a table because it's  easier for me to work with  convert that into an sf object and set  the lat long  then we'd use st filter  st filter is like a spatial join but  it's only going to keep the  columns from the first table and it's  going to reduce the rows based on which  points in the first table fall into the  polygons of the second table  after we have filtered down our data  notice this is all just one long  pipeline  we then convert our geometry object away  from well-known text where it's stored  into an ewkb that is a special type of  well-known binary because we could save  that in the csv and load that into post  gis very nicely  and we said hex equals true so it comes  across as text instead of raw  and then we use f right to write this  out to a file  and we do that for each file  individually and we mix very nicely data  table d plier and sf  we check before we can apply the  function actually  we have to create a mapping of all of  our input files this raw files and the  corresponding output file that way we  can iterate over this data frame and do  is do this one file at a time  we then delete any files that already  exist in our output directory  and use walk to iterate over  this data frame of file names calling  remove points on each file individually  once we accomplish this we read in one  data set to see what it looks like we  have all the columns we expect and our  geometry column the last one is stored  as a character because it is a  well-known binary not a raw  standard geometry column  with our  data filter geographically we can now  filter based on an aggregation  we want to only keep the rides from days  where the daily total was above a  threshold  so you can no longer do this one file at  a time because you don't know which rows  are split into which file  i need to be able to look at the entire  data set and a great tool for that is  arrow  this will allow me to operate on the  entire data set  without pulling it all into memory while  still using a d plier syntax this is  going to be very very helpful for us  now installing aero even though it's on  cran  can be a little difficult especially on  linux especially in an air-gapped  environment  so luckily there is this github content  which has a function called install  arrow which will install the arrow  system libraries for you to make it a  little bit easier to have the package  going in r  to do this step i wrote another function  so it's easy to apply because there are  multiple steps in this process  first we use open dataset to open the  entire data  we are not reading it all into memory  but we are making it available to us and  that's the nice thing it is not all in  memory it is just being a made available  to us and that's very important  we then compute a group by summarization  we group by date we summarize by summing  up the  total fare and then we filter out to  make sure that fares were over a certain  threshold now this has not been computed  we've just constructed the query  we will then use this query in a semi  join which is a filtering join that will  only keep records of our main data set  which have a date corresponding to this  filtered outdates  and then we write this result out to a  file  only parts of the data ever make it into  memory which is really really awesome  so then we call this function and we  check it out and it produced one file we  could have written multiple files but i  want just one for our next step which is  loading to the database this is our  ultimate goal of getting it in here and  for my purposes one file will be easier  dealing with databases can be a bit  tricky sometimes  so  instead of installing the database  directly i am going to use docker i'm  going to use to hold the database this  way i can't screw up other databases  rather than build my own docker  container i'm going to use an existing  one cartoza post gis and i will use  docker compose for spinning it up  i'm using a volume to store the database  data that way survives reboots  there's also a nice feature that any sql  files i put into a certain volume  will be ran the first time the container  is spun up  i also set certain environment variables  like setting a really secure password  such as docker  and i make sure there are extensions  such as post gis and h-store and some  other ones  and i declare the port to be 5436  because i have multiple of these  containers going on for all my projects  and they can all use the same port  that sql file that creates a table  has a regular crate statement with a  bunch of columns each of different types  including our geometry column with  constraints to make sure it is a point  not a polygon not a line string but a  point  i don't set any indexes because i'll do  that later after i load the data  to spin up the container  i use process x from inside of r and i  call the bash command docker compose i  tell it  which docker compose file to use because  i have multiples i tell it up and dash d  means detach it this way it doesn't clog  up my terminal  with our database running we can finally  copy from the csv into that table  but we are not going to use r to do this  because that whole csv might not fit  into memory instead we will use psql a  command line tool which reads straight  from a csv into  the database  and i need to provide a set of sql  instructions  this file starts with begin and ends  with commit  and that means that all these steps are  part of a transaction  if any one step fails it will undo all  the steps and that's really important  it's a really great way of making sure  you don't screw up massively always use  a transaction  first we drop the indexes because it'll  be quicker to delete and bulk load into  the database without indexes  we delete all the rows in the current  table that we care about  because we're just doing a delete and  replace and then we slash copy  into that table from our csv  and we tell the  program that it is a csv with a header  row and blanks to be treated as nulls  now this line of code should all be on a  single line  i have broken it up onto multiple lines  so you can read it but it has to be on a  single line  after slash copy we create the indexes  and then we commit so it's a really  great way of writing to the database  slash copy is really incredibly fast  when i call psql i will not be able to  pass in a password so i need to provide  that some other way  and i do that by storing all the  database information including our super  secure password in a config file  called.pg underscoreservice.conf  we put all of our connection information  inside of this file and then when we  call psql it gets the password  automatically  super easy really works really well we  then use process x to call p sql  and when we do that we say service  equals medium data so it knows to use  this database information that we got  from  our service file  and we provide the file of instructions  using dash f  so all those steps were really great  they  a lot of them  depend on each other it could be a lot  of complication you don't want to make  sure you want to make sure you don't  duplicate  so it's important to use some sort of  orchestration tool you want to run those  pieces smartly you want to run them in  the right order you don't want to repeat  steps you don't want to have to worry  about memory usage  thankfully we have targets this puts  everything together it only runs steps  that need to be re-ran it doesn't waste  any computation  it builds the dag for us the directed  acyclic graph it moves objects in and  out of memory it's very reproducible and  it's really changed my entire workflow  when you're using targets your directory  structure typically looks like this  you keep all your custom code  particularly your functions inside the r  folder inside a file called functions.r  the naming is optional  then you put  all of your instructions inside of  underscoretargets.r  everything goes inside of there  we'll look at that extensively you set  config and underscore targets.yaml  i put my database instructions inside  copy2db.txt you may or may not have that  i put my database files inside the  database folder and i have a docker  compose file for spinning up my  container  today we are going to focus on targets.r  inside there you call library targets  and optionally target types which gives  you more advanced versions of targets  you source any code you need by sourcing  in this case our functions then all of  your commands all of your steps go  inside of a list a plain old regular r  list nice super simple  so let's go back to the beginning where  we started and let's get the data  we use tarforce to first check has the  file changed because we don't want to do  this if the file hasn't changed  tarforce calls getbucketdf which tells  us if the file has changed and if it has  changed our next step calls save object  to download it  this target is a tar file because the  outcome of this function is the name of  a file on disk and later steps we'll  check if that file has changed and tar  file keeps track of that for us  we can visualize our dac by calling  tarviz network  even though we only had two steps it  shows us three because tar force is  actually two and one  typically this visualization  only will show the difference between  outdated targets and up-to-date targets  but since i use tarforce that runs every  time so even though subsequent targets  will be up to date they will still be  shown as outdated and there's nothing we  can do about that right now  next we need to split the data  luckily we wrote a function for that and  we can call that function  first we split the data and this times  the tar target it's a regular target  because an r object is returned a data  frame of file names  and that feeds into our next target  which creates a mapping of input files  and output files  when we visualize our dag now we see we  have these extra steps and the raw file  step will only be called if the raw data  step is changed and that is only changed  if we downloaded the data which only  happens if the file on s3 changes  to our geofiltering we need our map of  our desired area so we need to go  download it again we only want to  download it if it has changed so tar url  given a url on the internet will keep  track of that file on the internet and  we'll  let you know if that file has changed  remotely if it hasn't changed you're  good if it has changed the next step tar  target which reads in this url into sf  will be fired so it's a great way of  keeping track of files that are remote  to you so you don't have to worry about  if they have changed  this part of the dag has just two steps  checking if the file is changed on the  internet and reading it into an sf  object  you can see that these two steps are  completely disconnected from the rest of  the dag they're independent of each  other because they don't have anything  to do with each other  for now  because next we're going to do our  spatial filtering and that's going to  combine our data and that map file  to do this first we make a list of any  existing filtered files in our output  directory and we delete them all we  don't want them around because we don't  we don't want overlap  we then  take our data frame of input and output  files and we map over that see the  pattern equals map that allows us to  iterate over one row at a time of this  data frame  to call our function remove points on  each one individually  you can see here that this function  depends upon  our nyc map our file name mapping and  in curly braces we included remove  filtered files because even though our  function doesn't make use of it i want  this step to only occur after that  removing data step has been successful  looking at the dag now we see that  removing the old files making the input  output list and the nyc map all feed  into filter files  now filtered files is a square not a  circle  because rather than one step it is a  pattern of steps because it's going to  be called for each of those rows in the  data frame so it's iterating over that  pattern  with our data all processed we can now  do our aggregation based filtering  this step uses tar change because our  function which calls arrow doesn't  actually refer to any of the previous  steps so i'm saying change equals the  filter file step so if those files  change  go ahead and run the step  the outcome this of this step will be a  file so i say format equals file  and i tell it to load up the package  arrow because this way i don't need to  specify the arrow namespace in that  function  targets and arrow don't really play  nicely together so you need to create  and destroy the arrow object within a  single target  and this gets even harder if you want to  share schemas  our dag now shows the process files  which will only run if the filter files  have changed  next up we need to get the docker  container running  so i create a step called docker up and  i actually have a list our step is a  list it has two parts to it  because your steps can be  any valid r object  the first step calls docker compose like  we saw earlier this spins up the docker  container  but since column docker composed on  container that's already running gives a  different message than on a new  container i also check when was this  container created and i will use that  later to let us know if we should run  other steps  this docker up step is this one step by  itself disconnected from the rest of the  dag  with our database running we can copy  from the csv to the table  so we want to call our process x to call  p sql we need to remember to feed it our  database information  which is medium data this way it gets  the password  and this step runs  if either the docker uptime changed or  the process file itself changes that's  why we use tar change and specify the  change  our dag is now complete we have all of  our steps we need to take all laid out  for us right here and everything will  happen nicely and automatically  and if we say targets only equals false  it also shows us our custom functions to  make sure that we know if our function  has changed it changes the graph  so now we can run the whole pipeline or  at least whatever needs to be updated by  running one line of code we run tar make  and everything just runs all nicely  taken care of for us if things don't  need to be run they don't need to be run  if they do they do  but better yet  we can do this in parallel  that's really great  let's take advantage of our split files  remember we had hundreds of them  and let's do each one individually in  parallel  the first step to this is setting  pattern equals map equals  file name of mapping this iterates over  all those files and since they are done  independently they can be done in  parallel  next up in our arrow step we need to be  careful here  arrow runs implicitly in parallel  already and we want to keep it in  parallel  but we don't want a race condition with  our other parallel steps we want both so  we set deployment equals main for the  arrow step and that will run by itself  in parallel and then all everything else  will run in parallel also  we then make one change to  our targets file we say  future plan  of future multi-session and i set four  workers i could have done more workers  but i said four workers and now anything  that can be done in parallel will that  means if you have two steps that have  nothing to do with each other they can  run in parallel  if you have a step like our  geoprocessing which maps over a bunch of  files that will be done in parallel  if you have a step which uses a function  like future map that will be done in  parallel it's all nicely done for you  and the one more change we need to make  is instead of calling tar make  we call tar make future  that's it that runs everything in  parallel even across multiple machines  if you wanted to you'd actually run  tarmac cluster mq but same idea and this  runs everything in parallel for you you  don't need to worry about it you just go  along from there and go on your smooth  road  so we put together a lot of different  tools let's see what we did  we used aws for cloud storage  we use the command line for splitting  and pre-processing files  we use data table for reading and  writing data  and then d plier and per for data  manipulation  we use sf for geospatial filtering  we use arrow for operating on out of  memory data  postgres and postgis for holding the  finished data  docker isolating the database  and targets for orchestrating everything  and this is great this package put  everything together built the dag it  keeps track of what needs to be computed  it's easier than other orchestration  tools and it is all r  based and that one package pretty much  sums up the whole project literally it  gives us the whole project right here in  this one visualization tells us  everything that's happening and does it  all for you allowing you to combine all  these tools to help you work on data  that would otherwise give you a bit of  trouble  thank you very much
+
+00:00:02.470 --> 00:00:04.710 align:start position:0%
+it gives me great pleasure to announce  the next speaker for the conference  uh many of you know him by  many names which i probably don't know  uh but one thing i will do want to share  with you is a he's a good friend  um and b you know it's he's been putting  on a great conference over the last  couple years everyone please welcome  jared up on stage  when you're working on a project there  are many moving parts  and each part of this data pipeline has  its own considerations  and those considerations become  more difficult when you're working with  medium data  medium data is harder to handle than  people think it is  it's  big enough that it doesn't fit into  memory  but small enough that you shouldn't be  using google scale tools  so you need to figure out how you're  going to work with it it takes a little  bit of thought so we're going to discuss  some of those tools  and as our motivating example for today  we are going to be talking about taxis  yes that's cash cab and yes i was on it  very very early as one of the first  contestants  the new york city taxi data is publicly  available on aws for anyone to get and  examine in fact it's been used a lot for  medium data case studies  our goal for today  has a few steps in it  first we are going to pull the data from  s3  but we only want to pull the data if it  has changed because we don't want to pay  for that egress fee  then we are going to keep data only from  certain geographic areas of our data  set and then we want to only keep rides  which are which are represented by a row  where all the rides for that given day  were over some threshold say six million  dollars so if all the rides across all  taxis for a given day was over six  million dollars keep the rides for those  days and not other days  then we want to load our cleaned up  ready to go data set into a database  so first up we have to go get the data  and we can do that using the aws.s3  package  using the save object function we're  going to get this object which is in our  case a file from that bucket and save it  to this file locally on disk  and this brings it down  we can  read in the data set just a few columns  using f read take a sample using slice  sample then convert it into an sf object  so that we can plot it with leaflet  and we very quickly see there are a  bunch of taxi pickups in the middle of  the ocean near africa  we probably want to remove those from  our data set  notice for a moment though instead of  using the  add points function from leaflet i'm  using add gl points from leaf gl because  it uses webgl so it can plot much  quicker and it can plot more points than  the standard function can it's a nice  add-on that makes life really really  good  so now we have our data we want to  geo-filter it  and there are a few strategies we can  take  we can  load it up into post-gis right from the  get-go and do a spatial query  but that's our end goal and the data's  not ready for that yet  so we could read all the data into  memory convert it into an sf object and  filter out the rows  but we can't be so certain that the data  will fit into memory  so we can split this one big file into  multiple files then read and filter each  file individually  so that's the strategy i want to go if i  want to split the files  i wrote a function that first deletes  any files in the destination folder  saves the header row to be used later  and then uses process x which we are  going to use a lot to call the bash  command split we call split we give it a  bunch of extra information how we want  the data split up  and then we keep track of all these  files we generated  when we run this command and we take a  look at the output directory we have 319  files plus a header file  so our data is all split up and we can  operate over that  in order to do the geofiltering we first  need a map of our desired area  luckily that is freely available online  and we can read it straight from the url  which is hosted by arcgis into read sf  and we are going to use this map to keep  just some records  we check out the map to see we have each  borough of new york city and we are just  going to focus on manhattan just make  the problem a little bit quicker for  today  also please note that this map used  exactly four colors and according to the  four color theorem you can plot any map  with just four colors and i think we  just proved it with this one simple  example  so now it's time to do our spatial  filter and we're going to do this for  each of our hundreds of files so i wrote  a function to do that  first it reads in the header because not  all of our split files have headers  then we use f read for its speed to read  in this one file  convert it to a table because it's  easier for me to work with  convert that into an sf object and set  the lat long  then we'd use st filter  st filter is like a spatial join but  it's only going to keep the  columns from the first table and it's  going to reduce the rows based on which  points in the first table fall into the  polygons of the second table  after we have filtered down our data  notice this is all just one long  pipeline  we then convert our geometry object away  from well-known text where it's stored  into an ewkb that is a special type of  well-known binary because we could save  that in the csv and load that into post  gis very nicely  and we said hex equals true so it comes  across as text instead of raw  and then we use f right to write this  out to a file  and we do that for each file  individually and we mix very nicely data  table d plier and sf  we check before we can apply the  function actually  we have to create a mapping of all of  our input files this raw files and the  corresponding output file that way we  can iterate over this data frame and do  is do this one file at a time  we then delete any files that already  exist in our output directory  and use walk to iterate over  this data frame of file names calling  remove points on each file individually  once we accomplish this we read in one  data set to see what it looks like we  have all the columns we expect and our  geometry column the last one is stored  as a character because it is a  well-known binary not a raw  standard geometry column  with our  data filter geographically we can now  filter based on an aggregation  we want to only keep the rides from days  where the daily total was above a  threshold  so you can no longer do this one file at  a time because you don't know which rows  are split into which file  i need to be able to look at the entire  data set and a great tool for that is  arrow  this will allow me to operate on the  entire data set  without pulling it all into memory while  still using a d plier syntax this is  going to be very very helpful for us  now installing aero even though it's on  cran  can be a little difficult especially on  linux especially in an air-gapped  environment  so luckily there is this github content  which has a function called install  arrow which will install the arrow  system libraries for you to make it a  little bit easier to have the package  going in r  to do this step i wrote another function  so it's easy to apply because there are  multiple steps in this process  first we use open dataset to open the  entire data  we are not reading it all into memory  but we are making it available to us and  that's the nice thing it is not all in  memory it is just being a made available  to us and that's very important  we then compute a group by summarization  we group by date we summarize by summing  up the  total fare and then we filter out to  make sure that fares were over a certain  threshold now this has not been computed  we've just constructed the query  we will then use this query in a semi  join which is a filtering join that will  only keep records of our main data set  which have a date corresponding to this  filtered outdates  and then we write this result out to a  file  only parts of the data ever make it into  memory which is really really awesome  so then we call this function and we  check it out and it produced one file we  could have written multiple files but i  want just one for our next step which is  loading to the database this is our  ultimate goal of getting it in here and  for my purposes one file will be easier  dealing with databases can be a bit  tricky sometimes  so  instead of installing the database  directly i am going to use docker i'm  going to use to hold the database this  way i can't screw up other databases  rather than build my own docker  container i'm going to use an existing  one cartoza post gis and i will use  docker compose for spinning it up  i'm using a volume to store the database  data that way survives reboots  there's also a nice feature that any sql  files i put into a certain volume  will be ran the first time the container  is spun up  i also set certain environment variables  like setting a really secure password  such as docker  and i make sure there are extensions  such as post gis and h-store and some  other ones  and i declare the port to be 5436  because i have multiple of these  containers going on for all my projects  and they can all use the same port  that sql file that creates a table  has a regular crate statement with a  bunch of columns each of different types  including our geometry column with  constraints to make sure it is a point  not a polygon not a line string but a  point  i don't set any indexes because i'll do  that later after i load the data  to spin up the container  i use process x from inside of r and i  call the bash command docker compose i  tell it  which docker compose file to use because  i have multiples i tell it up and dash d  means detach it this way it doesn't clog  up my terminal  with our database running we can finally  copy from the csv into that table  but we are not going to use r to do this  because that whole csv might not fit  into memory instead we will use psql a  command line tool which reads straight  from a csv into  the database  and i need to provide a set of sql  instructions  this file starts with begin and ends  with commit  and that means that all these steps are  part of a transaction  if any one step fails it will undo all  the steps and that's really important  it's a really great way of making sure  you don't screw up massively always use  a transaction  first we drop the indexes because it'll  be quicker to delete and bulk load into  the database without indexes  we delete all the rows in the current  table that we care about  because we're just doing a delete and  replace and then we slash copy  into that table from our csv  and we tell the  program that it is a csv with a header  row and blanks to be treated as nulls  now this line of code should all be on a  single line  i have broken it up onto multiple lines  so you can read it but it has to be on a  single line  after slash copy we create the indexes  and then we commit so it's a really  great way of writing to the database  slash copy is really incredibly fast  when i call psql i will not be able to  pass in a password so i need to provide  that some other way  and i do that by storing all the  database information including our super  secure password in a config file  called.pg underscoreservice.conf  we put all of our connection information  inside of this file and then when we  call psql it gets the password  automatically  super easy really works really well we  then use process x to call p sql  and when we do that we say service  equals medium data so it knows to use  this database information that we got  from  our service file  and we provide the file of instructions  using dash f  so all those steps were really great  they  a lot of them  depend on each other it could be a lot  of complication you don't want to make  sure you want to make sure you don't  duplicate  so it's important to use some sort of  orchestration tool you want to run those  pieces smartly you want to run them in  the right order you don't want to repeat  steps you don't want to have to worry  about memory usage  thankfully we have targets this puts  everything together it only runs steps  that need to be re-ran it doesn't waste  any computation  it builds the dag for us the directed  acyclic graph it moves objects in and  out of memory it's very reproducible and  it's really changed my entire workflow  when you're using targets your directory  structure typically looks like this  you keep all your custom code  particularly your functions inside the r  folder inside a file called functions.r  the naming is optional  then you put  all of your instructions inside of  underscoretargets.r  everything goes inside of there  we'll look at that extensively you set  config and underscore targets.yaml  i put my database instructions inside  copy2db.txt you may or may not have that  i put my database files inside the  database folder and i have a docker  compose file for spinning up my  container  today we are going to focus on targets.r  inside there you call library targets  and optionally target types which gives  you more advanced versions of targets  you source any code you need by sourcing  in this case our functions then all of  your commands all of your steps go  inside of a list a plain old regular r  list nice super simple  so let's go back to the beginning where  we started and let's get the data  we use tarforce to first check has the  file changed because we don't want to do  this if the file hasn't changed  tarforce calls getbucketdf which tells  us if the file has changed and if it has  changed our next step calls save object  to download it  this target is a tar file because the  outcome of this function is the name of  a file on disk and later steps we'll  check if that file has changed and tar  file keeps track of that for us  we can visualize our dac by calling  tarviz network  even though we only had two steps it  shows us three because tar force is  actually two and one  typically this visualization  only will show the difference between  outdated targets and up-to-date targets  but since i use tarforce that runs every  time so even though subsequent targets  will be up to date they will still be  shown as outdated and there's nothing we  can do about that right now  next we need to split the data  luckily we wrote a function for that and  we can call that function  first we split the data and this times  the tar target it's a regular target  because an r object is returned a data  frame of file names  and that feeds into our next target  which creates a mapping of input files  and output files  when we visualize our dag now we see we  have these extra steps and the raw file  step will only be called if the raw data  step is changed and that is only changed  if we downloaded the data which only  happens if the file on s3 changes  to our geofiltering we need our map of  our desired area so we need to go  download it again we only want to  download it if it has changed so tar url  given a url on the internet will keep  track of that file on the internet and  we'll  let you know if that file has changed  remotely if it hasn't changed you're  good if it has changed the next step tar  target which reads in this url into sf  will be fired so it's a great way of  keeping track of files that are remote  to you so you don't have to worry about  if they have changed  this part of the dag has just two steps  checking if the file is changed on the  internet and reading it into an sf  object  you can see that these two steps are  completely disconnected from the rest of  the dag they're independent of each  other because they don't have anything  to do with each other  for now  because next we're going to do our  spatial filtering and that's going to  combine our data and that map file  to do this first we make a list of any  existing filtered files in our output  directory and we delete them all we  don't want them around because we don't  we don't want overlap  we then  take our data frame of input and output  files and we map over that see the  pattern equals map that allows us to  iterate over one row at a time of this  data frame  to call our function remove points on  each one individually  you can see here that this function  depends upon  our nyc map our file name mapping and  in curly braces we included remove  filtered files because even though our  function doesn't make use of it i want  this step to only occur after that  removing data step has been successful  looking at the dag now we see that  removing the old files making the input  output list and the nyc map all feed  into filter files  now filtered files is a square not a  circle  because rather than one step it is a  pattern of steps because it's going to  be called for each of those rows in the  data frame so it's iterating over that  pattern  with our data all processed we can now  do our aggregation based filtering  this step uses tar change because our  function which calls arrow doesn't  actually refer to any of the previous  steps so i'm saying change equals the  filter file step so if those files  change  go ahead and run the step  the outcome this of this step will be a  file so i say format equals file  and i tell it to load up the package  arrow because this way i don't need to  specify the arrow namespace in that  function  targets and arrow don't really play  nicely together so you need to create  and destroy the arrow object within a  single target  and this gets even harder if you want to  share schemas  our dag now shows the process files  which will only run if the filter files  have changed  next up we need to get the docker  container running  so i create a step called docker up and  i actually have a list our step is a  list it has two parts to it  because your steps can be  any valid r object  the first step calls docker compose like  we saw earlier this spins up the docker  container  but since column docker composed on  container that's already running gives a  different message than on a new  container i also check when was this  container created and i will use that  later to let us know if we should run  other steps  this docker up step is this one step by  itself disconnected from the rest of the  dag  with our database running we can copy  from the csv to the table  so we want to call our process x to call  p sql we need to remember to feed it our  database information  which is medium data this way it gets  the password  and this step runs  if either the docker uptime changed or  the process file itself changes that's  why we use tar change and specify the  change  our dag is now complete we have all of  our steps we need to take all laid out  for us right here and everything will  happen nicely and automatically  and if we say targets only equals false  it also shows us our custom functions to  make sure that we know if our function  has changed it changes the graph  so now we can run the whole pipeline or  at least whatever needs to be updated by  running one line of code we run tar make  and everything just runs all nicely  taken care of for us if things don't  need to be run they don't need to be run  if they do they do  but better yet  we can do this in parallel  that's really great  let's take advantage of our split files  remember we had hundreds of them  and let's do each one individually in  parallel  the first step to this is setting  pattern equals map equals  file name of mapping this iterates over  all those files and since they are done  independently they can be done in  parallel  next up in our arrow step we need to be  careful here  arrow runs implicitly in parallel  already and we want to keep it in  parallel  but we don't want a race condition with  our other parallel steps we want both so  we set deployment equals main for the  arrow step and that will run by itself  in parallel and then all everything else  will run in parallel also  we then make one change to  our targets file we say  future plan  of future multi-session and i set four  workers i could have done more workers  but i said four workers and now anything  that can be done in parallel will that  means if you have two steps that have  nothing to do with each other they can  run in parallel  if you have a step like our  geoprocessing which maps over a bunch of  files that will be done in parallel  if you have a step which uses a function  like future map that will be done in  parallel it's all nicely done for you  and the one more change we need to make  is instead of calling tar make  we call tar make future  that's it that runs everything in  parallel even across multiple machines  if you wanted to you'd actually run  tarmac cluster mq but same idea and this  runs everything in parallel for you you  don't need to worry about it you just go  along from there and go on your smooth  road  so we put together a lot of different  tools let's see what we did  we used aws for cloud storage  we use the command line for splitting  and pre-processing files  we use data table for reading and  writing data  and then d plier and per for data  manipulation  we use sf for geospatial filtering  we use arrow for operating on out of  memory data  postgres and postgis for holding the  finished data  docker isolating the database  and targets for orchestrating everything  and this is great this package put  everything together built the dag it  keeps track of what needs to be computed  it's easier than other orchestration  tools and it is all r  based and that one package pretty much  sums up the whole project literally it  gives us the whole project right here in  this one visualization tells us  everything that's happening and does it  all for you allowing you to combine all  these tools to help you work on data  that would otherwise give you a bit of  trouble  thank you very much
+ 
+
+00:00:04.710 --> 00:00:06.869 align:start position:0%
+ 
+ 
+
+00:00:06.869 --> 00:00:09.830 align:start position:0%
+ 
+ 
+
+00:00:09.830 --> 00:00:11.910 align:start position:0%
+ 
+ 
+
+00:00:11.910 --> 00:00:14.310 align:start position:0%
+ 
+ 
+
+00:00:14.310 --> 00:00:16.790 align:start position:0%
+ 
+ 
+
+00:00:16.790 --> 00:00:18.470 align:start position:0%
+ 
+ 
+
+00:00:18.470 --> 00:00:20.390 align:start position:0%
+ 
+ 
+
+00:00:20.390 --> 00:00:23.269 align:start position:0%
+ 
+ 
+
+00:00:23.269 --> 00:00:25.349 align:start position:0%
+ 
+ 
+
+00:00:25.349 --> 00:00:27.990 align:start position:0%
+ 
+ 
+
+00:00:27.990 --> 00:00:29.910 align:start position:0%
+ 
+ 
+
+00:00:29.910 --> 00:00:31.910 align:start position:0%
+ 
+ 
+
+00:00:31.910 --> 00:00:34.069 align:start position:0%
+ 
+ 
+
+00:00:34.069 --> 00:00:35.750 align:start position:0%
+ 
+ 
+
+00:00:35.750 --> 00:00:37.350 align:start position:0%
+ 
+ 
+
+00:00:37.350 --> 00:00:39.110 align:start position:0%
+ 
+ 
+
+00:00:39.110 --> 00:00:41.270 align:start position:0%
+ 
+ 
+
+00:00:41.270 --> 00:00:41.280 align:start position:0%
+ 
+ 
+
+00:00:41.280 --> 00:00:42.470 align:start position:0%
+ 
+
+
+00:00:42.470 --> 00:00:43.830 align:start position:0%
+ 
+ 
+
+00:00:43.830 --> 00:00:43.840 align:start position:0%
+ 
+ 
+
+00:00:43.840 --> 00:00:45.110 align:start position:0%
+ 
+
+
+00:00:45.110 --> 00:00:47.029 align:start position:0%
+ 
+ 
+
+00:00:47.029 --> 00:00:49.029 align:start position:0%
+ 
+ 
+
+00:00:49.029 --> 00:00:50.069 align:start position:0%
+ 
+ 
+
+00:00:50.069 --> 00:00:51.350 align:start position:0%
+ 
+ 
+
+00:00:51.350 --> 00:00:53.430 align:start position:0%
+ 
+ 
+
+00:00:53.430 --> 00:00:55.029 align:start position:0%
+ 
+ 
+
+00:00:55.029 --> 00:00:57.990 align:start position:0%
+ 
+ 
+
+00:00:57.990 --> 00:01:00.709 align:start position:0%
+ 
+ 
+
+00:01:00.709 --> 00:01:04.469 align:start position:0%
+ 
+ 
+
+00:01:04.469 --> 00:01:05.750 align:start position:0%
+ 
+ 
+
+00:01:05.750 --> 00:01:05.760 align:start position:0%
+ 
+ 
+
+00:01:05.760 --> 00:01:07.590 align:start position:0%
+ 
+
+
+00:01:07.590 --> 00:01:09.910 align:start position:0%
+ 
+ 
+
+00:01:09.910 --> 00:01:13.429 align:start position:0%
+ 
+ 
+
+00:01:13.429 --> 00:01:15.670 align:start position:0%
+ 
+ 
+
+00:01:15.670 --> 00:01:18.550 align:start position:0%
+ 
+ 
+
+00:01:18.550 --> 00:01:20.789 align:start position:0%
+ 
+ 
+
+00:01:20.789 --> 00:01:23.030 align:start position:0%
+ 
+ 
+
+00:01:23.030 --> 00:01:24.630 align:start position:0%
+ 
+ 
+
+00:01:24.630 --> 00:01:24.640 align:start position:0%
+ 
+ 
+
+00:01:24.640 --> 00:01:26.230 align:start position:0%
+ 
+
+
+00:01:26.230 --> 00:01:28.469 align:start position:0%
+ 
+ 
+
+00:01:28.469 --> 00:01:30.390 align:start position:0%
+ 
+ 
+
+00:01:30.390 --> 00:01:32.789 align:start position:0%
+ 
+ 
+
+00:01:32.789 --> 00:01:35.350 align:start position:0%
+ 
+ 
+
+00:01:35.350 --> 00:01:38.830 align:start position:0%
+ 
+ 
+
+00:01:38.830 --> 00:01:41.670 align:start position:0%
+ 
+ 
+
+00:01:41.670 --> 00:01:44.389 align:start position:0%
+ 
+ 
+
+00:01:44.389 --> 00:01:47.590 align:start position:0%
+ 
+ 
+
+00:01:47.590 --> 00:01:49.670 align:start position:0%
+ 
+ 
+
+00:01:49.670 --> 00:01:51.990 align:start position:0%
+ 
+ 
+
+00:01:51.990 --> 00:01:53.990 align:start position:0%
+ 
+ 
+
+00:01:53.990 --> 00:01:56.230 align:start position:0%
+ 
+ 
+
+00:01:56.230 --> 00:01:58.950 align:start position:0%
+ 
+ 
+
+00:01:58.950 --> 00:02:00.630 align:start position:0%
+ 
+ 
+
+00:02:00.630 --> 00:02:04.310 align:start position:0%
+ 
+ 
+
+00:02:04.310 --> 00:02:07.030 align:start position:0%
+ 
+ 
+
+00:02:07.030 --> 00:02:10.150 align:start position:0%
+ 
+ 
+
+00:02:10.150 --> 00:02:10.160 align:start position:0%
+ 
+ 
+
+00:02:10.160 --> 00:02:11.110 align:start position:0%
+ 
+
+
+00:02:11.110 --> 00:02:13.589 align:start position:0%
+ 
+ 
+
+00:02:13.589 --> 00:02:15.350 align:start position:0%
+ 
+ 
+
+00:02:15.350 --> 00:02:17.990 align:start position:0%
+ 
+ 
+
+00:02:17.990 --> 00:02:21.030 align:start position:0%
+ 
+ 
+
+00:02:21.030 --> 00:02:23.589 align:start position:0%
+ 
+ 
+
+00:02:23.589 --> 00:02:24.630 align:start position:0%
+ 
+ 
+
+00:02:24.630 --> 00:02:26.390 align:start position:0%
+ 
+ 
+
+00:02:26.390 --> 00:02:28.949 align:start position:0%
+ 
+ 
+
+00:02:28.949 --> 00:02:31.990 align:start position:0%
+ 
+ 
+
+00:02:31.990 --> 00:02:35.030 align:start position:0%
+ 
+ 
+
+00:02:35.030 --> 00:02:36.710 align:start position:0%
+ 
+ 
+
+00:02:36.710 --> 00:02:38.470 align:start position:0%
+ 
+ 
+
+00:02:38.470 --> 00:02:40.949 align:start position:0%
+ 
+ 
+
+00:02:40.949 --> 00:02:42.550 align:start position:0%
+ 
+ 
+
+00:02:42.550 --> 00:02:44.470 align:start position:0%
+ 
+ 
+
+00:02:44.470 --> 00:02:46.229 align:start position:0%
+ 
+ 
+
+00:02:46.229 --> 00:02:47.350 align:start position:0%
+ 
+ 
+
+00:02:47.350 --> 00:02:49.670 align:start position:0%
+ 
+ 
+
+00:02:49.670 --> 00:02:53.190 align:start position:0%
+ 
+ 
+
+00:02:53.190 --> 00:02:55.350 align:start position:0%
+ 
+ 
+
+00:02:55.350 --> 00:02:58.630 align:start position:0%
+ 
+ 
+
+00:02:58.630 --> 00:03:00.550 align:start position:0%
+ 
+ 
+
+00:03:00.550 --> 00:03:02.149 align:start position:0%
+ 
+ 
+
+00:03:02.149 --> 00:03:02.159 align:start position:0%
+ 
+ 
+
+00:03:02.159 --> 00:03:04.309 align:start position:0%
+ 
+
+
+00:03:04.309 --> 00:03:05.830 align:start position:0%
+ 
+ 
+
+00:03:05.830 --> 00:03:07.430 align:start position:0%
+ 
+ 
+
+00:03:07.430 --> 00:03:09.030 align:start position:0%
+ 
+ 
+
+00:03:09.030 --> 00:03:09.040 align:start position:0%
+ 
+ 
+
+00:03:09.040 --> 00:03:10.229 align:start position:0%
+ 
+
+
+00:03:10.229 --> 00:03:11.589 align:start position:0%
+ 
+ 
+
+00:03:11.589 --> 00:03:13.270 align:start position:0%
+ 
+ 
+
+00:03:13.270 --> 00:03:15.430 align:start position:0%
+ 
+ 
+
+00:03:15.430 --> 00:03:17.589 align:start position:0%
+ 
+ 
+
+00:03:17.589 --> 00:03:19.430 align:start position:0%
+ 
+ 
+
+00:03:19.430 --> 00:03:21.030 align:start position:0%
+ 
+ 
+
+00:03:21.030 --> 00:03:23.190 align:start position:0%
+ 
+ 
+
+00:03:23.190 --> 00:03:25.030 align:start position:0%
+ 
+ 
+
+00:03:25.030 --> 00:03:26.789 align:start position:0%
+ 
+ 
+
+00:03:26.789 --> 00:03:28.550 align:start position:0%
+ 
+ 
+
+00:03:28.550 --> 00:03:31.830 align:start position:0%
+ 
+ 
+
+00:03:31.830 --> 00:03:34.390 align:start position:0%
+ 
+ 
+
+00:03:34.390 --> 00:03:36.470 align:start position:0%
+ 
+ 
+
+00:03:36.470 --> 00:03:37.990 align:start position:0%
+ 
+ 
+
+00:03:37.990 --> 00:03:40.390 align:start position:0%
+ 
+ 
+
+00:03:40.390 --> 00:03:42.470 align:start position:0%
+ 
+ 
+
+00:03:42.470 --> 00:03:45.509 align:start position:0%
+ 
+ 
+
+00:03:45.509 --> 00:03:47.910 align:start position:0%
+ 
+ 
+
+00:03:47.910 --> 00:03:49.750 align:start position:0%
+ 
+ 
+
+00:03:49.750 --> 00:03:51.990 align:start position:0%
+ 
+ 
+
+00:03:51.990 --> 00:03:54.470 align:start position:0%
+ 
+ 
+
+00:03:54.470 --> 00:03:56.070 align:start position:0%
+ 
+ 
+
+00:03:56.070 --> 00:03:57.509 align:start position:0%
+ 
+ 
+
+00:03:57.509 --> 00:03:59.350 align:start position:0%
+ 
+ 
+
+00:03:59.350 --> 00:04:01.509 align:start position:0%
+ 
+ 
+
+00:04:01.509 --> 00:04:03.830 align:start position:0%
+ 
+ 
+
+00:04:03.830 --> 00:04:06.630 align:start position:0%
+ 
+ 
+
+00:04:06.630 --> 00:04:08.949 align:start position:0%
+ 
+ 
+
+00:04:08.949 --> 00:04:10.630 align:start position:0%
+ 
+ 
+
+00:04:10.630 --> 00:04:12.550 align:start position:0%
+ 
+ 
+
+00:04:12.550 --> 00:04:14.550 align:start position:0%
+ 
+ 
+
+00:04:14.550 --> 00:04:17.270 align:start position:0%
+ 
+ 
+
+00:04:17.270 --> 00:04:19.509 align:start position:0%
+ 
+ 
+
+00:04:19.509 --> 00:04:21.270 align:start position:0%
+ 
+ 
+
+00:04:21.270 --> 00:04:25.590 align:start position:0%
+ 
+ 
+
+00:04:25.590 --> 00:04:28.150 align:start position:0%
+ 
+ 
+
+00:04:28.150 --> 00:04:30.230 align:start position:0%
+ 
+ 
+
+00:04:30.230 --> 00:04:33.030 align:start position:0%
+ 
+ 
+
+00:04:33.030 --> 00:04:35.030 align:start position:0%
+ 
+ 
+
+00:04:35.030 --> 00:04:37.110 align:start position:0%
+ 
+ 
+
+00:04:37.110 --> 00:04:38.629 align:start position:0%
+ 
+ 
+
+00:04:38.629 --> 00:04:38.639 align:start position:0%
+ 
+ 
+
+00:04:38.639 --> 00:04:40.390 align:start position:0%
+ 
+
+
+00:04:40.390 --> 00:04:42.790 align:start position:0%
+ 
+ 
+
+00:04:42.790 --> 00:04:45.590 align:start position:0%
+ 
+ 
+
+00:04:45.590 --> 00:04:47.990 align:start position:0%
+ 
+ 
+
+00:04:47.990 --> 00:04:49.830 align:start position:0%
+ 
+ 
+
+00:04:49.830 --> 00:04:51.110 align:start position:0%
+ 
+ 
+
+00:04:51.110 --> 00:04:51.120 align:start position:0%
+ 
+ 
+
+00:04:51.120 --> 00:04:53.189 align:start position:0%
+ 
+
+
+00:04:53.189 --> 00:04:54.629 align:start position:0%
+ 
+ 
+
+00:04:54.629 --> 00:04:56.469 align:start position:0%
+ 
+ 
+
+00:04:56.469 --> 00:04:58.230 align:start position:0%
+ 
+ 
+
+00:04:58.230 --> 00:04:59.990 align:start position:0%
+ 
+ 
+
+00:04:59.990 --> 00:05:01.350 align:start position:0%
+ 
+ 
+
+00:05:01.350 --> 00:05:03.350 align:start position:0%
+ 
+ 
+
+00:05:03.350 --> 00:05:05.510 align:start position:0%
+ 
+ 
+
+00:05:05.510 --> 00:05:07.029 align:start position:0%
+ 
+ 
+
+00:05:07.029 --> 00:05:08.550 align:start position:0%
+ 
+ 
+
+00:05:08.550 --> 00:05:10.390 align:start position:0%
+ 
+ 
+
+00:05:10.390 --> 00:05:13.270 align:start position:0%
+ 
+ 
+
+00:05:13.270 --> 00:05:14.950 align:start position:0%
+ 
+ 
+
+00:05:14.950 --> 00:05:17.270 align:start position:0%
+ 
+ 
+
+00:05:17.270 --> 00:05:19.909 align:start position:0%
+ 
+ 
+
+00:05:19.909 --> 00:05:22.070 align:start position:0%
+ 
+ 
+
+00:05:22.070 --> 00:05:24.230 align:start position:0%
+ 
+ 
+
+00:05:24.230 --> 00:05:27.029 align:start position:0%
+ 
+ 
+
+00:05:27.029 --> 00:05:28.790 align:start position:0%
+ 
+ 
+
+00:05:28.790 --> 00:05:31.110 align:start position:0%
+ 
+ 
+
+00:05:31.110 --> 00:05:33.029 align:start position:0%
+ 
+ 
+
+00:05:33.029 --> 00:05:34.390 align:start position:0%
+ 
+ 
+
+00:05:34.390 --> 00:05:34.400 align:start position:0%
+ 
+ 
+
+00:05:34.400 --> 00:05:35.430 align:start position:0%
+ 
+
+
+00:05:35.430 --> 00:05:37.670 align:start position:0%
+ 
+ 
+
+00:05:37.670 --> 00:05:39.990 align:start position:0%
+ 
+ 
+
+00:05:39.990 --> 00:05:43.029 align:start position:0%
+ 
+ 
+
+00:05:43.029 --> 00:05:45.110 align:start position:0%
+ 
+ 
+
+00:05:45.110 --> 00:05:46.950 align:start position:0%
+ 
+ 
+
+00:05:46.950 --> 00:05:48.629 align:start position:0%
+ 
+ 
+
+00:05:48.629 --> 00:05:50.150 align:start position:0%
+ 
+ 
+
+00:05:50.150 --> 00:05:53.029 align:start position:0%
+ 
+ 
+
+00:05:53.029 --> 00:05:55.430 align:start position:0%
+ 
+ 
+
+00:05:55.430 --> 00:05:57.670 align:start position:0%
+ 
+ 
+
+00:05:57.670 --> 00:05:58.710 align:start position:0%
+ 
+ 
+
+00:05:58.710 --> 00:06:01.189 align:start position:0%
+ 
+ 
+
+00:06:01.189 --> 00:06:04.830 align:start position:0%
+ 
+ 
+
+00:06:04.830 --> 00:06:07.029 align:start position:0%
+ 
+ 
+
+00:06:07.029 --> 00:06:08.230 align:start position:0%
+ 
+ 
+
+00:06:08.230 --> 00:06:10.070 align:start position:0%
+ 
+ 
+
+00:06:10.070 --> 00:06:12.469 align:start position:0%
+ 
+ 
+
+00:06:12.469 --> 00:06:14.070 align:start position:0%
+ 
+ 
+
+00:06:14.070 --> 00:06:16.790 align:start position:0%
+ 
+ 
+
+00:06:16.790 --> 00:06:19.749 align:start position:0%
+ 
+ 
+
+00:06:19.749 --> 00:06:21.430 align:start position:0%
+ 
+ 
+
+00:06:21.430 --> 00:06:23.110 align:start position:0%
+ 
+ 
+
+00:06:23.110 --> 00:06:26.390 align:start position:0%
+ 
+ 
+
+00:06:26.390 --> 00:06:28.710 align:start position:0%
+ 
+ 
+
+00:06:28.710 --> 00:06:32.629 align:start position:0%
+ 
+ 
+
+00:06:32.629 --> 00:06:34.230 align:start position:0%
+ 
+ 
+
+00:06:34.230 --> 00:06:36.309 align:start position:0%
+ 
+ 
+
+00:06:36.309 --> 00:06:37.830 align:start position:0%
+ 
+ 
+
+00:06:37.830 --> 00:06:40.150 align:start position:0%
+ 
+ 
+
+00:06:40.150 --> 00:06:41.430 align:start position:0%
+ 
+ 
+
+00:06:41.430 --> 00:06:44.070 align:start position:0%
+ 
+ 
+
+00:06:44.070 --> 00:06:47.270 align:start position:0%
+ 
+ 
+
+00:06:47.270 --> 00:06:48.469 align:start position:0%
+ 
+ 
+
+00:06:48.469 --> 00:06:50.950 align:start position:0%
+ 
+ 
+
+00:06:50.950 --> 00:06:53.189 align:start position:0%
+ 
+ 
+
+00:06:53.189 --> 00:06:55.110 align:start position:0%
+ 
+ 
+
+00:06:55.110 --> 00:06:56.710 align:start position:0%
+ 
+ 
+
+00:06:56.710 --> 00:06:56.720 align:start position:0%
+ 
+ 
+
+00:06:56.720 --> 00:06:57.990 align:start position:0%
+ 
+
+
+00:06:57.990 --> 00:06:59.510 align:start position:0%
+ 
+ 
+
+00:06:59.510 --> 00:07:00.950 align:start position:0%
+ 
+ 
+
+00:07:00.950 --> 00:07:02.629 align:start position:0%
+ 
+ 
+
+00:07:02.629 --> 00:07:03.830 align:start position:0%
+ 
+ 
+
+00:07:03.830 --> 00:07:06.390 align:start position:0%
+ 
+ 
+
+00:07:06.390 --> 00:07:06.400 align:start position:0%
+ 
+ 
+
+00:07:06.400 --> 00:07:07.749 align:start position:0%
+ 
+
+
+00:07:07.749 --> 00:07:09.350 align:start position:0%
+ 
+ 
+
+00:07:09.350 --> 00:07:10.950 align:start position:0%
+ 
+ 
+
+00:07:10.950 --> 00:07:13.110 align:start position:0%
+ 
+ 
+
+00:07:13.110 --> 00:07:15.670 align:start position:0%
+ 
+ 
+
+00:07:15.670 --> 00:07:19.110 align:start position:0%
+ 
+ 
+
+00:07:19.110 --> 00:07:21.029 align:start position:0%
+ 
+ 
+
+00:07:21.029 --> 00:07:21.039 align:start position:0%
+ 
+ 
+
+00:07:21.039 --> 00:07:22.230 align:start position:0%
+ 
+
+
+00:07:22.230 --> 00:07:24.070 align:start position:0%
+ 
+ 
+
+00:07:24.070 --> 00:07:26.150 align:start position:0%
+ 
+ 
+
+00:07:26.150 --> 00:07:26.160 align:start position:0%
+ 
+ 
+
+00:07:26.160 --> 00:07:27.990 align:start position:0%
+ 
+
+
+00:07:27.990 --> 00:07:31.110 align:start position:0%
+ 
+ 
+
+00:07:31.110 --> 00:07:32.790 align:start position:0%
+ 
+ 
+
+00:07:32.790 --> 00:07:35.029 align:start position:0%
+ 
+ 
+
+00:07:35.029 --> 00:07:36.790 align:start position:0%
+ 
+ 
+
+00:07:36.790 --> 00:07:38.309 align:start position:0%
+ 
+ 
+
+00:07:38.309 --> 00:07:41.110 align:start position:0%
+ 
+ 
+
+00:07:41.110 --> 00:07:42.710 align:start position:0%
+ 
+ 
+
+00:07:42.710 --> 00:07:44.150 align:start position:0%
+ 
+ 
+
+00:07:44.150 --> 00:07:46.710 align:start position:0%
+ 
+ 
+
+00:07:46.710 --> 00:07:48.869 align:start position:0%
+ 
+ 
+
+00:07:48.869 --> 00:07:50.070 align:start position:0%
+ 
+ 
+
+00:07:50.070 --> 00:07:52.070 align:start position:0%
+ 
+ 
+
+00:07:52.070 --> 00:07:55.110 align:start position:0%
+ 
+ 
+
+00:07:55.110 --> 00:07:56.869 align:start position:0%
+ 
+ 
+
+00:07:56.869 --> 00:08:00.150 align:start position:0%
+ 
+ 
+
+00:08:00.150 --> 00:08:02.950 align:start position:0%
+ 
+ 
+
+00:08:02.950 --> 00:08:05.510 align:start position:0%
+ 
+ 
+
+00:08:05.510 --> 00:08:08.150 align:start position:0%
+ 
+ 
+
+00:08:08.150 --> 00:08:09.110 align:start position:0%
+ 
+ 
+
+00:08:09.110 --> 00:08:11.350 align:start position:0%
+ 
+ 
+
+00:08:11.350 --> 00:08:13.110 align:start position:0%
+ 
+ 
+
+00:08:13.110 --> 00:08:15.670 align:start position:0%
+ 
+ 
+
+00:08:15.670 --> 00:08:17.670 align:start position:0%
+ 
+ 
+
+00:08:17.670 --> 00:08:20.390 align:start position:0%
+ 
+ 
+
+00:08:20.390 --> 00:08:22.309 align:start position:0%
+ 
+ 
+
+00:08:22.309 --> 00:08:24.790 align:start position:0%
+ 
+ 
+
+00:08:24.790 --> 00:08:26.950 align:start position:0%
+ 
+ 
+
+00:08:26.950 --> 00:08:28.469 align:start position:0%
+ 
+ 
+
+00:08:28.469 --> 00:08:30.710 align:start position:0%
+ 
+ 
+
+00:08:30.710 --> 00:08:30.720 align:start position:0%
+ 
+ 
+
+00:08:30.720 --> 00:08:31.749 align:start position:0%
+ 
+
+
+00:08:31.749 --> 00:08:33.509 align:start position:0%
+ 
+ 
+
+00:08:33.509 --> 00:08:37.670 align:start position:0%
+ 
+ 
+
+00:08:37.670 --> 00:08:39.269 align:start position:0%
+ 
+ 
+
+00:08:39.269 --> 00:08:41.589 align:start position:0%
+ 
+ 
+
+00:08:41.589 --> 00:08:43.589 align:start position:0%
+ 
+ 
+
+00:08:43.589 --> 00:08:45.590 align:start position:0%
+ 
+ 
+
+00:08:45.590 --> 00:08:47.670 align:start position:0%
+ 
+ 
+
+00:08:47.670 --> 00:08:49.030 align:start position:0%
+ 
+ 
+
+00:08:49.030 --> 00:08:52.790 align:start position:0%
+ 
+ 
+
+00:08:52.790 --> 00:08:54.949 align:start position:0%
+ 
+ 
+
+00:08:54.949 --> 00:08:56.790 align:start position:0%
+ 
+ 
+
+00:08:56.790 --> 00:08:56.800 align:start position:0%
+ 
+ 
+
+00:08:56.800 --> 00:08:57.750 align:start position:0%
+ 
+
+
+00:08:57.750 --> 00:08:58.949 align:start position:0%
+ 
+ 
+
+00:08:58.949 --> 00:09:02.150 align:start position:0%
+ 
+ 
+
+00:09:02.150 --> 00:09:03.509 align:start position:0%
+ 
+ 
+
+00:09:03.509 --> 00:09:06.150 align:start position:0%
+ 
+ 
+
+00:09:06.150 --> 00:09:07.269 align:start position:0%
+ 
+ 
+
+00:09:07.269 --> 00:09:08.949 align:start position:0%
+ 
+ 
+
+00:09:08.949 --> 00:09:11.590 align:start position:0%
+ 
+ 
+
+00:09:11.590 --> 00:09:15.030 align:start position:0%
+ 
+ 
+
+00:09:15.030 --> 00:09:16.630 align:start position:0%
+ 
+ 
+
+00:09:16.630 --> 00:09:18.710 align:start position:0%
+ 
+ 
+
+00:09:18.710 --> 00:09:20.710 align:start position:0%
+ 
+ 
+
+00:09:20.710 --> 00:09:23.190 align:start position:0%
+ 
+ 
+
+00:09:23.190 --> 00:09:25.509 align:start position:0%
+ 
+ 
+
+00:09:25.509 --> 00:09:26.790 align:start position:0%
+ 
+ 
+
+00:09:26.790 --> 00:09:28.790 align:start position:0%
+ 
+ 
+
+00:09:28.790 --> 00:09:31.110 align:start position:0%
+ 
+ 
+
+00:09:31.110 --> 00:09:32.710 align:start position:0%
+ 
+ 
+
+00:09:32.710 --> 00:09:34.790 align:start position:0%
+ 
+ 
+
+00:09:34.790 --> 00:09:37.430 align:start position:0%
+ 
+ 
+
+00:09:37.430 --> 00:09:39.430 align:start position:0%
+ 
+ 
+
+00:09:39.430 --> 00:09:41.910 align:start position:0%
+ 
+ 
+
+00:09:41.910 --> 00:09:43.430 align:start position:0%
+ 
+ 
+
+00:09:43.430 --> 00:09:45.030 align:start position:0%
+ 
+ 
+
+00:09:45.030 --> 00:09:48.070 align:start position:0%
+ 
+ 
+
+00:09:48.070 --> 00:09:51.910 align:start position:0%
+ 
+ 
+
+00:09:51.910 --> 00:09:53.829 align:start position:0%
+ 
+ 
+
+00:09:53.829 --> 00:09:55.829 align:start position:0%
+ 
+ 
+
+00:09:55.829 --> 00:09:58.070 align:start position:0%
+ 
+ 
+
+00:09:58.070 --> 00:10:00.070 align:start position:0%
+ 
+ 
+
+00:10:00.070 --> 00:10:01.990 align:start position:0%
+ 
+ 
+
+00:10:01.990 --> 00:10:02.000 align:start position:0%
+ 
+ 
+
+00:10:02.000 --> 00:10:03.509 align:start position:0%
+ 
+
+
+00:10:03.509 --> 00:10:06.069 align:start position:0%
+ 
+ 
+
+00:10:06.069 --> 00:10:08.710 align:start position:0%
+ 
+ 
+
+00:10:08.710 --> 00:10:10.550 align:start position:0%
+ 
+ 
+
+00:10:10.550 --> 00:10:13.350 align:start position:0%
+ 
+ 
+
+00:10:13.350 --> 00:10:15.350 align:start position:0%
+ 
+ 
+
+00:10:15.350 --> 00:10:16.310 align:start position:0%
+ 
+ 
+
+00:10:16.310 --> 00:10:18.230 align:start position:0%
+ 
+ 
+
+00:10:18.230 --> 00:10:20.710 align:start position:0%
+ 
+ 
+
+00:10:20.710 --> 00:10:22.870 align:start position:0%
+ 
+ 
+
+00:10:22.870 --> 00:10:25.269 align:start position:0%
+ 
+ 
+
+00:10:25.269 --> 00:10:27.670 align:start position:0%
+ 
+ 
+
+00:10:27.670 --> 00:10:30.630 align:start position:0%
+ 
+ 
+
+00:10:30.630 --> 00:10:32.470 align:start position:0%
+ 
+ 
+
+00:10:32.470 --> 00:10:34.550 align:start position:0%
+ 
+ 
+
+00:10:34.550 --> 00:10:37.430 align:start position:0%
+ 
+ 
+
+00:10:37.430 --> 00:10:39.430 align:start position:0%
+ 
+ 
+
+00:10:39.430 --> 00:10:41.430 align:start position:0%
+ 
+ 
+
+00:10:41.430 --> 00:10:42.949 align:start position:0%
+ 
+ 
+
+00:10:42.949 --> 00:10:44.470 align:start position:0%
+ 
+ 
+
+00:10:44.470 --> 00:10:44.480 align:start position:0%
+ 
+ 
+
+00:10:44.480 --> 00:10:46.150 align:start position:0%
+ 
+
+
+00:10:46.150 --> 00:10:47.829 align:start position:0%
+ 
+ 
+
+00:10:47.829 --> 00:10:49.269 align:start position:0%
+ 
+ 
+
+00:10:49.269 --> 00:10:51.269 align:start position:0%
+ 
+ 
+
+00:10:51.269 --> 00:10:53.110 align:start position:0%
+ 
+ 
+
+00:10:53.110 --> 00:10:55.750 align:start position:0%
+ 
+ 
+
+00:10:55.750 --> 00:10:57.269 align:start position:0%
+ 
+ 
+
+00:10:57.269 --> 00:10:59.190 align:start position:0%
+ 
+ 
+
+00:10:59.190 --> 00:11:01.269 align:start position:0%
+ 
+ 
+
+00:11:01.269 --> 00:11:02.710 align:start position:0%
+ 
+ 
+
+00:11:02.710 --> 00:11:04.949 align:start position:0%
+ 
+ 
+
+00:11:04.949 --> 00:11:07.030 align:start position:0%
+ 
+ 
+
+00:11:07.030 --> 00:11:09.269 align:start position:0%
+ 
+ 
+
+00:11:09.269 --> 00:11:10.870 align:start position:0%
+ 
+ 
+
+00:11:10.870 --> 00:11:12.470 align:start position:0%
+ 
+ 
+
+00:11:12.470 --> 00:11:13.670 align:start position:0%
+ 
+ 
+
+00:11:13.670 --> 00:11:16.310 align:start position:0%
+ 
+ 
+
+00:11:16.310 --> 00:11:19.910 align:start position:0%
+ 
+ 
+
+00:11:19.910 --> 00:11:22.069 align:start position:0%
+ 
+ 
+
+00:11:22.069 --> 00:11:23.829 align:start position:0%
+ 
+ 
+
+00:11:23.829 --> 00:11:26.949 align:start position:0%
+ 
+ 
+
+00:11:26.949 --> 00:11:30.150 align:start position:0%
+ 
+ 
+
+00:11:30.150 --> 00:11:31.670 align:start position:0%
+ 
+ 
+
+00:11:31.670 --> 00:11:33.350 align:start position:0%
+ 
+ 
+
+00:11:33.350 --> 00:11:34.470 align:start position:0%
+ 
+ 
+
+00:11:34.470 --> 00:11:35.990 align:start position:0%
+ 
+ 
+
+00:11:35.990 --> 00:11:38.310 align:start position:0%
+ 
+ 
+
+00:11:38.310 --> 00:11:40.230 align:start position:0%
+ 
+ 
+
+00:11:40.230 --> 00:11:42.230 align:start position:0%
+ 
+ 
+
+00:11:42.230 --> 00:11:46.150 align:start position:0%
+ 
+ 
+
+00:11:46.150 --> 00:11:48.949 align:start position:0%
+ 
+ 
+
+00:11:48.949 --> 00:11:51.190 align:start position:0%
+ 
+ 
+
+00:11:51.190 --> 00:11:52.710 align:start position:0%
+ 
+ 
+
+00:11:52.710 --> 00:11:54.870 align:start position:0%
+ 
+ 
+
+00:11:54.870 --> 00:11:56.710 align:start position:0%
+ 
+ 
+
+00:11:56.710 --> 00:11:59.350 align:start position:0%
+ 
+ 
+
+00:11:59.350 --> 00:12:02.550 align:start position:0%
+ 
+ 
+
+00:12:02.550 --> 00:12:05.190 align:start position:0%
+ 
+ 
+
+00:12:05.190 --> 00:12:07.269 align:start position:0%
+ 
+ 
+
+00:12:07.269 --> 00:12:09.910 align:start position:0%
+ 
+ 
+
+00:12:09.910 --> 00:12:09.920 align:start position:0%
+ 
+ 
+
+00:12:09.920 --> 00:12:11.670 align:start position:0%
+ 
+
+
+00:12:11.670 --> 00:12:14.790 align:start position:0%
+ 
+ 
+
+00:12:14.790 --> 00:12:17.509 align:start position:0%
+ 
+ 
+
+00:12:17.509 --> 00:12:19.430 align:start position:0%
+ 
+ 
+
+00:12:19.430 --> 00:12:21.269 align:start position:0%
+ 
+ 
+
+00:12:21.269 --> 00:12:23.590 align:start position:0%
+ 
+ 
+
+00:12:23.590 --> 00:12:23.600 align:start position:0%
+ 
+ 
+
+00:12:23.600 --> 00:12:24.629 align:start position:0%
+ 
+
+
+00:12:24.629 --> 00:12:26.870 align:start position:0%
+ 
+ 
+
+00:12:26.870 --> 00:12:28.710 align:start position:0%
+ 
+ 
+
+00:12:28.710 --> 00:12:30.470 align:start position:0%
+ 
+ 
+
+00:12:30.470 --> 00:12:33.030 align:start position:0%
+ 
+ 
+
+00:12:33.030 --> 00:12:33.040 align:start position:0%
+ 
+ 
+
+00:12:33.040 --> 00:12:33.990 align:start position:0%
+ 
+
+
+00:12:33.990 --> 00:12:35.110 align:start position:0%
+ 
+ 
+
+00:12:35.110 --> 00:12:36.870 align:start position:0%
+ 
+ 
+
+00:12:36.870 --> 00:12:37.990 align:start position:0%
+ 
+ 
+
+00:12:37.990 --> 00:12:38.710 align:start position:0%
+ 
+ 
+
+00:12:38.710 --> 00:12:38.720 align:start position:0%
+ 
+ 
+
+00:12:38.720 --> 00:12:39.990 align:start position:0%
+ 
+
+
+00:12:39.990 --> 00:12:41.350 align:start position:0%
+ 
+ 
+
+00:12:41.350 --> 00:12:43.430 align:start position:0%
+ 
+ 
+
+00:12:43.430 --> 00:12:44.870 align:start position:0%
+ 
+ 
+
+00:12:44.870 --> 00:12:46.069 align:start position:0%
+ 
+ 
+
+00:12:46.069 --> 00:12:47.190 align:start position:0%
+ 
+ 
+
+00:12:47.190 --> 00:12:49.190 align:start position:0%
+ 
+ 
+
+00:12:49.190 --> 00:12:52.550 align:start position:0%
+ 
+ 
+
+00:12:52.550 --> 00:12:54.470 align:start position:0%
+ 
+ 
+
+00:12:54.470 --> 00:12:56.150 align:start position:0%
+ 
+ 
+
+00:12:56.150 --> 00:12:57.509 align:start position:0%
+ 
+ 
+
+00:12:57.509 --> 00:12:59.590 align:start position:0%
+ 
+ 
+
+00:12:59.590 --> 00:13:01.910 align:start position:0%
+ 
+ 
+
+00:13:01.910 --> 00:13:04.470 align:start position:0%
+ 
+ 
+
+00:13:04.470 --> 00:13:08.230 align:start position:0%
+ 
+ 
+
+00:13:08.230 --> 00:13:10.389 align:start position:0%
+ 
+ 
+
+00:13:10.389 --> 00:13:12.870 align:start position:0%
+ 
+ 
+
+00:13:12.870 --> 00:13:14.150 align:start position:0%
+ 
+ 
+
+00:13:14.150 --> 00:13:15.910 align:start position:0%
+ 
+ 
+
+00:13:15.910 --> 00:13:18.550 align:start position:0%
+ 
+ 
+
+00:13:18.550 --> 00:13:20.389 align:start position:0%
+ 
+ 
+
+00:13:20.389 --> 00:13:21.670 align:start position:0%
+ 
+ 
+
+00:13:21.670 --> 00:13:23.590 align:start position:0%
+ 
+ 
+
+00:13:23.590 --> 00:13:23.600 align:start position:0%
+ 
+ 
+
+00:13:23.600 --> 00:13:25.750 align:start position:0%
+ 
+
+
+00:13:25.750 --> 00:13:28.790 align:start position:0%
+ 
+ 
+
+00:13:28.790 --> 00:13:30.790 align:start position:0%
+ 
+ 
+
+00:13:30.790 --> 00:13:33.269 align:start position:0%
+ 
+ 
+
+00:13:33.269 --> 00:13:35.550 align:start position:0%
+ 
+ 
+
+00:13:35.550 --> 00:13:38.150 align:start position:0%
+ 
+ 
+
+00:13:38.150 --> 00:13:39.590 align:start position:0%
+ 
+ 
+
+00:13:39.590 --> 00:13:41.350 align:start position:0%
+ 
+ 
+
+00:13:41.350 --> 00:13:42.629 align:start position:0%
+ 
+ 
+
+00:13:42.629 --> 00:13:42.639 align:start position:0%
+ 
+ 
+
+00:13:42.639 --> 00:13:43.990 align:start position:0%
+ 
+
+
+00:13:43.990 --> 00:13:47.750 align:start position:0%
+ 
+ 
+
+00:13:47.750 --> 00:13:50.710 align:start position:0%
+ 
+ 
+
+00:13:50.710 --> 00:13:52.389 align:start position:0%
+ 
+ 
+
+00:13:52.389 --> 00:13:55.110 align:start position:0%
+ 
+ 
+
+00:13:55.110 --> 00:13:57.110 align:start position:0%
+ 
+ 
+
+00:13:57.110 --> 00:13:59.350 align:start position:0%
+ 
+ 
+
+00:13:59.350 --> 00:14:01.110 align:start position:0%
+ 
+ 
+
+00:14:01.110 --> 00:14:03.430 align:start position:0%
+ 
+ 
+
+00:14:03.430 --> 00:14:05.990 align:start position:0%
+ 
+ 
+
+00:14:05.990 --> 00:14:07.189 align:start position:0%
+ 
+ 
+
+00:14:07.189 --> 00:14:10.389 align:start position:0%
+ 
+ 
+
+00:14:10.389 --> 00:14:12.550 align:start position:0%
+ 
+ 
+
+00:14:12.550 --> 00:14:14.550 align:start position:0%
+ 
+ 
+
+00:14:14.550 --> 00:14:16.470 align:start position:0%
+ 
+ 
+
+00:14:16.470 --> 00:14:18.629 align:start position:0%
+ 
+ 
+
+00:14:18.629 --> 00:14:21.030 align:start position:0%
+ 
+ 
+
+00:14:21.030 --> 00:14:23.670 align:start position:0%
+ 
+ 
+
+00:14:23.670 --> 00:14:25.030 align:start position:0%
+ 
+ 
+
+00:14:25.030 --> 00:14:27.750 align:start position:0%
+ 
+ 
+
+00:14:27.750 --> 00:14:29.430 align:start position:0%
+ 
+ 
+
+00:14:29.430 --> 00:14:31.750 align:start position:0%
+ 
+ 
+
+00:14:31.750 --> 00:14:33.509 align:start position:0%
+ 
+ 
+
+00:14:33.509 --> 00:14:36.710 align:start position:0%
+ 
+ 
+
+00:14:36.710 --> 00:14:38.550 align:start position:0%
+ 
+ 
+
+00:14:38.550 --> 00:14:39.990 align:start position:0%
+ 
+ 
+
+00:14:39.990 --> 00:14:41.269 align:start position:0%
+ 
+ 
+
+00:14:41.269 --> 00:14:42.870 align:start position:0%
+ 
+ 
+
+00:14:42.870 --> 00:14:45.110 align:start position:0%
+ 
+ 
+
+00:14:45.110 --> 00:14:49.110 align:start position:0%
+ 
+ 
+
+00:14:49.110 --> 00:14:50.710 align:start position:0%
+ 
+ 
+
+00:14:50.710 --> 00:14:52.949 align:start position:0%
+ 
+ 
+
+00:14:52.949 --> 00:14:54.790 align:start position:0%
+ 
+ 
+
+00:14:54.790 --> 00:14:56.870 align:start position:0%
+ 
+ 
+
+00:14:56.870 --> 00:14:58.470 align:start position:0%
+ 
+ 
+
+00:14:58.470 --> 00:15:01.110 align:start position:0%
+ 
+ 
+
+00:15:01.110 --> 00:15:03.110 align:start position:0%
+ 
+ 
+
+00:15:03.110 --> 00:15:05.030 align:start position:0%
+ 
+ 
+
+00:15:05.030 --> 00:15:06.790 align:start position:0%
+ 
+ 
+
+00:15:06.790 --> 00:15:08.790 align:start position:0%
+ 
+ 
+
+00:15:08.790 --> 00:15:10.629 align:start position:0%
+ 
+ 
+
+00:15:10.629 --> 00:15:12.230 align:start position:0%
+ 
+ 
+
+00:15:12.230 --> 00:15:14.069 align:start position:0%
+ 
+ 
+
+00:15:14.069 --> 00:15:15.670 align:start position:0%
+ 
+ 
+
+00:15:15.670 --> 00:15:17.189 align:start position:0%
+ 
+ 
+
+00:15:17.189 --> 00:15:19.030 align:start position:0%
+ 
+ 
+
+00:15:19.030 --> 00:15:21.430 align:start position:0%
+ 
+ 
+
+00:15:21.430 --> 00:15:23.590 align:start position:0%
+ 
+ 
+
+00:15:23.590 --> 00:15:26.069 align:start position:0%
+ 
+ 
+
+00:15:26.069 --> 00:15:28.150 align:start position:0%
+ 
+ 
+
+00:15:28.150 --> 00:15:29.670 align:start position:0%
+ 
+ 
+
+00:15:29.670 --> 00:15:31.509 align:start position:0%
+ 
+ 
+
+00:15:31.509 --> 00:15:35.030 align:start position:0%
+ 
+ 
+
+00:15:35.030 --> 00:15:37.509 align:start position:0%
+ 
+ 
+
+00:15:37.509 --> 00:15:38.870 align:start position:0%
+ 
+ 
+
+00:15:38.870 --> 00:15:40.949 align:start position:0%
+ 
+ 
+
+00:15:40.949 --> 00:15:44.550 align:start position:0%
+ 
+ 
+
+00:15:44.550 --> 00:15:46.550 align:start position:0%
+ 
+ 
+
+00:15:46.550 --> 00:15:49.189 align:start position:0%
+ 
+ 
+
+00:15:49.189 --> 00:15:49.199 align:start position:0%
+ 
+ 
+
+00:15:49.199 --> 00:15:50.230 align:start position:0%
+ 
+
+
+00:15:50.230 --> 00:15:52.389 align:start position:0%
+ 
+ 
+
+00:15:52.389 --> 00:15:54.230 align:start position:0%
+ 
+ 
+
+00:15:54.230 --> 00:15:57.430 align:start position:0%
+ 
+ 
+
+00:15:57.430 --> 00:16:00.870 align:start position:0%
+ 
+ 
+
+00:16:00.870 --> 00:16:03.110 align:start position:0%
+ 
+ 
+
+00:16:03.110 --> 00:16:05.430 align:start position:0%
+ 
+ 
+
+00:16:05.430 --> 00:16:07.110 align:start position:0%
+ 
+ 
+
+00:16:07.110 --> 00:16:09.509 align:start position:0%
+ 
+ 
+
+00:16:09.509 --> 00:16:12.069 align:start position:0%
+ 
+ 
+
+00:16:12.069 --> 00:16:13.350 align:start position:0%
+ 
+ 
+
+00:16:13.350 --> 00:16:15.910 align:start position:0%
+ 
+ 
+
+00:16:15.910 --> 00:16:15.920 align:start position:0%
+ 
+ 
+
+00:16:15.920 --> 00:16:17.269 align:start position:0%
+ 
+
+
+00:16:17.269 --> 00:16:19.030 align:start position:0%
+ 
+ 
+
+00:16:19.030 --> 00:16:20.949 align:start position:0%
+ 
+ 
+
+00:16:20.949 --> 00:16:22.949 align:start position:0%
+ 
+ 
+
+00:16:22.949 --> 00:16:24.310 align:start position:0%
+ 
+ 
+
+00:16:24.310 --> 00:16:25.990 align:start position:0%
+ 
+ 
+
+00:16:25.990 --> 00:16:27.590 align:start position:0%
+ 
+ 
+
+00:16:27.590 --> 00:16:29.030 align:start position:0%
+ 
+ 
+
+00:16:29.030 --> 00:16:30.230 align:start position:0%
+ 
+ 
+
+00:16:30.230 --> 00:16:33.590 align:start position:0%
+ 
+ 
+
+00:16:33.590 --> 00:16:35.590 align:start position:0%
+ 
+ 
+
+00:16:35.590 --> 00:16:37.110 align:start position:0%
+ 
+ 
+
+00:16:37.110 --> 00:16:39.030 align:start position:0%
+ 
+ 
+
+00:16:39.030 --> 00:16:40.629 align:start position:0%
+ 
+ 
+
+00:16:40.629 --> 00:16:42.389 align:start position:0%
+ 
+ 
+
+00:16:42.389 --> 00:16:43.430 align:start position:0%
+ 
+ 
+
+00:16:43.430 --> 00:16:45.990 align:start position:0%
+ 
+ 
+
+00:16:45.990 --> 00:16:47.910 align:start position:0%
+ 
+ 
+
+00:16:47.910 --> 00:16:50.870 align:start position:0%
+ 
+ 
+
+00:16:50.870 --> 00:16:53.269 align:start position:0%
+ 
+ 
+
+00:16:53.269 --> 00:16:54.870 align:start position:0%
+ 
+ 
+
+00:16:54.870 --> 00:16:57.030 align:start position:0%
+ 
+ 
+
+00:16:57.030 --> 00:16:59.590 align:start position:0%
+ 
+ 
+
+00:16:59.590 --> 00:17:01.030 align:start position:0%
+ 
+ 
+
+00:17:01.030 --> 00:17:02.870 align:start position:0%
+ 
+ 
+
+00:17:02.870 --> 00:17:07.189 align:start position:0%
+ 
+ 
+
+00:17:07.189 --> 00:17:09.270 align:start position:0%
+ 
+ 
+
+00:17:09.270 --> 00:17:11.510 align:start position:0%
+ 
+ 
+
+00:17:11.510 --> 00:17:13.110 align:start position:0%
+ 
+ 
+
+00:17:13.110 --> 00:17:15.189 align:start position:0%
+ 
+ 
+
+00:17:15.189 --> 00:17:18.870 align:start position:0%
+ 
+ 
+
+00:17:18.870 --> 00:17:20.630 align:start position:0%
+ 
+ 
+
+00:17:20.630 --> 00:17:22.710 align:start position:0%
+ 
+ 
+
+00:17:22.710 --> 00:17:25.510 align:start position:0%
+ 
+ 
+
+00:17:25.510 --> 00:17:27.270 align:start position:0%
+ 
+ 
+
+00:17:27.270 --> 00:17:29.110 align:start position:0%
+ 
+ 
+
+00:17:29.110 --> 00:17:29.120 align:start position:0%
+ 
+ 
+
+00:17:29.120 --> 00:17:30.070 align:start position:0%
+ 
+
+
+00:17:30.070 --> 00:17:31.990 align:start position:0%
+ 
+ 
+
+00:17:31.990 --> 00:17:33.350 align:start position:0%
+ 
+ 
+
+00:17:33.350 --> 00:17:35.110 align:start position:0%
+ 
+ 
+
+00:17:35.110 --> 00:17:37.190 align:start position:0%
+ 
+ 
+
+00:17:37.190 --> 00:17:37.200 align:start position:0%
+ 
+ 
+
+00:17:37.200 --> 00:17:39.430 align:start position:0%
+ 
+
+
+00:17:39.430 --> 00:17:42.310 align:start position:0%
+ 
+ 
+
+00:17:42.310 --> 00:17:46.390 align:start position:0%
+ 
+ 
+
+00:17:46.390 --> 00:17:48.310 align:start position:0%
+ 
+ 
+
+00:17:48.310 --> 00:17:50.310 align:start position:0%
+ 
+ 
+
+00:17:50.310 --> 00:17:51.669 align:start position:0%
+ 
+ 
+
+00:17:51.669 --> 00:17:54.950 align:start position:0%
+ 
+ 
+
+00:17:54.950 --> 00:17:57.029 align:start position:0%
+ 
+ 
+
+00:17:57.029 --> 00:17:57.039 align:start position:0%
+ 
+ 
+
+00:17:57.039 --> 00:17:58.549 align:start position:0%
+ 
+
+
+00:17:58.549 --> 00:18:00.470 align:start position:0%
+ 
+ 
+
+00:18:00.470 --> 00:18:02.710 align:start position:0%
+ 
+ 
+
+00:18:02.710 --> 00:18:05.190 align:start position:0%
+ 
+ 
+
+00:18:05.190 --> 00:18:07.350 align:start position:0%
+ 
+ 
+
+00:18:07.350 --> 00:18:09.110 align:start position:0%
+ 
+ 
+
+00:18:09.110 --> 00:18:10.789 align:start position:0%
+ 
+ 
+
+00:18:10.789 --> 00:18:10.799 align:start position:0%
+ 
+ 
+
+00:18:10.799 --> 00:18:12.549 align:start position:0%
+ 
+
+
+00:18:12.549 --> 00:18:14.390 align:start position:0%
+ 
+ 
+
+00:18:14.390 --> 00:18:16.390 align:start position:0%
+ 
+ 
+
+00:18:16.390 --> 00:18:18.710 align:start position:0%
+ 
+ 
+
+00:18:18.710 --> 00:18:19.990 align:start position:0%
+ 
+ 
+
+00:18:19.990 --> 00:18:21.750 align:start position:0%
+ 
+ 
+
+00:18:21.750 --> 00:18:24.630 align:start position:0%
+ 
+ 
+
+00:18:24.630 --> 00:18:27.190 align:start position:0%
+ 
+ 
+
+00:18:27.190 --> 00:18:29.029 align:start position:0%
+ 
+ 
+
+00:18:29.029 --> 00:18:31.830 align:start position:0%
+ 
+ 
+
+00:18:31.830 --> 00:18:33.270 align:start position:0%
+ 
+ 
+
+00:18:33.270 --> 00:18:35.350 align:start position:0%
+ 
+ 
+
+00:18:35.350 --> 00:18:38.150 align:start position:0%
+ 
+ 
+
+00:18:38.150 --> 00:18:40.230 align:start position:0%
+ 
+ 
+
+00:18:40.230 --> 00:18:42.390 align:start position:0%
+ 
+ 
+
+00:18:42.390 --> 00:18:44.230 align:start position:0%
+ 
+ 
+
+00:18:44.230 --> 00:18:46.710 align:start position:0%
+ 
+ 
+
+00:18:46.710 --> 00:18:48.630 align:start position:0%
+ 
+ 
+
+00:18:48.630 --> 00:18:50.470 align:start position:0%
+ 
+ 
+
+00:18:50.470 --> 00:18:50.480 align:start position:0%
+ 
+ 
+
+00:18:50.480 --> 00:18:52.150 align:start position:0%
+ 
+
+
+00:18:52.150 --> 00:18:53.750 align:start position:0%
+ 
+ 
+
+00:18:53.750 --> 00:18:55.029 align:start position:0%
+ 
+ 
+
+00:18:55.029 --> 00:18:56.230 align:start position:0%
+ 
+ 
+
+00:18:56.230 --> 00:18:58.710 align:start position:0%
+ 
+ 
+
+00:18:58.710 --> 00:19:00.549 align:start position:0%
+ 
+ 
+
+00:19:00.549 --> 00:19:02.630 align:start position:0%
+ 
+ 
+
+00:19:02.630 --> 00:19:05.510 align:start position:0%
+ 
+ 
+
+00:19:05.510 --> 00:19:08.070 align:start position:0%
+ 
+ 
+
+00:19:08.070 --> 00:19:10.070 align:start position:0%
+ 
+ 
+
+00:19:10.070 --> 00:19:10.080 align:start position:0%
+ 
+ 
+
+00:19:10.080 --> 00:19:12.070 align:start position:0%
+ 
+
+
+00:19:12.070 --> 00:19:13.990 align:start position:0%
+ 
+ 
+
+00:19:13.990 --> 00:19:16.789 align:start position:0%
+ 
+ 
+
+00:19:16.789 --> 00:19:20.150 align:start position:0%
+ 
+ 
+
+00:19:20.150 --> 00:19:23.029 align:start position:0%
+ 
+ 
+
+00:19:23.029 --> 00:19:24.390 align:start position:0%
+ 
+ 
+
+00:19:24.390 --> 00:19:26.310 align:start position:0%
+ 
+ 
+
+00:19:26.310 --> 00:19:27.590 align:start position:0%
+ 
+ 
+
+00:19:27.590 --> 00:19:29.830 align:start position:0%
+ 
+ 
+
+00:19:29.830 --> 00:19:32.710 align:start position:0%
+ 
+ 
+
+00:19:32.710 --> 00:19:34.789 align:start position:0%
+ 
+ 
+
+00:19:34.789 --> 00:19:36.710 align:start position:0%
+ 
+ 
+
+00:19:36.710 --> 00:19:36.720 align:start position:0%
+ 
+ 
+
+00:19:36.720 --> 00:19:38.870 align:start position:0%
+ 
+
+
+00:19:38.870 --> 00:19:41.029 align:start position:0%
+ 
+ 
+
+00:19:41.029 --> 00:19:42.870 align:start position:0%
+ 
+ 
+
+00:19:42.870 --> 00:19:44.390 align:start position:0%
+ 
+ 
+
+00:19:44.390 --> 00:19:47.190 align:start position:0%
+ 
+ 
+
+00:19:47.190 --> 00:19:49.029 align:start position:0%
+ 
+ 
+
+00:19:49.029 --> 00:19:51.590 align:start position:0%
+ 
+ 
+
+00:19:51.590 --> 00:19:53.990 align:start position:0%
+ 
+ 
+
+00:19:53.990 --> 00:19:56.789 align:start position:0%
+ 
+ 
+
+00:19:56.789 --> 00:19:59.590 align:start position:0%
+ 
+ 
+
+00:19:59.590 --> 00:20:01.830 align:start position:0%
+ 
+ 
+
+00:20:01.830 --> 00:20:04.710 align:start position:0%
+ 
+ 
+
+00:20:04.710 --> 00:20:07.270 align:start position:0%
+ 
+ 
+
+00:20:07.270 --> 00:20:09.110 align:start position:0%
+ 
+ 
+
+00:20:09.110 --> 00:20:10.630 align:start position:0%
+ 
+ 
+
+00:20:10.630 --> 00:20:13.190 align:start position:0%
+ 
+ 
+
+00:20:13.190 --> 00:20:14.549 align:start position:0%
+ 
+ 
+
+00:20:14.549 --> 00:20:16.630 align:start position:0%
+ 
+ 
+
+00:20:16.630 --> 00:20:18.070 align:start position:0%
+ 
+ 
+
+00:20:18.070 --> 00:20:20.390 align:start position:0%
+ 
+ 
+
+00:20:20.390 --> 00:20:22.310 align:start position:0%
+ 
+ 
+
+00:20:22.310 --> 00:20:24.310 align:start position:0%
+ 
+ 
+
+00:20:24.310 --> 00:20:24.320 align:start position:0%
+ 
+ 
+
+00:20:24.320 --> 00:20:25.830 align:start position:0%
+ 
+
+
+00:20:25.830 --> 00:20:27.430 align:start position:0%
+ 
+ 
+
+00:20:27.430 --> 00:20:30.070 align:start position:0%
+ 
+ 
+
+00:20:30.070 --> 00:20:32.310 align:start position:0%
+ 
+ 
+
+00:20:32.310 --> 00:20:33.830 align:start position:0%
+ 
+ 
+
+00:20:33.830 --> 00:20:35.350 align:start position:0%
+ 
+ 
+
+00:20:35.350 --> 00:20:35.360 align:start position:0%
+ 
+ 
+
+00:20:35.360 --> 00:20:37.270 align:start position:0%
+ 
+
+
+00:20:37.270 --> 00:20:39.430 align:start position:0%
+ 
+ 
+
+00:20:39.430 --> 00:20:40.710 align:start position:0%
+ 
+ 
+
+00:20:40.710 --> 00:20:42.710 align:start position:0%
+ 
+ 
+
+00:20:42.710 --> 00:20:44.070 align:start position:0%
+ 
+ 
+
+00:20:44.070 --> 00:20:44.080 align:start position:0%
+ 
+ 
+
+00:20:44.080 --> 00:20:45.190 align:start position:0%
+ 
+
+
+00:20:45.190 --> 00:20:46.789 align:start position:0%
+ 
+ 
+
+00:20:46.789 --> 00:20:49.270 align:start position:0%
+ 
+ 
+
+00:20:49.270 --> 00:20:51.350 align:start position:0%
+ 
+ 
+
+00:20:51.350 --> 00:20:53.350 align:start position:0%
+ 
+ 
+
+00:20:53.350 --> 00:20:54.870 align:start position:0%
+ 
+ 
+
+00:20:54.870 --> 00:20:58.149 align:start position:0%
+ 
+ 
+
+00:20:58.149 --> 00:21:00.549 align:start position:0%
+ 
+ 
+
+00:21:00.549 --> 00:21:03.590 align:start position:0%
+ 
+ 
+
+00:21:03.590 --> 00:21:05.270 align:start position:0%
+ 
+ 
+
+00:21:05.270 --> 00:21:07.510 align:start position:0%
+ 
+ 
+
+00:21:07.510 --> 00:21:08.950 align:start position:0%
+ 
+ 
+
+00:21:08.950 --> 00:21:11.350 align:start position:0%
+ 
+ 
+
+00:21:11.350 --> 00:21:13.430 align:start position:0%
+ 
+ 
+
+00:21:13.430 --> 00:21:14.789 align:start position:0%
+ 
+ 
+
+00:21:14.789 --> 00:21:16.149 align:start position:0%
+ 
+ 
+
+00:21:16.149 --> 00:21:17.430 align:start position:0%
+ 
+ 
+
+00:21:17.430 --> 00:21:18.549 align:start position:0%
+ 
+ 
+
+00:21:18.549 --> 00:21:21.350 align:start position:0%
+ 
+ 
+
+00:21:21.350 --> 00:21:24.149 align:start position:0%
+ 
+ 
+
+00:21:24.149 --> 00:21:26.870 align:start position:0%
+ 
+ 
+
+00:21:26.870 --> 00:21:28.710 align:start position:0%
+ 
+ 
+
+00:21:28.710 --> 00:21:31.590 align:start position:0%
+ 
+ 
+
+00:21:31.590 --> 00:21:33.270 align:start position:0%
+ 
+ 
+
+00:21:33.270 --> 00:21:35.350 align:start position:0%
+ 
+ 
+
+00:21:35.350 --> 00:21:37.909 align:start position:0%
+ 
+ 
+
+00:21:37.909 --> 00:21:39.590 align:start position:0%
+ 
+ 
+
+00:21:39.590 --> 00:21:41.590 align:start position:0%
+ 
+ 
+
+00:21:41.590 --> 00:21:43.110 align:start position:0%
+ 
+ 
+
+00:21:43.110 --> 00:21:45.830 align:start position:0%
+ 
+ 
+
+00:21:45.830 --> 00:21:47.350 align:start position:0%
+ 
+ 
+
+00:21:47.350 --> 00:21:49.110 align:start position:0%
+ 
+ 
+
+00:21:49.110 --> 00:21:51.029 align:start position:0%
+ 
+ 
+
+00:21:51.029 --> 00:21:51.039 align:start position:0%
+ 
+ 
+
+00:21:51.039 --> 00:21:53.190 align:start position:0%
+ 
+
+
+00:21:53.190 --> 00:21:54.950 align:start position:0%
+ 
+ 
+
+00:21:54.950 --> 00:21:57.430 align:start position:0%
+ 
+ 
+
+00:21:57.430 --> 00:22:00.630 align:start position:0%
+ 
+ 
+
+00:22:00.630 --> 00:22:02.230 align:start position:0%
+ 
+ 
+
+00:22:02.230 --> 00:22:05.430 align:start position:0%
+ 
+ 
+
+00:22:05.430 --> 00:22:06.870 align:start position:0%
+ 
+ 
+
+00:22:06.870 --> 00:22:08.310 align:start position:0%
+ 
+ 
+
+00:22:08.310 --> 00:22:10.390 align:start position:0%
+ 
+ 
+
+00:22:10.390 --> 00:22:10.400 align:start position:0%
+ 
+ 
+
+00:22:10.400 --> 00:22:12.310 align:start position:0%
+ 
+
+
+00:22:12.310 --> 00:22:15.909 align:start position:0%
+ 
+ 
+
+00:22:15.909 --> 00:22:17.669 align:start position:0%
+ 
+ 
+
+00:22:17.669 --> 00:22:19.830 align:start position:0%
+ 
+ 
+
+00:22:19.830 --> 00:22:21.590 align:start position:0%
+ 
+ 
+
+00:22:21.590 --> 00:22:23.190 align:start position:0%
+ 
+ 
+
+00:22:23.190 --> 00:22:25.270 align:start position:0%
+ 
+ 
+
+00:22:25.270 --> 00:22:28.149 align:start position:0%
+ 
+ 
+
+00:22:28.149 --> 00:22:30.630 align:start position:0%
+ 
+ 
+
+00:22:30.630 --> 00:22:32.390 align:start position:0%
+ 
+ 
+
+00:22:32.390 --> 00:22:34.470 align:start position:0%
+ 
+ 
+
+00:22:34.470 --> 00:22:36.230 align:start position:0%
+ 
+ 
+
+00:22:36.230 --> 00:22:38.830 align:start position:0%
+ 
+ 
+
+00:22:38.830 --> 00:22:41.350 align:start position:0%
+ 
+ 
+
+00:22:41.350 --> 00:22:44.070 align:start position:0%
+ 
+ 
+
+00:22:44.070 --> 00:22:45.510 align:start position:0%
+ 
+ 
+
+00:22:45.510 --> 00:22:46.870 align:start position:0%
+ 
+ 
+
+00:22:46.870 --> 00:22:48.549 align:start position:0%
+ 
+ 
+
+00:22:48.549 --> 00:22:51.190 align:start position:0%
+ 
+ 
+
+00:22:51.190 --> 00:22:53.270 align:start position:0%
+ 
+ 
+
+00:22:53.270 --> 00:22:55.029 align:start position:0%
+ 
+ 
+
+00:22:55.029 --> 00:22:55.039 align:start position:0%
+ 
+ 
+
+00:22:55.039 --> 00:22:56.710 align:start position:0%
+ 
+
+
+00:22:56.710 --> 00:23:00.120 align:start position:0%
+ 
+ 
+
