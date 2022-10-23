@@ -1,0 +1,4536 @@
+WEBVTT
+Kind: captions
+Language: en
+
+00:00:01.240 --> 00:00:03.900 align:start position:0%
+ 
+okay so you're here for this talk how I  learned to time travel or data  pipelining and scheduling with airflow  my name is Laura Lorenz here are some  places you can contact me via the  internet and I'm here actually right now  representing industry dive work that I  do and my job there we're hiring you can  see the little bubble here so if you  want to check us out we're a business  media publishing company it's pretty  cool I would say and if you would like  any other stuff that I'm talking about  right now definitely come talk to me if  you are in the job market so first thing  I want to just put out some truths that  I think we can all get behind one data  is weird and break stuff and user data  is particularly untrustworthy just don't  trust it so we deal our whole ETL  process that we've been developing at  industry dive has been a lot related to  user data that they submit so we've had  a lot of exciting times with that and  other one is that computers slash the  internet slash third-party services  slash everything will fail and blow up  all of the scripts that you wrote to do  whatever your genius ETL stuff was and  that's really frustrating and so based  on both of these true facts and also  while I was looking at some past PI data  talks to get an idea of you know what  people are talking about these types of  things I saw this quote which I totally  just wanted to steal and put my proposal  in the first place but instead I'm  attributing it here but I still want to  bring it up so I'm at PI data London  2016 this year there was this quote in  the beginning there was Kron we had one  job it ran at 1:00 a.m. and it was good  right and so Pete said it a little  differently later but basically what  happened for us as well as him is that  it wasn't just one job anymore it was  like a hundred jobs and it didn't run at  1 a.m. anymore it's like depends and  maybe if this other stuff ran  successfully then I want to run this  other thing and it was no longer good  and so we no longer were using cron and  said it was just chaos right so this was  kind of the situation that we found  ourselves in so the basic  here for us is that plumbing problem  suck this is true in real life and this  is also true for your data pipeline so  we knew that we had to figure something  else out so we already had some thoughts  about how we wanted this to go just  based on like our early proof of  concepts we would prefer something an  open-source Python so we know what's  going on and could easily extend it as  we're a Python shop at industry dive  we wanted something resilient this is a  lot about what I just sort of motivated  this talk about we wanted to handle  failure well any types of failure so we  wanted there to be retry logic able to  specify failure callbacks good alerting  and monitoring all this was going to  make our life a lot easier to figure out  what's going on we wanted it to be able  to deal with complexity intelligently so  we were growing and growing what we  wanted to do we needed more complicated  dependency parsing and we also wanted to  only have to run what it had to we  didn't want to have to do extra work if  we had already done some part of the  pipeline and we wanted a lot of  flexibility we wanted to be able to run  anything that we wanted and we already  knew that we had batch tasks that we  were planning on running on a daily and  hourly schedule so we were already just  in the in the market for a batch  processing system that could help us  deal with this so we traveled the land  and came up with this chart that I've  made to sort of squish down a lot of  different tools that we took a look at  and I kind of separate them into two  different classes we have these light  lighter color ones make Drake Pye do it  Luigi which I sort of discerned we're  more on the file based dependency system  so they look for certain files to change  or compare metadata between files and  then they do some sort of work that then  outputs to a file so all of the  dependency is based on which files where  have been made and when whereas these on  the other side and the darker gray  airflow AWS data pipeline in pinball we  found that those were more abstract  about their dependency generation it  wasn't tracked directly to files  necessarily and you would configure that  in code they all have their own sort of  way to represent that as we go across  this picture there's other sorts of  features that also become really great  besides these two sort of class  distinctions that also kind of vary  so we can start out where it's just a  dependency framework but as we go  further to the other side we'll see that  they'll ship with more scheduling we're  monitoring more alerting in the box to  sort of that point these ones on I guess  this is your left are more lightweight  they won't specify any sort of like  protocols you would normally use there's  not a lot of reusable components for  normal or I guess standard ETL type of  things but if you go to the other side  everything's a little more heavyweight  there's more infrastructure for it but  there's a lot more batteries included  and then there's also this x2 this  y-axis to mention about dachshund  community which was also really  important to us because we were  interested in being able to extend and  customize and you can see sort of my  take on how all of these different  things delivered it on that term as well  so first I'm just going to talk a little  bit about this file dependencies target  system concept so the concept for these  this class of pipelining tool is that  there's some files or file or files that  are some dependency that have to exist  before some sort of recipe or action has  to occur and that recipe or action will  consume those files somehow do something  and then output to some sort of target  and then the system will be able to tell  if this target exists we don't need to  redo that this recipe anymore or if  these files have changed like their  metadata their timestamp is different  from this target we know that there's  updated information here that we need to  filter into a new target  so make is like a classic example of  this and you can see here some of the  syntax  I'm not going to go into too many  details but that you can see the track  back to the file dependencies concept  what the target actually is and what  work we're actually going to do  Drake is sort of a extension to make  their tagline is like make for data  actually is what they call themselves so  this has a similar concept it started to  introduce more variable substitution  built in variable substitution and also  different types of protocols you didn't  just have to run bash scripts you could  give it other stuff that you wanted to  do and that's also growing for them as  well  PI do it is more of a Python version you  define all of your configuration and  your tests in Python code and  then this is the same sort of track back  you have a concept of targets a concept  of your file dependencies and the  concept of different actions that you  want to take on those and then Luigi is  another one that is sort of the bridge  between I think these two systems that  I'm talking about but it still has this  file dependency based design paradigm so  it will have a concept that a specific  test has some sort of requires method  that defines what files it depends on  some output method that defines where  the target output is going to be written  to and then the actual logic so well we  were taking a look at these tools we  came up with different pros and cons  pros we really liked that this work was  cached in these files for each of these  different steps especially we were  coming at it from we had a lot of  different transformations we wanted to  be able to do and we liked that if we  got so far in the process and something  came up  later it was easy for us to just start  again from wherever we left off and the  you saw the syntax really briefly here  but it's pretty simple and intuitive  configuration for data transformations  especially you have a inputs you have a  target and you do some work and the  syntax is really clear and simple cons  for us was that there wasn't really  native concept of things happening on  any sort of schedule so Luigi started to  introduce this but this concept doesn't  really exist outside of you building it  yourself and Luigi doesn't have an  actual polling process to figure out  when it needs to do stuff so that didn't  come included the alerting systems for  these felt a little too basic too much  like heavy lifting for us to rewrite  them to include them and the design  paradigm was not broadly applicable to  other non-target operations so if you  wanted to do something else that didn't  necessarily do this type that wasn't a  data transformation but you had other  types of stuff that you wanted to live  in the same ecosystem this didn't really  like naturally fall into that kind of  work so the other class are the darker  gray ones that I showed you on that  first image I have made up this term  called abstract orchestration systems to  define what they are but they're less  concerned with targets because these  tasks don't necessarily have to have  actual data transfer between them but  they do have some sort of logical  dependency that one has to happen before  the other one  and so you define these relationships  between these tasks by um and whatever  the code configuration system is for  these different platforms and then you  end up with this graph that shows you  your different types of work and what  their edges connecting them are so for  example one we looked at was pinball so  you can see it's getting like a little  more fancy here and the actual just work  here is specified this dependency and  this work is really specified right here  but all of these start to incorporate  the concept of things happening on a  schedule and also incorporate the  concept of a schedule of process that's  constantly checking to see if it's time  to do something this is air flow we'll  go into this a little bit more too but  this is what the configuration kind of  looks for that like for that so you have  this pythonic way to set these  relationships and the whole  configuration ends up in Python so when  we were taking a look at all these  abstract orchestration systems so we  liked that a lot of these there's a lot  of coincident features that also are  occurring like there's many more  operations supported out-of-the-box with  these types of systems they're just like  a little more sophisticated and there's  a lot more behind them they handle more  complicated dependency logic all sorts  of different types of trigger rolls  things can branch things could depend on  each other only sometimes they could  have all different types of schedules  and the scheduling process the  monitoring and the alerting services  that are already built in are pretty  sophisticated so you didn't need to have  a separate scheduling service to figure  out if it was time to do any work but  also there's just some monitoring  monitoring tools or especially email  alerting is a really popular one that  was already built in cons for us this  caching concept the Spile caching  concept kind of went away so the idea at  that individual data transformations  could cache their data in between was  not something that was really a native  concept anymore the configuration is  more complex you saw the code examples a  little bit it's no longer just two lines  to describe your targets your file  dependencies and your outputs and  there's more infrastructure so now  instead of the state of your work flow  pipeline existing in files on disk  instead there needs to be some other  person  storage that knows what's going on in  all of these cases they have some sort  of database back that is keeping track  of what has been worked on and what  hasn't and a lot of these also  especially airflow I'll talk about allow  for you to have a distributed system so  in this case you're scheduling process  and the actual stuff doing the work  needs to have some middle committal way  to communicate especially if those  workers are on different servers so then  you need to set up a messaging queue for  the actual distribution if you decide to  do that so it's a little more  heavyweight so after we thought about  all this stuff we had more opinions and  we decided that we liked the  sophistication of the abstract  orchestration systems we liked the  batteries included stuff all the stuff  that came in the box but we did also  like the Drake and make and Luigi esque  file targeting especially for our data  transformation steps that we were really  working on and it makes it easy to see  transparently what's going on to do this  file caching and also to do data bug  tracking you can easily see we went from  this to that  everything's cached and it's really easy  to take a look and we termed these  intermediate artifacts is sort of our  thought process of what these are this  this cache that we're building up we aka  me okay DevOps didn't want to maintain a  separate scheduling service I kind of  wanted this all to be kind of more  together and so that was another big  reason that I liked the abstract  orchestration systems we like a really  strong community and good documentation  I mentioned before we wanted to be able  to extend this was something that made  us of the three that I mentioned that  are abstract orchestration systems  pinball wasn't really like the  competitor in this kind of space they  didn't have a ton of great documentation  at least at the point that we were  taking a look at it so we didn't feel  like it was going to be really easy to  plug into the community and we also  didn't want to be stuck in one ecosystem  if you choose AWS data pipeline it's  like super AWS times if you're already  in a system that's using a lot of AWS  resources and all of your data is there  and moving around in AWS that makes a  ton of sense but for us it wasn't really  the case and we wanted to be able to  support a lot of differ  stuff so we weren't super hyped about  that either so we decided to go with  airflow and we also decided to pull in  the Spile caching system from the Drake  Luigi times into our maybe semi rudely  named personal library called smart  airflow and we thought that this was  awesome so here's a little more details  about airflow and the features that they  support so they have a scheduler process  that handles the actual triggering and  executing of the work you specify the  works in these files called DAGs short  for directed acyclic graph some of the  other other the other systems had more  fancy names they just went with dag it  is what it is  and they can the scheduler can trigger  these tags on a given schedule there's a  lot of built in a learning based on SL  azor the task states so if your task has  a failed state or a success state or if  it has a retry state or skip state  there's a whole pantheon of different  types of states they could have that you  could specify different types of  callbacks for and there's lots of sexy  profiling visualizations so they really  they really got it with the UI the way  to make it easy for you to track what's  going on see your task history they also  put in a lot of other stuff to the UI  like different levels of authentication  being able to tune permissions so you as  the dev ops person might take a look at  it but also all your analysts can take a  look at and you can control like what  they might want to be able to be in  charge of there is a really convenient  CLI that among being able to do many of  the things that the you that the web UI  can do it also has these particular  helpful things test backfill and clear  which I'll talk about some of these a  little bit later too but the seal it CLI  was just really built out the operators  come which is a type of tasks come from  a number of pre-built classes so they  have a Python operator like s3 key  sensor based transfer these are all  different things that you might want to  do and a lot of them already came in  there's lots of stuff to connect with MS  sequel with my sequel with Postgres  there's stuff to connect with hive to  start a spark job to start in a Duke job  all sorts of different stuff those  already built in submitted by the  airflow core committers or the  community so that was really exciting  too and you can obviously extend any of  them using inheritance and we liked that  it can support local work execution but  also distributed work execution so it's  a scalable system so if you want to use  distributed it uses the Python library  celery to communicate with a message  queue there's several that celery  support RabbitMQ and Redis or really  popular ones but this was a scalable  thing we knew we could use this later as  our test went way past 100 or 500 when  we needed lots of servers or lots of  different types of servers for example  so this is how the actual architecture  kind of works for air flow so air flow  itself the services that air flow ships  is the web server and then another  concept that's called the executor the  executor contains both the scheduler and  the worker processes there's different  types of executors there's ones where  both of these are done by the same  process there's ones where one of these  is the parent process and can spawn  other smaller processes child processes  or there's the case where you have the  scheduler in a totally separate process  and the workers are all on a different  server and a totally different process  not in the same space at all and then in  that case you need to use some sort of  queue to facilitate communication  between them and both the web server and  whichever executor you're you choose  also needs to have some metadata  database to keep state since we're no  longer keeping state in on disk on the  file and the file system I mean so this  is just the general architecture of how  your air flow setup will go so here are  some pretty pictures of this nice UI  that they spent nice time building so  this gives you an idea of how you can  interact with this or how different  people in your organization can interact  with your air flow instance to schedule  work or stop scheduling work or whatever  HAP what-have-you so you can have  different tags here you can notice what  their scheduler schedule is for you can  turn them on and off you can check what  the recent status is stuff that has  succeded stuff that has failed stuff  that is still running and you have  hotkeys to a bunch of other different  types of views into this data  some of which I'm gonna show you in fact  this was one of them  the graph view so this is a way to take  a look at a given dag and visualize what  all the nodes and edges of the different  types of tests and dependencies are so  you can look at this on a per day in the  abstract and also per day or per hour  whatever your schedule is so you can  take a look see a lot of the same stuff  in terms of different tasks stat I but I  see it in this type of view instead and  there's a bunch of other tabs of  different ways to look at things and I  especially really like and I'm going to  show you the Gantt chart and the tree  view oops so this is the tree view that  they create so since we have a concept  of a schedule schedule we have a concept  of a schedule or who's gonna do stuff  over and over we have historical data  about tasks that have happened in the  past so this is one visualization tool  that they have to take a look at all  your different tasks in the past and you  can also take a look at their status  change the base state so you can look  further in the past or however you like  and also trigger things from here if you  need to and the Gantt tool this is one  of just many monitoring tools that you  eyes that I found really useful to be  able to diagnose issues with my  different tags this is like your  standard Gantt chart you can see  different tasks and when they ran and  how long it took them and how they  overlapped with anything else and so  this can give you a view like maybe  something we're just going on here or  maybe there's a good reason that it took  this long and there's a lot of other  visualizations you can actually roll  your own visualizations too and add your  own views onto this if there's some sort  of specific situation you want to take a  look at for a specific dag and then you  can track that information and you can  always query the metadata database  there's actually a tool built into this  UI to do it from here or whatever it is  you can connect directly and take a look  at all this historical data and do  whatever profiling that you need so  let's talk about DAGs and tasks so this  is the abstract concept here airflows  implementation of this graph concept of  dependencies I mentioned that a dag is a  collection of things that have some sort  of connection to each other and those  things are tasks in air flow there's  sort of two different types of  there's sensors which are kind of like  event bindings they're pulling waiting  for some sort of situation to be true so  this is a case like s3 key sensor  waiting for a key to show up an s3  bucket or there's a bunch of other ones  and then operators once they are cleared  to start working because they're do  their tasks dependencies have been met  then they just execute whatever work  that they need to do maybe they need to  run a sequel script or maybe they need  to run some Python script or any sort of  type of thing and DAGs and tasks have  different types of properties you can  use to configure them so you can reuse  different types of desks tasks and reuse  different types of DAGs if you lake DAGs  have a concept of what their schedule  interval is which I'll get into some  more details about later this is how  often it needs to be scheduled tasks  have a bunch of properties that might be  shared between different kinds like who  owns them how many retries they should  try for maybe you don't want it to retry  at all maybe you wanted it to retry 10  times I don't know you can do that at  the task level so they're all very  specifically configurable you can give  each task its own failure callback if  there's some special case that you want  to happen if task B fails but you want  some other thing to happen at C fails  then you can do stuff like that and then  they there's tons of other ones this is  certainly not a complete list so this is  an idea of the configuration I showed  you a little bit before really quickly  but you can specify a dag here's the dag  definition that takes its parameters and  then different tasks that can be a  different operator or sensor types and  then down here on line 44 this is where  we're actually specifying the  connections between them so I'm setting  the T to task the t1 task upstream of  the t2 task and so this is just your  basic configuration how you actually  would specify this in code so since we  have this concept of time which I keep  elite alluding to let's talk about dag  runs and tasks instances sodags and  tasks are an abstract concept but dag  runs actually our DAGs at a certain time  there DAGs that represent some period of  time  tasks instances are the tests that  belonged to that dag run so they inherit  inherit the concept of time from their  dag run and you can really see this in  this tree view each of these columns and  these circles represent some type of dag  run that happened for some certain time  and all these little boxes are all the  task instances that were part of that  dag run that were scheduled for the same  time that that dagger run was active so  a little bit more about the architecture  and how this actually works the the  connection between the executors the  webserver your metadata database and  whatever your cue is if you decide to  use a cue and then the actual dag  definition files those Python files that  specify the graph dependencies those  exist on file somewhere that you would  deploy with your airflow service so it  starts out where the scheduler pulls the  tags that are on disk and the metadata  database to figure out what it wants to  do so I can see from the DAGs what it's  supposed to do it can see from the  metadata database what's already  happened and so it can make some  decision about what it's time to do  right now so once it figures out and  starts freaking out that it's time to do  the thing it will especially if like at  industry dive you're using a messaging  queue to distribute the information from  the scheduler to the worker it's going  to submit that message to the queue that  says do the thing and then the scheduler  is also going to notify the metadata  database that it told the queue what was  going on and inside the metadata  database we'll have an entry for a dag  run that knows that it's running and an  entry for a task instance associated  with that dag run that knows that it's  queued that it's waiting to work so okay  also the worker is going to be pulling  into this queue to figure out what it's  supposed to do and once it sees that  there's a message in the queue it's  going to get all excited and decide to  do that and it's going to communicate to  both the queue and the metadata database  okay I got the message I'm on it so the  queue now knows that this message is  being worked on and the metadata  database also knows that this test  instance is being worked on yes  yeah so thus get the the dad  configuration specifies that the  scheduler is in charge of killing  anything that it needs to kill  so that's interesting question there's  different ways that you can specify what  your timeouts are you could not have one  I guess if you really wanted to another  popular thing is to use SL A's which  alert don't actually kill the process  but alert you in some other way that  something has gone wrong I expected this  to take less than two hours but it's  been two hours in one second and I don't  know what's happening and then you can  take an intervention action so if you  had like a really weird case where you  didn't know what was going on you could  use that instead okay so the worker has  communicated to everybody that  something's being done so eventually the  worker will act back to the cue that it  has succeeded and also till the metadata  database that it has succeeded on this  task instance that it worked on so now  the metadata database knows that the  task instance is done so the cue this is  sort of like ephemeral messaging storage  here so eventually the queues like okay  I did my job by data but the good thing  is that we have this metadata database  over here that still knows all this  history still knows what has been  completed and because of this the  scheduler can again keep doing this  process ask check the dag files check  the metadata database to figure out  what's going on and perhaps in this case  our dag only specifies this one task  instance so if this task is done the  whole dag is done so the scheduler can  update the metadata database at that  point and decide that ok we're done with  that one and update this metadata world  for everybody and since we've got this  webserver and the people love you eyes  he's got to put some data on it so since  we have this persistent store over here  with all of this data about what's been  going on the webserver can now show that  to everybody so that's the basic idea of  how everything is communicating here so  alerting is fun this is something that  we like so we talked just a little bit  about SL A's you can use these to set up  sort of a maximum boundary before you  think something weird is going on and  then you can take a human intervention  you can specify different callbacks or  you can also already built-in is email  on retry failure success or any other  types of things so if you're cool with  the official like airflow template for  how emails get sent to you on these  different types of things maybe you  don't need any sort of special callback  you can specify whatever different  timeouts that you need based on what how  long you expect stuff to work and  there's also other ways to connect with  other services that you might use for  alerting so there already is in airflow  course lack operator so if you use slack  at your work you can easily communicate  with that but you could do this to make  one for like Pedro duty or jet or  whatever it is that you use  configuration abounds so we have a  concept of pools which I'll talk about a  little bit later and queues which is a  way to manage your workers manage your  resources so that you don't necessarily  want all hundred possible tests that  could be allowed right now to hit your  database at the same time but if you  have a bunch of other stuff that can run  in parallel without too much confusion  you might let them use a bigger pool or  a bigger queue and I mentioned you can  turn your DAGs on and off and you can  also specify different levels of retries  at the tasks level so that's really nice  as well and there's lots of flexibility  we have tons of different types of  operators that are already built in and  the other great thing is that you can  extend your own which leaves me a little  bit - what we decided to do which was to  add in this concept of smart air flow  which borrowed this file dependencies  concept that we liked from the other  other tools and brought it into air flow  so air flow itself doesn't support much  data transfer only small pieces of data  via this thing called XCOM but it's like  a string or an integer it's not like  your whole whatever you were working on  so we added this plugin to air flow that  supports local file system or s3 backed  intermediate artifact storage and it  basically leverages air flow concepts to  make that file location' predictable so  that if you do have this dependency you  have an edge between two tasks it can  easily go figure out where its upstream  task data is automatically by using this  plugin so this is just some Doc's about  it but the important thing is it knows  how to get the input file name and get  the output file name for itself  and it knows how to predict all of that  and then so you don't have to deal with  figuring out where those files are  yourself or configure it during the dag  so this led us to an ETL paradigm where  we wanted to make each task as small as  possible while maintaining readability  because this could get out of hand  I'm sure you could imagine so still  maintaining readability  and we would preserve the output for  each task in the file based intermediate  artifacts so we wanted in a format that  was consumable by its dependent tasks so  this is the whole file cache and we  wanted to avoid finalizing our artifacts  for as long as possible we're doing the  state of warehousing thing eventually we  have to do the L in ETL but we're  waiting until we've completed all these  smaller tasks so we can confirm that all  of the work was done that we the way we  wanted to we can go back to the cache if  we needed to and then we finalize  whatever it is as the last step and the  simplest step in the dag is storage so  if I've sold you on airflo you don't  actually have to throw any money at it  because it is free and open source and  you can actually it's on pi PI so you  can pip install air flow to get started  really quick and they've made it really  easy to get started in like 30 seconds  right there's like a built-in Kampai  that already knows some sensible  defaults it will spin up a sequel light  metadata database that already came with  your Python distribution there's a ton  of example tags so you can just get it  started if you want to move up to  something a little more productionize  for us a github username Puckle created  a docker airflow repository that has  docker files and docker compose files  about setting this up more production  level scale so we've extended from  there's for our specific use case but I  really recommend that and also in the  repository at Apache Incubator air flow  there are some upstart and some systemd  templates that the community has  contributed as well if you don't want to  use docker so some things some tips  tricks and gotchas for air flow that I  have learned minimize your dev  environment with the easier executors  you don't necessarily need to use your  celery executors right out of the box so  you can separate your logic problems  from your system problems and there's a  CLI called airflow test that also makes  it really easy to just run things in the  foreground without interacting with the  metadata database if you just need to do  a quick test when you do get to the  point where you you want to test your  dag with the scheduler there's this  handy dandy at once scheduled interval  so the schedule will just pick up  knowing that it's time to run something  immediately you don't have to put it on  some schedule and then like wait 5  minutes or 10 minutes or anything like  that you can just use this at once and  it will just immediately try and start  to execute  my tip don't bother with the nascent  plug-in system air flow does have a  plug-in system but it's on the roadmap  to improve it but it's most people just  ship their custom operators with their  DAGs through whatever deployment process  they have they don't try and like build  a airflow plug-in separately and another  thing that kind of surprises some people  or surprised us for sure there's no  built in log rotation and it the air  flow service automatically like stores  all its log files to disk in this kind  of complicated location and the default  logging is really verbose and then if  you add in your own it starts to get  really large so as of air flow 1.7  there's a really simple thing in coughed  up high you can configure for it to  actually just send all those logs to s3  and then you can just set up whatever  you want to just clear out all of the  local logs as you see fit for us we have  about 1300 tasks across eight active  DAGs and 27 worker processes that are  all sitting on the same m4 extra-large  AWS ec2 instance so we utilize pools I  mentioned a little bit before to manage  resources so we have like a lot of  storage tests but we don't want them all  like trying to communicate to the  database at once so we create a pool  that only has one or two workers  subscribe to it and then that's where  all of our database tasks go you should  consider using queues if you have really  different types of work to do so if you  need like an AR server and you need a go  server and a scala server or whatever  you can set up a distributed system and  then use the queues instead to have  workers only subscribe to certain types  of queues and have the scheduler only  submit certain types of work to those  queues and we're using retries here so  if it wasn't clear your tests need to be  it input I didn't potent if you are  going to be using that so that they can  you don't get surprised if they run  again so last thing the biggest gotcha  that happens for users for air flow is  this time concept like when this stuff  happening and when is my schedule going  so here's a line that is time and you  can and we as humans do split up time  into arbitrary intervals and for example  it might be every 24 hours and in the  air flow speak this is a scheduled  interval the scheduled intervals are  represented by their execution date  which is at the top of the scheduled  interval so this entire period of time  here is represented by this execution  date that's at the top of the interval  so here's like the Guitar Hero period so  data is like streaming in and time time  is moving on and sometimes we cross  these arbitrary boundaries and we get  more data bla bla bla  so for at the situation where now is  here we can't actually do the work for  the execution date for the schedule  interval that the top of it is  represented by 2016 1001 until this  allowable time so once we get to  execution date + schedule interval it's  now allowable so all the data has  already by the time we get to here all  the data that represents 2016 1001 has  already happened right all the data that  could possibly come for that date is  done so the actual time that the dag run  gets instantiated is after this  allowable date this dag run gets  associated with this execution date but  it has a concept called  start date which is when it actually  started right the actual time that the  run happened is different from the data  that it's representing and this like  blows people's minds right because it it  doesn't necessarily make sense and also  these words are maybe not the best words  to represent them and everybody's  everyday usage so execution date does  not equal start date and it's the same  for tasks instances - since they inherit  their configuration from the dag runs  you can kind of see here but this run  was scheduled for 2016 1008 at 4:00 UTC  but it didn't actually start until 2016  10 oh 7 at 4 and 23 seconds UTC and  possibly the most confusing thing ever  is that execution date does not equal  start date but sometimes start date  doesn't equal start date because in the  dag model there's another keyword  argument called start date that is  unrelated completely to this concept of  execution date and start date that is  relevant for dag runs and tasks  instances so this is also in the roadmap  to come to clear up this confusion but a  lot of people get confused about this  issue so um I just wanted to point out  that there's another term there's  another column in the metadata database  somewhere else called start date that  doesn't mean the same thing if you still  don't get it and are very confused I  definitely recommend gotta make a time  travel dude time travel yourself  if we're in the future right now and  you're watching this online rewind and  if we're in the future either now these  people here in real time or the people  on video ask me I'm pretty friendly I  gave you all my internet communication  ways so feel free to ask me and actually  this conversation has been going on with  air flow on the Google Groups  on the Gitter and air flow Docs on the  dev mislay list on the devilís mailing  archives there's a lot to look at and  I'm saying that kind of tongue-in-cheek  here I kind of want to point that out  because they have a really great  community and a lot of people who are  are trying to use this and trying to  figure it out so there's a lot of great  information there in fact there as I as  I kind of alluded to but didn't  explicitly mention they are an  incubating project for Apache so they  were one day be Apache airflow they  originally came from Airbnb and they're  hardening their first Apache release  right now actually so if you wanted to  get into thick of things right now  before it's cool now's the time so  that's it I did want to say PS there's  an appendix and the longer version of  this talk I included way more details  about all those other pipelining things  that I didn't talk about so if you get  these slides online I've submitted them  to wherever in the ether to PI data that  someday they will show up somewhere then  you can keep scrolling through if you  want to get some more details about  those but otherwise that's it for this  and I'm happy to take any questions yes  hmm  yes and some people so DAGs are can our  Python files and so you can import them  around you can create tags dynamically  you could have some sort of for loop  that iterates over some type of  condition that your dag is testing for  to decide if it needs to make more tags  we use that at the tasks level so inside  a dag we query for this like list of  different types of data that we want to  work on and then we dynamically  instantiate all of our tasks so you can  do stuff like that so the way that that  interacts with the scheduler the  scheduler is pulling the files every 5  seconds or you can configure that you  can make it different is pulling the  files every 5 seconds so if you have  some sort of like dynamic situation that  is changing externally then the  scheduler can keep picking it up it's  going to keep pulling those files it  doesn't like hold them in memory so if  some external situation changes then it  the scheduler will pick that up  and then decide to do that work the dag  configuration is file based so  so the scheduler knows what work should  be done in what order based on these  files and then it pulls it it builds its  own sort of idea of the graph and  compares it to the metadata database and  then sends those message to the workers  or the worker queue and then the worker  just picks them up so the scheduler is  in charge of figuring out what needs to  happen based on whatever this template  is of what is supposed to happen and  what it already knew did happen does  that make sense  okay yes right that's a good question  and when I'm not really prepared to  answer because I had that requirement  from the beginning I do know that there  are some like commercial products to I  guess AWS data pipeline is kind of a  commercial product but a lot of people  compare this to Uzis and azkaban or I  don't I don't actually know what they're  called because I haven't used them but  some people use those tools as well it's  actually in the air flow Docs they're  like we're comparable to you blah blah  but like we're Python open source free  blah blah blah so I can't really answer  your question in other terms but that's  some other stuff that I've seen yes  right there right  sure the question was about what I've  had to overcome with airflow so  definitely the shortlist was kind of all  those things I mentioned the start date  drama was the biggest drama of them all  I would say and as you mentioned the  airflow we've been using it for the past  year we started on 1/6 now they're on  1/7 and there was a bunch of sort of  weird stuff going on then like they had  a problem where a couple bugs where the  scheduler you had to like bounce it  every once in a while because we're like  randomly hang which has been resolved  and we have never actually observed  since we've moved up to 1/7 but stuff  like that that was kind of surprising  but other than that I think basically  that list what I feel is all that we've  really experienced so it's you want to  talk about whatever your thing was we  can talk about it sometime yeah no  problem  yes  sure so if your job requires rollback in  case they that you fail so that is the  purview of the task to define so if it  would need to define however it needs to  rollback you could include that for  example in on failure callback for that  task if it does some sort of if it  throws some sort of weird exception you  could have it rollback based on whatever  logic you define and its callback or it  sort of depends what you're doing if  you're doing some sort of data database  stuff you could wrap the whole thing in  transaction if it throws an exception  then the whole the database is going to  roll back roll it back for you so that  it's mostly in the purview of the logic  that you write so is the answer that  make sense yeah anything else all right  well you can definitely contact me on  the internet anyway and I'll be hanging  around PI data for the rest of the time  so thank you very much
+
+00:00:03.900 --> 00:00:06.030 align:start position:0%
+okay so you're here for this talk how I  learned to time travel or data  pipelining and scheduling with airflow  my name is Laura Lorenz here are some  places you can contact me via the  internet and I'm here actually right now  representing industry dive work that I  do and my job there we're hiring you can  see the little bubble here so if you  want to check us out we're a business  media publishing company it's pretty  cool I would say and if you would like  any other stuff that I'm talking about  right now definitely come talk to me if  you are in the job market so first thing  I want to just put out some truths that  I think we can all get behind one data  is weird and break stuff and user data  is particularly untrustworthy just don't  trust it so we deal our whole ETL  process that we've been developing at  industry dive has been a lot related to  user data that they submit so we've had  a lot of exciting times with that and  other one is that computers slash the  internet slash third-party services  slash everything will fail and blow up  all of the scripts that you wrote to do  whatever your genius ETL stuff was and  that's really frustrating and so based  on both of these true facts and also  while I was looking at some past PI data  talks to get an idea of you know what  people are talking about these types of  things I saw this quote which I totally  just wanted to steal and put my proposal  in the first place but instead I'm  attributing it here but I still want to  bring it up so I'm at PI data London  2016 this year there was this quote in  the beginning there was Kron we had one  job it ran at 1:00 a.m. and it was good  right and so Pete said it a little  differently later but basically what  happened for us as well as him is that  it wasn't just one job anymore it was  like a hundred jobs and it didn't run at  1 a.m. anymore it's like depends and  maybe if this other stuff ran  successfully then I want to run this  other thing and it was no longer good  and so we no longer were using cron and  said it was just chaos right so this was  kind of the situation that we found  ourselves in so the basic  here for us is that plumbing problem  suck this is true in real life and this  is also true for your data pipeline so  we knew that we had to figure something  else out so we already had some thoughts  about how we wanted this to go just  based on like our early proof of  concepts we would prefer something an  open-source Python so we know what's  going on and could easily extend it as  we're a Python shop at industry dive  we wanted something resilient this is a  lot about what I just sort of motivated  this talk about we wanted to handle  failure well any types of failure so we  wanted there to be retry logic able to  specify failure callbacks good alerting  and monitoring all this was going to  make our life a lot easier to figure out  what's going on we wanted it to be able  to deal with complexity intelligently so  we were growing and growing what we  wanted to do we needed more complicated  dependency parsing and we also wanted to  only have to run what it had to we  didn't want to have to do extra work if  we had already done some part of the  pipeline and we wanted a lot of  flexibility we wanted to be able to run  anything that we wanted and we already  knew that we had batch tasks that we  were planning on running on a daily and  hourly schedule so we were already just  in the in the market for a batch  processing system that could help us  deal with this so we traveled the land  and came up with this chart that I've  made to sort of squish down a lot of  different tools that we took a look at  and I kind of separate them into two  different classes we have these light  lighter color ones make Drake Pye do it  Luigi which I sort of discerned we're  more on the file based dependency system  so they look for certain files to change  or compare metadata between files and  then they do some sort of work that then  outputs to a file so all of the  dependency is based on which files where  have been made and when whereas these on  the other side and the darker gray  airflow AWS data pipeline in pinball we  found that those were more abstract  about their dependency generation it  wasn't tracked directly to files  necessarily and you would configure that  in code they all have their own sort of  way to represent that as we go across  this picture there's other sorts of  features that also become really great  besides these two sort of class  distinctions that also kind of vary  so we can start out where it's just a  dependency framework but as we go  further to the other side we'll see that  they'll ship with more scheduling we're  monitoring more alerting in the box to  sort of that point these ones on I guess  this is your left are more lightweight  they won't specify any sort of like  protocols you would normally use there's  not a lot of reusable components for  normal or I guess standard ETL type of  things but if you go to the other side  everything's a little more heavyweight  there's more infrastructure for it but  there's a lot more batteries included  and then there's also this x2 this  y-axis to mention about dachshund  community which was also really  important to us because we were  interested in being able to extend and  customize and you can see sort of my  take on how all of these different  things delivered it on that term as well  so first I'm just going to talk a little  bit about this file dependencies target  system concept so the concept for these  this class of pipelining tool is that  there's some files or file or files that  are some dependency that have to exist  before some sort of recipe or action has  to occur and that recipe or action will  consume those files somehow do something  and then output to some sort of target  and then the system will be able to tell  if this target exists we don't need to  redo that this recipe anymore or if  these files have changed like their  metadata their timestamp is different  from this target we know that there's  updated information here that we need to  filter into a new target  so make is like a classic example of  this and you can see here some of the  syntax  I'm not going to go into too many  details but that you can see the track  back to the file dependencies concept  what the target actually is and what  work we're actually going to do  Drake is sort of a extension to make  their tagline is like make for data  actually is what they call themselves so  this has a similar concept it started to  introduce more variable substitution  built in variable substitution and also  different types of protocols you didn't  just have to run bash scripts you could  give it other stuff that you wanted to  do and that's also growing for them as  well  PI do it is more of a Python version you  define all of your configuration and  your tests in Python code and  then this is the same sort of track back  you have a concept of targets a concept  of your file dependencies and the  concept of different actions that you  want to take on those and then Luigi is  another one that is sort of the bridge  between I think these two systems that  I'm talking about but it still has this  file dependency based design paradigm so  it will have a concept that a specific  test has some sort of requires method  that defines what files it depends on  some output method that defines where  the target output is going to be written  to and then the actual logic so well we  were taking a look at these tools we  came up with different pros and cons  pros we really liked that this work was  cached in these files for each of these  different steps especially we were  coming at it from we had a lot of  different transformations we wanted to  be able to do and we liked that if we  got so far in the process and something  came up  later it was easy for us to just start  again from wherever we left off and the  you saw the syntax really briefly here  but it's pretty simple and intuitive  configuration for data transformations  especially you have a inputs you have a  target and you do some work and the  syntax is really clear and simple cons  for us was that there wasn't really  native concept of things happening on  any sort of schedule so Luigi started to  introduce this but this concept doesn't  really exist outside of you building it  yourself and Luigi doesn't have an  actual polling process to figure out  when it needs to do stuff so that didn't  come included the alerting systems for  these felt a little too basic too much  like heavy lifting for us to rewrite  them to include them and the design  paradigm was not broadly applicable to  other non-target operations so if you  wanted to do something else that didn't  necessarily do this type that wasn't a  data transformation but you had other  types of stuff that you wanted to live  in the same ecosystem this didn't really  like naturally fall into that kind of  work so the other class are the darker  gray ones that I showed you on that  first image I have made up this term  called abstract orchestration systems to  define what they are but they're less  concerned with targets because these  tasks don't necessarily have to have  actual data transfer between them but  they do have some sort of logical  dependency that one has to happen before  the other one  and so you define these relationships  between these tasks by um and whatever  the code configuration system is for  these different platforms and then you  end up with this graph that shows you  your different types of work and what  their edges connecting them are so for  example one we looked at was pinball so  you can see it's getting like a little  more fancy here and the actual just work  here is specified this dependency and  this work is really specified right here  but all of these start to incorporate  the concept of things happening on a  schedule and also incorporate the  concept of a schedule of process that's  constantly checking to see if it's time  to do something this is air flow we'll  go into this a little bit more too but  this is what the configuration kind of  looks for that like for that so you have  this pythonic way to set these  relationships and the whole  configuration ends up in Python so when  we were taking a look at all these  abstract orchestration systems so we  liked that a lot of these there's a lot  of coincident features that also are  occurring like there's many more  operations supported out-of-the-box with  these types of systems they're just like  a little more sophisticated and there's  a lot more behind them they handle more  complicated dependency logic all sorts  of different types of trigger rolls  things can branch things could depend on  each other only sometimes they could  have all different types of schedules  and the scheduling process the  monitoring and the alerting services  that are already built in are pretty  sophisticated so you didn't need to have  a separate scheduling service to figure  out if it was time to do any work but  also there's just some monitoring  monitoring tools or especially email  alerting is a really popular one that  was already built in cons for us this  caching concept the Spile caching  concept kind of went away so the idea at  that individual data transformations  could cache their data in between was  not something that was really a native  concept anymore the configuration is  more complex you saw the code examples a  little bit it's no longer just two lines  to describe your targets your file  dependencies and your outputs and  there's more infrastructure so now  instead of the state of your work flow  pipeline existing in files on disk  instead there needs to be some other  person  storage that knows what's going on in  all of these cases they have some sort  of database back that is keeping track  of what has been worked on and what  hasn't and a lot of these also  especially airflow I'll talk about allow  for you to have a distributed system so  in this case you're scheduling process  and the actual stuff doing the work  needs to have some middle committal way  to communicate especially if those  workers are on different servers so then  you need to set up a messaging queue for  the actual distribution if you decide to  do that so it's a little more  heavyweight so after we thought about  all this stuff we had more opinions and  we decided that we liked the  sophistication of the abstract  orchestration systems we liked the  batteries included stuff all the stuff  that came in the box but we did also  like the Drake and make and Luigi esque  file targeting especially for our data  transformation steps that we were really  working on and it makes it easy to see  transparently what's going on to do this  file caching and also to do data bug  tracking you can easily see we went from  this to that  everything's cached and it's really easy  to take a look and we termed these  intermediate artifacts is sort of our  thought process of what these are this  this cache that we're building up we aka  me okay DevOps didn't want to maintain a  separate scheduling service I kind of  wanted this all to be kind of more  together and so that was another big  reason that I liked the abstract  orchestration systems we like a really  strong community and good documentation  I mentioned before we wanted to be able  to extend this was something that made  us of the three that I mentioned that  are abstract orchestration systems  pinball wasn't really like the  competitor in this kind of space they  didn't have a ton of great documentation  at least at the point that we were  taking a look at it so we didn't feel  like it was going to be really easy to  plug into the community and we also  didn't want to be stuck in one ecosystem  if you choose AWS data pipeline it's  like super AWS times if you're already  in a system that's using a lot of AWS  resources and all of your data is there  and moving around in AWS that makes a  ton of sense but for us it wasn't really  the case and we wanted to be able to  support a lot of differ  stuff so we weren't super hyped about  that either so we decided to go with  airflow and we also decided to pull in  the Spile caching system from the Drake  Luigi times into our maybe semi rudely  named personal library called smart  airflow and we thought that this was  awesome so here's a little more details  about airflow and the features that they  support so they have a scheduler process  that handles the actual triggering and  executing of the work you specify the  works in these files called DAGs short  for directed acyclic graph some of the  other other the other systems had more  fancy names they just went with dag it  is what it is  and they can the scheduler can trigger  these tags on a given schedule there's a  lot of built in a learning based on SL  azor the task states so if your task has  a failed state or a success state or if  it has a retry state or skip state  there's a whole pantheon of different  types of states they could have that you  could specify different types of  callbacks for and there's lots of sexy  profiling visualizations so they really  they really got it with the UI the way  to make it easy for you to track what's  going on see your task history they also  put in a lot of other stuff to the UI  like different levels of authentication  being able to tune permissions so you as  the dev ops person might take a look at  it but also all your analysts can take a  look at and you can control like what  they might want to be able to be in  charge of there is a really convenient  CLI that among being able to do many of  the things that the you that the web UI  can do it also has these particular  helpful things test backfill and clear  which I'll talk about some of these a  little bit later too but the seal it CLI  was just really built out the operators  come which is a type of tasks come from  a number of pre-built classes so they  have a Python operator like s3 key  sensor based transfer these are all  different things that you might want to  do and a lot of them already came in  there's lots of stuff to connect with MS  sequel with my sequel with Postgres  there's stuff to connect with hive to  start a spark job to start in a Duke job  all sorts of different stuff those  already built in submitted by the  airflow core committers or the  community so that was really exciting  too and you can obviously extend any of  them using inheritance and we liked that  it can support local work execution but  also distributed work execution so it's  a scalable system so if you want to use  distributed it uses the Python library  celery to communicate with a message  queue there's several that celery  support RabbitMQ and Redis or really  popular ones but this was a scalable  thing we knew we could use this later as  our test went way past 100 or 500 when  we needed lots of servers or lots of  different types of servers for example  so this is how the actual architecture  kind of works for air flow so air flow  itself the services that air flow ships  is the web server and then another  concept that's called the executor the  executor contains both the scheduler and  the worker processes there's different  types of executors there's ones where  both of these are done by the same  process there's ones where one of these  is the parent process and can spawn  other smaller processes child processes  or there's the case where you have the  scheduler in a totally separate process  and the workers are all on a different  server and a totally different process  not in the same space at all and then in  that case you need to use some sort of  queue to facilitate communication  between them and both the web server and  whichever executor you're you choose  also needs to have some metadata  database to keep state since we're no  longer keeping state in on disk on the  file and the file system I mean so this  is just the general architecture of how  your air flow setup will go so here are  some pretty pictures of this nice UI  that they spent nice time building so  this gives you an idea of how you can  interact with this or how different  people in your organization can interact  with your air flow instance to schedule  work or stop scheduling work or whatever  HAP what-have-you so you can have  different tags here you can notice what  their scheduler schedule is for you can  turn them on and off you can check what  the recent status is stuff that has  succeded stuff that has failed stuff  that is still running and you have  hotkeys to a bunch of other different  types of views into this data  some of which I'm gonna show you in fact  this was one of them  the graph view so this is a way to take  a look at a given dag and visualize what  all the nodes and edges of the different  types of tests and dependencies are so  you can look at this on a per day in the  abstract and also per day or per hour  whatever your schedule is so you can  take a look see a lot of the same stuff  in terms of different tasks stat I but I  see it in this type of view instead and  there's a bunch of other tabs of  different ways to look at things and I  especially really like and I'm going to  show you the Gantt chart and the tree  view oops so this is the tree view that  they create so since we have a concept  of a schedule schedule we have a concept  of a schedule or who's gonna do stuff  over and over we have historical data  about tasks that have happened in the  past so this is one visualization tool  that they have to take a look at all  your different tasks in the past and you  can also take a look at their status  change the base state so you can look  further in the past or however you like  and also trigger things from here if you  need to and the Gantt tool this is one  of just many monitoring tools that you  eyes that I found really useful to be  able to diagnose issues with my  different tags this is like your  standard Gantt chart you can see  different tasks and when they ran and  how long it took them and how they  overlapped with anything else and so  this can give you a view like maybe  something we're just going on here or  maybe there's a good reason that it took  this long and there's a lot of other  visualizations you can actually roll  your own visualizations too and add your  own views onto this if there's some sort  of specific situation you want to take a  look at for a specific dag and then you  can track that information and you can  always query the metadata database  there's actually a tool built into this  UI to do it from here or whatever it is  you can connect directly and take a look  at all this historical data and do  whatever profiling that you need so  let's talk about DAGs and tasks so this  is the abstract concept here airflows  implementation of this graph concept of  dependencies I mentioned that a dag is a  collection of things that have some sort  of connection to each other and those  things are tasks in air flow there's  sort of two different types of  there's sensors which are kind of like  event bindings they're pulling waiting  for some sort of situation to be true so  this is a case like s3 key sensor  waiting for a key to show up an s3  bucket or there's a bunch of other ones  and then operators once they are cleared  to start working because they're do  their tasks dependencies have been met  then they just execute whatever work  that they need to do maybe they need to  run a sequel script or maybe they need  to run some Python script or any sort of  type of thing and DAGs and tasks have  different types of properties you can  use to configure them so you can reuse  different types of desks tasks and reuse  different types of DAGs if you lake DAGs  have a concept of what their schedule  interval is which I'll get into some  more details about later this is how  often it needs to be scheduled tasks  have a bunch of properties that might be  shared between different kinds like who  owns them how many retries they should  try for maybe you don't want it to retry  at all maybe you wanted it to retry 10  times I don't know you can do that at  the task level so they're all very  specifically configurable you can give  each task its own failure callback if  there's some special case that you want  to happen if task B fails but you want  some other thing to happen at C fails  then you can do stuff like that and then  they there's tons of other ones this is  certainly not a complete list so this is  an idea of the configuration I showed  you a little bit before really quickly  but you can specify a dag here's the dag  definition that takes its parameters and  then different tasks that can be a  different operator or sensor types and  then down here on line 44 this is where  we're actually specifying the  connections between them so I'm setting  the T to task the t1 task upstream of  the t2 task and so this is just your  basic configuration how you actually  would specify this in code so since we  have this concept of time which I keep  elite alluding to let's talk about dag  runs and tasks instances sodags and  tasks are an abstract concept but dag  runs actually our DAGs at a certain time  there DAGs that represent some period of  time  tasks instances are the tests that  belonged to that dag run so they inherit  inherit the concept of time from their  dag run and you can really see this in  this tree view each of these columns and  these circles represent some type of dag  run that happened for some certain time  and all these little boxes are all the  task instances that were part of that  dag run that were scheduled for the same  time that that dagger run was active so  a little bit more about the architecture  and how this actually works the the  connection between the executors the  webserver your metadata database and  whatever your cue is if you decide to  use a cue and then the actual dag  definition files those Python files that  specify the graph dependencies those  exist on file somewhere that you would  deploy with your airflow service so it  starts out where the scheduler pulls the  tags that are on disk and the metadata  database to figure out what it wants to  do so I can see from the DAGs what it's  supposed to do it can see from the  metadata database what's already  happened and so it can make some  decision about what it's time to do  right now so once it figures out and  starts freaking out that it's time to do  the thing it will especially if like at  industry dive you're using a messaging  queue to distribute the information from  the scheduler to the worker it's going  to submit that message to the queue that  says do the thing and then the scheduler  is also going to notify the metadata  database that it told the queue what was  going on and inside the metadata  database we'll have an entry for a dag  run that knows that it's running and an  entry for a task instance associated  with that dag run that knows that it's  queued that it's waiting to work so okay  also the worker is going to be pulling  into this queue to figure out what it's  supposed to do and once it sees that  there's a message in the queue it's  going to get all excited and decide to  do that and it's going to communicate to  both the queue and the metadata database  okay I got the message I'm on it so the  queue now knows that this message is  being worked on and the metadata  database also knows that this test  instance is being worked on yes  yeah so thus get the the dad  configuration specifies that the  scheduler is in charge of killing  anything that it needs to kill  so that's interesting question there's  different ways that you can specify what  your timeouts are you could not have one  I guess if you really wanted to another  popular thing is to use SL A's which  alert don't actually kill the process  but alert you in some other way that  something has gone wrong I expected this  to take less than two hours but it's  been two hours in one second and I don't  know what's happening and then you can  take an intervention action so if you  had like a really weird case where you  didn't know what was going on you could  use that instead okay so the worker has  communicated to everybody that  something's being done so eventually the  worker will act back to the cue that it  has succeeded and also till the metadata  database that it has succeeded on this  task instance that it worked on so now  the metadata database knows that the  task instance is done so the cue this is  sort of like ephemeral messaging storage  here so eventually the queues like okay  I did my job by data but the good thing  is that we have this metadata database  over here that still knows all this  history still knows what has been  completed and because of this the  scheduler can again keep doing this  process ask check the dag files check  the metadata database to figure out  what's going on and perhaps in this case  our dag only specifies this one task  instance so if this task is done the  whole dag is done so the scheduler can  update the metadata database at that  point and decide that ok we're done with  that one and update this metadata world  for everybody and since we've got this  webserver and the people love you eyes  he's got to put some data on it so since  we have this persistent store over here  with all of this data about what's been  going on the webserver can now show that  to everybody so that's the basic idea of  how everything is communicating here so  alerting is fun this is something that  we like so we talked just a little bit  about SL A's you can use these to set up  sort of a maximum boundary before you  think something weird is going on and  then you can take a human intervention  you can specify different callbacks or  you can also already built-in is email  on retry failure success or any other  types of things so if you're cool with  the official like airflow template for  how emails get sent to you on these  different types of things maybe you  don't need any sort of special callback  you can specify whatever different  timeouts that you need based on what how  long you expect stuff to work and  there's also other ways to connect with  other services that you might use for  alerting so there already is in airflow  course lack operator so if you use slack  at your work you can easily communicate  with that but you could do this to make  one for like Pedro duty or jet or  whatever it is that you use  configuration abounds so we have a  concept of pools which I'll talk about a  little bit later and queues which is a  way to manage your workers manage your  resources so that you don't necessarily  want all hundred possible tests that  could be allowed right now to hit your  database at the same time but if you  have a bunch of other stuff that can run  in parallel without too much confusion  you might let them use a bigger pool or  a bigger queue and I mentioned you can  turn your DAGs on and off and you can  also specify different levels of retries  at the tasks level so that's really nice  as well and there's lots of flexibility  we have tons of different types of  operators that are already built in and  the other great thing is that you can  extend your own which leaves me a little  bit - what we decided to do which was to  add in this concept of smart air flow  which borrowed this file dependencies  concept that we liked from the other  other tools and brought it into air flow  so air flow itself doesn't support much  data transfer only small pieces of data  via this thing called XCOM but it's like  a string or an integer it's not like  your whole whatever you were working on  so we added this plugin to air flow that  supports local file system or s3 backed  intermediate artifact storage and it  basically leverages air flow concepts to  make that file location' predictable so  that if you do have this dependency you  have an edge between two tasks it can  easily go figure out where its upstream  task data is automatically by using this  plugin so this is just some Doc's about  it but the important thing is it knows  how to get the input file name and get  the output file name for itself  and it knows how to predict all of that  and then so you don't have to deal with  figuring out where those files are  yourself or configure it during the dag  so this led us to an ETL paradigm where  we wanted to make each task as small as  possible while maintaining readability  because this could get out of hand  I'm sure you could imagine so still  maintaining readability  and we would preserve the output for  each task in the file based intermediate  artifacts so we wanted in a format that  was consumable by its dependent tasks so  this is the whole file cache and we  wanted to avoid finalizing our artifacts  for as long as possible we're doing the  state of warehousing thing eventually we  have to do the L in ETL but we're  waiting until we've completed all these  smaller tasks so we can confirm that all  of the work was done that we the way we  wanted to we can go back to the cache if  we needed to and then we finalize  whatever it is as the last step and the  simplest step in the dag is storage so  if I've sold you on airflo you don't  actually have to throw any money at it  because it is free and open source and  you can actually it's on pi PI so you  can pip install air flow to get started  really quick and they've made it really  easy to get started in like 30 seconds  right there's like a built-in Kampai  that already knows some sensible  defaults it will spin up a sequel light  metadata database that already came with  your Python distribution there's a ton  of example tags so you can just get it  started if you want to move up to  something a little more productionize  for us a github username Puckle created  a docker airflow repository that has  docker files and docker compose files  about setting this up more production  level scale so we've extended from  there's for our specific use case but I  really recommend that and also in the  repository at Apache Incubator air flow  there are some upstart and some systemd  templates that the community has  contributed as well if you don't want to  use docker so some things some tips  tricks and gotchas for air flow that I  have learned minimize your dev  environment with the easier executors  you don't necessarily need to use your  celery executors right out of the box so  you can separate your logic problems  from your system problems and there's a  CLI called airflow test that also makes  it really easy to just run things in the  foreground without interacting with the  metadata database if you just need to do  a quick test when you do get to the  point where you you want to test your  dag with the scheduler there's this  handy dandy at once scheduled interval  so the schedule will just pick up  knowing that it's time to run something  immediately you don't have to put it on  some schedule and then like wait 5  minutes or 10 minutes or anything like  that you can just use this at once and  it will just immediately try and start  to execute  my tip don't bother with the nascent  plug-in system air flow does have a  plug-in system but it's on the roadmap  to improve it but it's most people just  ship their custom operators with their  DAGs through whatever deployment process  they have they don't try and like build  a airflow plug-in separately and another  thing that kind of surprises some people  or surprised us for sure there's no  built in log rotation and it the air  flow service automatically like stores  all its log files to disk in this kind  of complicated location and the default  logging is really verbose and then if  you add in your own it starts to get  really large so as of air flow 1.7  there's a really simple thing in coughed  up high you can configure for it to  actually just send all those logs to s3  and then you can just set up whatever  you want to just clear out all of the  local logs as you see fit for us we have  about 1300 tasks across eight active  DAGs and 27 worker processes that are  all sitting on the same m4 extra-large  AWS ec2 instance so we utilize pools I  mentioned a little bit before to manage  resources so we have like a lot of  storage tests but we don't want them all  like trying to communicate to the  database at once so we create a pool  that only has one or two workers  subscribe to it and then that's where  all of our database tasks go you should  consider using queues if you have really  different types of work to do so if you  need like an AR server and you need a go  server and a scala server or whatever  you can set up a distributed system and  then use the queues instead to have  workers only subscribe to certain types  of queues and have the scheduler only  submit certain types of work to those  queues and we're using retries here so  if it wasn't clear your tests need to be  it input I didn't potent if you are  going to be using that so that they can  you don't get surprised if they run  again so last thing the biggest gotcha  that happens for users for air flow is  this time concept like when this stuff  happening and when is my schedule going  so here's a line that is time and you  can and we as humans do split up time  into arbitrary intervals and for example  it might be every 24 hours and in the  air flow speak this is a scheduled  interval the scheduled intervals are  represented by their execution date  which is at the top of the scheduled  interval so this entire period of time  here is represented by this execution  date that's at the top of the interval  so here's like the Guitar Hero period so  data is like streaming in and time time  is moving on and sometimes we cross  these arbitrary boundaries and we get  more data bla bla bla  so for at the situation where now is  here we can't actually do the work for  the execution date for the schedule  interval that the top of it is  represented by 2016 1001 until this  allowable time so once we get to  execution date + schedule interval it's  now allowable so all the data has  already by the time we get to here all  the data that represents 2016 1001 has  already happened right all the data that  could possibly come for that date is  done so the actual time that the dag run  gets instantiated is after this  allowable date this dag run gets  associated with this execution date but  it has a concept called  start date which is when it actually  started right the actual time that the  run happened is different from the data  that it's representing and this like  blows people's minds right because it it  doesn't necessarily make sense and also  these words are maybe not the best words  to represent them and everybody's  everyday usage so execution date does  not equal start date and it's the same  for tasks instances - since they inherit  their configuration from the dag runs  you can kind of see here but this run  was scheduled for 2016 1008 at 4:00 UTC  but it didn't actually start until 2016  10 oh 7 at 4 and 23 seconds UTC and  possibly the most confusing thing ever  is that execution date does not equal  start date but sometimes start date  doesn't equal start date because in the  dag model there's another keyword  argument called start date that is  unrelated completely to this concept of  execution date and start date that is  relevant for dag runs and tasks  instances so this is also in the roadmap  to come to clear up this confusion but a  lot of people get confused about this  issue so um I just wanted to point out  that there's another term there's  another column in the metadata database  somewhere else called start date that  doesn't mean the same thing if you still  don't get it and are very confused I  definitely recommend gotta make a time  travel dude time travel yourself  if we're in the future right now and  you're watching this online rewind and  if we're in the future either now these  people here in real time or the people  on video ask me I'm pretty friendly I  gave you all my internet communication  ways so feel free to ask me and actually  this conversation has been going on with  air flow on the Google Groups  on the Gitter and air flow Docs on the  dev mislay list on the devilís mailing  archives there's a lot to look at and  I'm saying that kind of tongue-in-cheek  here I kind of want to point that out  because they have a really great  community and a lot of people who are  are trying to use this and trying to  figure it out so there's a lot of great  information there in fact there as I as  I kind of alluded to but didn't  explicitly mention they are an  incubating project for Apache so they  were one day be Apache airflow they  originally came from Airbnb and they're  hardening their first Apache release  right now actually so if you wanted to  get into thick of things right now  before it's cool now's the time so  that's it I did want to say PS there's  an appendix and the longer version of  this talk I included way more details  about all those other pipelining things  that I didn't talk about so if you get  these slides online I've submitted them  to wherever in the ether to PI data that  someday they will show up somewhere then  you can keep scrolling through if you  want to get some more details about  those but otherwise that's it for this  and I'm happy to take any questions yes  hmm  yes and some people so DAGs are can our  Python files and so you can import them  around you can create tags dynamically  you could have some sort of for loop  that iterates over some type of  condition that your dag is testing for  to decide if it needs to make more tags  we use that at the tasks level so inside  a dag we query for this like list of  different types of data that we want to  work on and then we dynamically  instantiate all of our tasks so you can  do stuff like that so the way that that  interacts with the scheduler the  scheduler is pulling the files every 5  seconds or you can configure that you  can make it different is pulling the  files every 5 seconds so if you have  some sort of like dynamic situation that  is changing externally then the  scheduler can keep picking it up it's  going to keep pulling those files it  doesn't like hold them in memory so if  some external situation changes then it  the scheduler will pick that up  and then decide to do that work the dag  configuration is file based so  so the scheduler knows what work should  be done in what order based on these  files and then it pulls it it builds its  own sort of idea of the graph and  compares it to the metadata database and  then sends those message to the workers  or the worker queue and then the worker  just picks them up so the scheduler is  in charge of figuring out what needs to  happen based on whatever this template  is of what is supposed to happen and  what it already knew did happen does  that make sense  okay yes right that's a good question  and when I'm not really prepared to  answer because I had that requirement  from the beginning I do know that there  are some like commercial products to I  guess AWS data pipeline is kind of a  commercial product but a lot of people  compare this to Uzis and azkaban or I  don't I don't actually know what they're  called because I haven't used them but  some people use those tools as well it's  actually in the air flow Docs they're  like we're comparable to you blah blah  but like we're Python open source free  blah blah blah so I can't really answer  your question in other terms but that's  some other stuff that I've seen yes  right there right  sure the question was about what I've  had to overcome with airflow so  definitely the shortlist was kind of all  those things I mentioned the start date  drama was the biggest drama of them all  I would say and as you mentioned the  airflow we've been using it for the past  year we started on 1/6 now they're on  1/7 and there was a bunch of sort of  weird stuff going on then like they had  a problem where a couple bugs where the  scheduler you had to like bounce it  every once in a while because we're like  randomly hang which has been resolved  and we have never actually observed  since we've moved up to 1/7 but stuff  like that that was kind of surprising  but other than that I think basically  that list what I feel is all that we've  really experienced so it's you want to  talk about whatever your thing was we  can talk about it sometime yeah no  problem  yes  sure so if your job requires rollback in  case they that you fail so that is the  purview of the task to define so if it  would need to define however it needs to  rollback you could include that for  example in on failure callback for that  task if it does some sort of if it  throws some sort of weird exception you  could have it rollback based on whatever  logic you define and its callback or it  sort of depends what you're doing if  you're doing some sort of data database  stuff you could wrap the whole thing in  transaction if it throws an exception  then the whole the database is going to  roll back roll it back for you so that  it's mostly in the purview of the logic  that you write so is the answer that  make sense yeah anything else all right  well you can definitely contact me on  the internet anyway and I'll be hanging  around PI data for the rest of the time  so thank you very much
+ 
+
+00:00:06.030 --> 00:00:07.650 align:start position:0%
+ 
+ 
+
+00:00:07.650 --> 00:00:10.049 align:start position:0%
+ 
+ 
+
+00:00:10.049 --> 00:00:11.700 align:start position:0%
+ 
+ 
+
+00:00:11.700 --> 00:00:14.669 align:start position:0%
+ 
+ 
+
+00:00:14.669 --> 00:00:16.380 align:start position:0%
+ 
+ 
+
+00:00:16.380 --> 00:00:20.280 align:start position:0%
+ 
+ 
+
+00:00:20.280 --> 00:00:22.800 align:start position:0%
+ 
+ 
+
+00:00:22.800 --> 00:00:24.330 align:start position:0%
+ 
+ 
+
+00:00:24.330 --> 00:00:27.240 align:start position:0%
+ 
+ 
+
+00:00:27.240 --> 00:00:29.609 align:start position:0%
+ 
+ 
+
+00:00:29.609 --> 00:00:30.870 align:start position:0%
+ 
+ 
+
+00:00:30.870 --> 00:00:33.000 align:start position:0%
+ 
+ 
+
+00:00:33.000 --> 00:00:37.049 align:start position:0%
+ 
+ 
+
+00:00:37.049 --> 00:00:39.150 align:start position:0%
+ 
+ 
+
+00:00:39.150 --> 00:00:41.910 align:start position:0%
+ 
+ 
+
+00:00:41.910 --> 00:00:44.970 align:start position:0%
+ 
+ 
+
+00:00:44.970 --> 00:00:47.489 align:start position:0%
+ 
+ 
+
+00:00:47.489 --> 00:00:50.790 align:start position:0%
+ 
+ 
+
+00:00:50.790 --> 00:00:53.419 align:start position:0%
+ 
+ 
+
+00:00:53.419 --> 00:00:56.610 align:start position:0%
+ 
+ 
+
+00:00:56.610 --> 00:00:59.459 align:start position:0%
+ 
+ 
+
+00:00:59.459 --> 00:01:01.520 align:start position:0%
+ 
+ 
+
+00:01:01.520 --> 00:01:04.290 align:start position:0%
+ 
+ 
+
+00:01:04.290 --> 00:01:05.850 align:start position:0%
+ 
+ 
+
+00:01:05.850 --> 00:01:08.069 align:start position:0%
+ 
+ 
+
+00:01:08.069 --> 00:01:10.050 align:start position:0%
+ 
+ 
+
+00:01:10.050 --> 00:01:12.330 align:start position:0%
+ 
+ 
+
+00:01:12.330 --> 00:01:16.740 align:start position:0%
+ 
+ 
+
+00:01:16.740 --> 00:01:18.929 align:start position:0%
+ 
+ 
+
+00:01:18.929 --> 00:01:21.660 align:start position:0%
+ 
+ 
+
+00:01:21.660 --> 00:01:24.090 align:start position:0%
+ 
+ 
+
+00:01:24.090 --> 00:01:25.679 align:start position:0%
+ 
+ 
+
+00:01:25.679 --> 00:01:27.719 align:start position:0%
+ 
+ 
+
+00:01:27.719 --> 00:01:29.370 align:start position:0%
+ 
+ 
+
+00:01:29.370 --> 00:01:30.779 align:start position:0%
+ 
+ 
+
+00:01:30.779 --> 00:01:32.429 align:start position:0%
+ 
+ 
+
+00:01:32.429 --> 00:01:34.740 align:start position:0%
+ 
+ 
+
+00:01:34.740 --> 00:01:37.440 align:start position:0%
+ 
+ 
+
+00:01:37.440 --> 00:01:40.380 align:start position:0%
+ 
+ 
+
+00:01:40.380 --> 00:01:42.840 align:start position:0%
+ 
+ 
+
+00:01:42.840 --> 00:01:46.050 align:start position:0%
+ 
+ 
+
+00:01:46.050 --> 00:01:49.380 align:start position:0%
+ 
+ 
+
+00:01:49.380 --> 00:01:51.990 align:start position:0%
+ 
+ 
+
+00:01:51.990 --> 00:01:54.630 align:start position:0%
+ 
+ 
+
+00:01:54.630 --> 00:01:57.359 align:start position:0%
+ 
+ 
+
+00:01:57.359 --> 00:01:59.429 align:start position:0%
+ 
+ 
+
+00:01:59.429 --> 00:02:01.050 align:start position:0%
+ 
+ 
+
+00:02:01.050 --> 00:02:02.190 align:start position:0%
+ 
+ 
+
+00:02:02.190 --> 00:02:04.620 align:start position:0%
+ 
+ 
+
+00:02:04.620 --> 00:02:07.230 align:start position:0%
+ 
+ 
+
+00:02:07.230 --> 00:02:10.170 align:start position:0%
+ 
+ 
+
+00:02:10.170 --> 00:02:11.190 align:start position:0%
+ 
+ 
+
+00:02:11.190 --> 00:02:15.030 align:start position:0%
+ 
+ 
+
+00:02:15.030 --> 00:02:16.440 align:start position:0%
+ 
+ 
+
+00:02:16.440 --> 00:02:18.119 align:start position:0%
+ 
+ 
+
+00:02:18.119 --> 00:02:20.039 align:start position:0%
+ 
+ 
+
+00:02:20.039 --> 00:02:21.960 align:start position:0%
+ 
+ 
+
+00:02:21.960 --> 00:02:24.809 align:start position:0%
+ 
+ 
+
+00:02:24.809 --> 00:02:26.399 align:start position:0%
+ 
+ 
+
+00:02:26.399 --> 00:02:27.839 align:start position:0%
+ 
+ 
+
+00:02:27.839 --> 00:02:30.059 align:start position:0%
+ 
+ 
+
+00:02:30.059 --> 00:02:31.770 align:start position:0%
+ 
+ 
+
+00:02:31.770 --> 00:02:33.690 align:start position:0%
+ 
+ 
+
+00:02:33.690 --> 00:02:35.910 align:start position:0%
+ 
+ 
+
+00:02:35.910 --> 00:02:37.470 align:start position:0%
+ 
+ 
+
+00:02:37.470 --> 00:02:39.149 align:start position:0%
+ 
+ 
+
+00:02:39.149 --> 00:02:41.069 align:start position:0%
+ 
+ 
+
+00:02:41.069 --> 00:02:43.619 align:start position:0%
+ 
+ 
+
+00:02:43.619 --> 00:02:46.199 align:start position:0%
+ 
+ 
+
+00:02:46.199 --> 00:02:48.390 align:start position:0%
+ 
+ 
+
+00:02:48.390 --> 00:02:49.920 align:start position:0%
+ 
+ 
+
+00:02:49.920 --> 00:02:51.270 align:start position:0%
+ 
+ 
+
+00:02:51.270 --> 00:02:53.550 align:start position:0%
+ 
+ 
+
+00:02:53.550 --> 00:02:55.440 align:start position:0%
+ 
+ 
+
+00:02:55.440 --> 00:02:57.479 align:start position:0%
+ 
+ 
+
+00:02:57.479 --> 00:02:59.490 align:start position:0%
+ 
+ 
+
+00:02:59.490 --> 00:03:02.369 align:start position:0%
+ 
+ 
+
+00:03:02.369 --> 00:03:04.110 align:start position:0%
+ 
+ 
+
+00:03:04.110 --> 00:03:06.089 align:start position:0%
+ 
+ 
+
+00:03:06.089 --> 00:03:07.979 align:start position:0%
+ 
+ 
+
+00:03:07.979 --> 00:03:10.020 align:start position:0%
+ 
+ 
+
+00:03:10.020 --> 00:03:11.460 align:start position:0%
+ 
+ 
+
+00:03:11.460 --> 00:03:14.129 align:start position:0%
+ 
+ 
+
+00:03:14.129 --> 00:03:16.199 align:start position:0%
+ 
+ 
+
+00:03:16.199 --> 00:03:17.520 align:start position:0%
+ 
+ 
+
+00:03:17.520 --> 00:03:20.189 align:start position:0%
+ 
+ 
+
+00:03:20.189 --> 00:03:21.809 align:start position:0%
+ 
+ 
+
+00:03:21.809 --> 00:03:23.339 align:start position:0%
+ 
+ 
+
+00:03:23.339 --> 00:03:26.159 align:start position:0%
+ 
+ 
+
+00:03:26.159 --> 00:03:28.920 align:start position:0%
+ 
+ 
+
+00:03:28.920 --> 00:03:31.170 align:start position:0%
+ 
+ 
+
+00:03:31.170 --> 00:03:33.110 align:start position:0%
+ 
+ 
+
+00:03:33.110 --> 00:03:35.220 align:start position:0%
+ 
+ 
+
+00:03:35.220 --> 00:03:37.159 align:start position:0%
+ 
+ 
+
+00:03:37.159 --> 00:03:40.110 align:start position:0%
+ 
+ 
+
+00:03:40.110 --> 00:03:43.170 align:start position:0%
+ 
+ 
+
+00:03:43.170 --> 00:03:44.759 align:start position:0%
+ 
+ 
+
+00:03:44.759 --> 00:03:49.110 align:start position:0%
+ 
+ 
+
+00:03:49.110 --> 00:03:52.289 align:start position:0%
+ 
+ 
+
+00:03:52.289 --> 00:03:54.479 align:start position:0%
+ 
+ 
+
+00:03:54.479 --> 00:03:56.250 align:start position:0%
+ 
+ 
+
+00:03:56.250 --> 00:03:57.869 align:start position:0%
+ 
+ 
+
+00:03:57.869 --> 00:04:00.539 align:start position:0%
+ 
+ 
+
+00:04:00.539 --> 00:04:02.129 align:start position:0%
+ 
+ 
+
+00:04:02.129 --> 00:04:05.520 align:start position:0%
+ 
+ 
+
+00:04:05.520 --> 00:04:07.530 align:start position:0%
+ 
+ 
+
+00:04:07.530 --> 00:04:09.030 align:start position:0%
+ 
+ 
+
+00:04:09.030 --> 00:04:10.979 align:start position:0%
+ 
+ 
+
+00:04:10.979 --> 00:04:14.369 align:start position:0%
+ 
+ 
+
+00:04:14.369 --> 00:04:15.899 align:start position:0%
+ 
+ 
+
+00:04:15.899 --> 00:04:18.810 align:start position:0%
+ 
+ 
+
+00:04:18.810 --> 00:04:21.500 align:start position:0%
+ 
+ 
+
+00:04:21.500 --> 00:04:23.850 align:start position:0%
+ 
+ 
+
+00:04:23.850 --> 00:04:25.709 align:start position:0%
+ 
+ 
+
+00:04:25.709 --> 00:04:28.559 align:start position:0%
+ 
+ 
+
+00:04:28.559 --> 00:04:30.329 align:start position:0%
+ 
+ 
+
+00:04:30.329 --> 00:04:32.159 align:start position:0%
+ 
+ 
+
+00:04:32.159 --> 00:04:33.989 align:start position:0%
+ 
+ 
+
+00:04:33.989 --> 00:04:35.399 align:start position:0%
+ 
+ 
+
+00:04:35.399 --> 00:04:38.760 align:start position:0%
+ 
+ 
+
+00:04:38.760 --> 00:04:40.859 align:start position:0%
+ 
+ 
+
+00:04:40.859 --> 00:04:43.469 align:start position:0%
+ 
+ 
+
+00:04:43.469 --> 00:04:45.389 align:start position:0%
+ 
+ 
+
+00:04:45.389 --> 00:04:46.859 align:start position:0%
+ 
+ 
+
+00:04:46.859 --> 00:04:48.449 align:start position:0%
+ 
+ 
+
+00:04:48.449 --> 00:04:51.600 align:start position:0%
+ 
+ 
+
+00:04:51.600 --> 00:04:54.089 align:start position:0%
+ 
+ 
+
+00:04:54.089 --> 00:04:55.230 align:start position:0%
+ 
+ 
+
+00:04:55.230 --> 00:04:57.239 align:start position:0%
+ 
+ 
+
+00:04:57.239 --> 00:04:58.619 align:start position:0%
+ 
+ 
+
+00:04:58.619 --> 00:05:01.619 align:start position:0%
+ 
+ 
+
+00:05:01.619 --> 00:05:04.409 align:start position:0%
+ 
+ 
+
+00:05:04.409 --> 00:05:05.549 align:start position:0%
+ 
+ 
+
+00:05:05.549 --> 00:05:06.629 align:start position:0%
+ 
+ 
+
+00:05:06.629 --> 00:05:08.189 align:start position:0%
+ 
+ 
+
+00:05:08.189 --> 00:05:10.920 align:start position:0%
+ 
+ 
+
+00:05:10.920 --> 00:05:12.749 align:start position:0%
+ 
+ 
+
+00:05:12.749 --> 00:05:16.070 align:start position:0%
+ 
+ 
+
+00:05:16.070 --> 00:05:18.359 align:start position:0%
+ 
+ 
+
+00:05:18.359 --> 00:05:20.009 align:start position:0%
+ 
+ 
+
+00:05:20.009 --> 00:05:22.619 align:start position:0%
+ 
+ 
+
+00:05:22.619 --> 00:05:25.649 align:start position:0%
+ 
+ 
+
+00:05:25.649 --> 00:05:28.769 align:start position:0%
+ 
+ 
+
+00:05:28.769 --> 00:05:30.659 align:start position:0%
+ 
+ 
+
+00:05:30.659 --> 00:05:33.359 align:start position:0%
+ 
+ 
+
+00:05:33.359 --> 00:05:35.670 align:start position:0%
+ 
+ 
+
+00:05:35.670 --> 00:05:37.769 align:start position:0%
+ 
+ 
+
+00:05:37.769 --> 00:05:39.809 align:start position:0%
+ 
+ 
+
+00:05:39.809 --> 00:05:42.179 align:start position:0%
+ 
+ 
+
+00:05:42.179 --> 00:05:44.129 align:start position:0%
+ 
+ 
+
+00:05:44.129 --> 00:05:47.129 align:start position:0%
+ 
+ 
+
+00:05:47.129 --> 00:05:48.959 align:start position:0%
+ 
+ 
+
+00:05:48.959 --> 00:05:50.549 align:start position:0%
+ 
+ 
+
+00:05:50.549 --> 00:05:51.929 align:start position:0%
+ 
+ 
+
+00:05:51.929 --> 00:05:53.759 align:start position:0%
+ 
+ 
+
+00:05:53.759 --> 00:05:55.159 align:start position:0%
+ 
+ 
+
+00:05:55.159 --> 00:05:58.889 align:start position:0%
+ 
+ 
+
+00:05:58.889 --> 00:06:01.859 align:start position:0%
+ 
+ 
+
+00:06:01.859 --> 00:06:01.869 align:start position:0%
+ 
+ 
+
+00:06:01.869 --> 00:06:02.489 align:start position:0%
+ 
+
+
+00:06:02.489 --> 00:06:03.719 align:start position:0%
+ 
+ 
+
+00:06:03.719 --> 00:06:05.399 align:start position:0%
+ 
+ 
+
+00:06:05.399 --> 00:06:07.889 align:start position:0%
+ 
+ 
+
+00:06:07.889 --> 00:06:09.299 align:start position:0%
+ 
+ 
+
+00:06:09.299 --> 00:06:11.279 align:start position:0%
+ 
+ 
+
+00:06:11.279 --> 00:06:13.679 align:start position:0%
+ 
+ 
+
+00:06:13.679 --> 00:06:15.749 align:start position:0%
+ 
+ 
+
+00:06:15.749 --> 00:06:17.759 align:start position:0%
+ 
+ 
+
+00:06:17.759 --> 00:06:20.339 align:start position:0%
+ 
+ 
+
+00:06:20.339 --> 00:06:23.339 align:start position:0%
+ 
+ 
+
+00:06:23.339 --> 00:06:25.499 align:start position:0%
+ 
+ 
+
+00:06:25.499 --> 00:06:27.239 align:start position:0%
+ 
+ 
+
+00:06:27.239 --> 00:06:29.309 align:start position:0%
+ 
+ 
+
+00:06:29.309 --> 00:06:30.899 align:start position:0%
+ 
+ 
+
+00:06:30.899 --> 00:06:33.600 align:start position:0%
+ 
+ 
+
+00:06:33.600 --> 00:06:33.610 align:start position:0%
+ 
+ 
+
+00:06:33.610 --> 00:06:34.189 align:start position:0%
+ 
+
+
+00:06:34.189 --> 00:06:38.670 align:start position:0%
+ 
+ 
+
+00:06:38.670 --> 00:06:40.379 align:start position:0%
+ 
+ 
+
+00:06:40.379 --> 00:06:42.090 align:start position:0%
+ 
+ 
+
+00:06:42.090 --> 00:06:43.980 align:start position:0%
+ 
+ 
+
+00:06:43.980 --> 00:06:46.140 align:start position:0%
+ 
+ 
+
+00:06:46.140 --> 00:06:47.520 align:start position:0%
+ 
+ 
+
+00:06:47.520 --> 00:06:48.930 align:start position:0%
+ 
+ 
+
+00:06:48.930 --> 00:06:51.780 align:start position:0%
+ 
+ 
+
+00:06:51.780 --> 00:06:53.820 align:start position:0%
+ 
+ 
+
+00:06:53.820 --> 00:06:56.430 align:start position:0%
+ 
+ 
+
+00:06:56.430 --> 00:06:58.080 align:start position:0%
+ 
+ 
+
+00:06:58.080 --> 00:07:00.900 align:start position:0%
+ 
+ 
+
+00:07:00.900 --> 00:07:02.610 align:start position:0%
+ 
+ 
+
+00:07:02.610 --> 00:07:04.830 align:start position:0%
+ 
+ 
+
+00:07:04.830 --> 00:07:06.630 align:start position:0%
+ 
+ 
+
+00:07:06.630 --> 00:07:08.850 align:start position:0%
+ 
+ 
+
+00:07:08.850 --> 00:07:10.470 align:start position:0%
+ 
+ 
+
+00:07:10.470 --> 00:07:14.760 align:start position:0%
+ 
+ 
+
+00:07:14.760 --> 00:07:16.170 align:start position:0%
+ 
+ 
+
+00:07:16.170 --> 00:07:17.490 align:start position:0%
+ 
+ 
+
+00:07:17.490 --> 00:07:19.770 align:start position:0%
+ 
+ 
+
+00:07:19.770 --> 00:07:21.600 align:start position:0%
+ 
+ 
+
+00:07:21.600 --> 00:07:23.010 align:start position:0%
+ 
+ 
+
+00:07:23.010 --> 00:07:24.300 align:start position:0%
+ 
+ 
+
+00:07:24.300 --> 00:07:25.950 align:start position:0%
+ 
+ 
+
+00:07:25.950 --> 00:07:28.260 align:start position:0%
+ 
+ 
+
+00:07:28.260 --> 00:07:30.600 align:start position:0%
+ 
+ 
+
+00:07:30.600 --> 00:07:31.320 align:start position:0%
+ 
+ 
+
+00:07:31.320 --> 00:07:33.330 align:start position:0%
+ 
+ 
+
+00:07:33.330 --> 00:07:36.750 align:start position:0%
+ 
+ 
+
+00:07:36.750 --> 00:07:38.940 align:start position:0%
+ 
+ 
+
+00:07:38.940 --> 00:07:40.170 align:start position:0%
+ 
+ 
+
+00:07:40.170 --> 00:07:42.390 align:start position:0%
+ 
+ 
+
+00:07:42.390 --> 00:07:44.490 align:start position:0%
+ 
+ 
+
+00:07:44.490 --> 00:07:46.680 align:start position:0%
+ 
+ 
+
+00:07:46.680 --> 00:07:49.050 align:start position:0%
+ 
+ 
+
+00:07:49.050 --> 00:07:50.790 align:start position:0%
+ 
+ 
+
+00:07:50.790 --> 00:07:52.680 align:start position:0%
+ 
+ 
+
+00:07:52.680 --> 00:07:55.710 align:start position:0%
+ 
+ 
+
+00:07:55.710 --> 00:07:58.650 align:start position:0%
+ 
+ 
+
+00:07:58.650 --> 00:08:00.630 align:start position:0%
+ 
+ 
+
+00:08:00.630 --> 00:08:03.210 align:start position:0%
+ 
+ 
+
+00:08:03.210 --> 00:08:04.860 align:start position:0%
+ 
+ 
+
+00:08:04.860 --> 00:08:06.840 align:start position:0%
+ 
+ 
+
+00:08:06.840 --> 00:08:09.600 align:start position:0%
+ 
+ 
+
+00:08:09.600 --> 00:08:12.240 align:start position:0%
+ 
+ 
+
+00:08:12.240 --> 00:08:14.190 align:start position:0%
+ 
+ 
+
+00:08:14.190 --> 00:08:16.530 align:start position:0%
+ 
+ 
+
+00:08:16.530 --> 00:08:18.300 align:start position:0%
+ 
+ 
+
+00:08:18.300 --> 00:08:20.700 align:start position:0%
+ 
+ 
+
+00:08:20.700 --> 00:08:22.050 align:start position:0%
+ 
+ 
+
+00:08:22.050 --> 00:08:24.180 align:start position:0%
+ 
+ 
+
+00:08:24.180 --> 00:08:25.800 align:start position:0%
+ 
+ 
+
+00:08:25.800 --> 00:08:27.330 align:start position:0%
+ 
+ 
+
+00:08:27.330 --> 00:08:29.430 align:start position:0%
+ 
+ 
+
+00:08:29.430 --> 00:08:31.830 align:start position:0%
+ 
+ 
+
+00:08:31.830 --> 00:08:36.180 align:start position:0%
+ 
+ 
+
+00:08:36.180 --> 00:08:37.650 align:start position:0%
+ 
+ 
+
+00:08:37.650 --> 00:08:40.469 align:start position:0%
+ 
+ 
+
+00:08:40.469 --> 00:08:42.690 align:start position:0%
+ 
+ 
+
+00:08:42.690 --> 00:08:45.030 align:start position:0%
+ 
+ 
+
+00:08:45.030 --> 00:08:47.580 align:start position:0%
+ 
+ 
+
+00:08:47.580 --> 00:08:49.170 align:start position:0%
+ 
+ 
+
+00:08:49.170 --> 00:08:50.940 align:start position:0%
+ 
+ 
+
+00:08:50.940 --> 00:08:52.440 align:start position:0%
+ 
+ 
+
+00:08:52.440 --> 00:08:54.120 align:start position:0%
+ 
+ 
+
+00:08:54.120 --> 00:08:54.810 align:start position:0%
+ 
+ 
+
+00:08:54.810 --> 00:08:57.060 align:start position:0%
+ 
+ 
+
+00:08:57.060 --> 00:09:00.120 align:start position:0%
+ 
+ 
+
+00:09:00.120 --> 00:09:02.370 align:start position:0%
+ 
+ 
+
+00:09:02.370 --> 00:09:04.860 align:start position:0%
+ 
+ 
+
+00:09:04.860 --> 00:09:07.140 align:start position:0%
+ 
+ 
+
+00:09:07.140 --> 00:09:09.060 align:start position:0%
+ 
+ 
+
+00:09:09.060 --> 00:09:12.510 align:start position:0%
+ 
+ 
+
+00:09:12.510 --> 00:09:14.970 align:start position:0%
+ 
+ 
+
+00:09:14.970 --> 00:09:16.110 align:start position:0%
+ 
+ 
+
+00:09:16.110 --> 00:09:18.990 align:start position:0%
+ 
+ 
+
+00:09:18.990 --> 00:09:22.620 align:start position:0%
+ 
+ 
+
+00:09:22.620 --> 00:09:24.420 align:start position:0%
+ 
+ 
+
+00:09:24.420 --> 00:09:26.730 align:start position:0%
+ 
+ 
+
+00:09:26.730 --> 00:09:28.110 align:start position:0%
+ 
+ 
+
+00:09:28.110 --> 00:09:29.940 align:start position:0%
+ 
+ 
+
+00:09:29.940 --> 00:09:31.530 align:start position:0%
+ 
+ 
+
+00:09:31.530 --> 00:09:33.630 align:start position:0%
+ 
+ 
+
+00:09:33.630 --> 00:09:36.690 align:start position:0%
+ 
+ 
+
+00:09:36.690 --> 00:09:38.280 align:start position:0%
+ 
+ 
+
+00:09:38.280 --> 00:09:39.690 align:start position:0%
+ 
+ 
+
+00:09:39.690 --> 00:09:42.060 align:start position:0%
+ 
+ 
+
+00:09:42.060 --> 00:09:44.210 align:start position:0%
+ 
+ 
+
+00:09:44.210 --> 00:09:46.110 align:start position:0%
+ 
+ 
+
+00:09:46.110 --> 00:09:50.130 align:start position:0%
+ 
+ 
+
+00:09:50.130 --> 00:09:51.000 align:start position:0%
+ 
+ 
+
+00:09:51.000 --> 00:09:53.310 align:start position:0%
+ 
+ 
+
+00:09:53.310 --> 00:09:55.740 align:start position:0%
+ 
+ 
+
+00:09:55.740 --> 00:09:57.900 align:start position:0%
+ 
+ 
+
+00:09:57.900 --> 00:09:59.160 align:start position:0%
+ 
+ 
+
+00:09:59.160 --> 00:10:00.870 align:start position:0%
+ 
+ 
+
+00:10:00.870 --> 00:10:02.250 align:start position:0%
+ 
+ 
+
+00:10:02.250 --> 00:10:03.720 align:start position:0%
+ 
+ 
+
+00:10:03.720 --> 00:10:06.660 align:start position:0%
+ 
+ 
+
+00:10:06.660 --> 00:10:09.600 align:start position:0%
+ 
+ 
+
+00:10:09.600 --> 00:10:10.830 align:start position:0%
+ 
+ 
+
+00:10:10.830 --> 00:10:13.920 align:start position:0%
+ 
+ 
+
+00:10:13.920 --> 00:10:15.570 align:start position:0%
+ 
+ 
+
+00:10:15.570 --> 00:10:16.950 align:start position:0%
+ 
+ 
+
+00:10:16.950 --> 00:10:19.320 align:start position:0%
+ 
+ 
+
+00:10:19.320 --> 00:10:20.940 align:start position:0%
+ 
+ 
+
+00:10:20.940 --> 00:10:22.500 align:start position:0%
+ 
+ 
+
+00:10:22.500 --> 00:10:24.540 align:start position:0%
+ 
+ 
+
+00:10:24.540 --> 00:10:26.430 align:start position:0%
+ 
+ 
+
+00:10:26.430 --> 00:10:28.530 align:start position:0%
+ 
+ 
+
+00:10:28.530 --> 00:10:30.000 align:start position:0%
+ 
+ 
+
+00:10:30.000 --> 00:10:32.970 align:start position:0%
+ 
+ 
+
+00:10:32.970 --> 00:10:34.320 align:start position:0%
+ 
+ 
+
+00:10:34.320 --> 00:10:38.250 align:start position:0%
+ 
+ 
+
+00:10:38.250 --> 00:10:40.140 align:start position:0%
+ 
+ 
+
+00:10:40.140 --> 00:10:44.190 align:start position:0%
+ 
+ 
+
+00:10:44.190 --> 00:10:45.930 align:start position:0%
+ 
+ 
+
+00:10:45.930 --> 00:10:48.030 align:start position:0%
+ 
+ 
+
+00:10:48.030 --> 00:10:49.560 align:start position:0%
+ 
+ 
+
+00:10:49.560 --> 00:10:51.900 align:start position:0%
+ 
+ 
+
+00:10:51.900 --> 00:10:53.970 align:start position:0%
+ 
+ 
+
+00:10:53.970 --> 00:10:55.800 align:start position:0%
+ 
+ 
+
+00:10:55.800 --> 00:10:57.600 align:start position:0%
+ 
+ 
+
+00:10:57.600 --> 00:11:00.300 align:start position:0%
+ 
+ 
+
+00:11:00.300 --> 00:11:02.160 align:start position:0%
+ 
+ 
+
+00:11:02.160 --> 00:11:04.950 align:start position:0%
+ 
+ 
+
+00:11:04.950 --> 00:11:06.810 align:start position:0%
+ 
+ 
+
+00:11:06.810 --> 00:11:08.460 align:start position:0%
+ 
+ 
+
+00:11:08.460 --> 00:11:08.470 align:start position:0%
+ 
+ 
+
+00:11:08.470 --> 00:11:08.850 align:start position:0%
+ 
+
+
+00:11:08.850 --> 00:11:10.680 align:start position:0%
+ 
+ 
+
+00:11:10.680 --> 00:11:12.330 align:start position:0%
+ 
+ 
+
+00:11:12.330 --> 00:11:14.700 align:start position:0%
+ 
+ 
+
+00:11:14.700 --> 00:11:15.900 align:start position:0%
+ 
+ 
+
+00:11:15.900 --> 00:11:19.260 align:start position:0%
+ 
+ 
+
+00:11:19.260 --> 00:11:22.320 align:start position:0%
+ 
+ 
+
+00:11:22.320 --> 00:11:25.260 align:start position:0%
+ 
+ 
+
+00:11:25.260 --> 00:11:27.270 align:start position:0%
+ 
+ 
+
+00:11:27.270 --> 00:11:28.500 align:start position:0%
+ 
+ 
+
+00:11:28.500 --> 00:11:31.590 align:start position:0%
+ 
+ 
+
+00:11:31.590 --> 00:11:33.000 align:start position:0%
+ 
+ 
+
+00:11:33.000 --> 00:11:35.700 align:start position:0%
+ 
+ 
+
+00:11:35.700 --> 00:11:37.740 align:start position:0%
+ 
+ 
+
+00:11:37.740 --> 00:11:39.240 align:start position:0%
+ 
+ 
+
+00:11:39.240 --> 00:11:40.350 align:start position:0%
+ 
+ 
+
+00:11:40.350 --> 00:11:43.620 align:start position:0%
+ 
+ 
+
+00:11:43.620 --> 00:11:46.410 align:start position:0%
+ 
+ 
+
+00:11:46.410 --> 00:11:48.000 align:start position:0%
+ 
+ 
+
+00:11:48.000 --> 00:11:49.290 align:start position:0%
+ 
+ 
+
+00:11:49.290 --> 00:11:51.000 align:start position:0%
+ 
+ 
+
+00:11:51.000 --> 00:11:52.470 align:start position:0%
+ 
+ 
+
+00:11:52.470 --> 00:11:54.990 align:start position:0%
+ 
+ 
+
+00:11:54.990 --> 00:11:57.210 align:start position:0%
+ 
+ 
+
+00:11:57.210 --> 00:11:59.370 align:start position:0%
+ 
+ 
+
+00:11:59.370 --> 00:12:00.990 align:start position:0%
+ 
+ 
+
+00:12:00.990 --> 00:12:03.990 align:start position:0%
+ 
+ 
+
+00:12:03.990 --> 00:12:05.910 align:start position:0%
+ 
+ 
+
+00:12:05.910 --> 00:12:08.160 align:start position:0%
+ 
+ 
+
+00:12:08.160 --> 00:12:10.110 align:start position:0%
+ 
+ 
+
+00:12:10.110 --> 00:12:11.040 align:start position:0%
+ 
+ 
+
+00:12:11.040 --> 00:12:13.290 align:start position:0%
+ 
+ 
+
+00:12:13.290 --> 00:12:15.500 align:start position:0%
+ 
+ 
+
+00:12:15.500 --> 00:12:18.330 align:start position:0%
+ 
+ 
+
+00:12:18.330 --> 00:12:20.280 align:start position:0%
+ 
+ 
+
+00:12:20.280 --> 00:12:23.460 align:start position:0%
+ 
+ 
+
+00:12:23.460 --> 00:12:26.100 align:start position:0%
+ 
+ 
+
+00:12:26.100 --> 00:12:27.930 align:start position:0%
+ 
+ 
+
+00:12:27.930 --> 00:12:30.270 align:start position:0%
+ 
+ 
+
+00:12:30.270 --> 00:12:32.490 align:start position:0%
+ 
+ 
+
+00:12:32.490 --> 00:12:35.850 align:start position:0%
+ 
+ 
+
+00:12:35.850 --> 00:12:38.640 align:start position:0%
+ 
+ 
+
+00:12:38.640 --> 00:12:40.260 align:start position:0%
+ 
+ 
+
+00:12:40.260 --> 00:12:41.490 align:start position:0%
+ 
+ 
+
+00:12:41.490 --> 00:12:44.370 align:start position:0%
+ 
+ 
+
+00:12:44.370 --> 00:12:46.590 align:start position:0%
+ 
+ 
+
+00:12:46.590 --> 00:12:49.110 align:start position:0%
+ 
+ 
+
+00:12:49.110 --> 00:12:51.060 align:start position:0%
+ 
+ 
+
+00:12:51.060 --> 00:12:53.070 align:start position:0%
+ 
+ 
+
+00:12:53.070 --> 00:12:54.900 align:start position:0%
+ 
+ 
+
+00:12:54.900 --> 00:12:55.890 align:start position:0%
+ 
+ 
+
+00:12:55.890 --> 00:12:58.410 align:start position:0%
+ 
+ 
+
+00:12:58.410 --> 00:12:59.610 align:start position:0%
+ 
+ 
+
+00:12:59.610 --> 00:13:02.070 align:start position:0%
+ 
+ 
+
+00:13:02.070 --> 00:13:03.390 align:start position:0%
+ 
+ 
+
+00:13:03.390 --> 00:13:06.120 align:start position:0%
+ 
+ 
+
+00:13:06.120 --> 00:13:09.390 align:start position:0%
+ 
+ 
+
+00:13:09.390 --> 00:13:11.310 align:start position:0%
+ 
+ 
+
+00:13:11.310 --> 00:13:13.170 align:start position:0%
+ 
+ 
+
+00:13:13.170 --> 00:13:15.450 align:start position:0%
+ 
+ 
+
+00:13:15.450 --> 00:13:18.540 align:start position:0%
+ 
+ 
+
+00:13:18.540 --> 00:13:21.210 align:start position:0%
+ 
+ 
+
+00:13:21.210 --> 00:13:22.560 align:start position:0%
+ 
+ 
+
+00:13:22.560 --> 00:13:25.020 align:start position:0%
+ 
+ 
+
+00:13:25.020 --> 00:13:28.710 align:start position:0%
+ 
+ 
+
+00:13:28.710 --> 00:13:31.320 align:start position:0%
+ 
+ 
+
+00:13:31.320 --> 00:13:33.420 align:start position:0%
+ 
+ 
+
+00:13:33.420 --> 00:13:36.780 align:start position:0%
+ 
+ 
+
+00:13:36.780 --> 00:13:39.360 align:start position:0%
+ 
+ 
+
+00:13:39.360 --> 00:13:41.190 align:start position:0%
+ 
+ 
+
+00:13:41.190 --> 00:13:44.610 align:start position:0%
+ 
+ 
+
+00:13:44.610 --> 00:13:46.590 align:start position:0%
+ 
+ 
+
+00:13:46.590 --> 00:13:49.260 align:start position:0%
+ 
+ 
+
+00:13:49.260 --> 00:13:51.510 align:start position:0%
+ 
+ 
+
+00:13:51.510 --> 00:13:54.030 align:start position:0%
+ 
+ 
+
+00:13:54.030 --> 00:13:56.430 align:start position:0%
+ 
+ 
+
+00:13:56.430 --> 00:13:58.590 align:start position:0%
+ 
+ 
+
+00:13:58.590 --> 00:14:02.370 align:start position:0%
+ 
+ 
+
+00:14:02.370 --> 00:14:04.140 align:start position:0%
+ 
+ 
+
+00:14:04.140 --> 00:14:05.670 align:start position:0%
+ 
+ 
+
+00:14:05.670 --> 00:14:08.310 align:start position:0%
+ 
+ 
+
+00:14:08.310 --> 00:14:10.260 align:start position:0%
+ 
+ 
+
+00:14:10.260 --> 00:14:12.090 align:start position:0%
+ 
+ 
+
+00:14:12.090 --> 00:14:14.580 align:start position:0%
+ 
+ 
+
+00:14:14.580 --> 00:14:17.730 align:start position:0%
+ 
+ 
+
+00:14:17.730 --> 00:14:19.770 align:start position:0%
+ 
+ 
+
+00:14:19.770 --> 00:14:21.600 align:start position:0%
+ 
+ 
+
+00:14:21.600 --> 00:14:22.740 align:start position:0%
+ 
+ 
+
+00:14:22.740 --> 00:14:23.910 align:start position:0%
+ 
+ 
+
+00:14:23.910 --> 00:14:27.330 align:start position:0%
+ 
+ 
+
+00:14:27.330 --> 00:14:30.860 align:start position:0%
+ 
+ 
+
+00:14:30.860 --> 00:14:34.590 align:start position:0%
+ 
+ 
+
+00:14:34.590 --> 00:14:36.360 align:start position:0%
+ 
+ 
+
+00:14:36.360 --> 00:14:39.000 align:start position:0%
+ 
+ 
+
+00:14:39.000 --> 00:14:41.010 align:start position:0%
+ 
+ 
+
+00:14:41.010 --> 00:14:42.840 align:start position:0%
+ 
+ 
+
+00:14:42.840 --> 00:14:45.570 align:start position:0%
+ 
+ 
+
+00:14:45.570 --> 00:14:47.370 align:start position:0%
+ 
+ 
+
+00:14:47.370 --> 00:14:48.810 align:start position:0%
+ 
+ 
+
+00:14:48.810 --> 00:14:50.220 align:start position:0%
+ 
+ 
+
+00:14:50.220 --> 00:14:52.020 align:start position:0%
+ 
+ 
+
+00:14:52.020 --> 00:14:54.870 align:start position:0%
+ 
+ 
+
+00:14:54.870 --> 00:14:57.000 align:start position:0%
+ 
+ 
+
+00:14:57.000 --> 00:14:59.070 align:start position:0%
+ 
+ 
+
+00:14:59.070 --> 00:15:01.110 align:start position:0%
+ 
+ 
+
+00:15:01.110 --> 00:15:03.630 align:start position:0%
+ 
+ 
+
+00:15:03.630 --> 00:15:04.740 align:start position:0%
+ 
+ 
+
+00:15:04.740 --> 00:15:06.960 align:start position:0%
+ 
+ 
+
+00:15:06.960 --> 00:15:09.510 align:start position:0%
+ 
+ 
+
+00:15:09.510 --> 00:15:12.540 align:start position:0%
+ 
+ 
+
+00:15:12.540 --> 00:15:14.070 align:start position:0%
+ 
+ 
+
+00:15:14.070 --> 00:15:16.290 align:start position:0%
+ 
+ 
+
+00:15:16.290 --> 00:15:18.300 align:start position:0%
+ 
+ 
+
+00:15:18.300 --> 00:15:20.400 align:start position:0%
+ 
+ 
+
+00:15:20.400 --> 00:15:22.530 align:start position:0%
+ 
+ 
+
+00:15:22.530 --> 00:15:25.200 align:start position:0%
+ 
+ 
+
+00:15:25.200 --> 00:15:27.210 align:start position:0%
+ 
+ 
+
+00:15:27.210 --> 00:15:28.980 align:start position:0%
+ 
+ 
+
+00:15:28.980 --> 00:15:31.290 align:start position:0%
+ 
+ 
+
+00:15:31.290 --> 00:15:32.760 align:start position:0%
+ 
+ 
+
+00:15:32.760 --> 00:15:34.440 align:start position:0%
+ 
+ 
+
+00:15:34.440 --> 00:15:35.820 align:start position:0%
+ 
+ 
+
+00:15:35.820 --> 00:15:37.230 align:start position:0%
+ 
+ 
+
+00:15:37.230 --> 00:15:38.880 align:start position:0%
+ 
+ 
+
+00:15:38.880 --> 00:15:42.060 align:start position:0%
+ 
+ 
+
+00:15:42.060 --> 00:15:44.250 align:start position:0%
+ 
+ 
+
+00:15:44.250 --> 00:15:46.170 align:start position:0%
+ 
+ 
+
+00:15:46.170 --> 00:15:48.210 align:start position:0%
+ 
+ 
+
+00:15:48.210 --> 00:15:50.070 align:start position:0%
+ 
+ 
+
+00:15:50.070 --> 00:15:52.740 align:start position:0%
+ 
+ 
+
+00:15:52.740 --> 00:15:55.520 align:start position:0%
+ 
+ 
+
+00:15:55.520 --> 00:15:57.930 align:start position:0%
+ 
+ 
+
+00:15:57.930 --> 00:16:01.080 align:start position:0%
+ 
+ 
+
+00:16:01.080 --> 00:16:02.670 align:start position:0%
+ 
+ 
+
+00:16:02.670 --> 00:16:05.850 align:start position:0%
+ 
+ 
+
+00:16:05.850 --> 00:16:07.410 align:start position:0%
+ 
+ 
+
+00:16:07.410 --> 00:16:10.100 align:start position:0%
+ 
+ 
+
+00:16:10.100 --> 00:16:13.560 align:start position:0%
+ 
+ 
+
+00:16:13.560 --> 00:16:18.390 align:start position:0%
+ 
+ 
+
+00:16:18.390 --> 00:16:20.790 align:start position:0%
+ 
+ 
+
+00:16:20.790 --> 00:16:23.310 align:start position:0%
+ 
+ 
+
+00:16:23.310 --> 00:16:25.560 align:start position:0%
+ 
+ 
+
+00:16:25.560 --> 00:16:28.080 align:start position:0%
+ 
+ 
+
+00:16:28.080 --> 00:16:30.030 align:start position:0%
+ 
+ 
+
+00:16:30.030 --> 00:16:31.710 align:start position:0%
+ 
+ 
+
+00:16:31.710 --> 00:16:33.180 align:start position:0%
+ 
+ 
+
+00:16:33.180 --> 00:16:36.030 align:start position:0%
+ 
+ 
+
+00:16:36.030 --> 00:16:37.470 align:start position:0%
+ 
+ 
+
+00:16:37.470 --> 00:16:40.470 align:start position:0%
+ 
+ 
+
+00:16:40.470 --> 00:16:42.180 align:start position:0%
+ 
+ 
+
+00:16:42.180 --> 00:16:44.400 align:start position:0%
+ 
+ 
+
+00:16:44.400 --> 00:16:46.620 align:start position:0%
+ 
+ 
+
+00:16:46.620 --> 00:16:48.240 align:start position:0%
+ 
+ 
+
+00:16:48.240 --> 00:16:51.060 align:start position:0%
+ 
+ 
+
+00:16:51.060 --> 00:16:52.500 align:start position:0%
+ 
+ 
+
+00:16:52.500 --> 00:16:54.420 align:start position:0%
+ 
+ 
+
+00:16:54.420 --> 00:16:56.850 align:start position:0%
+ 
+ 
+
+00:16:56.850 --> 00:16:58.470 align:start position:0%
+ 
+ 
+
+00:16:58.470 --> 00:17:00.120 align:start position:0%
+ 
+ 
+
+00:17:00.120 --> 00:17:02.700 align:start position:0%
+ 
+ 
+
+00:17:02.700 --> 00:17:05.370 align:start position:0%
+ 
+ 
+
+00:17:05.370 --> 00:17:08.400 align:start position:0%
+ 
+ 
+
+00:17:08.400 --> 00:17:10.290 align:start position:0%
+ 
+ 
+
+00:17:10.290 --> 00:17:13.770 align:start position:0%
+ 
+ 
+
+00:17:13.770 --> 00:17:15.660 align:start position:0%
+ 
+ 
+
+00:17:15.660 --> 00:17:18.210 align:start position:0%
+ 
+ 
+
+00:17:18.210 --> 00:17:20.280 align:start position:0%
+ 
+ 
+
+00:17:20.280 --> 00:17:22.560 align:start position:0%
+ 
+ 
+
+00:17:22.560 --> 00:17:24.030 align:start position:0%
+ 
+ 
+
+00:17:24.030 --> 00:17:26.280 align:start position:0%
+ 
+ 
+
+00:17:26.280 --> 00:17:28.260 align:start position:0%
+ 
+ 
+
+00:17:28.260 --> 00:17:30.540 align:start position:0%
+ 
+ 
+
+00:17:30.540 --> 00:17:32.730 align:start position:0%
+ 
+ 
+
+00:17:32.730 --> 00:17:34.650 align:start position:0%
+ 
+ 
+
+00:17:34.650 --> 00:17:37.260 align:start position:0%
+ 
+ 
+
+00:17:37.260 --> 00:17:39.270 align:start position:0%
+ 
+ 
+
+00:17:39.270 --> 00:17:42.330 align:start position:0%
+ 
+ 
+
+00:17:42.330 --> 00:17:44.700 align:start position:0%
+ 
+ 
+
+00:17:44.700 --> 00:17:46.590 align:start position:0%
+ 
+ 
+
+00:17:46.590 --> 00:17:49.040 align:start position:0%
+ 
+ 
+
+00:17:49.040 --> 00:17:51.410 align:start position:0%
+ 
+ 
+
+00:17:51.410 --> 00:17:52.400 align:start position:0%
+ 
+ 
+
+00:17:52.400 --> 00:17:55.040 align:start position:0%
+ 
+ 
+
+00:17:55.040 --> 00:17:57.590 align:start position:0%
+ 
+ 
+
+00:17:57.590 --> 00:17:59.570 align:start position:0%
+ 
+ 
+
+00:17:59.570 --> 00:18:01.790 align:start position:0%
+ 
+ 
+
+00:18:01.790 --> 00:18:05.660 align:start position:0%
+ 
+ 
+
+00:18:05.660 --> 00:18:08.180 align:start position:0%
+ 
+ 
+
+00:18:08.180 --> 00:18:10.460 align:start position:0%
+ 
+ 
+
+00:18:10.460 --> 00:18:12.200 align:start position:0%
+ 
+ 
+
+00:18:12.200 --> 00:18:15.440 align:start position:0%
+ 
+ 
+
+00:18:15.440 --> 00:18:17.600 align:start position:0%
+ 
+ 
+
+00:18:17.600 --> 00:18:18.800 align:start position:0%
+ 
+ 
+
+00:18:18.800 --> 00:18:20.180 align:start position:0%
+ 
+ 
+
+00:18:20.180 --> 00:18:21.590 align:start position:0%
+ 
+ 
+
+00:18:21.590 --> 00:18:23.990 align:start position:0%
+ 
+ 
+
+00:18:23.990 --> 00:18:28.280 align:start position:0%
+ 
+ 
+
+00:18:28.280 --> 00:18:30.560 align:start position:0%
+ 
+ 
+
+00:18:30.560 --> 00:18:32.480 align:start position:0%
+ 
+ 
+
+00:18:32.480 --> 00:18:34.010 align:start position:0%
+ 
+ 
+
+00:18:34.010 --> 00:18:36.350 align:start position:0%
+ 
+ 
+
+00:18:36.350 --> 00:18:37.700 align:start position:0%
+ 
+ 
+
+00:18:37.700 --> 00:18:40.250 align:start position:0%
+ 
+ 
+
+00:18:40.250 --> 00:18:42.800 align:start position:0%
+ 
+ 
+
+00:18:42.800 --> 00:18:44.120 align:start position:0%
+ 
+ 
+
+00:18:44.120 --> 00:18:46.970 align:start position:0%
+ 
+ 
+
+00:18:46.970 --> 00:18:48.920 align:start position:0%
+ 
+ 
+
+00:18:48.920 --> 00:18:51.170 align:start position:0%
+ 
+ 
+
+00:18:51.170 --> 00:18:53.180 align:start position:0%
+ 
+ 
+
+00:18:53.180 --> 00:18:56.570 align:start position:0%
+ 
+ 
+
+00:18:56.570 --> 00:18:59.030 align:start position:0%
+ 
+ 
+
+00:18:59.030 --> 00:19:01.820 align:start position:0%
+ 
+ 
+
+00:19:01.820 --> 00:19:03.920 align:start position:0%
+ 
+ 
+
+00:19:03.920 --> 00:19:05.900 align:start position:0%
+ 
+ 
+
+00:19:05.900 --> 00:19:06.950 align:start position:0%
+ 
+ 
+
+00:19:06.950 --> 00:19:09.230 align:start position:0%
+ 
+ 
+
+00:19:09.230 --> 00:19:10.400 align:start position:0%
+ 
+ 
+
+00:19:10.400 --> 00:19:12.920 align:start position:0%
+ 
+ 
+
+00:19:12.920 --> 00:19:14.240 align:start position:0%
+ 
+ 
+
+00:19:14.240 --> 00:19:15.740 align:start position:0%
+ 
+ 
+
+00:19:15.740 --> 00:19:17.360 align:start position:0%
+ 
+ 
+
+00:19:17.360 --> 00:19:19.010 align:start position:0%
+ 
+ 
+
+00:19:19.010 --> 00:19:20.660 align:start position:0%
+ 
+ 
+
+00:19:20.660 --> 00:19:22.670 align:start position:0%
+ 
+ 
+
+00:19:22.670 --> 00:19:24.170 align:start position:0%
+ 
+ 
+
+00:19:24.170 --> 00:19:25.820 align:start position:0%
+ 
+ 
+
+00:19:25.820 --> 00:19:28.400 align:start position:0%
+ 
+ 
+
+00:19:28.400 --> 00:19:30.080 align:start position:0%
+ 
+ 
+
+00:19:30.080 --> 00:19:31.640 align:start position:0%
+ 
+ 
+
+00:19:31.640 --> 00:19:33.200 align:start position:0%
+ 
+ 
+
+00:19:33.200 --> 00:19:35.660 align:start position:0%
+ 
+ 
+
+00:19:35.660 --> 00:19:37.340 align:start position:0%
+ 
+ 
+
+00:19:37.340 --> 00:19:38.870 align:start position:0%
+ 
+ 
+
+00:19:38.870 --> 00:19:42.800 align:start position:0%
+ 
+ 
+
+00:19:42.800 --> 00:19:45.410 align:start position:0%
+ 
+ 
+
+00:19:45.410 --> 00:19:48.500 align:start position:0%
+ 
+ 
+
+00:19:48.500 --> 00:19:51.500 align:start position:0%
+ 
+ 
+
+00:19:51.500 --> 00:19:54.140 align:start position:0%
+ 
+ 
+
+00:19:54.140 --> 00:19:56.420 align:start position:0%
+ 
+ 
+
+00:19:56.420 --> 00:19:57.860 align:start position:0%
+ 
+ 
+
+00:19:57.860 --> 00:20:01.370 align:start position:0%
+ 
+ 
+
+00:20:01.370 --> 00:20:02.810 align:start position:0%
+ 
+ 
+
+00:20:02.810 --> 00:20:04.610 align:start position:0%
+ 
+ 
+
+00:20:04.610 --> 00:20:06.500 align:start position:0%
+ 
+ 
+
+00:20:06.500 --> 00:20:08.330 align:start position:0%
+ 
+ 
+
+00:20:08.330 --> 00:20:10.670 align:start position:0%
+ 
+ 
+
+00:20:10.670 --> 00:20:12.140 align:start position:0%
+ 
+ 
+
+00:20:12.140 --> 00:20:14.410 align:start position:0%
+ 
+ 
+
+00:20:14.410 --> 00:20:18.470 align:start position:0%
+ 
+ 
+
+00:20:18.470 --> 00:20:20.210 align:start position:0%
+ 
+ 
+
+00:20:20.210 --> 00:20:22.430 align:start position:0%
+ 
+ 
+
+00:20:22.430 --> 00:20:25.040 align:start position:0%
+ 
+ 
+
+00:20:25.040 --> 00:20:26.270 align:start position:0%
+ 
+ 
+
+00:20:26.270 --> 00:20:28.070 align:start position:0%
+ 
+ 
+
+00:20:28.070 --> 00:20:30.230 align:start position:0%
+ 
+ 
+
+00:20:30.230 --> 00:20:33.170 align:start position:0%
+ 
+ 
+
+00:20:33.170 --> 00:20:34.640 align:start position:0%
+ 
+ 
+
+00:20:34.640 --> 00:20:36.290 align:start position:0%
+ 
+ 
+
+00:20:36.290 --> 00:20:39.380 align:start position:0%
+ 
+ 
+
+00:20:39.380 --> 00:20:41.840 align:start position:0%
+ 
+ 
+
+00:20:41.840 --> 00:20:43.370 align:start position:0%
+ 
+ 
+
+00:20:43.370 --> 00:20:44.780 align:start position:0%
+ 
+ 
+
+00:20:44.780 --> 00:20:46.400 align:start position:0%
+ 
+ 
+
+00:20:46.400 --> 00:20:48.920 align:start position:0%
+ 
+ 
+
+00:20:48.920 --> 00:20:51.590 align:start position:0%
+ 
+ 
+
+00:20:51.590 --> 00:20:53.300 align:start position:0%
+ 
+ 
+
+00:20:53.300 --> 00:20:55.520 align:start position:0%
+ 
+ 
+
+00:20:55.520 --> 00:20:57.410 align:start position:0%
+ 
+ 
+
+00:20:57.410 --> 00:20:58.970 align:start position:0%
+ 
+ 
+
+00:20:58.970 --> 00:21:00.620 align:start position:0%
+ 
+ 
+
+00:21:00.620 --> 00:21:02.360 align:start position:0%
+ 
+ 
+
+00:21:02.360 --> 00:21:04.760 align:start position:0%
+ 
+ 
+
+00:21:04.760 --> 00:21:07.400 align:start position:0%
+ 
+ 
+
+00:21:07.400 --> 00:21:09.200 align:start position:0%
+ 
+ 
+
+00:21:09.200 --> 00:21:11.180 align:start position:0%
+ 
+ 
+
+00:21:11.180 --> 00:21:12.890 align:start position:0%
+ 
+ 
+
+00:21:12.890 --> 00:21:15.800 align:start position:0%
+ 
+ 
+
+00:21:15.800 --> 00:21:18.800 align:start position:0%
+ 
+ 
+
+00:21:18.800 --> 00:21:22.250 align:start position:0%
+ 
+ 
+
+00:21:22.250 --> 00:21:26.270 align:start position:0%
+ 
+ 
+
+00:21:26.270 --> 00:21:27.850 align:start position:0%
+ 
+ 
+
+00:21:27.850 --> 00:21:32.060 align:start position:0%
+ 
+ 
+
+00:21:32.060 --> 00:21:35.090 align:start position:0%
+ 
+ 
+
+00:21:35.090 --> 00:21:36.290 align:start position:0%
+ 
+ 
+
+00:21:36.290 --> 00:21:38.330 align:start position:0%
+ 
+ 
+
+00:21:38.330 --> 00:21:40.970 align:start position:0%
+ 
+ 
+
+00:21:40.970 --> 00:21:43.390 align:start position:0%
+ 
+ 
+
+00:21:43.390 --> 00:21:45.770 align:start position:0%
+ 
+ 
+
+00:21:45.770 --> 00:21:49.550 align:start position:0%
+ 
+ 
+
+00:21:49.550 --> 00:21:51.950 align:start position:0%
+ 
+ 
+
+00:21:51.950 --> 00:21:53.870 align:start position:0%
+ 
+ 
+
+00:21:53.870 --> 00:21:57.980 align:start position:0%
+ 
+ 
+
+00:21:57.980 --> 00:21:59.720 align:start position:0%
+ 
+ 
+
+00:21:59.720 --> 00:22:03.050 align:start position:0%
+ 
+ 
+
+00:22:03.050 --> 00:22:05.780 align:start position:0%
+ 
+ 
+
+00:22:05.780 --> 00:22:08.960 align:start position:0%
+ 
+ 
+
+00:22:08.960 --> 00:22:11.780 align:start position:0%
+ 
+ 
+
+00:22:11.780 --> 00:22:14.390 align:start position:0%
+ 
+ 
+
+00:22:14.390 --> 00:22:14.400 align:start position:0%
+ 
+ 
+
+00:22:14.400 --> 00:22:15.260 align:start position:0%
+ 
+
+
+00:22:15.260 --> 00:22:17.090 align:start position:0%
+ 
+ 
+
+00:22:17.090 --> 00:22:19.070 align:start position:0%
+ 
+ 
+
+00:22:19.070 --> 00:22:20.960 align:start position:0%
+ 
+ 
+
+00:22:20.960 --> 00:22:23.930 align:start position:0%
+ 
+ 
+
+00:22:23.930 --> 00:22:25.850 align:start position:0%
+ 
+ 
+
+00:22:25.850 --> 00:22:27.530 align:start position:0%
+ 
+ 
+
+00:22:27.530 --> 00:22:29.330 align:start position:0%
+ 
+ 
+
+00:22:29.330 --> 00:22:31.640 align:start position:0%
+ 
+ 
+
+00:22:31.640 --> 00:22:33.260 align:start position:0%
+ 
+ 
+
+00:22:33.260 --> 00:22:35.150 align:start position:0%
+ 
+ 
+
+00:22:35.150 --> 00:22:38.780 align:start position:0%
+ 
+ 
+
+00:22:38.780 --> 00:22:40.610 align:start position:0%
+ 
+ 
+
+00:22:40.610 --> 00:22:43.030 align:start position:0%
+ 
+ 
+
+00:22:43.030 --> 00:22:45.080 align:start position:0%
+ 
+ 
+
+00:22:45.080 --> 00:22:47.210 align:start position:0%
+ 
+ 
+
+00:22:47.210 --> 00:22:48.980 align:start position:0%
+ 
+ 
+
+00:22:48.980 --> 00:22:51.230 align:start position:0%
+ 
+ 
+
+00:22:51.230 --> 00:22:53.450 align:start position:0%
+ 
+ 
+
+00:22:53.450 --> 00:22:56.390 align:start position:0%
+ 
+ 
+
+00:22:56.390 --> 00:22:57.830 align:start position:0%
+ 
+ 
+
+00:22:57.830 --> 00:23:01.010 align:start position:0%
+ 
+ 
+
+00:23:01.010 --> 00:23:03.550 align:start position:0%
+ 
+ 
+
+00:23:03.550 --> 00:23:06.770 align:start position:0%
+ 
+ 
+
+00:23:06.770 --> 00:23:08.570 align:start position:0%
+ 
+ 
+
+00:23:08.570 --> 00:23:10.520 align:start position:0%
+ 
+ 
+
+00:23:10.520 --> 00:23:12.110 align:start position:0%
+ 
+ 
+
+00:23:12.110 --> 00:23:13.550 align:start position:0%
+ 
+ 
+
+00:23:13.550 --> 00:23:15.290 align:start position:0%
+ 
+ 
+
+00:23:15.290 --> 00:23:17.060 align:start position:0%
+ 
+ 
+
+00:23:17.060 --> 00:23:19.100 align:start position:0%
+ 
+ 
+
+00:23:19.100 --> 00:23:20.390 align:start position:0%
+ 
+ 
+
+00:23:20.390 --> 00:23:22.760 align:start position:0%
+ 
+ 
+
+00:23:22.760 --> 00:23:24.770 align:start position:0%
+ 
+ 
+
+00:23:24.770 --> 00:23:28.130 align:start position:0%
+ 
+ 
+
+00:23:28.130 --> 00:23:30.020 align:start position:0%
+ 
+ 
+
+00:23:30.020 --> 00:23:32.270 align:start position:0%
+ 
+ 
+
+00:23:32.270 --> 00:23:34.430 align:start position:0%
+ 
+ 
+
+00:23:34.430 --> 00:23:36.620 align:start position:0%
+ 
+ 
+
+00:23:36.620 --> 00:23:38.570 align:start position:0%
+ 
+ 
+
+00:23:38.570 --> 00:23:40.520 align:start position:0%
+ 
+ 
+
+00:23:40.520 --> 00:23:42.320 align:start position:0%
+ 
+ 
+
+00:23:42.320 --> 00:23:44.420 align:start position:0%
+ 
+ 
+
+00:23:44.420 --> 00:23:46.430 align:start position:0%
+ 
+ 
+
+00:23:46.430 --> 00:23:48.140 align:start position:0%
+ 
+ 
+
+00:23:48.140 --> 00:23:52.340 align:start position:0%
+ 
+ 
+
+00:23:52.340 --> 00:23:53.870 align:start position:0%
+ 
+ 
+
+00:23:53.870 --> 00:23:55.640 align:start position:0%
+ 
+ 
+
+00:23:55.640 --> 00:23:57.380 align:start position:0%
+ 
+ 
+
+00:23:57.380 --> 00:23:58.970 align:start position:0%
+ 
+ 
+
+00:23:58.970 --> 00:24:00.590 align:start position:0%
+ 
+ 
+
+00:24:00.590 --> 00:24:02.930 align:start position:0%
+ 
+ 
+
+00:24:02.930 --> 00:24:04.670 align:start position:0%
+ 
+ 
+
+00:24:04.670 --> 00:24:07.700 align:start position:0%
+ 
+ 
+
+00:24:07.700 --> 00:24:09.320 align:start position:0%
+ 
+ 
+
+00:24:09.320 --> 00:24:11.390 align:start position:0%
+ 
+ 
+
+00:24:11.390 --> 00:24:12.950 align:start position:0%
+ 
+ 
+
+00:24:12.950 --> 00:24:23.580 align:start position:0%
+ 
+ 
+
+00:24:23.580 --> 00:24:26.369 align:start position:0%
+ 
+ 
+
+00:24:26.369 --> 00:24:28.080 align:start position:0%
+ 
+ 
+
+00:24:28.080 --> 00:24:29.340 align:start position:0%
+ 
+ 
+
+00:24:29.340 --> 00:24:39.899 align:start position:0%
+ 
+ 
+
+00:24:39.899 --> 00:24:42.810 align:start position:0%
+ 
+ 
+
+00:24:42.810 --> 00:24:44.399 align:start position:0%
+ 
+ 
+
+00:24:44.399 --> 00:24:47.490 align:start position:0%
+ 
+ 
+
+00:24:47.490 --> 00:24:50.129 align:start position:0%
+ 
+ 
+
+00:24:50.129 --> 00:24:52.139 align:start position:0%
+ 
+ 
+
+00:24:52.139 --> 00:24:53.669 align:start position:0%
+ 
+ 
+
+00:24:53.669 --> 00:24:55.110 align:start position:0%
+ 
+ 
+
+00:24:55.110 --> 00:24:57.149 align:start position:0%
+ 
+ 
+
+00:24:57.149 --> 00:24:59.070 align:start position:0%
+ 
+ 
+
+00:24:59.070 --> 00:25:01.350 align:start position:0%
+ 
+ 
+
+00:25:01.350 --> 00:25:02.879 align:start position:0%
+ 
+ 
+
+00:25:02.879 --> 00:25:05.430 align:start position:0%
+ 
+ 
+
+00:25:05.430 --> 00:25:07.110 align:start position:0%
+ 
+ 
+
+00:25:07.110 --> 00:25:08.310 align:start position:0%
+ 
+ 
+
+00:25:08.310 --> 00:25:12.119 align:start position:0%
+ 
+ 
+
+00:25:12.119 --> 00:25:13.379 align:start position:0%
+ 
+ 
+
+00:25:13.379 --> 00:25:16.139 align:start position:0%
+ 
+ 
+
+00:25:16.139 --> 00:25:18.360 align:start position:0%
+ 
+ 
+
+00:25:18.360 --> 00:25:20.820 align:start position:0%
+ 
+ 
+
+00:25:20.820 --> 00:25:22.350 align:start position:0%
+ 
+ 
+
+00:25:22.350 --> 00:25:23.999 align:start position:0%
+ 
+ 
+
+00:25:23.999 --> 00:25:25.889 align:start position:0%
+ 
+ 
+
+00:25:25.889 --> 00:25:29.549 align:start position:0%
+ 
+ 
+
+00:25:29.549 --> 00:25:31.769 align:start position:0%
+ 
+ 
+
+00:25:31.769 --> 00:25:33.600 align:start position:0%
+ 
+ 
+
+00:25:33.600 --> 00:25:36.360 align:start position:0%
+ 
+ 
+
+00:25:36.360 --> 00:25:38.310 align:start position:0%
+ 
+ 
+
+00:25:38.310 --> 00:25:39.659 align:start position:0%
+ 
+ 
+
+00:25:39.659 --> 00:25:41.190 align:start position:0%
+ 
+ 
+
+00:25:41.190 --> 00:25:44.129 align:start position:0%
+ 
+ 
+
+00:25:44.129 --> 00:25:46.049 align:start position:0%
+ 
+ 
+
+00:25:46.049 --> 00:25:48.509 align:start position:0%
+ 
+ 
+
+00:25:48.509 --> 00:25:49.769 align:start position:0%
+ 
+ 
+
+00:25:49.769 --> 00:25:51.629 align:start position:0%
+ 
+ 
+
+00:25:51.629 --> 00:25:53.909 align:start position:0%
+ 
+ 
+
+00:25:53.909 --> 00:25:55.560 align:start position:0%
+ 
+ 
+
+00:25:55.560 --> 00:25:57.450 align:start position:0%
+ 
+ 
+
+00:25:57.450 --> 00:25:59.129 align:start position:0%
+ 
+ 
+
+00:25:59.129 --> 00:26:01.169 align:start position:0%
+ 
+ 
+
+00:26:01.169 --> 00:26:04.230 align:start position:0%
+ 
+ 
+
+00:26:04.230 --> 00:26:07.619 align:start position:0%
+ 
+ 
+
+00:26:07.619 --> 00:26:08.999 align:start position:0%
+ 
+ 
+
+00:26:08.999 --> 00:26:11.820 align:start position:0%
+ 
+ 
+
+00:26:11.820 --> 00:26:13.590 align:start position:0%
+ 
+ 
+
+00:26:13.590 --> 00:26:14.970 align:start position:0%
+ 
+ 
+
+00:26:14.970 --> 00:26:16.919 align:start position:0%
+ 
+ 
+
+00:26:16.919 --> 00:26:19.259 align:start position:0%
+ 
+ 
+
+00:26:19.259 --> 00:26:22.169 align:start position:0%
+ 
+ 
+
+00:26:22.169 --> 00:26:23.999 align:start position:0%
+ 
+ 
+
+00:26:23.999 --> 00:26:25.619 align:start position:0%
+ 
+ 
+
+00:26:25.619 --> 00:26:27.570 align:start position:0%
+ 
+ 
+
+00:26:27.570 --> 00:26:29.669 align:start position:0%
+ 
+ 
+
+00:26:29.669 --> 00:26:31.560 align:start position:0%
+ 
+ 
+
+00:26:31.560 --> 00:26:33.529 align:start position:0%
+ 
+ 
+
+00:26:33.529 --> 00:26:36.259 align:start position:0%
+ 
+ 
+
+00:26:36.259 --> 00:26:39.570 align:start position:0%
+ 
+ 
+
+00:26:39.570 --> 00:26:41.700 align:start position:0%
+ 
+ 
+
+00:26:41.700 --> 00:26:43.409 align:start position:0%
+ 
+ 
+
+00:26:43.409 --> 00:26:46.529 align:start position:0%
+ 
+ 
+
+00:26:46.529 --> 00:26:48.389 align:start position:0%
+ 
+ 
+
+00:26:48.389 --> 00:26:49.470 align:start position:0%
+ 
+ 
+
+00:26:49.470 --> 00:26:51.620 align:start position:0%
+ 
+ 
+
+00:26:51.620 --> 00:26:53.180 align:start position:0%
+ 
+ 
+
+00:26:53.180 --> 00:26:55.880 align:start position:0%
+ 
+ 
+
+00:26:55.880 --> 00:26:57.470 align:start position:0%
+ 
+ 
+
+00:26:57.470 --> 00:27:00.050 align:start position:0%
+ 
+ 
+
+00:27:00.050 --> 00:27:01.790 align:start position:0%
+ 
+ 
+
+00:27:01.790 --> 00:27:04.370 align:start position:0%
+ 
+ 
+
+00:27:04.370 --> 00:27:06.170 align:start position:0%
+ 
+ 
+
+00:27:06.170 --> 00:27:07.880 align:start position:0%
+ 
+ 
+
+00:27:07.880 --> 00:27:10.610 align:start position:0%
+ 
+ 
+
+00:27:10.610 --> 00:27:13.730 align:start position:0%
+ 
+ 
+
+00:27:13.730 --> 00:27:16.180 align:start position:0%
+ 
+ 
+
+00:27:16.180 --> 00:27:19.550 align:start position:0%
+ 
+ 
+
+00:27:19.550 --> 00:27:22.010 align:start position:0%
+ 
+ 
+
+00:27:22.010 --> 00:27:23.780 align:start position:0%
+ 
+ 
+
+00:27:23.780 --> 00:27:25.550 align:start position:0%
+ 
+ 
+
+00:27:25.550 --> 00:27:27.710 align:start position:0%
+ 
+ 
+
+00:27:27.710 --> 00:27:29.810 align:start position:0%
+ 
+ 
+
+00:27:29.810 --> 00:27:31.490 align:start position:0%
+ 
+ 
+
+00:27:31.490 --> 00:27:33.410 align:start position:0%
+ 
+ 
+
+00:27:33.410 --> 00:27:34.790 align:start position:0%
+ 
+ 
+
+00:27:34.790 --> 00:27:36.500 align:start position:0%
+ 
+ 
+
+00:27:36.500 --> 00:27:38.270 align:start position:0%
+ 
+ 
+
+00:27:38.270 --> 00:27:40.460 align:start position:0%
+ 
+ 
+
+00:27:40.460 --> 00:27:42.260 align:start position:0%
+ 
+ 
+
+00:27:42.260 --> 00:27:44.030 align:start position:0%
+ 
+ 
+
+00:27:44.030 --> 00:27:46.160 align:start position:0%
+ 
+ 
+
+00:27:46.160 --> 00:27:50.240 align:start position:0%
+ 
+ 
+
+00:27:50.240 --> 00:27:51.350 align:start position:0%
+ 
+ 
+
+00:27:51.350 --> 00:27:53.840 align:start position:0%
+ 
+ 
+
+00:27:53.840 --> 00:27:55.520 align:start position:0%
+ 
+ 
+
+00:27:55.520 --> 00:27:57.860 align:start position:0%
+ 
+ 
+
+00:27:57.860 --> 00:27:59.990 align:start position:0%
+ 
+ 
+
+00:27:59.990 --> 00:28:01.850 align:start position:0%
+ 
+ 
+
+00:28:01.850 --> 00:28:03.620 align:start position:0%
+ 
+ 
+
+00:28:03.620 --> 00:28:06.070 align:start position:0%
+ 
+ 
+
+00:28:06.070 --> 00:28:08.660 align:start position:0%
+ 
+ 
+
+00:28:08.660 --> 00:28:10.700 align:start position:0%
+ 
+ 
+
+00:28:10.700 --> 00:28:12.740 align:start position:0%
+ 
+ 
+
+00:28:12.740 --> 00:28:15.470 align:start position:0%
+ 
+ 
+
+00:28:15.470 --> 00:28:17.360 align:start position:0%
+ 
+ 
+
+00:28:17.360 --> 00:28:19.100 align:start position:0%
+ 
+ 
+
+00:28:19.100 --> 00:28:21.800 align:start position:0%
+ 
+ 
+
+00:28:21.800 --> 00:28:24.170 align:start position:0%
+ 
+ 
+
+00:28:24.170 --> 00:28:26.540 align:start position:0%
+ 
+ 
+
+00:28:26.540 --> 00:28:28.400 align:start position:0%
+ 
+ 
+
+00:28:28.400 --> 00:28:30.230 align:start position:0%
+ 
+ 
+
+00:28:30.230 --> 00:28:32.240 align:start position:0%
+ 
+ 
+
+00:28:32.240 --> 00:28:34.010 align:start position:0%
+ 
+ 
+
+00:28:34.010 --> 00:28:36.140 align:start position:0%
+ 
+ 
+
+00:28:36.140 --> 00:28:38.450 align:start position:0%
+ 
+ 
+
+00:28:38.450 --> 00:28:41.720 align:start position:0%
+ 
+ 
+
+00:28:41.720 --> 00:28:43.070 align:start position:0%
+ 
+ 
+
+00:28:43.070 --> 00:28:45.410 align:start position:0%
+ 
+ 
+
+00:28:45.410 --> 00:28:47.060 align:start position:0%
+ 
+ 
+
+00:28:47.060 --> 00:28:48.530 align:start position:0%
+ 
+ 
+
+00:28:48.530 --> 00:28:50.090 align:start position:0%
+ 
+ 
+
+00:28:50.090 --> 00:28:51.440 align:start position:0%
+ 
+ 
+
+00:28:51.440 --> 00:28:53.710 align:start position:0%
+ 
+ 
+
+00:28:53.710 --> 00:28:57.170 align:start position:0%
+ 
+ 
+
+00:28:57.170 --> 00:28:58.970 align:start position:0%
+ 
+ 
+
+00:28:58.970 --> 00:29:00.590 align:start position:0%
+ 
+ 
+
+00:29:00.590 --> 00:29:02.540 align:start position:0%
+ 
+ 
+
+00:29:02.540 --> 00:29:04.640 align:start position:0%
+ 
+ 
+
+00:29:04.640 --> 00:29:05.570 align:start position:0%
+ 
+ 
+
+00:29:05.570 --> 00:29:07.430 align:start position:0%
+ 
+ 
+
+00:29:07.430 --> 00:29:09.289 align:start position:0%
+ 
+ 
+
+00:29:09.289 --> 00:29:11.029 align:start position:0%
+ 
+ 
+
+00:29:11.029 --> 00:29:12.739 align:start position:0%
+ 
+ 
+
+00:29:12.739 --> 00:29:14.779 align:start position:0%
+ 
+ 
+
+00:29:14.779 --> 00:29:16.549 align:start position:0%
+ 
+ 
+
+00:29:16.549 --> 00:29:18.289 align:start position:0%
+ 
+ 
+
+00:29:18.289 --> 00:29:19.820 align:start position:0%
+ 
+ 
+
+00:29:19.820 --> 00:29:21.979 align:start position:0%
+ 
+ 
+
+00:29:21.979 --> 00:29:24.080 align:start position:0%
+ 
+ 
+
+00:29:24.080 --> 00:29:26.119 align:start position:0%
+ 
+ 
+
+00:29:26.119 --> 00:29:27.830 align:start position:0%
+ 
+ 
+
+00:29:27.830 --> 00:29:29.629 align:start position:0%
+ 
+ 
+
+00:29:29.629 --> 00:29:31.310 align:start position:0%
+ 
+ 
+
+00:29:31.310 --> 00:29:33.019 align:start position:0%
+ 
+ 
+
+00:29:33.019 --> 00:29:35.840 align:start position:0%
+ 
+ 
+
+00:29:35.840 --> 00:29:38.629 align:start position:0%
+ 
+ 
+
+00:29:38.629 --> 00:29:39.950 align:start position:0%
+ 
+ 
+
+00:29:39.950 --> 00:29:41.769 align:start position:0%
+ 
+ 
+
+00:29:41.769 --> 00:29:44.450 align:start position:0%
+ 
+ 
+
+00:29:44.450 --> 00:29:46.129 align:start position:0%
+ 
+ 
+
+00:29:46.129 --> 00:29:48.680 align:start position:0%
+ 
+ 
+
+00:29:48.680 --> 00:29:50.389 align:start position:0%
+ 
+ 
+
+00:29:50.389 --> 00:29:52.070 align:start position:0%
+ 
+ 
+
+00:29:52.070 --> 00:29:53.779 align:start position:0%
+ 
+ 
+
+00:29:53.779 --> 00:29:55.340 align:start position:0%
+ 
+ 
+
+00:29:55.340 --> 00:29:56.960 align:start position:0%
+ 
+ 
+
+00:29:56.960 --> 00:29:58.820 align:start position:0%
+ 
+ 
+
+00:29:58.820 --> 00:30:00.169 align:start position:0%
+ 
+ 
+
+00:30:00.169 --> 00:30:03.349 align:start position:0%
+ 
+ 
+
+00:30:03.349 --> 00:30:04.759 align:start position:0%
+ 
+ 
+
+00:30:04.759 --> 00:30:07.999 align:start position:0%
+ 
+ 
+
+00:30:07.999 --> 00:30:10.489 align:start position:0%
+ 
+ 
+
+00:30:10.489 --> 00:30:12.200 align:start position:0%
+ 
+ 
+
+00:30:12.200 --> 00:30:14.330 align:start position:0%
+ 
+ 
+
+00:30:14.330 --> 00:30:16.669 align:start position:0%
+ 
+ 
+
+00:30:16.669 --> 00:30:18.470 align:start position:0%
+ 
+ 
+
+00:30:18.470 --> 00:30:21.680 align:start position:0%
+ 
+ 
+
+00:30:21.680 --> 00:30:24.379 align:start position:0%
+ 
+ 
+
+00:30:24.379 --> 00:30:27.229 align:start position:0%
+ 
+ 
+
+00:30:27.229 --> 00:30:28.940 align:start position:0%
+ 
+ 
+
+00:30:28.940 --> 00:30:30.590 align:start position:0%
+ 
+ 
+
+00:30:30.590 --> 00:30:34.310 align:start position:0%
+ 
+ 
+
+00:30:34.310 --> 00:30:36.169 align:start position:0%
+ 
+ 
+
+00:30:36.169 --> 00:30:38.450 align:start position:0%
+ 
+ 
+
+00:30:38.450 --> 00:30:42.470 align:start position:0%
+ 
+ 
+
+00:30:42.470 --> 00:30:43.970 align:start position:0%
+ 
+ 
+
+00:30:43.970 --> 00:30:46.220 align:start position:0%
+ 
+ 
+
+00:30:46.220 --> 00:30:48.049 align:start position:0%
+ 
+ 
+
+00:30:48.049 --> 00:30:50.659 align:start position:0%
+ 
+ 
+
+00:30:50.659 --> 00:30:52.729 align:start position:0%
+ 
+ 
+
+00:30:52.729 --> 00:30:54.680 align:start position:0%
+ 
+ 
+
+00:30:54.680 --> 00:30:57.320 align:start position:0%
+ 
+ 
+
+00:30:57.320 --> 00:30:58.879 align:start position:0%
+ 
+ 
+
+00:30:58.879 --> 00:31:01.460 align:start position:0%
+ 
+ 
+
+00:31:01.460 --> 00:31:02.869 align:start position:0%
+ 
+ 
+
+00:31:02.869 --> 00:31:04.430 align:start position:0%
+ 
+ 
+
+00:31:04.430 --> 00:31:06.560 align:start position:0%
+ 
+ 
+
+00:31:06.560 --> 00:31:08.180 align:start position:0%
+ 
+ 
+
+00:31:08.180 --> 00:31:09.799 align:start position:0%
+ 
+ 
+
+00:31:09.799 --> 00:31:10.940 align:start position:0%
+ 
+ 
+
+00:31:10.940 --> 00:31:12.440 align:start position:0%
+ 
+ 
+
+00:31:12.440 --> 00:31:14.269 align:start position:0%
+ 
+ 
+
+00:31:14.269 --> 00:31:16.970 align:start position:0%
+ 
+ 
+
+00:31:16.970 --> 00:31:18.259 align:start position:0%
+ 
+ 
+
+00:31:18.259 --> 00:31:19.970 align:start position:0%
+ 
+ 
+
+00:31:19.970 --> 00:31:22.160 align:start position:0%
+ 
+ 
+
+00:31:22.160 --> 00:31:23.540 align:start position:0%
+ 
+ 
+
+00:31:23.540 --> 00:31:25.250 align:start position:0%
+ 
+ 
+
+00:31:25.250 --> 00:31:28.280 align:start position:0%
+ 
+ 
+
+00:31:28.280 --> 00:31:30.320 align:start position:0%
+ 
+ 
+
+00:31:30.320 --> 00:31:32.090 align:start position:0%
+ 
+ 
+
+00:31:32.090 --> 00:31:33.590 align:start position:0%
+ 
+ 
+
+00:31:33.590 --> 00:31:36.650 align:start position:0%
+ 
+ 
+
+00:31:36.650 --> 00:31:38.120 align:start position:0%
+ 
+ 
+
+00:31:38.120 --> 00:31:40.880 align:start position:0%
+ 
+ 
+
+00:31:40.880 --> 00:31:42.800 align:start position:0%
+ 
+ 
+
+00:31:42.800 --> 00:31:44.720 align:start position:0%
+ 
+ 
+
+00:31:44.720 --> 00:31:46.340 align:start position:0%
+ 
+ 
+
+00:31:46.340 --> 00:31:49.430 align:start position:0%
+ 
+ 
+
+00:31:49.430 --> 00:31:50.810 align:start position:0%
+ 
+ 
+
+00:31:50.810 --> 00:31:52.130 align:start position:0%
+ 
+ 
+
+00:31:52.130 --> 00:31:54.710 align:start position:0%
+ 
+ 
+
+00:31:54.710 --> 00:31:56.630 align:start position:0%
+ 
+ 
+
+00:31:56.630 --> 00:31:58.340 align:start position:0%
+ 
+ 
+
+00:31:58.340 --> 00:32:00.080 align:start position:0%
+ 
+ 
+
+00:32:00.080 --> 00:32:02.120 align:start position:0%
+ 
+ 
+
+00:32:02.120 --> 00:32:03.830 align:start position:0%
+ 
+ 
+
+00:32:03.830 --> 00:32:07.520 align:start position:0%
+ 
+ 
+
+00:32:07.520 --> 00:32:09.860 align:start position:0%
+ 
+ 
+
+00:32:09.860 --> 00:32:12.230 align:start position:0%
+ 
+ 
+
+00:32:12.230 --> 00:32:14.660 align:start position:0%
+ 
+ 
+
+00:32:14.660 --> 00:32:18.200 align:start position:0%
+ 
+ 
+
+00:32:18.200 --> 00:32:19.550 align:start position:0%
+ 
+ 
+
+00:32:19.550 --> 00:32:21.230 align:start position:0%
+ 
+ 
+
+00:32:21.230 --> 00:32:22.760 align:start position:0%
+ 
+ 
+
+00:32:22.760 --> 00:32:24.650 align:start position:0%
+ 
+ 
+
+00:32:24.650 --> 00:32:26.390 align:start position:0%
+ 
+ 
+
+00:32:26.390 --> 00:32:27.680 align:start position:0%
+ 
+ 
+
+00:32:27.680 --> 00:32:30.470 align:start position:0%
+ 
+ 
+
+00:32:30.470 --> 00:32:32.750 align:start position:0%
+ 
+ 
+
+00:32:32.750 --> 00:32:34.220 align:start position:0%
+ 
+ 
+
+00:32:34.220 --> 00:32:36.080 align:start position:0%
+ 
+ 
+
+00:32:36.080 --> 00:32:38.090 align:start position:0%
+ 
+ 
+
+00:32:38.090 --> 00:32:39.940 align:start position:0%
+ 
+ 
+
+00:32:39.940 --> 00:32:42.710 align:start position:0%
+ 
+ 
+
+00:32:42.710 --> 00:32:45.500 align:start position:0%
+ 
+ 
+
+00:32:45.500 --> 00:32:47.120 align:start position:0%
+ 
+ 
+
+00:32:47.120 --> 00:32:48.980 align:start position:0%
+ 
+ 
+
+00:32:48.980 --> 00:32:50.480 align:start position:0%
+ 
+ 
+
+00:32:50.480 --> 00:32:53.480 align:start position:0%
+ 
+ 
+
+00:32:53.480 --> 00:32:55.580 align:start position:0%
+ 
+ 
+
+00:32:55.580 --> 00:32:58.130 align:start position:0%
+ 
+ 
+
+00:32:58.130 --> 00:33:00.260 align:start position:0%
+ 
+ 
+
+00:33:00.260 --> 00:33:01.940 align:start position:0%
+ 
+ 
+
+00:33:01.940 --> 00:33:05.180 align:start position:0%
+ 
+ 
+
+00:33:05.180 --> 00:33:07.400 align:start position:0%
+ 
+ 
+
+00:33:07.400 --> 00:33:09.890 align:start position:0%
+ 
+ 
+
+00:33:09.890 --> 00:33:12.380 align:start position:0%
+ 
+ 
+
+00:33:12.380 --> 00:33:15.800 align:start position:0%
+ 
+ 
+
+00:33:15.800 --> 00:33:18.080 align:start position:0%
+ 
+ 
+
+00:33:18.080 --> 00:33:21.050 align:start position:0%
+ 
+ 
+
+00:33:21.050 --> 00:33:23.030 align:start position:0%
+ 
+ 
+
+00:33:23.030 --> 00:33:24.620 align:start position:0%
+ 
+ 
+
+00:33:24.620 --> 00:33:27.470 align:start position:0%
+ 
+ 
+
+00:33:27.470 --> 00:33:29.690 align:start position:0%
+ 
+ 
+
+00:33:29.690 --> 00:33:31.370 align:start position:0%
+ 
+ 
+
+00:33:31.370 --> 00:33:33.270 align:start position:0%
+ 
+ 
+
+00:33:33.270 --> 00:33:35.550 align:start position:0%
+ 
+ 
+
+00:33:35.550 --> 00:33:37.010 align:start position:0%
+ 
+ 
+
+00:33:37.010 --> 00:33:40.350 align:start position:0%
+ 
+ 
+
+00:33:40.350 --> 00:33:42.750 align:start position:0%
+ 
+ 
+
+00:33:42.750 --> 00:33:44.640 align:start position:0%
+ 
+ 
+
+00:33:44.640 --> 00:33:47.130 align:start position:0%
+ 
+ 
+
+00:33:47.130 --> 00:33:48.600 align:start position:0%
+ 
+ 
+
+00:33:48.600 --> 00:33:51.090 align:start position:0%
+ 
+ 
+
+00:33:51.090 --> 00:33:54.600 align:start position:0%
+ 
+ 
+
+00:33:54.600 --> 00:33:56.370 align:start position:0%
+ 
+ 
+
+00:33:56.370 --> 00:33:58.020 align:start position:0%
+ 
+ 
+
+00:33:58.020 --> 00:34:00.900 align:start position:0%
+ 
+ 
+
+00:34:00.900 --> 00:34:03.270 align:start position:0%
+ 
+ 
+
+00:34:03.270 --> 00:34:05.250 align:start position:0%
+ 
+ 
+
+00:34:05.250 --> 00:34:07.860 align:start position:0%
+ 
+ 
+
+00:34:07.860 --> 00:34:09.390 align:start position:0%
+ 
+ 
+
+00:34:09.390 --> 00:34:11.790 align:start position:0%
+ 
+ 
+
+00:34:11.790 --> 00:34:13.980 align:start position:0%
+ 
+ 
+
+00:34:13.980 --> 00:34:15.659 align:start position:0%
+ 
+ 
+
+00:34:15.659 --> 00:34:18.600 align:start position:0%
+ 
+ 
+
+00:34:18.600 --> 00:34:20.640 align:start position:0%
+ 
+ 
+
+00:34:20.640 --> 00:34:24.149 align:start position:0%
+ 
+ 
+
+00:34:24.149 --> 00:34:26.730 align:start position:0%
+ 
+ 
+
+00:34:26.730 --> 00:34:28.080 align:start position:0%
+ 
+ 
+
+00:34:28.080 --> 00:34:29.419 align:start position:0%
+ 
+ 
+
+00:34:29.419 --> 00:34:31.710 align:start position:0%
+ 
+ 
+
+00:34:31.710 --> 00:34:33.210 align:start position:0%
+ 
+ 
+
+00:34:33.210 --> 00:34:35.190 align:start position:0%
+ 
+ 
+
+00:34:35.190 --> 00:34:37.980 align:start position:0%
+ 
+ 
+
+00:34:37.980 --> 00:34:39.720 align:start position:0%
+ 
+ 
+
+00:34:39.720 --> 00:34:41.370 align:start position:0%
+ 
+ 
+
+00:34:41.370 --> 00:34:43.680 align:start position:0%
+ 
+ 
+
+00:34:43.680 --> 00:34:45.540 align:start position:0%
+ 
+ 
+
+00:34:45.540 --> 00:34:48.270 align:start position:0%
+ 
+ 
+
+00:34:48.270 --> 00:34:50.639 align:start position:0%
+ 
+ 
+
+00:34:50.639 --> 00:34:53.070 align:start position:0%
+ 
+ 
+
+00:34:53.070 --> 00:34:55.409 align:start position:0%
+ 
+ 
+
+00:34:55.409 --> 00:34:59.190 align:start position:0%
+ 
+ 
+
+00:34:59.190 --> 00:35:01.620 align:start position:0%
+ 
+ 
+
+00:35:01.620 --> 00:35:06.470 align:start position:0%
+ 
+ 
+
+00:35:06.470 --> 00:35:08.580 align:start position:0%
+ 
+ 
+
+00:35:08.580 --> 00:35:10.440 align:start position:0%
+ 
+ 
+
+00:35:10.440 --> 00:35:12.180 align:start position:0%
+ 
+ 
+
+00:35:12.180 --> 00:35:14.220 align:start position:0%
+ 
+ 
+
+00:35:14.220 --> 00:35:16.110 align:start position:0%
+ 
+ 
+
+00:35:16.110 --> 00:35:18.240 align:start position:0%
+ 
+ 
+
+00:35:18.240 --> 00:35:20.880 align:start position:0%
+ 
+ 
+
+00:35:20.880 --> 00:35:22.470 align:start position:0%
+ 
+ 
+
+00:35:22.470 --> 00:35:23.790 align:start position:0%
+ 
+ 
+
+00:35:23.790 --> 00:35:25.950 align:start position:0%
+ 
+ 
+
+00:35:25.950 --> 00:35:28.530 align:start position:0%
+ 
+ 
+
+00:35:28.530 --> 00:35:30.150 align:start position:0%
+ 
+ 
+
+00:35:30.150 --> 00:35:33.090 align:start position:0%
+ 
+ 
+
+00:35:33.090 --> 00:35:35.340 align:start position:0%
+ 
+ 
+
+00:35:35.340 --> 00:35:36.840 align:start position:0%
+ 
+ 
+
+00:35:36.840 --> 00:35:38.220 align:start position:0%
+ 
+ 
+
+00:35:38.220 --> 00:35:41.190 align:start position:0%
+ 
+ 
+
+00:35:41.190 --> 00:35:43.560 align:start position:0%
+ 
+ 
+
+00:35:43.560 --> 00:35:45.060 align:start position:0%
+ 
+ 
+
+00:35:45.060 --> 00:35:47.010 align:start position:0%
+ 
+ 
+
+00:35:47.010 --> 00:35:48.420 align:start position:0%
+ 
+ 
+
+00:35:48.420 --> 00:35:50.690 align:start position:0%
+ 
+ 
+
+00:35:50.690 --> 00:35:54.480 align:start position:0%
+ 
+ 
+
+00:35:54.480 --> 00:35:55.860 align:start position:0%
+ 
+ 
+
+00:35:55.860 --> 00:35:58.320 align:start position:0%
+ 
+ 
+
+00:35:58.320 --> 00:36:00.210 align:start position:0%
+ 
+ 
+
+00:36:00.210 --> 00:36:03.210 align:start position:0%
+ 
+ 
+
+00:36:03.210 --> 00:36:05.400 align:start position:0%
+ 
+ 
+
+00:36:05.400 --> 00:36:06.660 align:start position:0%
+ 
+ 
+
+00:36:06.660 --> 00:36:08.730 align:start position:0%
+ 
+ 
+
+00:36:08.730 --> 00:36:11.310 align:start position:0%
+ 
+ 
+
+00:36:11.310 --> 00:36:13.200 align:start position:0%
+ 
+ 
+
+00:36:13.200 --> 00:36:14.850 align:start position:0%
+ 
+ 
+
+00:36:14.850 --> 00:36:17.520 align:start position:0%
+ 
+ 
+
+00:36:17.520 --> 00:36:19.050 align:start position:0%
+ 
+ 
+
+00:36:19.050 --> 00:36:20.490 align:start position:0%
+ 
+ 
+
+00:36:20.490 --> 00:36:22.080 align:start position:0%
+ 
+ 
+
+00:36:22.080 --> 00:36:24.120 align:start position:0%
+ 
+ 
+
+00:36:24.120 --> 00:36:27.120 align:start position:0%
+ 
+ 
+
+00:36:27.120 --> 00:36:28.560 align:start position:0%
+ 
+ 
+
+00:36:28.560 --> 00:36:30.780 align:start position:0%
+ 
+ 
+
+00:36:30.780 --> 00:36:33.120 align:start position:0%
+ 
+ 
+
+00:36:33.120 --> 00:36:34.500 align:start position:0%
+ 
+ 
+
+00:36:34.500 --> 00:36:36.420 align:start position:0%
+ 
+ 
+
+00:36:36.420 --> 00:36:37.830 align:start position:0%
+ 
+ 
+
+00:36:37.830 --> 00:36:39.990 align:start position:0%
+ 
+ 
+
+00:36:39.990 --> 00:36:41.850 align:start position:0%
+ 
+ 
+
+00:36:41.850 --> 00:36:45.630 align:start position:0%
+ 
+ 
+
+00:36:45.630 --> 00:36:47.850 align:start position:0%
+ 
+ 
+
+00:36:47.850 --> 00:36:49.320 align:start position:0%
+ 
+ 
+
+00:36:49.320 --> 00:36:51.090 align:start position:0%
+ 
+ 
+
+00:36:51.090 --> 00:36:52.620 align:start position:0%
+ 
+ 
+
+00:36:52.620 --> 00:36:55.140 align:start position:0%
+ 
+ 
+
+00:36:55.140 --> 00:36:57.240 align:start position:0%
+ 
+ 
+
+00:36:57.240 --> 00:37:00.360 align:start position:0%
+ 
+ 
+
+00:37:00.360 --> 00:37:02.370 align:start position:0%
+ 
+ 
+
+00:37:02.370 --> 00:37:03.630 align:start position:0%
+ 
+ 
+
+00:37:03.630 --> 00:37:04.590 align:start position:0%
+ 
+ 
+
+00:37:04.590 --> 00:37:06.720 align:start position:0%
+ 
+ 
+
+00:37:06.720 --> 00:37:20.180 align:start position:0%
+ 
+ 
+
+00:37:20.180 --> 00:37:20.190 align:start position:0%
+ 
+ 
+
+00:37:20.190 --> 00:37:25.420 align:start position:0%
+ 
+
+
+00:37:25.420 --> 00:37:30.550 align:start position:0%
+ 
+ 
+
+00:37:30.550 --> 00:37:32.620 align:start position:0%
+ 
+ 
+
+00:37:32.620 --> 00:37:35.920 align:start position:0%
+ 
+ 
+
+00:37:35.920 --> 00:37:37.270 align:start position:0%
+ 
+ 
+
+00:37:37.270 --> 00:37:38.860 align:start position:0%
+ 
+ 
+
+00:37:38.860 --> 00:37:40.660 align:start position:0%
+ 
+ 
+
+00:37:40.660 --> 00:37:42.340 align:start position:0%
+ 
+ 
+
+00:37:42.340 --> 00:37:45.100 align:start position:0%
+ 
+ 
+
+00:37:45.100 --> 00:37:48.880 align:start position:0%
+ 
+ 
+
+00:37:48.880 --> 00:37:50.530 align:start position:0%
+ 
+ 
+
+00:37:50.530 --> 00:37:52.480 align:start position:0%
+ 
+ 
+
+00:37:52.480 --> 00:37:54.970 align:start position:0%
+ 
+ 
+
+00:37:54.970 --> 00:37:58.990 align:start position:0%
+ 
+ 
+
+00:37:58.990 --> 00:38:00.040 align:start position:0%
+ 
+ 
+
+00:38:00.040 --> 00:38:01.870 align:start position:0%
+ 
+ 
+
+00:38:01.870 --> 00:38:03.610 align:start position:0%
+ 
+ 
+
+00:38:03.610 --> 00:38:05.080 align:start position:0%
+ 
+ 
+
+00:38:05.080 --> 00:38:07.120 align:start position:0%
+ 
+ 
+
+00:38:07.120 --> 00:38:10.060 align:start position:0%
+ 
+ 
+
+00:38:10.060 --> 00:38:12.100 align:start position:0%
+ 
+ 
+
+00:38:12.100 --> 00:38:13.420 align:start position:0%
+ 
+ 
+
+00:38:13.420 --> 00:38:14.740 align:start position:0%
+ 
+ 
+
+00:38:14.740 --> 00:38:16.660 align:start position:0%
+ 
+ 
+
+00:38:16.660 --> 00:38:19.210 align:start position:0%
+ 
+ 
+
+00:38:19.210 --> 00:38:20.800 align:start position:0%
+ 
+ 
+
+00:38:20.800 --> 00:38:27.070 align:start position:0%
+ 
+ 
+
+00:38:27.070 --> 00:38:38.830 align:start position:0%
+ 
+ 
+
+00:38:38.830 --> 00:38:42.400 align:start position:0%
+ 
+ 
+
+00:38:42.400 --> 00:38:43.960 align:start position:0%
+ 
+ 
+
+00:38:43.960 --> 00:38:48.190 align:start position:0%
+ 
+ 
+
+00:38:48.190 --> 00:38:49.990 align:start position:0%
+ 
+ 
+
+00:38:49.990 --> 00:38:51.940 align:start position:0%
+ 
+ 
+
+00:38:51.940 --> 00:38:53.560 align:start position:0%
+ 
+ 
+
+00:38:53.560 --> 00:38:55.300 align:start position:0%
+ 
+ 
+
+00:38:55.300 --> 00:38:57.130 align:start position:0%
+ 
+ 
+
+00:38:57.130 --> 00:38:59.200 align:start position:0%
+ 
+ 
+
+00:38:59.200 --> 00:39:01.570 align:start position:0%
+ 
+ 
+
+00:39:01.570 --> 00:39:03.850 align:start position:0%
+ 
+ 
+
+00:39:03.850 --> 00:39:06.100 align:start position:0%
+ 
+ 
+
+00:39:06.100 --> 00:39:06.580 align:start position:0%
+ 
+ 
+
+00:39:06.580 --> 00:39:26.290 align:start position:0%
+ 
+ 
+
+00:39:26.290 --> 00:39:27.460 align:start position:0%
+ 
+ 
+
+00:39:27.460 --> 00:39:29.080 align:start position:0%
+ 
+ 
+
+00:39:29.080 --> 00:39:31.660 align:start position:0%
+ 
+ 
+
+00:39:31.660 --> 00:39:35.170 align:start position:0%
+ 
+ 
+
+00:39:35.170 --> 00:39:36.820 align:start position:0%
+ 
+ 
+
+00:39:36.820 --> 00:39:39.160 align:start position:0%
+ 
+ 
+
+00:39:39.160 --> 00:39:43.510 align:start position:0%
+ 
+ 
+
+00:39:43.510 --> 00:39:44.710 align:start position:0%
+ 
+ 
+
+00:39:44.710 --> 00:39:46.390 align:start position:0%
+ 
+ 
+
+00:39:46.390 --> 00:39:48.010 align:start position:0%
+ 
+ 
+
+00:39:48.010 --> 00:39:49.270 align:start position:0%
+ 
+ 
+
+00:39:49.270 --> 00:39:50.830 align:start position:0%
+ 
+ 
+
+00:39:50.830 --> 00:39:52.810 align:start position:0%
+ 
+ 
+
+00:39:52.810 --> 00:39:54.790 align:start position:0%
+ 
+ 
+
+00:39:54.790 --> 00:39:57.130 align:start position:0%
+ 
+ 
+
+00:39:57.130 --> 00:40:09.430 align:start position:0%
+ 
+ 
+
+00:40:09.430 --> 00:40:26.349 align:start position:0%
+ 
+ 
+
+00:40:26.349 --> 00:40:29.180 align:start position:0%
+ 
+ 
+
+00:40:29.180 --> 00:40:30.740 align:start position:0%
+ 
+ 
+
+00:40:30.740 --> 00:40:32.510 align:start position:0%
+ 
+ 
+
+00:40:32.510 --> 00:40:34.069 align:start position:0%
+ 
+ 
+
+00:40:34.069 --> 00:40:37.039 align:start position:0%
+ 
+ 
+
+00:40:37.039 --> 00:40:40.579 align:start position:0%
+ 
+ 
+
+00:40:40.579 --> 00:40:43.039 align:start position:0%
+ 
+ 
+
+00:40:43.039 --> 00:40:45.109 align:start position:0%
+ 
+ 
+
+00:40:45.109 --> 00:40:47.960 align:start position:0%
+ 
+ 
+
+00:40:47.960 --> 00:40:49.880 align:start position:0%
+ 
+ 
+
+00:40:49.880 --> 00:40:52.069 align:start position:0%
+ 
+ 
+
+00:40:52.069 --> 00:40:53.690 align:start position:0%
+ 
+ 
+
+00:40:53.690 --> 00:40:56.150 align:start position:0%
+ 
+ 
+
+00:40:56.150 --> 00:40:59.029 align:start position:0%
+ 
+ 
+
+00:40:59.029 --> 00:41:00.529 align:start position:0%
+ 
+ 
+
+00:41:00.529 --> 00:41:04.099 align:start position:0%
+ 
+ 
+
+00:41:04.099 --> 00:41:06.880 align:start position:0%
+ 
+ 
+
+00:41:06.880 --> 00:41:09.170 align:start position:0%
+ 
+ 
+
+00:41:09.170 --> 00:41:11.329 align:start position:0%
+ 
+ 
+
+00:41:11.329 --> 00:41:13.640 align:start position:0%
+ 
+ 
+
+00:41:13.640 --> 00:41:16.430 align:start position:0%
+ 
+ 
+
+00:41:16.430 --> 00:41:18.829 align:start position:0%
+ 
+ 
+
+00:41:18.829 --> 00:41:18.839 align:start position:0%
+ 
+ 
+
+00:41:18.839 --> 00:41:19.839 align:start position:0%
+ 
+
+
+00:41:19.839 --> 00:41:19.849 align:start position:0%
+ 
+ 
+
+00:41:19.849 --> 00:41:27.080 align:start position:0%
+ 
+
+
+00:41:27.080 --> 00:41:30.720 align:start position:0%
+ 
+ 
+
+00:41:30.720 --> 00:41:33.030 align:start position:0%
+ 
+ 
+
+00:41:33.030 --> 00:41:37.500 align:start position:0%
+ 
+ 
+
+00:41:37.500 --> 00:41:39.120 align:start position:0%
+ 
+ 
+
+00:41:39.120 --> 00:41:41.280 align:start position:0%
+ 
+ 
+
+00:41:41.280 --> 00:41:43.290 align:start position:0%
+ 
+ 
+
+00:41:43.290 --> 00:41:45.090 align:start position:0%
+ 
+ 
+
+00:41:45.090 --> 00:41:46.350 align:start position:0%
+ 
+ 
+
+00:41:46.350 --> 00:41:48.600 align:start position:0%
+ 
+ 
+
+00:41:48.600 --> 00:41:52.230 align:start position:0%
+ 
+ 
+
+00:41:52.230 --> 00:41:53.670 align:start position:0%
+ 
+ 
+
+00:41:53.670 --> 00:41:55.020 align:start position:0%
+ 
+ 
+
+00:41:55.020 --> 00:41:56.580 align:start position:0%
+ 
+ 
+
+00:41:56.580 --> 00:41:57.750 align:start position:0%
+ 
+ 
+
+00:41:57.750 --> 00:41:59.340 align:start position:0%
+ 
+ 
+
+00:41:59.340 --> 00:42:02.760 align:start position:0%
+ 
+ 
+
+00:42:02.760 --> 00:42:05.250 align:start position:0%
+ 
+ 
+
+00:42:05.250 --> 00:42:07.440 align:start position:0%
+ 
+ 
+
+00:42:07.440 --> 00:42:14.340 align:start position:0%
+ 
+ 
+
+00:42:14.340 --> 00:42:16.320 align:start position:0%
+ 
+ 
+
+00:42:16.320 --> 00:42:17.700 align:start position:0%
+ 
+ 
+
+00:42:17.700 --> 00:42:19.470 align:start position:0%
+ 
+ 
+
+00:42:19.470 --> 00:42:22.410 align:start position:0%
+ 
+ 
+
