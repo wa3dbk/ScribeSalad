@@ -1,0 +1,3124 @@
+WEBVTT
+Kind: captions
+Language: en
+
+00:00:04.640 --> 00:00:06.150 align:start position:0%
+ 
+historically  dark has been  laser focused on delivering the fastest  performance possible end-to-end runtime  of a problem  [Music]  these sometimes has come at the cost of  less than optimal memory usage  which on occasion was deliberate  and afterthought  first before i start is how many people  in the room are already familiar with  task raise your hands  okay not so bad  those that aren't  you may find yourself a bit disoriented  here as this is uh  quite a bit into the internal task  but tomorrow morning at 9 00 am there  will be a  tutorial from one of my colleagues that  starts from scratch and it's highly  recommended  so  those that already run  that's distributed may have already  found issues with  a lot of memory usage this is stemming  from  different reasons but the chief one is  that whenever you have  a task that finishes on a worker it will  leave its output on that worker when  another task on a different worker  needs the same data as an input  the task the data is copied off  let's look at it  so here i'm creating a cluster with two  workers  and i am submitting a task simply a  function that returns one  in this case i'm artificially saying i  want this task to run on worker zero  normally i wouldn't have that  specification i would just say  run this task on whatever worker is free  and ask would choose it  um  i wait for the to start the task to  finish the result is one  and then i query the cluster and ask  okay where is the data  of this task and they see that i have  the output on worker 0 and worker 1  doesn't have it it didn't run the task  it doesn't have no reason to contain a  copy so it doesn't have it  now i'm going to run a second  [Music]  task y  equal x plus one  now if i didn't put  these workers one  specif specific  task would notice that the cluster has  two workers  both of them are free worker 0 already  has all the input data worker 1 doesn't  so it would choose worker 0.  therefore avoiding a copy of the data  however let's say that worker 0 is  fairly busy and worker 1 isn't at that  point the ask will choose worker 1  because it will privilege  cpu  allocation  over the cost of memory transfers and  data duplication  in this artificial example i'm forcing  the copy from worker 0 to worker 1.  so i'm running  a  y on a worker 1 and that forces an  automatic copy of x  i didn't ask das to do the copy it just  happens because it really does realizes  that y requires x  so now i'm going to query again the  cluster  to see  what the data situation looks like what  do you think the output will be  we have y on worker 1 where it just  finished  we have the original copy of x on worker  0 and we have a new copy of replica of x  on worker 1.  i have two copies of x  and x in this case is a tiny integer but  in real life it may be hundreds of  megabytes worth of numpy  this is actually something desirable as  long as you have infinite amount of  memory  why well because if if in the future i  have another task that  also requires x  i won't need to transfer it again i  already have it on both workers so all  workers are ready hot and they can fire  off the new task straight away  if x was a transitory task  that meaning a task that is not  referenced by any client but is just an  input to something else  then the scheduler would delete it as  soon as possible but in this case x is  referenced by a client so it will stay  there indefinitely  um  other issues in  memory management that people may find  is that if you have a task that has  let's say 16 inputs and those 16 inputs  were computed on 16 different workers  dusk will have no option but to  get those 16 outputs and copy them over  onto a single worker  and that will cause a memory spike on  one of the workers of the cluster  dusk array and does data frame  already mitigate this by having a  recursive  aggregation in all of the reductions if  you take  the a dot sum for example to  reduce the um  a data frame  at an array on the columns or on the  rows or whatever  uh  there you're under the hood you're  actually having  chunks of four and then four and  therefore recursively so exactly to  avoid this kind of coagulation of memory  onto a single worker  final problem that a lot of people may  have been stumbled upon already  is that  when a worker hits 60 percent memory  usage it will start spilling data to  disk  if that is not sufficient  and the worker hits 80  memory usage it will pause and refuse to  accept new tasks if that is not  sufficient and it hits 95 percent usage  uh it will be killed by the nanny  the idea being that that is preferable  for to have 100 at which point  theoretically the kubernetes watchdog or  whatever else you're using will kick in  and just to the killing  now when the process is killed  all the data that you have on that  worker is lost  good news  you are not going to experience a crash  in your computation because the  scheduler will notice that it lost a  work and all the data on it  and will just reshade it somewhere else  bad news you just lost al you just lost  a lot of time because you have to  rebuild whatever was on that worker  worse news  if this is a systematic problem now you  may have another worker that ends up  exactly in the same condition  to  solve all of this kind of problem we  came up with the active memory manager  amm  for short  is a daemon that runs every couple of  seconds in the scheduler it analyzes all  the tasks in the cluster that are in  memory  and asks its policies which is applying  a plugin system for suggestions  every policy goes through the tasks that  it cares about  and issues two kinds of suggestions to  the nmm  replicate  a task that is already in memory  on one more worker so if the task exists  on only one worker say  create a copy somewhere else if it  exists on two great three etc  uh it can ask to just create a copy  somewhere at the mm will choose whatever  the worker with the lowest memory usage  is  or it may ask for a specific worker or a  specific short list of workers  another the opposite suggestion that a  policy could do is to drop  a replica  this can only happen if you have at  least two replicas of the of a task  the ama will flat out refuse to delete  the last replica of a task  it will also flat out refuse to generate  more replicas than you have workers  there are  a lot of other  less more subtle  things that the amm will notice and will  use to reject a suggestion when it is  unwise  the whole idea being that a policy  can be as sophisticated as you want in  terms of decision-making process  progress  whereas the amm  doesn't know about  decision-making that is on why the  policy decided to drop or replicate  but it it was guarantees the stability  and robustness of the whole thing  and one of the key features of mm is  that you can run it while the  computation is running you don't need to  push a button like for example client  that replicate which is something that  exists today  it just runs on its own every two  seconds and it's guaranteed to be  performed  and stable  for the same sake of simplicity there is  no  move  suggestion you have replicate or copy if  you prefer and drop if you want to do a  move first you do a replicate  second iteration two seconds later you  do a drop  the condition may have changed two  seconds later so you  your same policy may realize actually i  don't want to drop that key anymore i  want to drop another or  i am i want to do something else  entirely  the cluster evolves over time and the  policies over time will take different  decisions  mm  is at the moment  experimental feature which is off by  default  if you want to play with it all you need  to do is flick the switch  you can do it by through the dusk config  by simply setting the flag here  as shown  or on the fly even from the client  client.amm.start  that's it you need a fairly recent  version of dusk  what i am demoing is 2022.2  onwards  alternatively you can set the config  from the command line or if you're using  coiled as i will in the demo a second in  a few minutes  you can pass the environment variable  through the coiled  cluster creation  so as i said the amm in and by itself  is  very dumb in terms of decision making  actually doesn't do any decisions it  just asks the policies for decisions  and then enacts them  what policies  do we have well at the moment we have  two policies in  available in the package which are  remove replicas and retire walker  and we have plans in the future for two  more rebalancing replicate  on top of that this is a plugin system  and it is designed  to let the users add their own policies  for example  you may have a hybrid cluster  where some hosts are gpu enabled and  have not so great  memory and other workers don't have a  gpu and have a much larger memory  capacity or something like that  and you may say  well i want to  replicate these task that is contains  gpu specific data  on a short list of workers which is only  those that have a gpu  or you may say  yes i want to replicate this  cpu generic data but please avoid the  gpu specific  workers because on those memory comes at  a premium  or whatever else may come to mind or you  may say you may have some data that you  know is very very expensive to pickle  and unpickle  and you say actually skip this one  just shuffle around the numpy data that  is quick to serialize  first policy that we have  right now is amm remove replicas  and  it is on by default all you need to do  is activate  the active memory manager and you will  just have it running every two seconds  what does it do whenever you have two  plus copies of  a task  in memory  it drops the extra one if it deems them  not useful in the immediate future  this  drastically reduces the memory  consumption in the cluster and that's  something i will show in a second  retail worker is something that you may  actually have already used even if  without realizing  it is the back end of client.retire  workers and  it is used also by the adaptive scaler  whenever you scale down a cluster  it  is at the core of what we call graceful  worker retirement meaning unlike when  you kill a worker and you lose  everything  when you  decide to retire a worker and you have  some time and the worker is still  working  you can flush out all the data to the  rest of the cluster and then shut it  down without losing anything  in the future  we want to add rebalance which is a  complete overhaul of what currently is  the client.3 balance command  we want to get rid of the command  entirely  and instead have this thing that runs  every two seconds and continuously moves  data  from the workers that have the highest  memory usage to the workers that have  the lowest so that  the problem with  spikes in single workers of memory  should be a lot less visible  and finally replicate  is going to re-implement the current  client.replicate command  so you have some very precious data that  took a lot long a lot of time to  complete but you have some stability  issues in your cluster you can say okay  have four copies at all times of this  piece of data  and  unlike the current replicate command  whenever you lose a copy  amm replicate will regenerate the copy  continuously until you have four or  whatever many you ask for  for example  how will these policies  work together  uh  you have something that licks memory  and leaks memory very severely and you  end up over time with 80  of your memory  uh in leaks  it's not long no longer usable it just  sits there so the worker is paused it  gets stuck there in post state because  there is nothing to spill it's a memory  leak  after 30 seconds or so it transitions  into graceful retirement this is  something that we hope to deliver in q3  and retired worker takes all the data  all that valuable data that was sitting  on that worker  and  shuffles it out to the rest of the  cluster then that worker is shut down  uh replicate  will recreate whatever knowing whatever  data that was there that now has less  than the desired number of replicas  in the meantime the worker goes back  online  and it comes up online a brand new  worker and is completely empty  a mm rebalance will see that there has  the rest of the cluster with a  substantial  amount of memory and a completely empty  worker will take some data from the rest  of the cluster and put it  on the new work  all right now i will  show you  uh  the  re  reduce replicas policy  i am  gonna use a coil cluster here i'm  actually gonna use two parallel coil  clusters uh that are  16 workers two threads per worker a per  six gigabytes of worker perfectly  identical except for  this one weird trick  which is enabling  the amm  for all other purposes they are  perfectly identical  i have started them ahead of time to  save three flight three minutes  okay  and now i'm gonna test  okay client one amm is not running  client to it is running  now i'm gonna define a square matrix of  a bit less than six gigabytes  with dusk array  and now i'm gonna put it in tensor dot  with itself  this is a particularly brutal  exercise  because tensor dot is a n-squared  computation  where every chunk  needs to be put together with every  other chunk  so all the nice ideas behind the ask of  a worker does not need the  worker contains only a bit of bit of the  whole data set  fly out of the window every worker  eventually will need the whole data set  but we need to be careful not to have it  at the same time because we simply don't  have the space to store it  and now i'm going to  send them to the two clusters in  parallel  on the left i have the memory usage on  the cluster without amm  on the right  the exact same computation in the  cluster with amm  and  bar goes orange when it goes beyond 50  if it reaches 60 percent it starts  spilling if it reaches 80 percent it  poses if it reaches 95 percent it dies  and we can see how it is  less  memory intensive on the right  and once it is finished  we will be able to see the differences  on top of each other  i used a  small example so just  wouldn't take  the  entirely entirety of the  presentation  it's on the  starting to dwindle down  and we can see how  more or less at all times  the one with amm  [Music]  is somewhat  less memory hungry but now we will  see them on top of each other  and here you go  um  in the initial period the initial part  there is not much different but  once you get  what's to get to the core of the  computation you see the difference  this is the total memory usage the sum  of the memory across all every workers  and you see how the one with amm caps  out at 46 47 gigabytes whereas the one  without goes  fairly high  are there  questions  maybe  somebody wants to  sorry  microphone  where are you  uh so then you mentioned that rebalance  will  basically  try and take  workers that have high memory usage and  distribute the keys amongst other  workers but i'm assuming this only works  for workers that completed their task  or  how would it work if the keys are  necessary for actually doing the  computation  so  these uh  the mm avoids tasks that are just just  being copied over to a worker to serve  as an input to other tasks we're talking  about tasks that individually are  addressed  the cluster itself is not at rest you  have a computation going on  but  if you have a task that is a dependency  of another task that is skewed  it is completely ignored by the imm  and reverse the traditional algorithms  of  plane that's distributed  all right thank you  yeah thank you  how do you define a custom policy or  register one  you  need to follow a  dac api duct tape doctype api and you  just you have access to the list of the  tasks on the scheduler  and  you can define a policy you can define  you can go through them well in the  i would not recommend to go through all  of the tasks on the scheduler  sequentially  but  you can track for example a subset of  tasks that you're interested in or you  can have your own memory structures to  keep to keep them in check we have  additional memory structures for example  specifically for tasks that have more  than one replica running and you can tap  on those  and once you got to your decisions you  just yield them back  to the  amm all of those  are thoroughly documented in the  distributed page of emm  with plenty of examples  so we have a few from  slidell  what is the best reduction in peak  memory consumption that you have seen in  practice using amm  um  first and foremost  in practice is  a hard question because this is a is  disabled by default for obvious  uh concerns in terms of  stability  and i every time i see a  crowd like this i try to push please  play with it and come back to me and  tell me if it breaks  tensor dot is probably one of the  biggest  examples  in as a general rule if you have an  embarrassingly parallel computation amm  will make no difference whatsoever  because  if it's embarrassingly parallel most  times  you will not have data transfers at all  you have the beginning of you have a  bunch of siloed computations and every  worker can just take one  if you have something which any any kind  of n-squared problem  will benefit the most because those are  the ones that need to copy around most  data  thanks  one more  what do you mean by the worker will keep  valuable data what is valuable data  uh that is entirely up to you to define  but say for example  you have a first stage of a computation  that took you  five hours to complete  and you have a second stage of a  computation which is  performed by a c extension which has a  habit of sex faulting once in a while  you  [Music]  don't want to lose those five hours  just because a sec fault killed the  worker with the one and only copy of the  data on it  what you said you want to do is say okay  have four copies at this point and  oh you have a sec fault fine just  restart the worker copy the data over  somewhere else and now you have three  copies back to 4 amm replicate  and uh one more from slido  will amm be affected by storage backhand  being used for example tsar  um really uh  as long as your data is in ram uh  will mm will not really notice mm does  handle  a special logic for data that is spilled  to disk  so if you spill something to disk you  there will be decisions that change  space namely you will not have data that  is moved around if it's built to disk  unless absolutely necessary  because you will not get any any run  back it's already on disk  okay  we have time for one more question from  the audience if there is one  i i was wondering where the  the policies that you that you use where  coming from and if you take any  uh inspiration from other distributed  framework i'm i'm coming more from the  spark world and i'm wondering if you  took some of them from there or  some other one no not really in previous  jobs monte carlo is  very very heavily  monte carlo computations tend to be very  very heavily embarrassing embarrassingly  power  parallel most  calculations 95 of the calculation is  embarrassingly powered parallel there so  not really  this is specific when you start having  uh matrix dot products or such  um  i will  maybe you can ask it later because we  have another talk in 10 minutes  let's thank guido for his excellent talk  excellent presentation
+
+00:00:06.150 --> 00:00:07.909 align:start position:0%
+historically  dark has been  laser focused on delivering the fastest  performance possible end-to-end runtime  of a problem  [Music]  these sometimes has come at the cost of  less than optimal memory usage  which on occasion was deliberate  and afterthought  first before i start is how many people  in the room are already familiar with  task raise your hands  okay not so bad  those that aren't  you may find yourself a bit disoriented  here as this is uh  quite a bit into the internal task  but tomorrow morning at 9 00 am there  will be a  tutorial from one of my colleagues that  starts from scratch and it's highly  recommended  so  those that already run  that's distributed may have already  found issues with  a lot of memory usage this is stemming  from  different reasons but the chief one is  that whenever you have  a task that finishes on a worker it will  leave its output on that worker when  another task on a different worker  needs the same data as an input  the task the data is copied off  let's look at it  so here i'm creating a cluster with two  workers  and i am submitting a task simply a  function that returns one  in this case i'm artificially saying i  want this task to run on worker zero  normally i wouldn't have that  specification i would just say  run this task on whatever worker is free  and ask would choose it  um  i wait for the to start the task to  finish the result is one  and then i query the cluster and ask  okay where is the data  of this task and they see that i have  the output on worker 0 and worker 1  doesn't have it it didn't run the task  it doesn't have no reason to contain a  copy so it doesn't have it  now i'm going to run a second  [Music]  task y  equal x plus one  now if i didn't put  these workers one  specif specific  task would notice that the cluster has  two workers  both of them are free worker 0 already  has all the input data worker 1 doesn't  so it would choose worker 0.  therefore avoiding a copy of the data  however let's say that worker 0 is  fairly busy and worker 1 isn't at that  point the ask will choose worker 1  because it will privilege  cpu  allocation  over the cost of memory transfers and  data duplication  in this artificial example i'm forcing  the copy from worker 0 to worker 1.  so i'm running  a  y on a worker 1 and that forces an  automatic copy of x  i didn't ask das to do the copy it just  happens because it really does realizes  that y requires x  so now i'm going to query again the  cluster  to see  what the data situation looks like what  do you think the output will be  we have y on worker 1 where it just  finished  we have the original copy of x on worker  0 and we have a new copy of replica of x  on worker 1.  i have two copies of x  and x in this case is a tiny integer but  in real life it may be hundreds of  megabytes worth of numpy  this is actually something desirable as  long as you have infinite amount of  memory  why well because if if in the future i  have another task that  also requires x  i won't need to transfer it again i  already have it on both workers so all  workers are ready hot and they can fire  off the new task straight away  if x was a transitory task  that meaning a task that is not  referenced by any client but is just an  input to something else  then the scheduler would delete it as  soon as possible but in this case x is  referenced by a client so it will stay  there indefinitely  um  other issues in  memory management that people may find  is that if you have a task that has  let's say 16 inputs and those 16 inputs  were computed on 16 different workers  dusk will have no option but to  get those 16 outputs and copy them over  onto a single worker  and that will cause a memory spike on  one of the workers of the cluster  dusk array and does data frame  already mitigate this by having a  recursive  aggregation in all of the reductions if  you take  the a dot sum for example to  reduce the um  a data frame  at an array on the columns or on the  rows or whatever  uh  there you're under the hood you're  actually having  chunks of four and then four and  therefore recursively so exactly to  avoid this kind of coagulation of memory  onto a single worker  final problem that a lot of people may  have been stumbled upon already  is that  when a worker hits 60 percent memory  usage it will start spilling data to  disk  if that is not sufficient  and the worker hits 80  memory usage it will pause and refuse to  accept new tasks if that is not  sufficient and it hits 95 percent usage  uh it will be killed by the nanny  the idea being that that is preferable  for to have 100 at which point  theoretically the kubernetes watchdog or  whatever else you're using will kick in  and just to the killing  now when the process is killed  all the data that you have on that  worker is lost  good news  you are not going to experience a crash  in your computation because the  scheduler will notice that it lost a  work and all the data on it  and will just reshade it somewhere else  bad news you just lost al you just lost  a lot of time because you have to  rebuild whatever was on that worker  worse news  if this is a systematic problem now you  may have another worker that ends up  exactly in the same condition  to  solve all of this kind of problem we  came up with the active memory manager  amm  for short  is a daemon that runs every couple of  seconds in the scheduler it analyzes all  the tasks in the cluster that are in  memory  and asks its policies which is applying  a plugin system for suggestions  every policy goes through the tasks that  it cares about  and issues two kinds of suggestions to  the nmm  replicate  a task that is already in memory  on one more worker so if the task exists  on only one worker say  create a copy somewhere else if it  exists on two great three etc  uh it can ask to just create a copy  somewhere at the mm will choose whatever  the worker with the lowest memory usage  is  or it may ask for a specific worker or a  specific short list of workers  another the opposite suggestion that a  policy could do is to drop  a replica  this can only happen if you have at  least two replicas of the of a task  the ama will flat out refuse to delete  the last replica of a task  it will also flat out refuse to generate  more replicas than you have workers  there are  a lot of other  less more subtle  things that the amm will notice and will  use to reject a suggestion when it is  unwise  the whole idea being that a policy  can be as sophisticated as you want in  terms of decision-making process  progress  whereas the amm  doesn't know about  decision-making that is on why the  policy decided to drop or replicate  but it it was guarantees the stability  and robustness of the whole thing  and one of the key features of mm is  that you can run it while the  computation is running you don't need to  push a button like for example client  that replicate which is something that  exists today  it just runs on its own every two  seconds and it's guaranteed to be  performed  and stable  for the same sake of simplicity there is  no  move  suggestion you have replicate or copy if  you prefer and drop if you want to do a  move first you do a replicate  second iteration two seconds later you  do a drop  the condition may have changed two  seconds later so you  your same policy may realize actually i  don't want to drop that key anymore i  want to drop another or  i am i want to do something else  entirely  the cluster evolves over time and the  policies over time will take different  decisions  mm  is at the moment  experimental feature which is off by  default  if you want to play with it all you need  to do is flick the switch  you can do it by through the dusk config  by simply setting the flag here  as shown  or on the fly even from the client  client.amm.start  that's it you need a fairly recent  version of dusk  what i am demoing is 2022.2  onwards  alternatively you can set the config  from the command line or if you're using  coiled as i will in the demo a second in  a few minutes  you can pass the environment variable  through the coiled  cluster creation  so as i said the amm in and by itself  is  very dumb in terms of decision making  actually doesn't do any decisions it  just asks the policies for decisions  and then enacts them  what policies  do we have well at the moment we have  two policies in  available in the package which are  remove replicas and retire walker  and we have plans in the future for two  more rebalancing replicate  on top of that this is a plugin system  and it is designed  to let the users add their own policies  for example  you may have a hybrid cluster  where some hosts are gpu enabled and  have not so great  memory and other workers don't have a  gpu and have a much larger memory  capacity or something like that  and you may say  well i want to  replicate these task that is contains  gpu specific data  on a short list of workers which is only  those that have a gpu  or you may say  yes i want to replicate this  cpu generic data but please avoid the  gpu specific  workers because on those memory comes at  a premium  or whatever else may come to mind or you  may say you may have some data that you  know is very very expensive to pickle  and unpickle  and you say actually skip this one  just shuffle around the numpy data that  is quick to serialize  first policy that we have  right now is amm remove replicas  and  it is on by default all you need to do  is activate  the active memory manager and you will  just have it running every two seconds  what does it do whenever you have two  plus copies of  a task  in memory  it drops the extra one if it deems them  not useful in the immediate future  this  drastically reduces the memory  consumption in the cluster and that's  something i will show in a second  retail worker is something that you may  actually have already used even if  without realizing  it is the back end of client.retire  workers and  it is used also by the adaptive scaler  whenever you scale down a cluster  it  is at the core of what we call graceful  worker retirement meaning unlike when  you kill a worker and you lose  everything  when you  decide to retire a worker and you have  some time and the worker is still  working  you can flush out all the data to the  rest of the cluster and then shut it  down without losing anything  in the future  we want to add rebalance which is a  complete overhaul of what currently is  the client.3 balance command  we want to get rid of the command  entirely  and instead have this thing that runs  every two seconds and continuously moves  data  from the workers that have the highest  memory usage to the workers that have  the lowest so that  the problem with  spikes in single workers of memory  should be a lot less visible  and finally replicate  is going to re-implement the current  client.replicate command  so you have some very precious data that  took a lot long a lot of time to  complete but you have some stability  issues in your cluster you can say okay  have four copies at all times of this  piece of data  and  unlike the current replicate command  whenever you lose a copy  amm replicate will regenerate the copy  continuously until you have four or  whatever many you ask for  for example  how will these policies  work together  uh  you have something that licks memory  and leaks memory very severely and you  end up over time with 80  of your memory  uh in leaks  it's not long no longer usable it just  sits there so the worker is paused it  gets stuck there in post state because  there is nothing to spill it's a memory  leak  after 30 seconds or so it transitions  into graceful retirement this is  something that we hope to deliver in q3  and retired worker takes all the data  all that valuable data that was sitting  on that worker  and  shuffles it out to the rest of the  cluster then that worker is shut down  uh replicate  will recreate whatever knowing whatever  data that was there that now has less  than the desired number of replicas  in the meantime the worker goes back  online  and it comes up online a brand new  worker and is completely empty  a mm rebalance will see that there has  the rest of the cluster with a  substantial  amount of memory and a completely empty  worker will take some data from the rest  of the cluster and put it  on the new work  all right now i will  show you  uh  the  re  reduce replicas policy  i am  gonna use a coil cluster here i'm  actually gonna use two parallel coil  clusters uh that are  16 workers two threads per worker a per  six gigabytes of worker perfectly  identical except for  this one weird trick  which is enabling  the amm  for all other purposes they are  perfectly identical  i have started them ahead of time to  save three flight three minutes  okay  and now i'm gonna test  okay client one amm is not running  client to it is running  now i'm gonna define a square matrix of  a bit less than six gigabytes  with dusk array  and now i'm gonna put it in tensor dot  with itself  this is a particularly brutal  exercise  because tensor dot is a n-squared  computation  where every chunk  needs to be put together with every  other chunk  so all the nice ideas behind the ask of  a worker does not need the  worker contains only a bit of bit of the  whole data set  fly out of the window every worker  eventually will need the whole data set  but we need to be careful not to have it  at the same time because we simply don't  have the space to store it  and now i'm going to  send them to the two clusters in  parallel  on the left i have the memory usage on  the cluster without amm  on the right  the exact same computation in the  cluster with amm  and  bar goes orange when it goes beyond 50  if it reaches 60 percent it starts  spilling if it reaches 80 percent it  poses if it reaches 95 percent it dies  and we can see how it is  less  memory intensive on the right  and once it is finished  we will be able to see the differences  on top of each other  i used a  small example so just  wouldn't take  the  entirely entirety of the  presentation  it's on the  starting to dwindle down  and we can see how  more or less at all times  the one with amm  [Music]  is somewhat  less memory hungry but now we will  see them on top of each other  and here you go  um  in the initial period the initial part  there is not much different but  once you get  what's to get to the core of the  computation you see the difference  this is the total memory usage the sum  of the memory across all every workers  and you see how the one with amm caps  out at 46 47 gigabytes whereas the one  without goes  fairly high  are there  questions  maybe  somebody wants to  sorry  microphone  where are you  uh so then you mentioned that rebalance  will  basically  try and take  workers that have high memory usage and  distribute the keys amongst other  workers but i'm assuming this only works  for workers that completed their task  or  how would it work if the keys are  necessary for actually doing the  computation  so  these uh  the mm avoids tasks that are just just  being copied over to a worker to serve  as an input to other tasks we're talking  about tasks that individually are  addressed  the cluster itself is not at rest you  have a computation going on  but  if you have a task that is a dependency  of another task that is skewed  it is completely ignored by the imm  and reverse the traditional algorithms  of  plane that's distributed  all right thank you  yeah thank you  how do you define a custom policy or  register one  you  need to follow a  dac api duct tape doctype api and you  just you have access to the list of the  tasks on the scheduler  and  you can define a policy you can define  you can go through them well in the  i would not recommend to go through all  of the tasks on the scheduler  sequentially  but  you can track for example a subset of  tasks that you're interested in or you  can have your own memory structures to  keep to keep them in check we have  additional memory structures for example  specifically for tasks that have more  than one replica running and you can tap  on those  and once you got to your decisions you  just yield them back  to the  amm all of those  are thoroughly documented in the  distributed page of emm  with plenty of examples  so we have a few from  slidell  what is the best reduction in peak  memory consumption that you have seen in  practice using amm  um  first and foremost  in practice is  a hard question because this is a is  disabled by default for obvious  uh concerns in terms of  stability  and i every time i see a  crowd like this i try to push please  play with it and come back to me and  tell me if it breaks  tensor dot is probably one of the  biggest  examples  in as a general rule if you have an  embarrassingly parallel computation amm  will make no difference whatsoever  because  if it's embarrassingly parallel most  times  you will not have data transfers at all  you have the beginning of you have a  bunch of siloed computations and every  worker can just take one  if you have something which any any kind  of n-squared problem  will benefit the most because those are  the ones that need to copy around most  data  thanks  one more  what do you mean by the worker will keep  valuable data what is valuable data  uh that is entirely up to you to define  but say for example  you have a first stage of a computation  that took you  five hours to complete  and you have a second stage of a  computation which is  performed by a c extension which has a  habit of sex faulting once in a while  you  [Music]  don't want to lose those five hours  just because a sec fault killed the  worker with the one and only copy of the  data on it  what you said you want to do is say okay  have four copies at this point and  oh you have a sec fault fine just  restart the worker copy the data over  somewhere else and now you have three  copies back to 4 amm replicate  and uh one more from slido  will amm be affected by storage backhand  being used for example tsar  um really uh  as long as your data is in ram uh  will mm will not really notice mm does  handle  a special logic for data that is spilled  to disk  so if you spill something to disk you  there will be decisions that change  space namely you will not have data that  is moved around if it's built to disk  unless absolutely necessary  because you will not get any any run  back it's already on disk  okay  we have time for one more question from  the audience if there is one  i i was wondering where the  the policies that you that you use where  coming from and if you take any  uh inspiration from other distributed  framework i'm i'm coming more from the  spark world and i'm wondering if you  took some of them from there or  some other one no not really in previous  jobs monte carlo is  very very heavily  monte carlo computations tend to be very  very heavily embarrassing embarrassingly  power  parallel most  calculations 95 of the calculation is  embarrassingly powered parallel there so  not really  this is specific when you start having  uh matrix dot products or such  um  i will  maybe you can ask it later because we  have another talk in 10 minutes  let's thank guido for his excellent talk  excellent presentation
+ 
+
+00:00:07.909 --> 00:00:10.950 align:start position:0%
+ 
+ 
+
+00:00:10.950 --> 00:00:14.150 align:start position:0%
+ 
+ 
+
+00:00:14.150 --> 00:00:16.650 align:start position:0%
+ 
+ 
+
+00:00:16.650 --> 00:00:16.660 align:start position:0%
+ 
+ 
+
+00:00:16.660 --> 00:00:18.150 align:start position:0%
+ 
+
+
+00:00:18.150 --> 00:00:21.429 align:start position:0%
+ 
+ 
+
+00:00:21.429 --> 00:00:24.150 align:start position:0%
+ 
+ 
+
+00:00:24.150 --> 00:00:27.189 align:start position:0%
+ 
+ 
+
+00:00:27.189 --> 00:00:29.589 align:start position:0%
+ 
+ 
+
+00:00:29.589 --> 00:00:32.790 align:start position:0%
+ 
+ 
+
+00:00:32.790 --> 00:00:34.389 align:start position:0%
+ 
+ 
+
+00:00:34.389 --> 00:00:36.470 align:start position:0%
+ 
+ 
+
+00:00:36.470 --> 00:00:39.590 align:start position:0%
+ 
+ 
+
+00:00:39.590 --> 00:00:41.590 align:start position:0%
+ 
+ 
+
+00:00:41.590 --> 00:00:44.790 align:start position:0%
+ 
+ 
+
+00:00:44.790 --> 00:00:46.790 align:start position:0%
+ 
+ 
+
+00:00:46.790 --> 00:00:49.590 align:start position:0%
+ 
+ 
+
+00:00:49.590 --> 00:00:52.389 align:start position:0%
+ 
+ 
+
+00:00:52.389 --> 00:00:53.990 align:start position:0%
+ 
+ 
+
+00:00:53.990 --> 00:00:56.389 align:start position:0%
+ 
+ 
+
+00:00:56.389 --> 00:00:59.110 align:start position:0%
+ 
+ 
+
+00:00:59.110 --> 00:00:59.120 align:start position:0%
+ 
+ 
+
+00:00:59.120 --> 00:01:01.430 align:start position:0%
+ 
+
+
+00:01:01.430 --> 00:01:01.440 align:start position:0%
+ 
+ 
+
+00:01:01.440 --> 00:01:02.549 align:start position:0%
+ 
+
+
+00:01:02.549 --> 00:01:04.789 align:start position:0%
+ 
+ 
+
+00:01:04.789 --> 00:01:06.950 align:start position:0%
+ 
+ 
+
+00:01:06.950 --> 00:01:09.270 align:start position:0%
+ 
+ 
+
+00:01:09.270 --> 00:01:14.230 align:start position:0%
+ 
+ 
+
+00:01:14.230 --> 00:01:14.240 align:start position:0%
+ 
+ 
+
+00:01:14.240 --> 00:01:15.510 align:start position:0%
+ 
+
+
+00:01:15.510 --> 00:01:17.830 align:start position:0%
+ 
+ 
+
+00:01:17.830 --> 00:01:20.550 align:start position:0%
+ 
+ 
+
+00:01:20.550 --> 00:01:23.429 align:start position:0%
+ 
+ 
+
+00:01:23.429 --> 00:01:26.469 align:start position:0%
+ 
+ 
+
+00:01:26.469 --> 00:01:29.030 align:start position:0%
+ 
+ 
+
+00:01:29.030 --> 00:01:31.749 align:start position:0%
+ 
+ 
+
+00:01:31.749 --> 00:01:34.789 align:start position:0%
+ 
+ 
+
+00:01:34.789 --> 00:01:36.789 align:start position:0%
+ 
+ 
+
+00:01:36.789 --> 00:01:40.310 align:start position:0%
+ 
+ 
+
+00:01:40.310 --> 00:01:40.320 align:start position:0%
+ 
+ 
+
+00:01:40.320 --> 00:01:41.510 align:start position:0%
+ 
+
+
+00:01:41.510 --> 00:01:45.749 align:start position:0%
+ 
+ 
+
+00:01:45.749 --> 00:01:48.630 align:start position:0%
+ 
+ 
+
+00:01:48.630 --> 00:01:51.109 align:start position:0%
+ 
+ 
+
+00:01:51.109 --> 00:01:53.590 align:start position:0%
+ 
+ 
+
+00:01:53.590 --> 00:01:55.910 align:start position:0%
+ 
+ 
+
+00:01:55.910 --> 00:01:58.389 align:start position:0%
+ 
+ 
+
+00:01:58.389 --> 00:02:00.630 align:start position:0%
+ 
+ 
+
+00:02:00.630 --> 00:02:02.950 align:start position:0%
+ 
+ 
+
+00:02:02.950 --> 00:02:02.960 align:start position:0%
+ 
+ 
+
+00:02:02.960 --> 00:02:03.830 align:start position:0%
+ 
+
+
+00:02:03.830 --> 00:02:05.830 align:start position:0%
+ 
+ 
+
+00:02:05.830 --> 00:02:08.550 align:start position:0%
+ 
+ 
+
+00:02:08.550 --> 00:02:10.630 align:start position:0%
+ 
+ 
+
+00:02:10.630 --> 00:02:12.470 align:start position:0%
+ 
+ 
+
+00:02:12.470 --> 00:02:16.070 align:start position:0%
+ 
+ 
+
+00:02:16.070 --> 00:02:19.990 align:start position:0%
+ 
+ 
+
+00:02:19.990 --> 00:02:21.830 align:start position:0%
+ 
+ 
+
+00:02:21.830 --> 00:02:24.070 align:start position:0%
+ 
+ 
+
+00:02:24.070 --> 00:02:27.190 align:start position:0%
+ 
+ 
+
+00:02:27.190 --> 00:02:29.970 align:start position:0%
+ 
+ 
+
+00:02:29.970 --> 00:02:29.980 align:start position:0%
+ 
+ 
+
+00:02:29.980 --> 00:02:31.350 align:start position:0%
+ 
+
+
+00:02:31.350 --> 00:02:33.190 align:start position:0%
+ 
+ 
+
+00:02:33.190 --> 00:02:36.630 align:start position:0%
+ 
+ 
+
+00:02:36.630 --> 00:02:38.390 align:start position:0%
+ 
+ 
+
+00:02:38.390 --> 00:02:41.110 align:start position:0%
+ 
+ 
+
+00:02:41.110 --> 00:02:43.350 align:start position:0%
+ 
+ 
+
+00:02:43.350 --> 00:02:46.550 align:start position:0%
+ 
+ 
+
+00:02:46.550 --> 00:02:48.229 align:start position:0%
+ 
+ 
+
+00:02:48.229 --> 00:02:51.430 align:start position:0%
+ 
+ 
+
+00:02:51.430 --> 00:02:54.309 align:start position:0%
+ 
+ 
+
+00:02:54.309 --> 00:02:56.630 align:start position:0%
+ 
+ 
+
+00:02:56.630 --> 00:03:00.869 align:start position:0%
+ 
+ 
+
+00:03:00.869 --> 00:03:02.869 align:start position:0%
+ 
+ 
+
+00:03:02.869 --> 00:03:05.990 align:start position:0%
+ 
+ 
+
+00:03:05.990 --> 00:03:08.550 align:start position:0%
+ 
+ 
+
+00:03:08.550 --> 00:03:10.710 align:start position:0%
+ 
+ 
+
+00:03:10.710 --> 00:03:10.720 align:start position:0%
+ 
+ 
+
+00:03:10.720 --> 00:03:13.030 align:start position:0%
+ 
+
+
+00:03:13.030 --> 00:03:13.040 align:start position:0%
+ 
+ 
+
+00:03:13.040 --> 00:03:14.390 align:start position:0%
+ 
+
+
+00:03:14.390 --> 00:03:16.949 align:start position:0%
+ 
+ 
+
+00:03:16.949 --> 00:03:19.190 align:start position:0%
+ 
+ 
+
+00:03:19.190 --> 00:03:22.229 align:start position:0%
+ 
+ 
+
+00:03:22.229 --> 00:03:25.350 align:start position:0%
+ 
+ 
+
+00:03:25.350 --> 00:03:27.030 align:start position:0%
+ 
+ 
+
+00:03:27.030 --> 00:03:27.040 align:start position:0%
+ 
+ 
+
+00:03:27.040 --> 00:03:27.910 align:start position:0%
+ 
+
+
+00:03:27.910 --> 00:03:31.670 align:start position:0%
+ 
+ 
+
+00:03:31.670 --> 00:03:34.869 align:start position:0%
+ 
+ 
+
+00:03:34.869 --> 00:03:38.070 align:start position:0%
+ 
+ 
+
+00:03:38.070 --> 00:03:41.830 align:start position:0%
+ 
+ 
+
+00:03:41.830 --> 00:03:44.550 align:start position:0%
+ 
+ 
+
+00:03:44.550 --> 00:03:46.789 align:start position:0%
+ 
+ 
+
+00:03:46.789 --> 00:03:46.799 align:start position:0%
+ 
+ 
+
+00:03:46.799 --> 00:03:48.149 align:start position:0%
+ 
+
+
+00:03:48.149 --> 00:03:49.430 align:start position:0%
+ 
+ 
+
+00:03:49.430 --> 00:03:51.589 align:start position:0%
+ 
+ 
+
+00:03:51.589 --> 00:03:57.910 align:start position:0%
+ 
+ 
+
+00:03:57.910 --> 00:04:01.750 align:start position:0%
+ 
+ 
+
+00:04:01.750 --> 00:04:01.760 align:start position:0%
+ 
+ 
+
+00:04:01.760 --> 00:04:03.110 align:start position:0%
+ 
+
+
+00:04:03.110 --> 00:04:06.470 align:start position:0%
+ 
+ 
+
+00:04:06.470 --> 00:04:11.589 align:start position:0%
+ 
+ 
+
+00:04:11.589 --> 00:04:13.830 align:start position:0%
+ 
+ 
+
+00:04:13.830 --> 00:04:15.830 align:start position:0%
+ 
+ 
+
+00:04:15.830 --> 00:04:19.430 align:start position:0%
+ 
+ 
+
+00:04:19.430 --> 00:04:21.590 align:start position:0%
+ 
+ 
+
+00:04:21.590 --> 00:04:25.510 align:start position:0%
+ 
+ 
+
+00:04:25.510 --> 00:04:28.390 align:start position:0%
+ 
+ 
+
+00:04:28.390 --> 00:04:30.310 align:start position:0%
+ 
+ 
+
+00:04:30.310 --> 00:04:30.320 align:start position:0%
+ 
+ 
+
+00:04:30.320 --> 00:04:31.510 align:start position:0%
+ 
+
+
+00:04:31.510 --> 00:04:34.710 align:start position:0%
+ 
+ 
+
+00:04:34.710 --> 00:04:36.950 align:start position:0%
+ 
+ 
+
+00:04:36.950 --> 00:04:38.950 align:start position:0%
+ 
+ 
+
+00:04:38.950 --> 00:04:41.189 align:start position:0%
+ 
+ 
+
+00:04:41.189 --> 00:04:43.270 align:start position:0%
+ 
+ 
+
+00:04:43.270 --> 00:04:45.270 align:start position:0%
+ 
+ 
+
+00:04:45.270 --> 00:04:49.270 align:start position:0%
+ 
+ 
+
+00:04:49.270 --> 00:04:52.390 align:start position:0%
+ 
+ 
+
+00:04:52.390 --> 00:04:54.950 align:start position:0%
+ 
+ 
+
+00:04:54.950 --> 00:04:57.909 align:start position:0%
+ 
+ 
+
+00:04:57.909 --> 00:04:59.670 align:start position:0%
+ 
+ 
+
+00:04:59.670 --> 00:05:02.230 align:start position:0%
+ 
+ 
+
+00:05:02.230 --> 00:05:04.870 align:start position:0%
+ 
+ 
+
+00:05:04.870 --> 00:05:06.710 align:start position:0%
+ 
+ 
+
+00:05:06.710 --> 00:05:10.150 align:start position:0%
+ 
+ 
+
+00:05:10.150 --> 00:05:10.160 align:start position:0%
+ 
+ 
+
+00:05:10.160 --> 00:05:14.070 align:start position:0%
+ 
+
+
+00:05:14.070 --> 00:05:16.469 align:start position:0%
+ 
+ 
+
+00:05:16.469 --> 00:05:19.110 align:start position:0%
+ 
+ 
+
+00:05:19.110 --> 00:05:21.749 align:start position:0%
+ 
+ 
+
+00:05:21.749 --> 00:05:25.350 align:start position:0%
+ 
+ 
+
+00:05:25.350 --> 00:05:29.909 align:start position:0%
+ 
+ 
+
+00:05:29.909 --> 00:05:33.029 align:start position:0%
+ 
+ 
+
+00:05:33.029 --> 00:05:36.790 align:start position:0%
+ 
+ 
+
+00:05:36.790 --> 00:05:38.870 align:start position:0%
+ 
+ 
+
+00:05:38.870 --> 00:05:41.350 align:start position:0%
+ 
+ 
+
+00:05:41.350 --> 00:05:45.029 align:start position:0%
+ 
+ 
+
+00:05:45.029 --> 00:05:47.510 align:start position:0%
+ 
+ 
+
+00:05:47.510 --> 00:05:51.430 align:start position:0%
+ 
+ 
+
+00:05:51.430 --> 00:05:51.440 align:start position:0%
+ 
+ 
+
+00:05:51.440 --> 00:05:53.590 align:start position:0%
+ 
+
+
+00:05:53.590 --> 00:05:55.990 align:start position:0%
+ 
+ 
+
+00:05:55.990 --> 00:05:56.950 align:start position:0%
+ 
+ 
+
+00:05:56.950 --> 00:06:00.070 align:start position:0%
+ 
+ 
+
+00:06:00.070 --> 00:06:01.749 align:start position:0%
+ 
+ 
+
+00:06:01.749 --> 00:06:03.510 align:start position:0%
+ 
+ 
+
+00:06:03.510 --> 00:06:05.749 align:start position:0%
+ 
+ 
+
+00:06:05.749 --> 00:06:07.270 align:start position:0%
+ 
+ 
+
+00:06:07.270 --> 00:06:07.280 align:start position:0%
+ 
+ 
+
+00:06:07.280 --> 00:06:08.070 align:start position:0%
+ 
+
+
+00:06:08.070 --> 00:06:09.590 align:start position:0%
+ 
+ 
+
+00:06:09.590 --> 00:06:11.029 align:start position:0%
+ 
+ 
+
+00:06:11.029 --> 00:06:12.629 align:start position:0%
+ 
+ 
+
+00:06:12.629 --> 00:06:14.870 align:start position:0%
+ 
+ 
+
+00:06:14.870 --> 00:06:18.150 align:start position:0%
+ 
+ 
+
+00:06:18.150 --> 00:06:23.830 align:start position:0%
+ 
+ 
+
+00:06:23.830 --> 00:06:26.629 align:start position:0%
+ 
+ 
+
+00:06:26.629 --> 00:06:29.749 align:start position:0%
+ 
+ 
+
+00:06:29.749 --> 00:06:31.670 align:start position:0%
+ 
+ 
+
+00:06:31.670 --> 00:06:35.189 align:start position:0%
+ 
+ 
+
+00:06:35.189 --> 00:06:37.350 align:start position:0%
+ 
+ 
+
+00:06:37.350 --> 00:06:37.360 align:start position:0%
+ 
+ 
+
+00:06:37.360 --> 00:06:38.790 align:start position:0%
+ 
+
+
+00:06:38.790 --> 00:06:41.350 align:start position:0%
+ 
+ 
+
+00:06:41.350 --> 00:06:43.430 align:start position:0%
+ 
+ 
+
+00:06:43.430 --> 00:06:46.230 align:start position:0%
+ 
+ 
+
+00:06:46.230 --> 00:06:48.790 align:start position:0%
+ 
+ 
+
+00:06:48.790 --> 00:06:52.550 align:start position:0%
+ 
+ 
+
+00:06:52.550 --> 00:06:55.430 align:start position:0%
+ 
+ 
+
+00:06:55.430 --> 00:06:58.150 align:start position:0%
+ 
+ 
+
+00:06:58.150 --> 00:07:00.629 align:start position:0%
+ 
+ 
+
+00:07:00.629 --> 00:07:03.110 align:start position:0%
+ 
+ 
+
+00:07:03.110 --> 00:07:05.189 align:start position:0%
+ 
+ 
+
+00:07:05.189 --> 00:07:07.029 align:start position:0%
+ 
+ 
+
+00:07:07.029 --> 00:07:09.510 align:start position:0%
+ 
+ 
+
+00:07:09.510 --> 00:07:11.110 align:start position:0%
+ 
+ 
+
+00:07:11.110 --> 00:07:13.670 align:start position:0%
+ 
+ 
+
+00:07:13.670 --> 00:07:15.029 align:start position:0%
+ 
+ 
+
+00:07:15.029 --> 00:07:18.230 align:start position:0%
+ 
+ 
+
+00:07:18.230 --> 00:07:19.749 align:start position:0%
+ 
+ 
+
+00:07:19.749 --> 00:07:21.909 align:start position:0%
+ 
+ 
+
+00:07:21.909 --> 00:07:24.230 align:start position:0%
+ 
+ 
+
+00:07:24.230 --> 00:07:28.469 align:start position:0%
+ 
+ 
+
+00:07:28.469 --> 00:07:31.749 align:start position:0%
+ 
+ 
+
+00:07:31.749 --> 00:07:33.029 align:start position:0%
+ 
+ 
+
+00:07:33.029 --> 00:07:36.309 align:start position:0%
+ 
+ 
+
+00:07:36.309 --> 00:07:37.670 align:start position:0%
+ 
+ 
+
+00:07:37.670 --> 00:07:39.670 align:start position:0%
+ 
+ 
+
+00:07:39.670 --> 00:07:41.510 align:start position:0%
+ 
+ 
+
+00:07:41.510 --> 00:07:45.430 align:start position:0%
+ 
+ 
+
+00:07:45.430 --> 00:07:45.440 align:start position:0%
+ 
+ 
+
+00:07:45.440 --> 00:07:47.510 align:start position:0%
+ 
+
+
+00:07:47.510 --> 00:07:50.150 align:start position:0%
+ 
+ 
+
+00:07:50.150 --> 00:07:53.510 align:start position:0%
+ 
+ 
+
+00:07:53.510 --> 00:07:53.520 align:start position:0%
+ 
+ 
+
+00:07:53.520 --> 00:07:54.629 align:start position:0%
+ 
+
+
+00:07:54.629 --> 00:07:55.830 align:start position:0%
+ 
+ 
+
+00:07:55.830 --> 00:07:58.790 align:start position:0%
+ 
+ 
+
+00:07:58.790 --> 00:08:02.790 align:start position:0%
+ 
+ 
+
+00:08:02.790 --> 00:08:05.110 align:start position:0%
+ 
+ 
+
+00:08:05.110 --> 00:08:05.120 align:start position:0%
+ 
+ 
+
+00:08:05.120 --> 00:08:06.469 align:start position:0%
+ 
+
+
+00:08:06.469 --> 00:08:10.390 align:start position:0%
+ 
+ 
+
+00:08:10.390 --> 00:08:14.790 align:start position:0%
+ 
+ 
+
+00:08:14.790 --> 00:08:17.589 align:start position:0%
+ 
+ 
+
+00:08:17.589 --> 00:08:19.110 align:start position:0%
+ 
+ 
+
+00:08:19.110 --> 00:08:21.589 align:start position:0%
+ 
+ 
+
+00:08:21.589 --> 00:08:22.950 align:start position:0%
+ 
+ 
+
+00:08:22.950 --> 00:08:22.960 align:start position:0%
+ 
+ 
+
+00:08:22.960 --> 00:08:25.029 align:start position:0%
+ 
+
+
+00:08:25.029 --> 00:08:27.990 align:start position:0%
+ 
+ 
+
+00:08:27.990 --> 00:08:31.510 align:start position:0%
+ 
+ 
+
+00:08:31.510 --> 00:08:33.430 align:start position:0%
+ 
+ 
+
+00:08:33.430 --> 00:08:35.430 align:start position:0%
+ 
+ 
+
+00:08:35.430 --> 00:08:38.630 align:start position:0%
+ 
+ 
+
+00:08:38.630 --> 00:08:41.670 align:start position:0%
+ 
+ 
+
+00:08:41.670 --> 00:08:44.310 align:start position:0%
+ 
+ 
+
+00:08:44.310 --> 00:08:46.949 align:start position:0%
+ 
+ 
+
+00:08:46.949 --> 00:08:46.959 align:start position:0%
+ 
+ 
+
+00:08:46.959 --> 00:08:48.070 align:start position:0%
+ 
+
+
+00:08:48.070 --> 00:08:51.030 align:start position:0%
+ 
+ 
+
+00:08:51.030 --> 00:08:55.910 align:start position:0%
+ 
+ 
+
+00:08:55.910 --> 00:08:58.630 align:start position:0%
+ 
+ 
+
+00:08:58.630 --> 00:09:01.590 align:start position:0%
+ 
+ 
+
+00:09:01.590 --> 00:09:03.269 align:start position:0%
+ 
+ 
+
+00:09:03.269 --> 00:09:06.389 align:start position:0%
+ 
+ 
+
+00:09:06.389 --> 00:09:10.870 align:start position:0%
+ 
+ 
+
+00:09:10.870 --> 00:09:14.230 align:start position:0%
+ 
+ 
+
+00:09:14.230 --> 00:09:16.949 align:start position:0%
+ 
+ 
+
+00:09:16.949 --> 00:09:19.430 align:start position:0%
+ 
+ 
+
+00:09:19.430 --> 00:09:22.150 align:start position:0%
+ 
+ 
+
+00:09:22.150 --> 00:09:23.509 align:start position:0%
+ 
+ 
+
+00:09:23.509 --> 00:09:26.389 align:start position:0%
+ 
+ 
+
+00:09:26.389 --> 00:09:29.350 align:start position:0%
+ 
+ 
+
+00:09:29.350 --> 00:09:32.389 align:start position:0%
+ 
+ 
+
+00:09:32.389 --> 00:09:34.630 align:start position:0%
+ 
+ 
+
+00:09:34.630 --> 00:09:34.640 align:start position:0%
+ 
+ 
+
+00:09:34.640 --> 00:09:35.750 align:start position:0%
+ 
+
+
+00:09:35.750 --> 00:09:38.630 align:start position:0%
+ 
+ 
+
+00:09:38.630 --> 00:09:41.190 align:start position:0%
+ 
+ 
+
+00:09:41.190 --> 00:09:42.949 align:start position:0%
+ 
+ 
+
+00:09:42.949 --> 00:09:42.959 align:start position:0%
+ 
+ 
+
+00:09:42.959 --> 00:09:44.470 align:start position:0%
+ 
+
+
+00:09:44.470 --> 00:09:46.389 align:start position:0%
+ 
+ 
+
+00:09:46.389 --> 00:09:48.470 align:start position:0%
+ 
+ 
+
+00:09:48.470 --> 00:09:50.550 align:start position:0%
+ 
+ 
+
+00:09:50.550 --> 00:09:53.190 align:start position:0%
+ 
+ 
+
+00:09:53.190 --> 00:09:56.550 align:start position:0%
+ 
+ 
+
+00:09:56.550 --> 00:09:59.829 align:start position:0%
+ 
+ 
+
+00:09:59.829 --> 00:10:02.230 align:start position:0%
+ 
+ 
+
+00:10:02.230 --> 00:10:04.069 align:start position:0%
+ 
+ 
+
+00:10:04.069 --> 00:10:06.150 align:start position:0%
+ 
+ 
+
+00:10:06.150 --> 00:10:08.710 align:start position:0%
+ 
+ 
+
+00:10:08.710 --> 00:10:10.310 align:start position:0%
+ 
+ 
+
+00:10:10.310 --> 00:10:13.350 align:start position:0%
+ 
+ 
+
+00:10:13.350 --> 00:10:15.509 align:start position:0%
+ 
+ 
+
+00:10:15.509 --> 00:10:17.509 align:start position:0%
+ 
+ 
+
+00:10:17.509 --> 00:10:17.519 align:start position:0%
+ 
+ 
+
+00:10:17.519 --> 00:10:19.670 align:start position:0%
+ 
+
+
+00:10:19.670 --> 00:10:22.949 align:start position:0%
+ 
+ 
+
+00:10:22.949 --> 00:10:25.269 align:start position:0%
+ 
+ 
+
+00:10:25.269 --> 00:10:25.279 align:start position:0%
+ 
+ 
+
+00:10:25.279 --> 00:10:26.069 align:start position:0%
+ 
+
+
+00:10:26.069 --> 00:10:26.079 align:start position:0%
+ 
+ 
+
+00:10:26.079 --> 00:10:27.269 align:start position:0%
+ 
+
+
+00:10:27.269 --> 00:10:29.670 align:start position:0%
+ 
+ 
+
+00:10:29.670 --> 00:10:31.829 align:start position:0%
+ 
+ 
+
+00:10:31.829 --> 00:10:34.230 align:start position:0%
+ 
+ 
+
+00:10:34.230 --> 00:10:36.470 align:start position:0%
+ 
+ 
+
+00:10:36.470 --> 00:10:38.550 align:start position:0%
+ 
+ 
+
+00:10:38.550 --> 00:10:40.310 align:start position:0%
+ 
+ 
+
+00:10:40.310 --> 00:10:42.470 align:start position:0%
+ 
+ 
+
+00:10:42.470 --> 00:10:45.670 align:start position:0%
+ 
+ 
+
+00:10:45.670 --> 00:10:47.269 align:start position:0%
+ 
+ 
+
+00:10:47.269 --> 00:10:49.829 align:start position:0%
+ 
+ 
+
+00:10:49.829 --> 00:10:51.990 align:start position:0%
+ 
+ 
+
+00:10:51.990 --> 00:10:52.000 align:start position:0%
+ 
+ 
+
+00:10:52.000 --> 00:10:53.430 align:start position:0%
+ 
+
+
+00:10:53.430 --> 00:10:55.990 align:start position:0%
+ 
+ 
+
+00:10:55.990 --> 00:10:58.230 align:start position:0%
+ 
+ 
+
+00:10:58.230 --> 00:10:58.240 align:start position:0%
+ 
+ 
+
+00:10:58.240 --> 00:11:03.750 align:start position:0%
+ 
+
+
+00:11:03.750 --> 00:11:03.760 align:start position:0%
+ 
+ 
+
+00:11:03.760 --> 00:11:04.949 align:start position:0%
+ 
+
+
+00:11:04.949 --> 00:11:07.269 align:start position:0%
+ 
+ 
+
+00:11:07.269 --> 00:11:08.870 align:start position:0%
+ 
+ 
+
+00:11:08.870 --> 00:11:08.880 align:start position:0%
+ 
+ 
+
+00:11:08.880 --> 00:11:10.230 align:start position:0%
+ 
+
+
+00:11:10.230 --> 00:11:12.230 align:start position:0%
+ 
+ 
+
+00:11:12.230 --> 00:11:14.870 align:start position:0%
+ 
+ 
+
+00:11:14.870 --> 00:11:18.150 align:start position:0%
+ 
+ 
+
+00:11:18.150 --> 00:11:21.110 align:start position:0%
+ 
+ 
+
+00:11:21.110 --> 00:11:22.230 align:start position:0%
+ 
+ 
+
+00:11:22.230 --> 00:11:24.790 align:start position:0%
+ 
+ 
+
+00:11:24.790 --> 00:11:24.800 align:start position:0%
+ 
+ 
+
+00:11:24.800 --> 00:11:26.630 align:start position:0%
+ 
+
+
+00:11:26.630 --> 00:11:29.430 align:start position:0%
+ 
+ 
+
+00:11:29.430 --> 00:11:31.350 align:start position:0%
+ 
+ 
+
+00:11:31.350 --> 00:11:35.190 align:start position:0%
+ 
+ 
+
+00:11:35.190 --> 00:11:35.200 align:start position:0%
+ 
+ 
+
+00:11:35.200 --> 00:11:38.630 align:start position:0%
+ 
+
+
+00:11:38.630 --> 00:11:41.110 align:start position:0%
+ 
+ 
+
+00:11:41.110 --> 00:11:43.030 align:start position:0%
+ 
+ 
+
+00:11:43.030 --> 00:11:46.470 align:start position:0%
+ 
+ 
+
+00:11:46.470 --> 00:11:47.750 align:start position:0%
+ 
+ 
+
+00:11:47.750 --> 00:11:51.190 align:start position:0%
+ 
+ 
+
+00:11:51.190 --> 00:11:54.389 align:start position:0%
+ 
+ 
+
+00:11:54.389 --> 00:11:59.670 align:start position:0%
+ 
+ 
+
+00:11:59.670 --> 00:12:03.750 align:start position:0%
+ 
+ 
+
+00:12:03.750 --> 00:12:03.760 align:start position:0%
+ 
+ 
+
+00:12:03.760 --> 00:12:05.110 align:start position:0%
+ 
+
+
+00:12:05.110 --> 00:12:07.509 align:start position:0%
+ 
+ 
+
+00:12:07.509 --> 00:12:10.310 align:start position:0%
+ 
+ 
+
+00:12:10.310 --> 00:12:13.670 align:start position:0%
+ 
+ 
+
+00:12:13.670 --> 00:12:15.509 align:start position:0%
+ 
+ 
+
+00:12:15.509 --> 00:12:17.190 align:start position:0%
+ 
+ 
+
+00:12:17.190 --> 00:12:20.069 align:start position:0%
+ 
+ 
+
+00:12:20.069 --> 00:12:21.910 align:start position:0%
+ 
+ 
+
+00:12:21.910 --> 00:12:23.829 align:start position:0%
+ 
+ 
+
+00:12:23.829 --> 00:12:26.949 align:start position:0%
+ 
+ 
+
+00:12:26.949 --> 00:12:29.750 align:start position:0%
+ 
+ 
+
+00:12:29.750 --> 00:12:32.069 align:start position:0%
+ 
+ 
+
+00:12:32.069 --> 00:12:34.710 align:start position:0%
+ 
+ 
+
+00:12:34.710 --> 00:12:36.310 align:start position:0%
+ 
+ 
+
+00:12:36.310 --> 00:12:40.150 align:start position:0%
+ 
+ 
+
+00:12:40.150 --> 00:12:41.509 align:start position:0%
+ 
+ 
+
+00:12:41.509 --> 00:12:44.949 align:start position:0%
+ 
+ 
+
+00:12:44.949 --> 00:12:48.629 align:start position:0%
+ 
+ 
+
+00:12:48.629 --> 00:12:51.030 align:start position:0%
+ 
+ 
+
+00:12:51.030 --> 00:12:55.110 align:start position:0%
+ 
+ 
+
+00:12:55.110 --> 00:12:57.910 align:start position:0%
+ 
+ 
+
+00:12:57.910 --> 00:12:59.990 align:start position:0%
+ 
+ 
+
+00:12:59.990 --> 00:13:01.509 align:start position:0%
+ 
+ 
+
+00:13:01.509 --> 00:13:03.829 align:start position:0%
+ 
+ 
+
+00:13:03.829 --> 00:13:07.990 align:start position:0%
+ 
+ 
+
+00:13:07.990 --> 00:13:10.629 align:start position:0%
+ 
+ 
+
+00:13:10.629 --> 00:13:13.829 align:start position:0%
+ 
+ 
+
+00:13:13.829 --> 00:13:16.230 align:start position:0%
+ 
+ 
+
+00:13:16.230 --> 00:13:19.030 align:start position:0%
+ 
+ 
+
+00:13:19.030 --> 00:13:21.430 align:start position:0%
+ 
+ 
+
+00:13:21.430 --> 00:13:24.470 align:start position:0%
+ 
+ 
+
+00:13:24.470 --> 00:13:26.790 align:start position:0%
+ 
+ 
+
+00:13:26.790 --> 00:13:29.190 align:start position:0%
+ 
+ 
+
+00:13:29.190 --> 00:13:30.629 align:start position:0%
+ 
+ 
+
+00:13:30.629 --> 00:13:33.430 align:start position:0%
+ 
+ 
+
+00:13:33.430 --> 00:13:35.269 align:start position:0%
+ 
+ 
+
+00:13:35.269 --> 00:13:37.350 align:start position:0%
+ 
+ 
+
+00:13:37.350 --> 00:13:39.030 align:start position:0%
+ 
+ 
+
+00:13:39.030 --> 00:13:42.069 align:start position:0%
+ 
+ 
+
+00:13:42.069 --> 00:13:44.870 align:start position:0%
+ 
+ 
+
+00:13:44.870 --> 00:13:50.310 align:start position:0%
+ 
+ 
+
+00:13:50.310 --> 00:13:52.470 align:start position:0%
+ 
+ 
+
+00:13:52.470 --> 00:13:56.150 align:start position:0%
+ 
+ 
+
+00:13:56.150 --> 00:13:56.160 align:start position:0%
+ 
+ 
+
+00:13:56.160 --> 00:13:57.990 align:start position:0%
+ 
+
+
+00:13:57.990 --> 00:14:00.790 align:start position:0%
+ 
+ 
+
+00:14:00.790 --> 00:14:02.550 align:start position:0%
+ 
+ 
+
+00:14:02.550 --> 00:14:04.150 align:start position:0%
+ 
+ 
+
+00:14:04.150 --> 00:14:06.389 align:start position:0%
+ 
+ 
+
+00:14:06.389 --> 00:14:08.069 align:start position:0%
+ 
+ 
+
+00:14:08.069 --> 00:14:09.990 align:start position:0%
+ 
+ 
+
+00:14:09.990 --> 00:14:11.030 align:start position:0%
+ 
+ 
+
+00:14:11.030 --> 00:14:12.470 align:start position:0%
+ 
+ 
+
+00:14:12.470 --> 00:14:16.230 align:start position:0%
+ 
+ 
+
+00:14:16.230 --> 00:14:19.990 align:start position:0%
+ 
+ 
+
+00:14:19.990 --> 00:14:20.000 align:start position:0%
+ 
+ 
+
+00:14:20.000 --> 00:14:21.269 align:start position:0%
+ 
+
+
+00:14:21.269 --> 00:14:23.750 align:start position:0%
+ 
+ 
+
+00:14:23.750 --> 00:14:26.069 align:start position:0%
+ 
+ 
+
+00:14:26.069 --> 00:14:29.269 align:start position:0%
+ 
+ 
+
+00:14:29.269 --> 00:14:32.150 align:start position:0%
+ 
+ 
+
+00:14:32.150 --> 00:14:33.590 align:start position:0%
+ 
+ 
+
+00:14:33.590 --> 00:14:35.189 align:start position:0%
+ 
+ 
+
+00:14:35.189 --> 00:14:37.990 align:start position:0%
+ 
+ 
+
+00:14:37.990 --> 00:14:39.590 align:start position:0%
+ 
+ 
+
+00:14:39.590 --> 00:14:41.430 align:start position:0%
+ 
+ 
+
+00:14:41.430 --> 00:14:44.389 align:start position:0%
+ 
+ 
+
+00:14:44.389 --> 00:14:44.399 align:start position:0%
+ 
+ 
+
+00:14:44.399 --> 00:14:45.430 align:start position:0%
+ 
+
+
+00:14:45.430 --> 00:14:47.990 align:start position:0%
+ 
+ 
+
+00:14:47.990 --> 00:14:50.230 align:start position:0%
+ 
+ 
+
+00:14:50.230 --> 00:14:51.590 align:start position:0%
+ 
+ 
+
+00:14:51.590 --> 00:14:51.600 align:start position:0%
+ 
+ 
+
+00:14:51.600 --> 00:14:52.629 align:start position:0%
+ 
+
+
+00:14:52.629 --> 00:14:54.150 align:start position:0%
+ 
+ 
+
+00:14:54.150 --> 00:14:57.110 align:start position:0%
+ 
+ 
+
+00:14:57.110 --> 00:14:58.470 align:start position:0%
+ 
+ 
+
+00:14:58.470 --> 00:14:58.480 align:start position:0%
+ 
+ 
+
+00:14:58.480 --> 00:14:59.430 align:start position:0%
+ 
+
+
+00:14:59.430 --> 00:15:01.910 align:start position:0%
+ 
+ 
+
+00:15:01.910 --> 00:15:03.990 align:start position:0%
+ 
+ 
+
+00:15:03.990 --> 00:15:09.110 align:start position:0%
+ 
+ 
+
+00:15:09.110 --> 00:15:10.389 align:start position:0%
+ 
+ 
+
+00:15:10.389 --> 00:15:14.790 align:start position:0%
+ 
+ 
+
+00:15:14.790 --> 00:15:17.509 align:start position:0%
+ 
+ 
+
+00:15:17.509 --> 00:15:19.590 align:start position:0%
+ 
+ 
+
+00:15:19.590 --> 00:15:21.670 align:start position:0%
+ 
+ 
+
+00:15:21.670 --> 00:15:21.680 align:start position:0%
+ 
+ 
+
+00:15:21.680 --> 00:15:23.030 align:start position:0%
+ 
+
+
+00:15:23.030 --> 00:15:26.069 align:start position:0%
+ 
+ 
+
+00:15:26.069 --> 00:15:28.470 align:start position:0%
+ 
+ 
+
+00:15:28.470 --> 00:15:28.480 align:start position:0%
+ 
+ 
+
+00:15:28.480 --> 00:15:29.350 align:start position:0%
+ 
+
+
+00:15:29.350 --> 00:15:31.829 align:start position:0%
+ 
+ 
+
+00:15:31.829 --> 00:15:34.230 align:start position:0%
+ 
+ 
+
+00:15:34.230 --> 00:15:36.230 align:start position:0%
+ 
+ 
+
+00:15:36.230 --> 00:15:38.389 align:start position:0%
+ 
+ 
+
+00:15:38.389 --> 00:15:41.189 align:start position:0%
+ 
+ 
+
+00:15:41.189 --> 00:15:45.430 align:start position:0%
+ 
+ 
+
+00:15:45.430 --> 00:15:47.670 align:start position:0%
+ 
+ 
+
+00:15:47.670 --> 00:15:49.990 align:start position:0%
+ 
+ 
+
+00:15:49.990 --> 00:15:52.790 align:start position:0%
+ 
+ 
+
+00:15:52.790 --> 00:15:54.470 align:start position:0%
+ 
+ 
+
+00:15:54.470 --> 00:15:56.470 align:start position:0%
+ 
+ 
+
+00:15:56.470 --> 00:15:58.870 align:start position:0%
+ 
+ 
+
+00:15:58.870 --> 00:16:01.030 align:start position:0%
+ 
+ 
+
+00:16:01.030 --> 00:16:03.350 align:start position:0%
+ 
+ 
+
+00:16:03.350 --> 00:16:04.870 align:start position:0%
+ 
+ 
+
+00:16:04.870 --> 00:16:04.880 align:start position:0%
+ 
+ 
+
+00:16:04.880 --> 00:16:06.069 align:start position:0%
+ 
+
+
+00:16:06.069 --> 00:16:07.910 align:start position:0%
+ 
+ 
+
+00:16:07.910 --> 00:16:10.069 align:start position:0%
+ 
+ 
+
+00:16:10.069 --> 00:16:12.389 align:start position:0%
+ 
+ 
+
+00:16:12.389 --> 00:16:14.550 align:start position:0%
+ 
+ 
+
+00:16:14.550 --> 00:16:18.949 align:start position:0%
+ 
+ 
+
+00:16:18.949 --> 00:16:20.550 align:start position:0%
+ 
+ 
+
+00:16:20.550 --> 00:16:22.550 align:start position:0%
+ 
+ 
+
+00:16:22.550 --> 00:16:24.150 align:start position:0%
+ 
+ 
+
+00:16:24.150 --> 00:16:24.160 align:start position:0%
+ 
+ 
+
+00:16:24.160 --> 00:16:26.069 align:start position:0%
+ 
+
+
+00:16:26.069 --> 00:16:28.470 align:start position:0%
+ 
+ 
+
+00:16:28.470 --> 00:16:31.189 align:start position:0%
+ 
+ 
+
+00:16:31.189 --> 00:16:33.910 align:start position:0%
+ 
+ 
+
+00:16:33.910 --> 00:16:35.350 align:start position:0%
+ 
+ 
+
+00:16:35.350 --> 00:16:37.590 align:start position:0%
+ 
+ 
+
+00:16:37.590 --> 00:16:39.910 align:start position:0%
+ 
+ 
+
+00:16:39.910 --> 00:16:42.710 align:start position:0%
+ 
+ 
+
+00:16:42.710 --> 00:16:44.470 align:start position:0%
+ 
+ 
+
+00:16:44.470 --> 00:16:46.230 align:start position:0%
+ 
+ 
+
+00:16:46.230 --> 00:16:46.240 align:start position:0%
+ 
+ 
+
+00:16:46.240 --> 00:16:47.749 align:start position:0%
+ 
+
+
+00:16:47.749 --> 00:16:51.030 align:start position:0%
+ 
+ 
+
+00:16:51.030 --> 00:16:52.790 align:start position:0%
+ 
+ 
+
+00:16:52.790 --> 00:16:56.710 align:start position:0%
+ 
+ 
+
+00:16:56.710 --> 00:16:59.590 align:start position:0%
+ 
+ 
+
+00:16:59.590 --> 00:17:01.350 align:start position:0%
+ 
+ 
+
+00:17:01.350 --> 00:17:02.710 align:start position:0%
+ 
+ 
+
+00:17:02.710 --> 00:17:02.720 align:start position:0%
+ 
+ 
+
+00:17:02.720 --> 00:17:03.509 align:start position:0%
+ 
+
+
+00:17:03.509 --> 00:17:05.750 align:start position:0%
+ 
+ 
+
+00:17:05.750 --> 00:17:10.230 align:start position:0%
+ 
+ 
+
+00:17:10.230 --> 00:17:11.829 align:start position:0%
+ 
+ 
+
+00:17:11.829 --> 00:17:15.110 align:start position:0%
+ 
+ 
+
+00:17:15.110 --> 00:17:17.829 align:start position:0%
+ 
+ 
+
+00:17:17.829 --> 00:17:20.870 align:start position:0%
+ 
+ 
+
+00:17:20.870 --> 00:17:22.630 align:start position:0%
+ 
+ 
+
+00:17:22.630 --> 00:17:22.640 align:start position:0%
+ 
+ 
+
+00:17:22.640 --> 00:17:23.909 align:start position:0%
+ 
+
+
+00:17:23.909 --> 00:17:26.470 align:start position:0%
+ 
+ 
+
+00:17:26.470 --> 00:17:28.870 align:start position:0%
+ 
+ 
+
+00:17:28.870 --> 00:17:31.510 align:start position:0%
+ 
+ 
+
+00:17:31.510 --> 00:17:32.870 align:start position:0%
+ 
+ 
+
+00:17:32.870 --> 00:17:32.880 align:start position:0%
+ 
+ 
+
+00:17:32.880 --> 00:17:34.070 align:start position:0%
+ 
+
+
+00:17:34.070 --> 00:17:36.710 align:start position:0%
+ 
+ 
+
+00:17:36.710 --> 00:17:39.510 align:start position:0%
+ 
+ 
+
+00:17:39.510 --> 00:17:41.830 align:start position:0%
+ 
+ 
+
+00:17:41.830 --> 00:17:45.990 align:start position:0%
+ 
+ 
+
+00:17:45.990 --> 00:17:49.029 align:start position:0%
+ 
+ 
+
+00:17:49.029 --> 00:17:50.150 align:start position:0%
+ 
+ 
+
+00:17:50.150 --> 00:17:50.160 align:start position:0%
+ 
+ 
+
+00:17:50.160 --> 00:17:51.270 align:start position:0%
+ 
+
+
+00:17:51.270 --> 00:17:51.280 align:start position:0%
+ 
+ 
+
+00:17:51.280 --> 00:17:52.070 align:start position:0%
+ 
+
+
+00:17:52.070 --> 00:17:52.080 align:start position:0%
+ 
+ 
+
+00:17:52.080 --> 00:17:53.029 align:start position:0%
+ 
+
+
+00:17:53.029 --> 00:17:55.669 align:start position:0%
+ 
+ 
+
+00:17:55.669 --> 00:17:57.909 align:start position:0%
+ 
+ 
+
+00:17:57.909 --> 00:18:00.470 align:start position:0%
+ 
+ 
+
+00:18:00.470 --> 00:18:02.230 align:start position:0%
+ 
+ 
+
+00:18:02.230 --> 00:18:04.630 align:start position:0%
+ 
+ 
+
+00:18:04.630 --> 00:18:07.909 align:start position:0%
+ 
+ 
+
+00:18:07.909 --> 00:18:09.909 align:start position:0%
+ 
+ 
+
+00:18:09.909 --> 00:18:12.230 align:start position:0%
+ 
+ 
+
+00:18:12.230 --> 00:18:14.390 align:start position:0%
+ 
+ 
+
+00:18:14.390 --> 00:18:16.310 align:start position:0%
+ 
+ 
+
+00:18:16.310 --> 00:18:18.310 align:start position:0%
+ 
+ 
+
+00:18:18.310 --> 00:18:20.390 align:start position:0%
+ 
+ 
+
+00:18:20.390 --> 00:18:22.789 align:start position:0%
+ 
+ 
+
+00:18:22.789 --> 00:18:25.830 align:start position:0%
+ 
+ 
+
+00:18:25.830 --> 00:18:40.390 align:start position:0%
+ 
+ 
+
+00:18:40.390 --> 00:18:40.400 align:start position:0%
+ 
+ 
+
+00:18:40.400 --> 00:18:41.430 align:start position:0%
+ 
+
+
+00:18:41.430 --> 00:18:43.430 align:start position:0%
+ 
+ 
+
+00:18:43.430 --> 00:18:45.990 align:start position:0%
+ 
+ 
+
+00:18:45.990 --> 00:18:49.029 align:start position:0%
+ 
+ 
+
+00:18:49.029 --> 00:18:52.950 align:start position:0%
+ 
+ 
+
+00:18:52.950 --> 00:18:55.590 align:start position:0%
+ 
+ 
+
+00:18:55.590 --> 00:18:58.070 align:start position:0%
+ 
+ 
+
+00:18:58.070 --> 00:19:01.510 align:start position:0%
+ 
+ 
+
+00:19:01.510 --> 00:19:03.350 align:start position:0%
+ 
+ 
+
+00:19:03.350 --> 00:19:07.190 align:start position:0%
+ 
+ 
+
+00:19:07.190 --> 00:19:07.200 align:start position:0%
+ 
+ 
+
+00:19:07.200 --> 00:19:08.390 align:start position:0%
+ 
+
+
+00:19:08.390 --> 00:19:11.669 align:start position:0%
+ 
+ 
+
+00:19:11.669 --> 00:19:11.679 align:start position:0%
+ 
+ 
+
+00:19:11.679 --> 00:19:13.110 align:start position:0%
+ 
+
+
+00:19:13.110 --> 00:19:15.029 align:start position:0%
+ 
+ 
+
+00:19:15.029 --> 00:19:17.430 align:start position:0%
+ 
+ 
+
+00:19:17.430 --> 00:19:18.710 align:start position:0%
+ 
+ 
+
+00:19:18.710 --> 00:19:22.950 align:start position:0%
+ 
+ 
+
+00:19:22.950 --> 00:19:25.029 align:start position:0%
+ 
+ 
+
+00:19:25.029 --> 00:19:29.590 align:start position:0%
+ 
+ 
+
+00:19:29.590 --> 00:19:31.270 align:start position:0%
+ 
+ 
+
+00:19:31.270 --> 00:19:33.270 align:start position:0%
+ 
+ 
+
+00:19:33.270 --> 00:19:35.909 align:start position:0%
+ 
+ 
+
+00:19:35.909 --> 00:19:38.390 align:start position:0%
+ 
+ 
+
+00:19:38.390 --> 00:19:40.710 align:start position:0%
+ 
+ 
+
+00:19:40.710 --> 00:19:46.470 align:start position:0%
+ 
+ 
+
+00:19:46.470 --> 00:19:47.830 align:start position:0%
+ 
+ 
+
+00:19:47.830 --> 00:19:49.350 align:start position:0%
+ 
+ 
+
+00:19:49.350 --> 00:19:49.360 align:start position:0%
+ 
+ 
+
+00:19:49.360 --> 00:19:54.070 align:start position:0%
+ 
+
+
+00:19:54.070 --> 00:19:57.270 align:start position:0%
+ 
+ 
+
+00:19:57.270 --> 00:19:59.669 align:start position:0%
+ 
+ 
+
+00:19:59.669 --> 00:20:01.430 align:start position:0%
+ 
+ 
+
+00:20:01.430 --> 00:20:03.190 align:start position:0%
+ 
+ 
+
+00:20:03.190 --> 00:20:06.630 align:start position:0%
+ 
+ 
+
+00:20:06.630 --> 00:20:06.640 align:start position:0%
+ 
+ 
+
+00:20:06.640 --> 00:20:09.270 align:start position:0%
+ 
+
+
+00:20:09.270 --> 00:20:13.990 align:start position:0%
+ 
+ 
+
+00:20:13.990 --> 00:20:16.149 align:start position:0%
+ 
+ 
+
+00:20:16.149 --> 00:20:18.470 align:start position:0%
+ 
+ 
+
+00:20:18.470 --> 00:20:23.430 align:start position:0%
+ 
+ 
+
+00:20:23.430 --> 00:20:27.510 align:start position:0%
+ 
+ 
+
+00:20:27.510 --> 00:20:27.520 align:start position:0%
+ 
+ 
+
+00:20:27.520 --> 00:20:29.350 align:start position:0%
+ 
+
+
+00:20:29.350 --> 00:20:32.950 align:start position:0%
+ 
+ 
+
+00:20:32.950 --> 00:20:37.350 align:start position:0%
+ 
+ 
+
+00:20:37.350 --> 00:20:39.270 align:start position:0%
+ 
+ 
+
+00:20:39.270 --> 00:20:47.029 align:start position:0%
+ 
+ 
+
+00:20:47.029 --> 00:20:49.029 align:start position:0%
+ 
+ 
+
+00:20:49.029 --> 00:20:51.430 align:start position:0%
+ 
+ 
+
+00:20:51.430 --> 00:20:53.190 align:start position:0%
+ 
+ 
+
+00:20:53.190 --> 00:20:53.200 align:start position:0%
+ 
+ 
+
+00:20:53.200 --> 00:20:54.070 align:start position:0%
+ 
+
+
+00:20:54.070 --> 00:20:56.870 align:start position:0%
+ 
+ 
+
+00:20:56.870 --> 00:20:56.880 align:start position:0%
+ 
+ 
+
+00:20:56.880 --> 00:20:58.470 align:start position:0%
+ 
+
+
+00:20:58.470 --> 00:20:59.750 align:start position:0%
+ 
+ 
+
+00:20:59.750 --> 00:21:07.909 align:start position:0%
+ 
+ 
+
+00:21:07.909 --> 00:21:09.430 align:start position:0%
+ 
+ 
+
+00:21:09.430 --> 00:21:11.830 align:start position:0%
+ 
+ 
+
+00:21:11.830 --> 00:21:13.230 align:start position:0%
+ 
+ 
+
+00:21:13.230 --> 00:21:13.240 align:start position:0%
+ 
+ 
+
+00:21:13.240 --> 00:21:14.470 align:start position:0%
+ 
+
+
+00:21:14.470 --> 00:21:17.029 align:start position:0%
+ 
+ 
+
+00:21:17.029 --> 00:21:21.110 align:start position:0%
+ 
+ 
+
+00:21:21.110 --> 00:21:24.470 align:start position:0%
+ 
+ 
+
+00:21:24.470 --> 00:21:26.549 align:start position:0%
+ 
+ 
+
+00:21:26.549 --> 00:21:26.559 align:start position:0%
+ 
+ 
+
+00:21:26.559 --> 00:21:27.990 align:start position:0%
+ 
+
+
+00:21:27.990 --> 00:21:29.990 align:start position:0%
+ 
+ 
+
+00:21:29.990 --> 00:21:31.990 align:start position:0%
+ 
+ 
+
+00:21:31.990 --> 00:21:34.470 align:start position:0%
+ 
+ 
+
+00:21:34.470 --> 00:21:35.909 align:start position:0%
+ 
+ 
+
+00:21:35.909 --> 00:21:38.950 align:start position:0%
+ 
+ 
+
+00:21:38.950 --> 00:21:41.350 align:start position:0%
+ 
+ 
+
+00:21:41.350 --> 00:21:45.430 align:start position:0%
+ 
+ 
+
+00:21:45.430 --> 00:21:48.630 align:start position:0%
+ 
+ 
+
+00:21:48.630 --> 00:21:53.350 align:start position:0%
+ 
+ 
+
+00:21:53.350 --> 00:21:55.669 align:start position:0%
+ 
+ 
+
+00:21:55.669 --> 00:22:01.110 align:start position:0%
+ 
+ 
+
+00:22:01.110 --> 00:22:02.870 align:start position:0%
+ 
+ 
+
+00:22:02.870 --> 00:22:02.880 align:start position:0%
+ 
+ 
+
+00:22:02.880 --> 00:22:13.190 align:start position:0%
+ 
+
+
+00:22:13.190 --> 00:22:13.200 align:start position:0%
+ 
+ 
+
+00:22:13.200 --> 00:22:14.149 align:start position:0%
+ 
+
+
+00:22:14.149 --> 00:22:15.590 align:start position:0%
+ 
+ 
+
+00:22:15.590 --> 00:22:15.600 align:start position:0%
+ 
+ 
+
+00:22:15.600 --> 00:22:16.950 align:start position:0%
+ 
+
+
+00:22:16.950 --> 00:22:16.960 align:start position:0%
+ 
+ 
+
+00:22:16.960 --> 00:22:18.870 align:start position:0%
+ 
+
+
+00:22:18.870 --> 00:22:28.070 align:start position:0%
+ 
+ 
+
+00:22:28.070 --> 00:22:30.470 align:start position:0%
+ 
+ 
+
+00:22:30.470 --> 00:22:30.480 align:start position:0%
+ 
+ 
+
+00:22:30.480 --> 00:22:31.590 align:start position:0%
+ 
+
+
+00:22:31.590 --> 00:22:31.600 align:start position:0%
+ 
+ 
+
+00:22:31.600 --> 00:22:32.789 align:start position:0%
+ 
+
+
+00:22:32.789 --> 00:22:35.350 align:start position:0%
+ 
+ 
+
+00:22:35.350 --> 00:22:37.270 align:start position:0%
+ 
+ 
+
+00:22:37.270 --> 00:22:39.510 align:start position:0%
+ 
+ 
+
+00:22:39.510 --> 00:22:41.590 align:start position:0%
+ 
+ 
+
+00:22:41.590 --> 00:22:44.230 align:start position:0%
+ 
+ 
+
+00:22:44.230 --> 00:22:44.240 align:start position:0%
+ 
+ 
+
+00:22:44.240 --> 00:22:45.190 align:start position:0%
+ 
+
+
+00:22:45.190 --> 00:22:47.510 align:start position:0%
+ 
+ 
+
+00:22:47.510 --> 00:22:49.190 align:start position:0%
+ 
+ 
+
+00:22:49.190 --> 00:22:49.200 align:start position:0%
+ 
+ 
+
+00:22:49.200 --> 00:22:50.390 align:start position:0%
+ 
+
+
+00:22:50.390 --> 00:22:50.400 align:start position:0%
+ 
+ 
+
+00:22:50.400 --> 00:22:51.270 align:start position:0%
+ 
+
+
+00:22:51.270 --> 00:22:53.270 align:start position:0%
+ 
+ 
+
+00:22:53.270 --> 00:22:57.750 align:start position:0%
+ 
+ 
+
+00:22:57.750 --> 00:23:00.870 align:start position:0%
+ 
+ 
+
+00:23:00.870 --> 00:23:03.350 align:start position:0%
+ 
+ 
+
+00:23:03.350 --> 00:23:05.590 align:start position:0%
+ 
+ 
+
+00:23:05.590 --> 00:23:05.600 align:start position:0%
+ 
+ 
+
+00:23:05.600 --> 00:23:06.789 align:start position:0%
+ 
+
+
+00:23:06.789 --> 00:23:09.110 align:start position:0%
+ 
+ 
+
+00:23:09.110 --> 00:23:11.110 align:start position:0%
+ 
+ 
+
+00:23:11.110 --> 00:23:11.120 align:start position:0%
+ 
+ 
+
+00:23:11.120 --> 00:23:12.630 align:start position:0%
+ 
+
+
+00:23:12.630 --> 00:23:15.750 align:start position:0%
+ 
+ 
+
+00:23:15.750 --> 00:23:17.909 align:start position:0%
+ 
+ 
+
+00:23:17.909 --> 00:23:21.190 align:start position:0%
+ 
+ 
+
+00:23:21.190 --> 00:23:24.390 align:start position:0%
+ 
+ 
+
+00:23:24.390 --> 00:23:24.400 align:start position:0%
+ 
+ 
+
+00:23:24.400 --> 00:23:25.909 align:start position:0%
+ 
+
+
+00:23:25.909 --> 00:23:27.909 align:start position:0%
+ 
+ 
+
+00:23:27.909 --> 00:23:41.110 align:start position:0%
+ 
+ 
+
+00:23:41.110 --> 00:23:44.070 align:start position:0%
+ 
+ 
+
+00:23:44.070 --> 00:23:46.950 align:start position:0%
+ 
+ 
+
+00:23:46.950 --> 00:23:49.590 align:start position:0%
+ 
+ 
+
+00:23:49.590 --> 00:23:49.600 align:start position:0%
+ 
+ 
+
+00:23:49.600 --> 00:23:50.789 align:start position:0%
+ 
+
+
+00:23:50.789 --> 00:23:52.710 align:start position:0%
+ 
+ 
+
+00:23:52.710 --> 00:23:56.149 align:start position:0%
+ 
+ 
+
+00:23:56.149 --> 00:24:00.310 align:start position:0%
+ 
+ 
+
+00:24:00.310 --> 00:24:02.310 align:start position:0%
+ 
+ 
+
+00:24:02.310 --> 00:24:02.320 align:start position:0%
+ 
+ 
+
+00:24:02.320 --> 00:24:03.190 align:start position:0%
+ 
+
+
+00:24:03.190 --> 00:24:06.710 align:start position:0%
+ 
+ 
+
+00:24:06.710 --> 00:24:09.430 align:start position:0%
+ 
+ 
+
+00:24:09.430 --> 00:24:11.190 align:start position:0%
+ 
+ 
+
+00:24:11.190 --> 00:24:12.950 align:start position:0%
+ 
+ 
+
+00:24:12.950 --> 00:24:12.960 align:start position:0%
+ 
+ 
+
+00:24:12.960 --> 00:24:14.390 align:start position:0%
+ 
+
+
+00:24:14.390 --> 00:24:14.400 align:start position:0%
+ 
+ 
+
+00:24:14.400 --> 00:24:15.350 align:start position:0%
+ 
+
+
+00:24:15.350 --> 00:24:17.510 align:start position:0%
+ 
+ 
+
+00:24:17.510 --> 00:24:19.830 align:start position:0%
+ 
+ 
+
+00:24:19.830 --> 00:24:23.750 align:start position:0%
+ 
+ 
+
+00:24:23.750 --> 00:24:26.870 align:start position:0%
+ 
+ 
+
+00:24:26.870 --> 00:24:28.630 align:start position:0%
+ 
+ 
+
+00:24:28.630 --> 00:24:31.350 align:start position:0%
+ 
+ 
+
+00:24:31.350 --> 00:24:34.149 align:start position:0%
+ 
+ 
+
+00:24:34.149 --> 00:24:36.149 align:start position:0%
+ 
+ 
+
+00:24:36.149 --> 00:24:39.029 align:start position:0%
+ 
+ 
+
+00:24:39.029 --> 00:24:40.630 align:start position:0%
+ 
+ 
+
+00:24:40.630 --> 00:24:42.549 align:start position:0%
+ 
+ 
+
+00:24:42.549 --> 00:24:45.029 align:start position:0%
+ 
+ 
+
+00:24:45.029 --> 00:24:47.350 align:start position:0%
+ 
+ 
+
+00:24:47.350 --> 00:24:51.669 align:start position:0%
+ 
+ 
+
+00:24:51.669 --> 00:24:54.230 align:start position:0%
+ 
+ 
+
+00:24:54.230 --> 00:24:56.230 align:start position:0%
+ 
+ 
+
+00:24:56.230 --> 00:24:56.240 align:start position:0%
+ 
+ 
+
+00:24:56.240 --> 00:24:58.390 align:start position:0%
+ 
+
+
+00:24:58.390 --> 00:25:00.470 align:start position:0%
+ 
+ 
+
+00:25:00.470 --> 00:25:02.630 align:start position:0%
+ 
+ 
+
+00:25:02.630 --> 00:25:05.269 align:start position:0%
+ 
+ 
+
+00:25:05.269 --> 00:25:05.279 align:start position:0%
+ 
+ 
+
+00:25:05.279 --> 00:25:07.990 align:start position:0%
+ 
+
+
+00:25:07.990 --> 00:25:10.549 align:start position:0%
+ 
+ 
+
+00:25:10.549 --> 00:25:12.549 align:start position:0%
+ 
+ 
+
+00:25:12.549 --> 00:25:15.750 align:start position:0%
+ 
+ 
+
+00:25:15.750 --> 00:25:18.149 align:start position:0%
+ 
+ 
+
+00:25:18.149 --> 00:25:21.590 align:start position:0%
+ 
+ 
+
+00:25:21.590 --> 00:25:21.600 align:start position:0%
+ 
+ 
+
+00:25:21.600 --> 00:25:22.870 align:start position:0%
+ 
+
+
+00:25:22.870 --> 00:25:25.590 align:start position:0%
+ 
+ 
+
+00:25:25.590 --> 00:25:27.909 align:start position:0%
+ 
+ 
+
+00:25:27.909 --> 00:25:29.990 align:start position:0%
+ 
+ 
+
+00:25:29.990 --> 00:25:33.909 align:start position:0%
+ 
+ 
+
+00:25:33.909 --> 00:25:37.669 align:start position:0%
+ 
+ 
+
+00:25:37.669 --> 00:25:37.679 align:start position:0%
+ 
+ 
+
+00:25:37.679 --> 00:25:39.029 align:start position:0%
+ 
+
+
+00:25:39.029 --> 00:25:39.039 align:start position:0%
+ 
+ 
+
+00:25:39.039 --> 00:25:40.710 align:start position:0%
+ 
+
+
+00:25:40.710 --> 00:25:42.950 align:start position:0%
+ 
+ 
+
+00:25:42.950 --> 00:25:45.830 align:start position:0%
+ 
+ 
+
+00:25:45.830 --> 00:25:47.510 align:start position:0%
+ 
+ 
+
+00:25:47.510 --> 00:25:47.520 align:start position:0%
+ 
+ 
+
+00:25:47.520 --> 00:25:48.630 align:start position:0%
+ 
+
+
+00:25:48.630 --> 00:25:51.110 align:start position:0%
+ 
+ 
+
+00:25:51.110 --> 00:25:51.120 align:start position:0%
+ 
+ 
+
+00:25:51.120 --> 00:25:52.230 align:start position:0%
+ 
+
+
+00:25:52.230 --> 00:25:56.470 align:start position:0%
+ 
+ 
+
+00:25:56.470 --> 00:25:58.950 align:start position:0%
+ 
+ 
+
+00:25:58.950 --> 00:26:01.909 align:start position:0%
+ 
+ 
+
+00:26:01.909 --> 00:26:03.909 align:start position:0%
+ 
+ 
+
+00:26:03.909 --> 00:26:07.029 align:start position:0%
+ 
+ 
+
+00:26:07.029 --> 00:26:09.110 align:start position:0%
+ 
+ 
+
+00:26:09.110 --> 00:26:11.909 align:start position:0%
+ 
+ 
+
+00:26:11.909 --> 00:26:13.750 align:start position:0%
+ 
+ 
+
+00:26:13.750 --> 00:26:13.760 align:start position:0%
+ 
+ 
+
+00:26:13.760 --> 00:26:16.149 align:start position:0%
+ 
+
+
+00:26:16.149 --> 00:26:16.159 align:start position:0%
+ 
+ 
+
+00:26:16.159 --> 00:26:18.310 align:start position:0%
+ 
+
+
+00:26:18.310 --> 00:26:19.830 align:start position:0%
+ 
+ 
+
+00:26:19.830 --> 00:26:22.870 align:start position:0%
+ 
+ 
+
+00:26:22.870 --> 00:26:26.950 align:start position:0%
+ 
+ 
+
+00:26:26.950 --> 00:26:31.830 align:start position:0%
+ 
+ 
+
+00:26:31.830 --> 00:26:33.669 align:start position:0%
+ 
+ 
+
+00:26:33.669 --> 00:26:35.669 align:start position:0%
+ 
+ 
+
+00:26:35.669 --> 00:26:37.190 align:start position:0%
+ 
+ 
+
+00:26:37.190 --> 00:26:39.269 align:start position:0%
+ 
+ 
+
+00:26:39.269 --> 00:26:40.710 align:start position:0%
+ 
+ 
+
+00:26:40.710 --> 00:26:43.350 align:start position:0%
+ 
+ 
+
+00:26:43.350 --> 00:26:45.350 align:start position:0%
+ 
+ 
+
+00:26:45.350 --> 00:26:49.110 align:start position:0%
+ 
+ 
+
+00:26:49.110 --> 00:26:49.120 align:start position:0%
+ 
+ 
+
+00:26:49.120 --> 00:26:49.600 align:start position:0%
+ 
+
+
+00:26:49.600 --> 00:26:49.610 align:start position:0%
+ 
+ 
+
+00:26:49.610 --> 00:26:51.510 align:start position:0%
+ 
+
+
+00:26:51.510 --> 00:26:54.870 align:start position:0%
+ 
+ 
+
+00:26:54.870 --> 00:26:56.710 align:start position:0%
+ 
+ 
+
+00:26:56.710 --> 00:26:59.190 align:start position:0%
+ 
+ 
+
+00:26:59.190 --> 00:27:00.789 align:start position:0%
+ 
+ 
+
+00:27:00.789 --> 00:27:03.510 align:start position:0%
+ 
+ 
+
+00:27:03.510 --> 00:27:07.110 align:start position:0%
+ 
+ 
+
+00:27:07.110 --> 00:27:08.789 align:start position:0%
+ 
+ 
+
+00:27:08.789 --> 00:27:11.110 align:start position:0%
+ 
+ 
+
+00:27:11.110 --> 00:27:12.870 align:start position:0%
+ 
+ 
+
+00:27:12.870 --> 00:27:20.310 align:start position:0%
+ 
+ 
+
+00:27:20.310 --> 00:27:23.269 align:start position:0%
+ 
+ 
+
+00:27:23.269 --> 00:27:26.230 align:start position:0%
+ 
+ 
+
+00:27:26.230 --> 00:27:32.830 align:start position:0%
+ 
+ 
+
+00:27:32.830 --> 00:27:35.990 align:start position:0%
+ 
+ 
+
+00:27:35.990 --> 00:27:40.870 align:start position:0%
+ 
+ 
+
+00:27:40.870 --> 00:27:44.549 align:start position:0%
+ 
+ 
+
+00:27:44.549 --> 00:27:44.559 align:start position:0%
+ 
+ 
+
+00:27:44.559 --> 00:27:45.990 align:start position:0%
+ 
+
+
+00:27:45.990 --> 00:27:48.789 align:start position:0%
+ 
+ 
+
+00:27:48.789 --> 00:27:50.470 align:start position:0%
+ 
+ 
+
+00:27:50.470 --> 00:27:53.029 align:start position:0%
+ 
+ 
+
+00:27:53.029 --> 00:27:56.149 align:start position:0%
+ 
+ 
+
+00:27:56.149 --> 00:27:59.350 align:start position:0%
+ 
+ 
+
+00:27:59.350 --> 00:28:01.669 align:start position:0%
+ 
+ 
+
+00:28:01.669 --> 00:28:06.070 align:start position:0%
+ 
+ 
+
+00:28:06.070 --> 00:28:08.630 align:start position:0%
+ 
+ 
+
+00:28:08.630 --> 00:28:13.990 align:start position:0%
+ 
+ 
+
+00:28:13.990 --> 00:28:14.000 align:start position:0%
+ 
+ 
+
+00:28:14.000 --> 00:28:15.110 align:start position:0%
+ 
+
+
+00:28:15.110 --> 00:28:18.950 align:start position:0%
+ 
+ 
+
+00:28:18.950 --> 00:28:26.149 align:start position:0%
+ 
+ 
+
+00:28:26.149 --> 00:28:28.789 align:start position:0%
+ 
+ 
+
+00:28:28.789 --> 00:28:30.950 align:start position:0%
+ 
+ 
+
+00:28:30.950 --> 00:28:33.110 align:start position:0%
+ 
+ 
+
+00:28:33.110 --> 00:28:35.750 align:start position:0%
+ 
+ 
+
+00:28:35.750 --> 00:28:37.990 align:start position:0%
+ 
+ 
+
+00:28:37.990 --> 00:28:40.230 align:start position:0%
+ 
+ 
+
+00:28:40.230 --> 00:28:42.630 align:start position:0%
+ 
+ 
+
+00:28:42.630 --> 00:28:45.830 align:start position:0%
+ 
+ 
+
+00:28:45.830 --> 00:28:48.230 align:start position:0%
+ 
+ 
+
+00:28:48.230 --> 00:28:51.350 align:start position:0%
+ 
+ 
+
+00:28:51.350 --> 00:28:53.350 align:start position:0%
+ 
+ 
+
+00:28:53.350 --> 00:28:55.510 align:start position:0%
+ 
+ 
+
+00:28:55.510 --> 00:28:55.520 align:start position:0%
+ 
+ 
+
+00:28:55.520 --> 00:28:56.830 align:start position:0%
+ 
+
+
+00:28:56.830 --> 00:28:59.190 align:start position:0%
+ 
+ 
+
+00:28:59.190 --> 00:29:02.230 align:start position:0%
+ 
+ 
+
+00:29:02.230 --> 00:29:04.710 align:start position:0%
+ 
+ 
+
+00:29:04.710 --> 00:29:05.830 align:start position:0%
+ 
+ 
+
+00:29:05.830 --> 00:29:08.470 align:start position:0%
+ 
+ 
+
+00:29:08.470 --> 00:29:16.310 align:start position:0%
+ 
+ 
+
+00:29:16.310 --> 00:29:16.320 align:start position:0%
+ 
+ 
+
+00:29:16.320 --> 00:29:17.830 align:start position:0%
+ 
+
+
+00:29:17.830 --> 00:29:18.870 align:start position:0%
+ 
+ 
+
+00:29:18.870 --> 00:29:20.630 align:start position:0%
+ 
+ 
+
+00:29:20.630 --> 00:29:22.870 align:start position:0%
+ 
+ 
+
+00:29:22.870 --> 00:29:25.430 align:start position:0%
+ 
+ 
+
+00:29:25.430 --> 00:29:28.760 align:start position:0%
+ 
+ 
+

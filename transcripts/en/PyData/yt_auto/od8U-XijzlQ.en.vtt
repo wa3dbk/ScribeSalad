@@ -1,0 +1,4224 @@
+WEBVTT
+Kind: captions
+Language: en
+
+00:00:07.480 --> 00:00:12.840 align:start position:0%
+ 
+so let me introduce Andrew mantel NT  who's the CTO and founder of parsley  which is startup doing working with  content publishers to provide them  analytics and more relevance to reach  their audience and also let me introduce  Keith Bergen he's the backend lead for  parsley so they'll be talking about real  time streams and logs I'm Python cool  can you guys hear me okay all right so  so yeah thanks for having us here this  is uh I think our third PI data now  we've been a PI date out on the East  Coast in New York a couple of times  before we're excited to talk to you  about some very new stuff real-time  streams and logs with Apache storm in  Kafka the agenda of our talk is to cover  a little bit about what we do at parsley  and why we use storm and Kafka and  production for our web analytics  platform talk a little bit about how you  can aggregate aggregate streams of data  using apache storm and particularly  using python with apache storm since  it's a JVM technology we've written some  code that helps with that and then Keith  will dive into Kafka and explain why  it's a good design principle to organize  data processing systems around blogs  some quick admin on this talk all of the  presentations in code that parsley has  given an open source are available at  parcel y / code so you can go there and  you can actually see the project links  that we're talking about today as well  as actually the web-based slides that  you're looking at right now so if you're  in the back and can't see things you  could pull it up on your browser we also  have a note form of the slides up there  and you can click on that link in order  to actually get more detailed info that  you can copy paste like code samples and  things like that so very quickly what is  parsley so parsley as the introduction  mentioned is a web analytics platform  for digital storytellers these are some  examples of our customers we work with  large-scale content publishers online  and they send us a lot of data that we  use in order to help their journalists  editors writers and site manager  understand how content is reacting with  audiences across the web we get a lot of  high-speed data the typical news story  you could imagine has a very short shelf  life typically less than 48 hours it's  fast moving its minute by minute second  by second time series data we get a lot  of volume of data thousands of posts per  day or published by our content  publishers and we've been tracking  millions of posts across the web in this  way and some different kinds of data  that we play within our platform include  time series summary data that might do  aggregates and grouping by different  categories ranked data and these are all  screenshots from our dashboard that I'm  just flying through so rank data that  might group content by different tags or  topics benchmark data that might compare  how the certain content has performed  relative to the past and then in general  we kind of refer to information  radiators that bring all this data  together real time streams historical  streams and showcase basically how  content is moving on their websites so  how did the architecture parsley evolve  over time well we started like almost  every distributed system engineering  team with a basic queues and workers  architecture so how many people here  have built accuse and workers  architecture like almost everyone here  right so like most people we started  with tools that are well-worn and  understood like RabbitMQ when we hit  scaling issues with those we move to  more lightweight queuing mechanisms like  Redis and zeromq and with workers we  started with the simplest possible which  is cron jobs that are doing certain you  know things in Python and then went up  from there to something like celery  which is a pretty nice worker system in  pythons community but what we found is  that over time things started to get  pretty complex and I'm sure you guys  have found this too if you've worked on  complex or large-scale data processing  pipelines you have a lot of workers  they're doing a lot of multistage  processing if anything breaks in the  chain you don't really know what  happened you start setting up ad hoc  systems that start communicating across  a lot of different boundaries and it  becomes difficult to debug what data  actually ended up in your database and  that data actually came from in terms of  its provenance starting in the queue and  also you just have lots of moving parts  so this is an actual diagram I drew a  couple years ago when I was trying to  understand the system we had wrought on  our servers right all of these workers  and q's operating on real-time streams  of data and it just gets really messy  and you you basically start developing  ops dashboards and spending most of your  time trying to manage systems rather  than actually building business logic  around the time series data you are  collecting in the first place so storm  is actually a framework that was  developed at back type a company  acquired by Twitter a couple years ago  and storms now an Apache project and  basically storm tries to solve this  workers in cuse problem by turning it  into a framework so it's a distributed  real-time computation system you can  kind of think of it at naga Slee to  Hadoop in the sense that Hadoop gives  you all these primitives for working  with batch processing well storm gives  you primitives for working with  real-time computation or stream  processing for running long running  processes that are operating on a  fast-moving stream of data rather than  in the case of a dupe something where  you might run batch processes across  like file system data sources and it's  perfect for a replacement for that messy  system I just kind of outlined on the  last slides storms features are that  it's fast it can handle millions of  tuples per second per node it's got  fault tolerance built in so it knows  when nodes go down or when data isn't  processed and it can actually rescale  the the cluster appropriately in  response to those faults it has parallel  ISM built in and it's separate from your  code so you don't change your code in  order to make your system more parallel  you just change the topology  configuration and your Python code  becomes more parallel it has guaranteed  message processing built in which I'll  cover more in a sec and it has some easy  code management and local development  features which we leverage so the storm  primitives that are built into the  framework are you typically start your  data processing system with a streaming  data set and actually we use Kafka for  this and almost everyone who uses storm  in production also uses Kafka for this  so we're going to cover Kafka in the  second half of the  explain like why that's a good tool for  that but typically you start with some  streaming data then zeromq is used under  the hood for IPC and bolts and spouts  are the core abstraction in storm a  spout is basically a process that  generates a stream of data and a bolt is  a process that actually works with that  stream of data and does some  transformation on it and that's  apologies laid out in a directed acyclic  graph and that graph is basically your  entire worker in Q system as like a  model of multistage processing then  there are some ops parts of storm like  the Nimbus and workers which manage  execution and then like I said you can  tune the parallelism and get fault  tolerance for free so why are topology  might look like this where on the left  you have the storm spout that's  generating data and then you might have  several storm bolts in this case the  directed graph is starting with two  bolts where the data splits out and then  a third bolt that's receiving data from  one of the two earlier bolts and all of  this is modeled in the topology storm  also has a notion of a tuple tree and  what that means is that it understands  the source of every piece of data that's  moving through your system so that if a  node goes offline in the middle of  processing some piece of data storm  knows where that data originated from  and is able to replay the original tuple  into your topology to reprocess that  data so in this example we start with a  sentence that sentence might move  through some bolts that do words  splitting and then those words might  actually be counted in the final tuple  is a word and the current count for that  word and the issue here is that storm  can efficiently know that if a bolt  while it was trying to count the word  cow for example falls over that actually  it needs to replay the sentence where  that word came from as well as any of  the other sentences that might have  contributed to that count and it's able  to do that very efficiently so I'm going  to show you a couple of code examples  now and then I'm actually going to jump  into the command line to show you the  project that we built that makes  deploying storm topologies really easy  with Python but I'm going to breeze  through the code first then I'll show it  to you from the terminal so basically  the two things you need to do in order  to use storm is that you need to write  your logic using some integration  library we've built one that's called  stream parse which we're going to show  you today and then you have to actually  describe the layout of your topology in  a domain-specific language that's built  for that purpose in this case the  language we're using is one that's  bundled with storm which is called the  closure DSO it's written in javas  closure like Lisp like programming  language but you don't really have to  know much about closure in order to use  it essentially you can see that it's  looks kind of like a Python dictionary  and it's basically saying I have a spout  that's called a word spout and that's  about corresponds to a file called word  spy and on the last line of this  definition is actually saying it emits  one tuple and that or it emits a tuple  with one field and that field is called  word right so that's all this is  basically saying if I implement that  spout in Python it looks something like  this and and basically in this toy  example here i'm just going to emit i  just create like an infinite stream of  words like dog cat zebra and elephant I  just admit those infinitely and that's  going to be my stream of word data that  I'm going to be counting because I guess  no big data example would be complete  without a word count example right so  the the word count bolt is only slightly  more complicated you basically tell the  bolt where it's getting is data in this  case that's actually the the word spout  that's over here right and then you  actually tell it ok this is the  implementation of my bolt these are the  two fields that I'm output in and then  here's something interesting I say p2  and what this means is I tell the  topology definition I want my bolt to  run with a process parallelism of 2 so  have to python processes that are  inputting data from the spout and that's  hinted here and then the word counter is  really simple it just maintains an  in-memory counter from the collections  API and it just counts every word and  not the at the very end it does two  things it emits the current count for  the word and it also logs it using  storms logging infrastructure  so I'm actually going to now jump into  the terminal and show this stuff to you  so let's see if this works yeah so far  so bad okay there we go so can you guys  read this all right yeah okay cool so I  so stream parse is a project that we  just open source today actually that  provides you with a command line utility  called s parse and s parse lets you  quick start a project which knows how to  run storm topologies and it'll also let  you run that storm topology from the  command line very quickly so  traditionally when people tried to play  with storm with Python they kind of got  turned off because you have to download  like all these Java dependencies and get  this cluster running on your machine and  it's a big pain but with s parse it's  actually really easy so you pip install  stream parse which is the library and  Python and then basically you get this  command and this command says s parse  QuickStart s parse run and then a few  other subcommands if I say s sparse  quick start and I create a directory  called PI data what happens is it  actually went ahead and created a bunch  of files that follow a directory  template that we have for how storm  topologies and java could be later sorry  storm topologies and Python could be  laid out and this actually relies on a  tool wonder the hood called line again  which is like a closure build tool but  it's kind of abstracted from you so you  don't really have to know about it  although that is a dependency for using  stream pars it's only one line of code  to install line again it's like either a  curl one liner or you know you could use  homebrew and install it and there's also  apt packages available but once you get  that running you can basically create  this topology this word count example in  the PI data directory and then i can run  sparse run s parse run and it'll  actually start running this word count  example from the command line what you  see in the bottom right here is i'm just  running a process monitor that's showing  that java has actually spun up and  that's because the storm infrastructure  is spinning up a local cluster right now  it's actually also compiling my topology  which  to find in that domain specific language  before and now that it's actually  running you'll see some Python processes  running on the right and so you'll  actually see that word count because  it's parallelism is to is running with  to python processes but then words was  running with one and and that's really  nice that kind of shows you kind of the  whole infrastructure running at the  command line and that's really all you  need to do to do local testing so as  another kind of cool example I created  just a slight variation of this project  where in addition to storing the or  sorry in addition to having a basic  quick started project i modified the the  bolt so that it actually stored data in  Redis so now basically instead of a  counter I'm just connecting to Redis and  then I'm incrementing doing something  like Z incur by in Redis to increment  the word count and if I run this guy  here I let's just do a sparse run again  now in the bottom left i'm actually  going to see the live word counts for  this topology and so you can actually  see that it's counting words really  quickly they're refreshing in that  screen that's just a Python one-liner  that's calling Redis and asking for the  sordid keys right and then the topology  went back down and so run this again and  the same thing happens so what's really  cool about stream parses not only does  it let you get storms started really  quickly and test these typologies  locally but it also sets up a structure  where you can organize your Python code  and deploy it to remote clusters and  actually what my teams working on right  now is making it really easy to do  things like manage virtual ends on  multiple storm machines that are running  in production which we have some code at  parsley that does that already so yeah  so that's basically stream parse you can  find it online at the same link as  before so let me see here let's pull  that back up cool and now i'm going to  hand it over to Keith who's going to  talk about organizing around blogs so  thank you Andrew yep so everyone I  assume can hear me okay so I want to  talk about organizing around logs and  the second half of the talk is about  Kafka but one of them  important things is sort of a shift in  the way that we've come to look at the  data that we process of parsley so the  question is what do I mean by logs you  know and I'm not talking about things  you'll send to log stash looking for you  know warnings about database queries  that are slow or system status messages  but what I'm really talking about is a  series of time-stamped facts about a  given system so you know the the example  that we do you know most of our  processing is based off of web logs that  we get you know where an analytics  company we get similar pixel data to  Google Analytics or omniture whoever so  we have a stream of data coming in  that's it's fundamentally a log but it's  also a raw data that needs to be  processed and as this goes through a  pipeline it eventually you know it gets  partially enriched or various stages  through the pipeline to the point where  it turns it to database operations and  depending on how you write this out you  could look at this as a series of logs  to be processed so when I say logs and  when I say a log oriented architecture  this is really what I'm talking about so  the motivation for this if anyone has  built a significantly sized distributed  system this looks painfully familiar to  those who haven't it might not look so  bad what happens is you start with one  system and then two systems need to talk  so those two systems get hooked together  then you need a monitoring system so  that gets connected to the monitoring  system and eventually you end up at this  lattice flat / spaghetti mess the  diagram taken from LinkedIn where every  system needs to talk to every other  system for various reasons so when you  organized around a unified log what you  have is you have a way for everyone to  talk to each other you have a basic  clearinghouse for all the information  that needs to be distributed around your  data center so you take the old diagram  and you make it much much simpler so now  everyone who needs to know about the  status of your system about what's going  on merely needs to basically tale dash F  the lock so that's obviously not  practical to run 37 tale processes on  each machine but you use a queuing  system or another system excuse me to  manage as a clear  a house for that data so needless to say  as I mentioned earlier we are most  decidedly a log centric organization we  were not built with that idea explicitly  it just sort of fell out of the problem  domain that we solve for and ironically  in this diagram the log is not central  to the diagram but is most certainly  central to our data processing you can  see it it's the second one down on the  left so and it was Andrew that actually  came up with this insight that when you  start thinking about our data and how we  work with it in terms of logs all of our  databases be it a real-time database or  archival data base the data isn't that  is not the canonical source of data the  only canonical source of data we  actually have are the raw web logs and  as long as we have those archived  everything else is functionally a  materialized view on that information  and once you realize that it's actually  kind of a freeing concept because you  don't have to worry about losing an  analysis because it can always be rima t  realized from you know your based  materials so the question of course is  what magical amazing system could  possibly handle all this data because as  you grow you know scaling is always a  problem and this is where a patchy Kafka  came in so it is it's from LinkedIn it's  a log centric messaging system it's  designed for incredibly efficient  resource usage now it solves a very  specific problem in its it's in a very  specific area because it's not quite a  messaging system it's not quite a pub  subsystem and it's not quite a log  aggregator like flume escribe it  basically does all three of them and it  doesn in a really interesting way with  some architectural trade-offs but what  is able to do is it's able to get really  kind of incredible throughput for us  personally we run it on three really  small machines in AWS but it's able to  handle the only bottleneck we have is  network throughput so when we need more  network throughput we add new machines  but in terms of disk in terms of memory  you know it's serving up tens of  thousands of messages per second with  virtually no load on our machines so and  also for note I guess Oh date is not a  new release at this point but it's also  able to have full replication of data  and your your data as it go  through as a vote eight so to go over  some quick concepts of Kafka you have a  cluster you have brokers within the  cluster this is a familiar architecture  it ends up feeling a little bit like  Cassandra where you have a ring  architecture where the topics themselves  are distributed among the are  distributed among the brokers based on  various rules you set in terms of  replication so within each broker we  have a topic and the topic is it's like  a pub sub topic it's what you produce to  it's what you consume to and for the  sake of replication it actually takes  that topic which is organized like a log  file and breaks it into partitions so  your topic might be named raw data but  it'll also have say ten partitions that  make their way around the rest of the  cluster so producer is pretty  straightforward produces messages  consumer groups you can actually  organize your consumers so that you  distribute the reading among several  machines so that it's guaranteed that  each message only reaches the consumer  wants so for handy distribution fault  tolerance and parallelization offsets I  will get to in just a moment but first  what's the catch right it sounds strange  new magical wonderful it's all of those  things but you know as adherence of the  cap theorem consistently consistency and  availability are great it does have some  issues with network partitioning but as  long as it's in the same data center  those are generally negligible the one  large architectural trade-off that it  makes which is a huge break from  traditional messaging systems is that  there is no out of order acknowledgement  of messages so and this is what i mean  by the offset on this slide to go back  so Kafka does not store message state on  a message per message basis instead what  it does true to its core as essentially  a distributed log is you store your  offset within that log so as a consumer  I know that I've read up to message 407  so I mark that as a mark I don't know if  I processed 406 405 if there was one  missed in there there's no way to  functionally store that within Kafka so  what it means is that you  it is again to go back to the analogy of  tail dash F on a log file it's very  similar to that on a restart you're  going to know where to pick up with in  that file because it is disk fact and  it's going to keep the data around for a  while so you know where to restart but  if there are little bits of missing  information behind there you're not  necessarily going to know that this  sounds like a really big problem this  sounds like a huge deficiency compared  to traditional messaging systems in  practice with a couple clever solutions  around batching and a little bit of care  it's actually proven to really not be a  problem for us at least with the kinds  of problems that we solve so again to go  over Kafka as the idea of a distributed  log it's because of how the partitions  work you have a log file split into  evenly sized pieces the consumers read  offsets into that log to get into one  technical detail the offsets are stored  on a partition basis so you wouldn't say  I've read up to message 146 on X  partition its or X topic its X topic y  partition but messages can be replayed  because it's all disk backed and logs  are maintained for a configurable period  of time and consumers share identical  logs easily so this is something that  compared to a lot of systems is a huge  difference so if you're using Regis's  pub/sub feature it needs to keep track  of every consumer it's blasting messages  out to if you're using RabbitMQ for  every consumer it stores message state  for every message and every consumer so  you know whether it's read whether it's  acknowledged failed retrying and all  that Kafka is a poll based system so in  fact prior to oda eight dot one it  didn't actually store those offsets you  were responsible for storing those  offsets in zookeeper or the client was  so really when you make a request from a  Kafka topic you're requesting X messages  from a certain from a certain topic /  partition it's entirely pull based so  what this does is this actually reduces  the load of what the kafka server needs  to keep track of and it's able to  paralyze to a number of consumers with  exceptionally small overhead  no duplication of messages there's no  duplication of state zookeeper whoever  might need to store more offsets but  those are generally integers and easily  stored so to revisit the idea of queuing  problems I alluded to this in the  previous slide rabbitmq and Redis have  serious shortcomings when dealing with  very high volume traffic so you can  scale a rabid mq cluster up to the size  that we need but it would take maybe an  order of magnitude or two more hardware  than we use right now and it's largely  because of these architectural  trade-offs like out of order  acknowledgments you know random disk  access is very very slow and especially  when you're talking about spinning disks  to have to go back and mark messages as  acknowledged as failed ends up putting a  huge amount of load on the system so and  again really the big thing is that more  consumers not leading to more server  load ends up in terms of scaling being  huge it means that you can add new  consumers for your data without ever  really having to worry about it you know  so if you have a new monitoring system  where you have whatever so this brings  us back around to the earlier bit about  storm and why the two are such a good  fit together you know and over the  evolution of storm there have been  various messaging systems that are in  vogue like casserole or Starling people  of you Stratos for messaging but by and  large Kafka is very popular in the storm  ecosystem today Andrew when he was  talking about the tubule trees and the  retrying so storms basic guarantee is at  least once processing for every tupple  not exactly once and there is ongoing  work in the community via project called  trident to bring guaranteed wants  processing but in general it provides at  least once guarantees so this really  fits in with Kafka's lack of out of  order acknowledgments since you don't  have a strong guarantee on the consuming  system the producing system doesn't need  the same strong guarantee and needless  to say if you have a system that's able  to produce millions of earth that's able  to process millions of tuples per second  it would be awfully nice to have a cue  system that could serve  millions of tuples per second and the  other thing that has come in really  handy for us is that when you have a  high-performance messaging system that  you can basically throw anything you  want at it without really having to  worry you can do all sorts of  interesting tricks so the one thing we  use it for are basically relief valves  within our pipeline so let's say one of  our database machines is sick you know  either went down or whatever and our  write throughput is suffering we have a  cut we have a we have a Kafka log right  in front of that right before it gets  written so that it doesn't shut down our  entire pipeline when that one area has a  problem you know you're able to  basically handle the back pressure from  that make sure that it doesn't knock  over systems further down the pipeline  and generally keep the real-time  processing system happy and healthy you  know we're in news analytics we deal  with very spiky data and its really nice  to be able to handle it in a same manner  without dying so this unfortunately I  don't have anything nearly as fancy is  Andrew to show but there are two current  Python drivers for Kafka 14 081407 the  reason I bring up the two given that 07  is a bit older is that this one  currently does not support the fancy  distributed consumer stuff I was talking  about where they share partitions this  one's much simpler 408 called Kafka  Python this 140 dot 7 which is the one  we use and the one we maintain has the  enhanced consumer which it uses  zookeeper for coordination between nodes  and if any wants to come up afterwards I  can go into the details about it but  that's why I bring up the two drivers  it's worth noting depending on what you  need there's no real need in the  community for two drivers so hopefully  as we migrated as a company to 0 dot 8  will be able to merge the two  communities and keep things reasonable  needs to say this whole log centric  thing is not necessarily our idea a lot  of other companies are involved you know  have the same way of thinking about the  data that they process most notably  linkedin had a great blog post on log  centric architectures they create a  Kafka  of course as Andrew mentioned above back  type which created store so in  conclusion what we've learned it goes  without saying that there's no silver  bullet and data processing technology  for me I think having a high-throughput  messaging system has changed the way I  think about a lot of problems but it  doesn't necessarily solve all of them it  just makes life a lot easier you know  the other nice thing about logged log  centric architecture is that disk space  is really really cheap so if you think  about that as your principal data store  you know you're not as worried about as  long as you can make it queryable in the  end it's not as much of a focus on the  memory heavy systems so timestamp facts  in there Ross form our great source of  data storm and Kafka both let you  develop on top of them so we have a fair  bit of time left there any questions I  don't know if we have a mic going around  so I've been we're a company that's  pretty heavily invested on AWS and it  sounds like you guys are as well so why  would I choose Kafka over something like  Kinesis which seems like it fulfills  very the requirements are almost exactly  in the limitations and like it almost  exactly the same except I don't have all  the overhead in the complexity of like a  zookeeper setup and that sort of stuff  is there something that coffee gives me  that Kinesis doesn't so it ends up being  a similar question too why do I roll  post grass instead of redshift it's  usually a question of cost in terms of  features I personally haven't  investigated Kinesis yeah so much  initiative so Kinesis actually basically  imitated the kafka api and was coming I  out around the same time that Kafka was  getting popular so like Keith said it's  a question of do you want to lock  yourself in to you know the Amazon  infrastructure or do you want to run  open source software on your own  hardware or your own virtual machines  that's really all it comes down to yeah  yes I think they both scratch the itch I  don't know exactly in the weeds like  what Kinesis has that Kafka doesn't I  haven't done like that analysis but I  know that they're very kind of similar  philosophically you know yeah one of the  things that's really nice about trying  to is that you basically specify your  topology in a very functional way and  and then it sort of computes the  physical execution plan for you do you  guys have any plans for stream parts to  do something like that with your closure  definitions or no so we've started  looking into it there's a jira ticket  open on storm to get multilang support  for trident barring that we can't really  do a whole lot because you know it's  very heavily tied to the the JVM and all  that but that's certainly you know as we  as we work on stream parts that's  definitely something we're going to be  looking into because it really does seem  like Trident is the direction that  storms moving for pretty much everything  Keith can you talk a little bit about  some of the overhead costs you might  incur on switching over from a non log  base 10 system to a log based system and  either some of the scales of which it  becomes appropriate or some of the  strategies you might use to accomplish  that uh certainly I mean for us it was  it was very much changing the way we  looked at the problem we had we didn't  actually make a lot of huge  architectural changes when we first  started looking at it this way we're  starting to as we move down the road I  think one of the better examples is you  know we do a lot of web scraping and  storing logs for that instead of just  ephemeral data in the database would be  really nice I got the cost they big the  big win you get I guess if you're  switching if you're kind of switching  mindset is that you start treating your  databases like pure indexes and not like  databases so that also means that if  you're evaluating all these newer  databases that have different trade-offs  it's very easy for you to basically run  two systems and pero el that are both  like computing similar views but on  different database technologies of your  original log data and if you treat your  database as like the canonical store  then that might be like a painful schema  migration problem yeah so it's much more  of a conceptual change than  architectural one for us so specific  changes one would make you know as long  as you're storing all your broad data in  a very raw format wouldn't be huge yeah  in terms of like scale i guess i don't  know i think that it probably comes down  to you know if you're doing thousands of  messages per second and you feel like  back pressure on of RabbitMQ instance or  overflow on your reticence tins is like  imminent and you're starting to  investigate things like how to  distribute out Redis using some of the  newer stuff that's available you might  you know be at the right scale where  maybe you should look at Kafka instead  right but if a single RabbitMQ instance  is serving your whole plant fine then  that's fine you know so  where where did you build your message  resiliency means the fault tolerance if  something breaks during the transition  so so so there are three parts of the  question so that's what part and output  all the three-second is how complex is  your logic in the middle tier which is  in at the strong processing so complex  even processing place and then what are  the other end persistency model did you  use it was it Hadoop based or any other  database or because when I see so many  messages coming in the pipeline you must  have interesting implementation for  purchase that data so that okay so all  right so to take that from the first  part most of our redundancy for the  actual log collection and persistence to  Kafka is handled by Kafka itself so our  data collectors write directly to the  kafka instance and then we rely on  Kafka's replication for the actual  persistence and resiliency there as far  as the actual complexity of the storm  topologies you know we have two  topologies that run in sequence with a  Kafka queue in between I mean I don't I  don't know how to evaluate complexity I  mean I I built it I feel it was complex  but that feels like a very subjective  evaluation to me but as far as the data  persistence goes that was actually a  really interesting problem for us so our  principal data store is [ __ ] DB we  really appreciate the query ability a  lot of things work but write throughput  isn't the best in the world you know if  this was Cassandra the story would have  been a lot simpler but with MongoDB we  had to worry a lot about overflowing it  especially when we were running on  smaller instances we used to swamp them  all the time so this was actually where  we put actually put a Kafka instance  right in front of where we write to the  database so it was basically writing out  MongoDB zop log to Kafka before I got to  [ __ ] at which point we could take all  those operations and reduce them so we  do a lot you know we're analytic  company we do a lot of adding one and  one a lot so you take all those  operations you reduce them to their most  information efficient form and you end  up reducing the number of operations  that are actually sent to [ __ ] at last  count I think we had 100 to 1 efficiency  on that so we produced you know a  hundred thousand we ended up only  writing one thousand that you don't in  storm you don't have the acknowledgement  method to tell sender that I have  processed the message completely you do  yeah you do I'm doing that okay oh yeah  so it's part it's part of both the  multilang protocol and the core storm  API that you can acknowledge that a  tuple has been a processed or you can  fail a tuple and in that case it will  replay the tuple from the tuple trees  root if you fail it no matter where in  the topology you fail it right then give  them how is Dom support for breaking  down a complex task into subtasks  dependence of dust and executing them on  the distributed infrastructure that's a  great question so the question was how  storms support for breaking big tasks  into subtasks that you can like kind of  work on reasonably and and actually  that's one of the big wins we've gotten  out of storms so for example when we do  teamwork on data flows like these we  often break up our project by thinking  about the inputs and outputs of  different bolts inside a storm topology  and we have different engineers working  on different bolts and testing them in  isolation before wiring them together in  a topology and what's really wonderful  about this is that no engineer has to  really worry about you know how it's  going to run concurrently in practice  and no individual engineer has to worry  about like you know message  acknowledgement and replay and failed  you know all of this kind of stuff and  not to mention monitoring and all of the  rest of it instead that code gets tested  in isolation and when you wire a  topology together you actually have like  a complete data processing pipeline but  each component is kind of on its own so  I think it actually does really help  with teamwork on some of these streaming  data problems  kind of is the right level of  abstraction for that  anyone else we all sit there we go hi um  with Kafka what's the the mechanism for  actually getting data out of your  program into the log is that is that  like socket level what's the options and  what's the performance profile of that  am I waiting while the right is  happening and so on so there are a  number of ways to do this it's gotten  better with the ODA a release what they  do is they implement they implement  their own binary TCP protocol so it's  not HTTP rest or any of that which ends  up giving you a little bit more  efficiency at the expense of you know  driver writers like myself have to  implement a binary interface there are a  bunch of things in terms of bursting  communication so one of the big things  when you're writing out lines they're  very small and it results in a lot of  small transmissions which are remarkably  inefficient over TCP so there are in a  properly amended driver batching  mechanisms so that you're sending fewer  larger messages to the kafka broker it  does the same thing on the back end when  sending messages back so in general  throughput we've seen I mean we do and  again we run by all measures are a  pretty small cluster it handles I think  20,000 messages per second which for us  translates to and get 75 megabits in  about 160 megabits out so and that's not  I mean those machines are really under  loaded so we've been we've actually been  ramping up how much we use Kafka because  we have so much we're so over proficient  yeah I understand that you you're down  sampling before you store in one would  you be hmm what makes sense for you if  there were a use case where you wanted  to preserve all of the logs intact to  dump them into something like  elasticsearch so you could then preserve  the entire data so we actually do keep  all the logs we store them in s3 and  Amazon s3 and then we use traditional  Hadoop tooling to do batch processing  over the logs so you know part of the  log centric infrastructure is that the  log data comes in it gets backed up  right away so we can rebuild from it at  any moment but then the live stream of  data moves through the storm processing  plant and real time computation happens  from there and yeah you're right that  you know technologies like elastic  search I don't think we've actually  played with elastic search and it  wouldn't really work to send all of our  logs into elasticsearch or at least we'd  have to run a really massive  elasticsearch cluster to make that  happen but you could do a little  aggregation and then put data in a  source like that and it would work  pretty well yeah all right let's give a  round a plus to Andrew and Keith  by the way quickly
+
+00:00:12.840 --> 00:00:15.480 align:start position:0%
+so let me introduce Andrew mantel NT  who's the CTO and founder of parsley  which is startup doing working with  content publishers to provide them  analytics and more relevance to reach  their audience and also let me introduce  Keith Bergen he's the backend lead for  parsley so they'll be talking about real  time streams and logs I'm Python cool  can you guys hear me okay all right so  so yeah thanks for having us here this  is uh I think our third PI data now  we've been a PI date out on the East  Coast in New York a couple of times  before we're excited to talk to you  about some very new stuff real-time  streams and logs with Apache storm in  Kafka the agenda of our talk is to cover  a little bit about what we do at parsley  and why we use storm and Kafka and  production for our web analytics  platform talk a little bit about how you  can aggregate aggregate streams of data  using apache storm and particularly  using python with apache storm since  it's a JVM technology we've written some  code that helps with that and then Keith  will dive into Kafka and explain why  it's a good design principle to organize  data processing systems around blogs  some quick admin on this talk all of the  presentations in code that parsley has  given an open source are available at  parcel y / code so you can go there and  you can actually see the project links  that we're talking about today as well  as actually the web-based slides that  you're looking at right now so if you're  in the back and can't see things you  could pull it up on your browser we also  have a note form of the slides up there  and you can click on that link in order  to actually get more detailed info that  you can copy paste like code samples and  things like that so very quickly what is  parsley so parsley as the introduction  mentioned is a web analytics platform  for digital storytellers these are some  examples of our customers we work with  large-scale content publishers online  and they send us a lot of data that we  use in order to help their journalists  editors writers and site manager  understand how content is reacting with  audiences across the web we get a lot of  high-speed data the typical news story  you could imagine has a very short shelf  life typically less than 48 hours it's  fast moving its minute by minute second  by second time series data we get a lot  of volume of data thousands of posts per  day or published by our content  publishers and we've been tracking  millions of posts across the web in this  way and some different kinds of data  that we play within our platform include  time series summary data that might do  aggregates and grouping by different  categories ranked data and these are all  screenshots from our dashboard that I'm  just flying through so rank data that  might group content by different tags or  topics benchmark data that might compare  how the certain content has performed  relative to the past and then in general  we kind of refer to information  radiators that bring all this data  together real time streams historical  streams and showcase basically how  content is moving on their websites so  how did the architecture parsley evolve  over time well we started like almost  every distributed system engineering  team with a basic queues and workers  architecture so how many people here  have built accuse and workers  architecture like almost everyone here  right so like most people we started  with tools that are well-worn and  understood like RabbitMQ when we hit  scaling issues with those we move to  more lightweight queuing mechanisms like  Redis and zeromq and with workers we  started with the simplest possible which  is cron jobs that are doing certain you  know things in Python and then went up  from there to something like celery  which is a pretty nice worker system in  pythons community but what we found is  that over time things started to get  pretty complex and I'm sure you guys  have found this too if you've worked on  complex or large-scale data processing  pipelines you have a lot of workers  they're doing a lot of multistage  processing if anything breaks in the  chain you don't really know what  happened you start setting up ad hoc  systems that start communicating across  a lot of different boundaries and it  becomes difficult to debug what data  actually ended up in your database and  that data actually came from in terms of  its provenance starting in the queue and  also you just have lots of moving parts  so this is an actual diagram I drew a  couple years ago when I was trying to  understand the system we had wrought on  our servers right all of these workers  and q's operating on real-time streams  of data and it just gets really messy  and you you basically start developing  ops dashboards and spending most of your  time trying to manage systems rather  than actually building business logic  around the time series data you are  collecting in the first place so storm  is actually a framework that was  developed at back type a company  acquired by Twitter a couple years ago  and storms now an Apache project and  basically storm tries to solve this  workers in cuse problem by turning it  into a framework so it's a distributed  real-time computation system you can  kind of think of it at naga Slee to  Hadoop in the sense that Hadoop gives  you all these primitives for working  with batch processing well storm gives  you primitives for working with  real-time computation or stream  processing for running long running  processes that are operating on a  fast-moving stream of data rather than  in the case of a dupe something where  you might run batch processes across  like file system data sources and it's  perfect for a replacement for that messy  system I just kind of outlined on the  last slides storms features are that  it's fast it can handle millions of  tuples per second per node it's got  fault tolerance built in so it knows  when nodes go down or when data isn't  processed and it can actually rescale  the the cluster appropriately in  response to those faults it has parallel  ISM built in and it's separate from your  code so you don't change your code in  order to make your system more parallel  you just change the topology  configuration and your Python code  becomes more parallel it has guaranteed  message processing built in which I'll  cover more in a sec and it has some easy  code management and local development  features which we leverage so the storm  primitives that are built into the  framework are you typically start your  data processing system with a streaming  data set and actually we use Kafka for  this and almost everyone who uses storm  in production also uses Kafka for this  so we're going to cover Kafka in the  second half of the  explain like why that's a good tool for  that but typically you start with some  streaming data then zeromq is used under  the hood for IPC and bolts and spouts  are the core abstraction in storm a  spout is basically a process that  generates a stream of data and a bolt is  a process that actually works with that  stream of data and does some  transformation on it and that's  apologies laid out in a directed acyclic  graph and that graph is basically your  entire worker in Q system as like a  model of multistage processing then  there are some ops parts of storm like  the Nimbus and workers which manage  execution and then like I said you can  tune the parallelism and get fault  tolerance for free so why are topology  might look like this where on the left  you have the storm spout that's  generating data and then you might have  several storm bolts in this case the  directed graph is starting with two  bolts where the data splits out and then  a third bolt that's receiving data from  one of the two earlier bolts and all of  this is modeled in the topology storm  also has a notion of a tuple tree and  what that means is that it understands  the source of every piece of data that's  moving through your system so that if a  node goes offline in the middle of  processing some piece of data storm  knows where that data originated from  and is able to replay the original tuple  into your topology to reprocess that  data so in this example we start with a  sentence that sentence might move  through some bolts that do words  splitting and then those words might  actually be counted in the final tuple  is a word and the current count for that  word and the issue here is that storm  can efficiently know that if a bolt  while it was trying to count the word  cow for example falls over that actually  it needs to replay the sentence where  that word came from as well as any of  the other sentences that might have  contributed to that count and it's able  to do that very efficiently so I'm going  to show you a couple of code examples  now and then I'm actually going to jump  into the command line to show you the  project that we built that makes  deploying storm topologies really easy  with Python but I'm going to breeze  through the code first then I'll show it  to you from the terminal so basically  the two things you need to do in order  to use storm is that you need to write  your logic using some integration  library we've built one that's called  stream parse which we're going to show  you today and then you have to actually  describe the layout of your topology in  a domain-specific language that's built  for that purpose in this case the  language we're using is one that's  bundled with storm which is called the  closure DSO it's written in javas  closure like Lisp like programming  language but you don't really have to  know much about closure in order to use  it essentially you can see that it's  looks kind of like a Python dictionary  and it's basically saying I have a spout  that's called a word spout and that's  about corresponds to a file called word  spy and on the last line of this  definition is actually saying it emits  one tuple and that or it emits a tuple  with one field and that field is called  word right so that's all this is  basically saying if I implement that  spout in Python it looks something like  this and and basically in this toy  example here i'm just going to emit i  just create like an infinite stream of  words like dog cat zebra and elephant I  just admit those infinitely and that's  going to be my stream of word data that  I'm going to be counting because I guess  no big data example would be complete  without a word count example right so  the the word count bolt is only slightly  more complicated you basically tell the  bolt where it's getting is data in this  case that's actually the the word spout  that's over here right and then you  actually tell it ok this is the  implementation of my bolt these are the  two fields that I'm output in and then  here's something interesting I say p2  and what this means is I tell the  topology definition I want my bolt to  run with a process parallelism of 2 so  have to python processes that are  inputting data from the spout and that's  hinted here and then the word counter is  really simple it just maintains an  in-memory counter from the collections  API and it just counts every word and  not the at the very end it does two  things it emits the current count for  the word and it also logs it using  storms logging infrastructure  so I'm actually going to now jump into  the terminal and show this stuff to you  so let's see if this works yeah so far  so bad okay there we go so can you guys  read this all right yeah okay cool so I  so stream parse is a project that we  just open source today actually that  provides you with a command line utility  called s parse and s parse lets you  quick start a project which knows how to  run storm topologies and it'll also let  you run that storm topology from the  command line very quickly so  traditionally when people tried to play  with storm with Python they kind of got  turned off because you have to download  like all these Java dependencies and get  this cluster running on your machine and  it's a big pain but with s parse it's  actually really easy so you pip install  stream parse which is the library and  Python and then basically you get this  command and this command says s parse  QuickStart s parse run and then a few  other subcommands if I say s sparse  quick start and I create a directory  called PI data what happens is it  actually went ahead and created a bunch  of files that follow a directory  template that we have for how storm  topologies and java could be later sorry  storm topologies and Python could be  laid out and this actually relies on a  tool wonder the hood called line again  which is like a closure build tool but  it's kind of abstracted from you so you  don't really have to know about it  although that is a dependency for using  stream pars it's only one line of code  to install line again it's like either a  curl one liner or you know you could use  homebrew and install it and there's also  apt packages available but once you get  that running you can basically create  this topology this word count example in  the PI data directory and then i can run  sparse run s parse run and it'll  actually start running this word count  example from the command line what you  see in the bottom right here is i'm just  running a process monitor that's showing  that java has actually spun up and  that's because the storm infrastructure  is spinning up a local cluster right now  it's actually also compiling my topology  which  to find in that domain specific language  before and now that it's actually  running you'll see some Python processes  running on the right and so you'll  actually see that word count because  it's parallelism is to is running with  to python processes but then words was  running with one and and that's really  nice that kind of shows you kind of the  whole infrastructure running at the  command line and that's really all you  need to do to do local testing so as  another kind of cool example I created  just a slight variation of this project  where in addition to storing the or  sorry in addition to having a basic  quick started project i modified the the  bolt so that it actually stored data in  Redis so now basically instead of a  counter I'm just connecting to Redis and  then I'm incrementing doing something  like Z incur by in Redis to increment  the word count and if I run this guy  here I let's just do a sparse run again  now in the bottom left i'm actually  going to see the live word counts for  this topology and so you can actually  see that it's counting words really  quickly they're refreshing in that  screen that's just a Python one-liner  that's calling Redis and asking for the  sordid keys right and then the topology  went back down and so run this again and  the same thing happens so what's really  cool about stream parses not only does  it let you get storms started really  quickly and test these typologies  locally but it also sets up a structure  where you can organize your Python code  and deploy it to remote clusters and  actually what my teams working on right  now is making it really easy to do  things like manage virtual ends on  multiple storm machines that are running  in production which we have some code at  parsley that does that already so yeah  so that's basically stream parse you can  find it online at the same link as  before so let me see here let's pull  that back up cool and now i'm going to  hand it over to Keith who's going to  talk about organizing around blogs so  thank you Andrew yep so everyone I  assume can hear me okay so I want to  talk about organizing around logs and  the second half of the talk is about  Kafka but one of them  important things is sort of a shift in  the way that we've come to look at the  data that we process of parsley so the  question is what do I mean by logs you  know and I'm not talking about things  you'll send to log stash looking for you  know warnings about database queries  that are slow or system status messages  but what I'm really talking about is a  series of time-stamped facts about a  given system so you know the the example  that we do you know most of our  processing is based off of web logs that  we get you know where an analytics  company we get similar pixel data to  Google Analytics or omniture whoever so  we have a stream of data coming in  that's it's fundamentally a log but it's  also a raw data that needs to be  processed and as this goes through a  pipeline it eventually you know it gets  partially enriched or various stages  through the pipeline to the point where  it turns it to database operations and  depending on how you write this out you  could look at this as a series of logs  to be processed so when I say logs and  when I say a log oriented architecture  this is really what I'm talking about so  the motivation for this if anyone has  built a significantly sized distributed  system this looks painfully familiar to  those who haven't it might not look so  bad what happens is you start with one  system and then two systems need to talk  so those two systems get hooked together  then you need a monitoring system so  that gets connected to the monitoring  system and eventually you end up at this  lattice flat / spaghetti mess the  diagram taken from LinkedIn where every  system needs to talk to every other  system for various reasons so when you  organized around a unified log what you  have is you have a way for everyone to  talk to each other you have a basic  clearinghouse for all the information  that needs to be distributed around your  data center so you take the old diagram  and you make it much much simpler so now  everyone who needs to know about the  status of your system about what's going  on merely needs to basically tale dash F  the lock so that's obviously not  practical to run 37 tale processes on  each machine but you use a queuing  system or another system excuse me to  manage as a clear  a house for that data so needless to say  as I mentioned earlier we are most  decidedly a log centric organization we  were not built with that idea explicitly  it just sort of fell out of the problem  domain that we solve for and ironically  in this diagram the log is not central  to the diagram but is most certainly  central to our data processing you can  see it it's the second one down on the  left so and it was Andrew that actually  came up with this insight that when you  start thinking about our data and how we  work with it in terms of logs all of our  databases be it a real-time database or  archival data base the data isn't that  is not the canonical source of data the  only canonical source of data we  actually have are the raw web logs and  as long as we have those archived  everything else is functionally a  materialized view on that information  and once you realize that it's actually  kind of a freeing concept because you  don't have to worry about losing an  analysis because it can always be rima t  realized from you know your based  materials so the question of course is  what magical amazing system could  possibly handle all this data because as  you grow you know scaling is always a  problem and this is where a patchy Kafka  came in so it is it's from LinkedIn it's  a log centric messaging system it's  designed for incredibly efficient  resource usage now it solves a very  specific problem in its it's in a very  specific area because it's not quite a  messaging system it's not quite a pub  subsystem and it's not quite a log  aggregator like flume escribe it  basically does all three of them and it  doesn in a really interesting way with  some architectural trade-offs but what  is able to do is it's able to get really  kind of incredible throughput for us  personally we run it on three really  small machines in AWS but it's able to  handle the only bottleneck we have is  network throughput so when we need more  network throughput we add new machines  but in terms of disk in terms of memory  you know it's serving up tens of  thousands of messages per second with  virtually no load on our machines so and  also for note I guess Oh date is not a  new release at this point but it's also  able to have full replication of data  and your your data as it go  through as a vote eight so to go over  some quick concepts of Kafka you have a  cluster you have brokers within the  cluster this is a familiar architecture  it ends up feeling a little bit like  Cassandra where you have a ring  architecture where the topics themselves  are distributed among the are  distributed among the brokers based on  various rules you set in terms of  replication so within each broker we  have a topic and the topic is it's like  a pub sub topic it's what you produce to  it's what you consume to and for the  sake of replication it actually takes  that topic which is organized like a log  file and breaks it into partitions so  your topic might be named raw data but  it'll also have say ten partitions that  make their way around the rest of the  cluster so producer is pretty  straightforward produces messages  consumer groups you can actually  organize your consumers so that you  distribute the reading among several  machines so that it's guaranteed that  each message only reaches the consumer  wants so for handy distribution fault  tolerance and parallelization offsets I  will get to in just a moment but first  what's the catch right it sounds strange  new magical wonderful it's all of those  things but you know as adherence of the  cap theorem consistently consistency and  availability are great it does have some  issues with network partitioning but as  long as it's in the same data center  those are generally negligible the one  large architectural trade-off that it  makes which is a huge break from  traditional messaging systems is that  there is no out of order acknowledgement  of messages so and this is what i mean  by the offset on this slide to go back  so Kafka does not store message state on  a message per message basis instead what  it does true to its core as essentially  a distributed log is you store your  offset within that log so as a consumer  I know that I've read up to message 407  so I mark that as a mark I don't know if  I processed 406 405 if there was one  missed in there there's no way to  functionally store that within Kafka so  what it means is that you  it is again to go back to the analogy of  tail dash F on a log file it's very  similar to that on a restart you're  going to know where to pick up with in  that file because it is disk fact and  it's going to keep the data around for a  while so you know where to restart but  if there are little bits of missing  information behind there you're not  necessarily going to know that this  sounds like a really big problem this  sounds like a huge deficiency compared  to traditional messaging systems in  practice with a couple clever solutions  around batching and a little bit of care  it's actually proven to really not be a  problem for us at least with the kinds  of problems that we solve so again to go  over Kafka as the idea of a distributed  log it's because of how the partitions  work you have a log file split into  evenly sized pieces the consumers read  offsets into that log to get into one  technical detail the offsets are stored  on a partition basis so you wouldn't say  I've read up to message 146 on X  partition its or X topic its X topic y  partition but messages can be replayed  because it's all disk backed and logs  are maintained for a configurable period  of time and consumers share identical  logs easily so this is something that  compared to a lot of systems is a huge  difference so if you're using Regis's  pub/sub feature it needs to keep track  of every consumer it's blasting messages  out to if you're using RabbitMQ for  every consumer it stores message state  for every message and every consumer so  you know whether it's read whether it's  acknowledged failed retrying and all  that Kafka is a poll based system so in  fact prior to oda eight dot one it  didn't actually store those offsets you  were responsible for storing those  offsets in zookeeper or the client was  so really when you make a request from a  Kafka topic you're requesting X messages  from a certain from a certain topic /  partition it's entirely pull based so  what this does is this actually reduces  the load of what the kafka server needs  to keep track of and it's able to  paralyze to a number of consumers with  exceptionally small overhead  no duplication of messages there's no  duplication of state zookeeper whoever  might need to store more offsets but  those are generally integers and easily  stored so to revisit the idea of queuing  problems I alluded to this in the  previous slide rabbitmq and Redis have  serious shortcomings when dealing with  very high volume traffic so you can  scale a rabid mq cluster up to the size  that we need but it would take maybe an  order of magnitude or two more hardware  than we use right now and it's largely  because of these architectural  trade-offs like out of order  acknowledgments you know random disk  access is very very slow and especially  when you're talking about spinning disks  to have to go back and mark messages as  acknowledged as failed ends up putting a  huge amount of load on the system so and  again really the big thing is that more  consumers not leading to more server  load ends up in terms of scaling being  huge it means that you can add new  consumers for your data without ever  really having to worry about it you know  so if you have a new monitoring system  where you have whatever so this brings  us back around to the earlier bit about  storm and why the two are such a good  fit together you know and over the  evolution of storm there have been  various messaging systems that are in  vogue like casserole or Starling people  of you Stratos for messaging but by and  large Kafka is very popular in the storm  ecosystem today Andrew when he was  talking about the tubule trees and the  retrying so storms basic guarantee is at  least once processing for every tupple  not exactly once and there is ongoing  work in the community via project called  trident to bring guaranteed wants  processing but in general it provides at  least once guarantees so this really  fits in with Kafka's lack of out of  order acknowledgments since you don't  have a strong guarantee on the consuming  system the producing system doesn't need  the same strong guarantee and needless  to say if you have a system that's able  to produce millions of earth that's able  to process millions of tuples per second  it would be awfully nice to have a cue  system that could serve  millions of tuples per second and the  other thing that has come in really  handy for us is that when you have a  high-performance messaging system that  you can basically throw anything you  want at it without really having to  worry you can do all sorts of  interesting tricks so the one thing we  use it for are basically relief valves  within our pipeline so let's say one of  our database machines is sick you know  either went down or whatever and our  write throughput is suffering we have a  cut we have a we have a Kafka log right  in front of that right before it gets  written so that it doesn't shut down our  entire pipeline when that one area has a  problem you know you're able to  basically handle the back pressure from  that make sure that it doesn't knock  over systems further down the pipeline  and generally keep the real-time  processing system happy and healthy you  know we're in news analytics we deal  with very spiky data and its really nice  to be able to handle it in a same manner  without dying so this unfortunately I  don't have anything nearly as fancy is  Andrew to show but there are two current  Python drivers for Kafka 14 081407 the  reason I bring up the two given that 07  is a bit older is that this one  currently does not support the fancy  distributed consumer stuff I was talking  about where they share partitions this  one's much simpler 408 called Kafka  Python this 140 dot 7 which is the one  we use and the one we maintain has the  enhanced consumer which it uses  zookeeper for coordination between nodes  and if any wants to come up afterwards I  can go into the details about it but  that's why I bring up the two drivers  it's worth noting depending on what you  need there's no real need in the  community for two drivers so hopefully  as we migrated as a company to 0 dot 8  will be able to merge the two  communities and keep things reasonable  needs to say this whole log centric  thing is not necessarily our idea a lot  of other companies are involved you know  have the same way of thinking about the  data that they process most notably  linkedin had a great blog post on log  centric architectures they create a  Kafka  of course as Andrew mentioned above back  type which created store so in  conclusion what we've learned it goes  without saying that there's no silver  bullet and data processing technology  for me I think having a high-throughput  messaging system has changed the way I  think about a lot of problems but it  doesn't necessarily solve all of them it  just makes life a lot easier you know  the other nice thing about logged log  centric architecture is that disk space  is really really cheap so if you think  about that as your principal data store  you know you're not as worried about as  long as you can make it queryable in the  end it's not as much of a focus on the  memory heavy systems so timestamp facts  in there Ross form our great source of  data storm and Kafka both let you  develop on top of them so we have a fair  bit of time left there any questions I  don't know if we have a mic going around  so I've been we're a company that's  pretty heavily invested on AWS and it  sounds like you guys are as well so why  would I choose Kafka over something like  Kinesis which seems like it fulfills  very the requirements are almost exactly  in the limitations and like it almost  exactly the same except I don't have all  the overhead in the complexity of like a  zookeeper setup and that sort of stuff  is there something that coffee gives me  that Kinesis doesn't so it ends up being  a similar question too why do I roll  post grass instead of redshift it's  usually a question of cost in terms of  features I personally haven't  investigated Kinesis yeah so much  initiative so Kinesis actually basically  imitated the kafka api and was coming I  out around the same time that Kafka was  getting popular so like Keith said it's  a question of do you want to lock  yourself in to you know the Amazon  infrastructure or do you want to run  open source software on your own  hardware or your own virtual machines  that's really all it comes down to yeah  yes I think they both scratch the itch I  don't know exactly in the weeds like  what Kinesis has that Kafka doesn't I  haven't done like that analysis but I  know that they're very kind of similar  philosophically you know yeah one of the  things that's really nice about trying  to is that you basically specify your  topology in a very functional way and  and then it sort of computes the  physical execution plan for you do you  guys have any plans for stream parts to  do something like that with your closure  definitions or no so we've started  looking into it there's a jira ticket  open on storm to get multilang support  for trident barring that we can't really  do a whole lot because you know it's  very heavily tied to the the JVM and all  that but that's certainly you know as we  as we work on stream parts that's  definitely something we're going to be  looking into because it really does seem  like Trident is the direction that  storms moving for pretty much everything  Keith can you talk a little bit about  some of the overhead costs you might  incur on switching over from a non log  base 10 system to a log based system and  either some of the scales of which it  becomes appropriate or some of the  strategies you might use to accomplish  that uh certainly I mean for us it was  it was very much changing the way we  looked at the problem we had we didn't  actually make a lot of huge  architectural changes when we first  started looking at it this way we're  starting to as we move down the road I  think one of the better examples is you  know we do a lot of web scraping and  storing logs for that instead of just  ephemeral data in the database would be  really nice I got the cost they big the  big win you get I guess if you're  switching if you're kind of switching  mindset is that you start treating your  databases like pure indexes and not like  databases so that also means that if  you're evaluating all these newer  databases that have different trade-offs  it's very easy for you to basically run  two systems and pero el that are both  like computing similar views but on  different database technologies of your  original log data and if you treat your  database as like the canonical store  then that might be like a painful schema  migration problem yeah so it's much more  of a conceptual change than  architectural one for us so specific  changes one would make you know as long  as you're storing all your broad data in  a very raw format wouldn't be huge yeah  in terms of like scale i guess i don't  know i think that it probably comes down  to you know if you're doing thousands of  messages per second and you feel like  back pressure on of RabbitMQ instance or  overflow on your reticence tins is like  imminent and you're starting to  investigate things like how to  distribute out Redis using some of the  newer stuff that's available you might  you know be at the right scale where  maybe you should look at Kafka instead  right but if a single RabbitMQ instance  is serving your whole plant fine then  that's fine you know so  where where did you build your message  resiliency means the fault tolerance if  something breaks during the transition  so so so there are three parts of the  question so that's what part and output  all the three-second is how complex is  your logic in the middle tier which is  in at the strong processing so complex  even processing place and then what are  the other end persistency model did you  use it was it Hadoop based or any other  database or because when I see so many  messages coming in the pipeline you must  have interesting implementation for  purchase that data so that okay so all  right so to take that from the first  part most of our redundancy for the  actual log collection and persistence to  Kafka is handled by Kafka itself so our  data collectors write directly to the  kafka instance and then we rely on  Kafka's replication for the actual  persistence and resiliency there as far  as the actual complexity of the storm  topologies you know we have two  topologies that run in sequence with a  Kafka queue in between I mean I don't I  don't know how to evaluate complexity I  mean I I built it I feel it was complex  but that feels like a very subjective  evaluation to me but as far as the data  persistence goes that was actually a  really interesting problem for us so our  principal data store is [ __ ] DB we  really appreciate the query ability a  lot of things work but write throughput  isn't the best in the world you know if  this was Cassandra the story would have  been a lot simpler but with MongoDB we  had to worry a lot about overflowing it  especially when we were running on  smaller instances we used to swamp them  all the time so this was actually where  we put actually put a Kafka instance  right in front of where we write to the  database so it was basically writing out  MongoDB zop log to Kafka before I got to  [ __ ] at which point we could take all  those operations and reduce them so we  do a lot you know we're analytic  company we do a lot of adding one and  one a lot so you take all those  operations you reduce them to their most  information efficient form and you end  up reducing the number of operations  that are actually sent to [ __ ] at last  count I think we had 100 to 1 efficiency  on that so we produced you know a  hundred thousand we ended up only  writing one thousand that you don't in  storm you don't have the acknowledgement  method to tell sender that I have  processed the message completely you do  yeah you do I'm doing that okay oh yeah  so it's part it's part of both the  multilang protocol and the core storm  API that you can acknowledge that a  tuple has been a processed or you can  fail a tuple and in that case it will  replay the tuple from the tuple trees  root if you fail it no matter where in  the topology you fail it right then give  them how is Dom support for breaking  down a complex task into subtasks  dependence of dust and executing them on  the distributed infrastructure that's a  great question so the question was how  storms support for breaking big tasks  into subtasks that you can like kind of  work on reasonably and and actually  that's one of the big wins we've gotten  out of storms so for example when we do  teamwork on data flows like these we  often break up our project by thinking  about the inputs and outputs of  different bolts inside a storm topology  and we have different engineers working  on different bolts and testing them in  isolation before wiring them together in  a topology and what's really wonderful  about this is that no engineer has to  really worry about you know how it's  going to run concurrently in practice  and no individual engineer has to worry  about like you know message  acknowledgement and replay and failed  you know all of this kind of stuff and  not to mention monitoring and all of the  rest of it instead that code gets tested  in isolation and when you wire a  topology together you actually have like  a complete data processing pipeline but  each component is kind of on its own so  I think it actually does really help  with teamwork on some of these streaming  data problems  kind of is the right level of  abstraction for that  anyone else we all sit there we go hi um  with Kafka what's the the mechanism for  actually getting data out of your  program into the log is that is that  like socket level what's the options and  what's the performance profile of that  am I waiting while the right is  happening and so on so there are a  number of ways to do this it's gotten  better with the ODA a release what they  do is they implement they implement  their own binary TCP protocol so it's  not HTTP rest or any of that which ends  up giving you a little bit more  efficiency at the expense of you know  driver writers like myself have to  implement a binary interface there are a  bunch of things in terms of bursting  communication so one of the big things  when you're writing out lines they're  very small and it results in a lot of  small transmissions which are remarkably  inefficient over TCP so there are in a  properly amended driver batching  mechanisms so that you're sending fewer  larger messages to the kafka broker it  does the same thing on the back end when  sending messages back so in general  throughput we've seen I mean we do and  again we run by all measures are a  pretty small cluster it handles I think  20,000 messages per second which for us  translates to and get 75 megabits in  about 160 megabits out so and that's not  I mean those machines are really under  loaded so we've been we've actually been  ramping up how much we use Kafka because  we have so much we're so over proficient  yeah I understand that you you're down  sampling before you store in one would  you be hmm what makes sense for you if  there were a use case where you wanted  to preserve all of the logs intact to  dump them into something like  elasticsearch so you could then preserve  the entire data so we actually do keep  all the logs we store them in s3 and  Amazon s3 and then we use traditional  Hadoop tooling to do batch processing  over the logs so you know part of the  log centric infrastructure is that the  log data comes in it gets backed up  right away so we can rebuild from it at  any moment but then the live stream of  data moves through the storm processing  plant and real time computation happens  from there and yeah you're right that  you know technologies like elastic  search I don't think we've actually  played with elastic search and it  wouldn't really work to send all of our  logs into elasticsearch or at least we'd  have to run a really massive  elasticsearch cluster to make that  happen but you could do a little  aggregation and then put data in a  source like that and it would work  pretty well yeah all right let's give a  round a plus to Andrew and Keith  by the way quickly
+ 
+
+00:00:15.480 --> 00:00:18.960 align:start position:0%
+ 
+ 
+
+00:00:18.960 --> 00:00:20.910 align:start position:0%
+ 
+ 
+
+00:00:20.910 --> 00:00:23.160 align:start position:0%
+ 
+ 
+
+00:00:23.160 --> 00:00:26.490 align:start position:0%
+ 
+ 
+
+00:00:26.490 --> 00:00:30.480 align:start position:0%
+ 
+ 
+
+00:00:30.480 --> 00:00:32.850 align:start position:0%
+ 
+ 
+
+00:00:32.850 --> 00:00:36.420 align:start position:0%
+ 
+ 
+
+00:00:36.420 --> 00:00:38.640 align:start position:0%
+ 
+ 
+
+00:00:38.640 --> 00:00:40.799 align:start position:0%
+ 
+ 
+
+00:00:40.799 --> 00:00:43.920 align:start position:0%
+ 
+ 
+
+00:00:43.920 --> 00:00:45.330 align:start position:0%
+ 
+ 
+
+00:00:45.330 --> 00:00:46.889 align:start position:0%
+ 
+ 
+
+00:00:46.889 --> 00:00:48.900 align:start position:0%
+ 
+ 
+
+00:00:48.900 --> 00:00:51.630 align:start position:0%
+ 
+ 
+
+00:00:51.630 --> 00:00:53.580 align:start position:0%
+ 
+ 
+
+00:00:53.580 --> 00:00:58.200 align:start position:0%
+ 
+ 
+
+00:00:58.200 --> 00:00:59.910 align:start position:0%
+ 
+ 
+
+00:00:59.910 --> 00:01:01.740 align:start position:0%
+ 
+ 
+
+00:01:01.740 --> 00:01:03.660 align:start position:0%
+ 
+ 
+
+00:01:03.660 --> 00:01:06.240 align:start position:0%
+ 
+ 
+
+00:01:06.240 --> 00:01:08.700 align:start position:0%
+ 
+ 
+
+00:01:08.700 --> 00:01:11.250 align:start position:0%
+ 
+ 
+
+00:01:11.250 --> 00:01:14.610 align:start position:0%
+ 
+ 
+
+00:01:14.610 --> 00:01:16.680 align:start position:0%
+ 
+ 
+
+00:01:16.680 --> 00:01:19.470 align:start position:0%
+ 
+ 
+
+00:01:19.470 --> 00:01:22.740 align:start position:0%
+ 
+ 
+
+00:01:22.740 --> 00:01:24.960 align:start position:0%
+ 
+ 
+
+00:01:24.960 --> 00:01:27.890 align:start position:0%
+ 
+ 
+
+00:01:27.890 --> 00:01:31.530 align:start position:0%
+ 
+ 
+
+00:01:31.530 --> 00:01:33.930 align:start position:0%
+ 
+ 
+
+00:01:33.930 --> 00:01:36.420 align:start position:0%
+ 
+ 
+
+00:01:36.420 --> 00:01:39.540 align:start position:0%
+ 
+ 
+
+00:01:39.540 --> 00:01:41.070 align:start position:0%
+ 
+ 
+
+00:01:41.070 --> 00:01:42.870 align:start position:0%
+ 
+ 
+
+00:01:42.870 --> 00:01:44.640 align:start position:0%
+ 
+ 
+
+00:01:44.640 --> 00:01:46.500 align:start position:0%
+ 
+ 
+
+00:01:46.500 --> 00:01:47.970 align:start position:0%
+ 
+ 
+
+00:01:47.970 --> 00:01:49.800 align:start position:0%
+ 
+ 
+
+00:01:49.800 --> 00:01:51.660 align:start position:0%
+ 
+ 
+
+00:01:51.660 --> 00:01:54.120 align:start position:0%
+ 
+ 
+
+00:01:54.120 --> 00:01:56.820 align:start position:0%
+ 
+ 
+
+00:01:56.820 --> 00:01:58.800 align:start position:0%
+ 
+ 
+
+00:01:58.800 --> 00:02:02.160 align:start position:0%
+ 
+ 
+
+00:02:02.160 --> 00:02:05.820 align:start position:0%
+ 
+ 
+
+00:02:05.820 --> 00:02:07.590 align:start position:0%
+ 
+ 
+
+00:02:07.590 --> 00:02:09.960 align:start position:0%
+ 
+ 
+
+00:02:09.960 --> 00:02:12.210 align:start position:0%
+ 
+ 
+
+00:02:12.210 --> 00:02:14.100 align:start position:0%
+ 
+ 
+
+00:02:14.100 --> 00:02:16.589 align:start position:0%
+ 
+ 
+
+00:02:16.589 --> 00:02:18.599 align:start position:0%
+ 
+ 
+
+00:02:18.599 --> 00:02:20.430 align:start position:0%
+ 
+ 
+
+00:02:20.430 --> 00:02:23.620 align:start position:0%
+ 
+ 
+
+00:02:23.620 --> 00:02:26.650 align:start position:0%
+ 
+ 
+
+00:02:26.650 --> 00:02:29.470 align:start position:0%
+ 
+ 
+
+00:02:29.470 --> 00:02:31.420 align:start position:0%
+ 
+ 
+
+00:02:31.420 --> 00:02:33.850 align:start position:0%
+ 
+ 
+
+00:02:33.850 --> 00:02:36.130 align:start position:0%
+ 
+ 
+
+00:02:36.130 --> 00:02:38.470 align:start position:0%
+ 
+ 
+
+00:02:38.470 --> 00:02:41.260 align:start position:0%
+ 
+ 
+
+00:02:41.260 --> 00:02:43.150 align:start position:0%
+ 
+ 
+
+00:02:43.150 --> 00:02:45.340 align:start position:0%
+ 
+ 
+
+00:02:45.340 --> 00:02:47.500 align:start position:0%
+ 
+ 
+
+00:02:47.500 --> 00:02:50.410 align:start position:0%
+ 
+ 
+
+00:02:50.410 --> 00:02:52.120 align:start position:0%
+ 
+ 
+
+00:02:52.120 --> 00:02:54.970 align:start position:0%
+ 
+ 
+
+00:02:54.970 --> 00:02:56.590 align:start position:0%
+ 
+ 
+
+00:02:56.590 --> 00:02:59.949 align:start position:0%
+ 
+ 
+
+00:02:59.949 --> 00:03:01.690 align:start position:0%
+ 
+ 
+
+00:03:01.690 --> 00:03:04.030 align:start position:0%
+ 
+ 
+
+00:03:04.030 --> 00:03:06.280 align:start position:0%
+ 
+ 
+
+00:03:06.280 --> 00:03:09.400 align:start position:0%
+ 
+ 
+
+00:03:09.400 --> 00:03:11.949 align:start position:0%
+ 
+ 
+
+00:03:11.949 --> 00:03:15.640 align:start position:0%
+ 
+ 
+
+00:03:15.640 --> 00:03:17.140 align:start position:0%
+ 
+ 
+
+00:03:17.140 --> 00:03:18.580 align:start position:0%
+ 
+ 
+
+00:03:18.580 --> 00:03:21.130 align:start position:0%
+ 
+ 
+
+00:03:21.130 --> 00:03:24.009 align:start position:0%
+ 
+ 
+
+00:03:24.009 --> 00:03:27.190 align:start position:0%
+ 
+ 
+
+00:03:27.190 --> 00:03:29.020 align:start position:0%
+ 
+ 
+
+00:03:29.020 --> 00:03:32.020 align:start position:0%
+ 
+ 
+
+00:03:32.020 --> 00:03:34.060 align:start position:0%
+ 
+ 
+
+00:03:34.060 --> 00:03:36.490 align:start position:0%
+ 
+ 
+
+00:03:36.490 --> 00:03:38.080 align:start position:0%
+ 
+ 
+
+00:03:38.080 --> 00:03:39.280 align:start position:0%
+ 
+ 
+
+00:03:39.280 --> 00:03:41.710 align:start position:0%
+ 
+ 
+
+00:03:41.710 --> 00:03:44.470 align:start position:0%
+ 
+ 
+
+00:03:44.470 --> 00:03:46.479 align:start position:0%
+ 
+ 
+
+00:03:46.479 --> 00:03:49.479 align:start position:0%
+ 
+ 
+
+00:03:49.479 --> 00:03:51.160 align:start position:0%
+ 
+ 
+
+00:03:51.160 --> 00:03:53.319 align:start position:0%
+ 
+ 
+
+00:03:53.319 --> 00:03:56.229 align:start position:0%
+ 
+ 
+
+00:03:56.229 --> 00:03:58.150 align:start position:0%
+ 
+ 
+
+00:03:58.150 --> 00:04:00.819 align:start position:0%
+ 
+ 
+
+00:04:00.819 --> 00:04:02.380 align:start position:0%
+ 
+ 
+
+00:04:02.380 --> 00:04:04.120 align:start position:0%
+ 
+ 
+
+00:04:04.120 --> 00:04:06.190 align:start position:0%
+ 
+ 
+
+00:04:06.190 --> 00:04:09.340 align:start position:0%
+ 
+ 
+
+00:04:09.340 --> 00:04:10.660 align:start position:0%
+ 
+ 
+
+00:04:10.660 --> 00:04:12.190 align:start position:0%
+ 
+ 
+
+00:04:12.190 --> 00:04:14.020 align:start position:0%
+ 
+ 
+
+00:04:14.020 --> 00:04:16.930 align:start position:0%
+ 
+ 
+
+00:04:16.930 --> 00:04:18.550 align:start position:0%
+ 
+ 
+
+00:04:18.550 --> 00:04:19.840 align:start position:0%
+ 
+ 
+
+00:04:19.840 --> 00:04:21.789 align:start position:0%
+ 
+ 
+
+00:04:21.789 --> 00:04:22.900 align:start position:0%
+ 
+ 
+
+00:04:22.900 --> 00:04:25.000 align:start position:0%
+ 
+ 
+
+00:04:25.000 --> 00:04:27.190 align:start position:0%
+ 
+ 
+
+00:04:27.190 --> 00:04:29.380 align:start position:0%
+ 
+ 
+
+00:04:29.380 --> 00:04:31.659 align:start position:0%
+ 
+ 
+
+00:04:31.659 --> 00:04:33.820 align:start position:0%
+ 
+ 
+
+00:04:33.820 --> 00:04:35.560 align:start position:0%
+ 
+ 
+
+00:04:35.560 --> 00:04:38.620 align:start position:0%
+ 
+ 
+
+00:04:38.620 --> 00:04:40.030 align:start position:0%
+ 
+ 
+
+00:04:40.030 --> 00:04:42.010 align:start position:0%
+ 
+ 
+
+00:04:42.010 --> 00:04:43.510 align:start position:0%
+ 
+ 
+
+00:04:43.510 --> 00:04:45.820 align:start position:0%
+ 
+ 
+
+00:04:45.820 --> 00:04:47.950 align:start position:0%
+ 
+ 
+
+00:04:47.950 --> 00:04:50.590 align:start position:0%
+ 
+ 
+
+00:04:50.590 --> 00:04:52.500 align:start position:0%
+ 
+ 
+
+00:04:52.500 --> 00:04:55.810 align:start position:0%
+ 
+ 
+
+00:04:55.810 --> 00:04:58.000 align:start position:0%
+ 
+ 
+
+00:04:58.000 --> 00:05:00.130 align:start position:0%
+ 
+ 
+
+00:05:00.130 --> 00:05:01.480 align:start position:0%
+ 
+ 
+
+00:05:01.480 --> 00:05:03.190 align:start position:0%
+ 
+ 
+
+00:05:03.190 --> 00:05:06.670 align:start position:0%
+ 
+ 
+
+00:05:06.670 --> 00:05:08.710 align:start position:0%
+ 
+ 
+
+00:05:08.710 --> 00:05:10.630 align:start position:0%
+ 
+ 
+
+00:05:10.630 --> 00:05:12.750 align:start position:0%
+ 
+ 
+
+00:05:12.750 --> 00:05:15.730 align:start position:0%
+ 
+ 
+
+00:05:15.730 --> 00:05:17.860 align:start position:0%
+ 
+ 
+
+00:05:17.860 --> 00:05:19.930 align:start position:0%
+ 
+ 
+
+00:05:19.930 --> 00:05:22.030 align:start position:0%
+ 
+ 
+
+00:05:22.030 --> 00:05:24.610 align:start position:0%
+ 
+ 
+
+00:05:24.610 --> 00:05:26.140 align:start position:0%
+ 
+ 
+
+00:05:26.140 --> 00:05:28.300 align:start position:0%
+ 
+ 
+
+00:05:28.300 --> 00:05:29.740 align:start position:0%
+ 
+ 
+
+00:05:29.740 --> 00:05:31.720 align:start position:0%
+ 
+ 
+
+00:05:31.720 --> 00:05:32.770 align:start position:0%
+ 
+ 
+
+00:05:32.770 --> 00:05:34.480 align:start position:0%
+ 
+ 
+
+00:05:34.480 --> 00:05:36.580 align:start position:0%
+ 
+ 
+
+00:05:36.580 --> 00:05:38.710 align:start position:0%
+ 
+ 
+
+00:05:38.710 --> 00:05:40.960 align:start position:0%
+ 
+ 
+
+00:05:40.960 --> 00:05:42.910 align:start position:0%
+ 
+ 
+
+00:05:42.910 --> 00:05:44.770 align:start position:0%
+ 
+ 
+
+00:05:44.770 --> 00:05:48.130 align:start position:0%
+ 
+ 
+
+00:05:48.130 --> 00:05:49.870 align:start position:0%
+ 
+ 
+
+00:05:49.870 --> 00:05:51.910 align:start position:0%
+ 
+ 
+
+00:05:51.910 --> 00:05:54.820 align:start position:0%
+ 
+ 
+
+00:05:54.820 --> 00:05:57.190 align:start position:0%
+ 
+ 
+
+00:05:57.190 --> 00:06:00.310 align:start position:0%
+ 
+ 
+
+00:06:00.310 --> 00:06:02.110 align:start position:0%
+ 
+ 
+
+00:06:02.110 --> 00:06:04.840 align:start position:0%
+ 
+ 
+
+00:06:04.840 --> 00:06:08.260 align:start position:0%
+ 
+ 
+
+00:06:08.260 --> 00:06:10.930 align:start position:0%
+ 
+ 
+
+00:06:10.930 --> 00:06:13.180 align:start position:0%
+ 
+ 
+
+00:06:13.180 --> 00:06:14.950 align:start position:0%
+ 
+ 
+
+00:06:14.950 --> 00:06:16.900 align:start position:0%
+ 
+ 
+
+00:06:16.900 --> 00:06:18.430 align:start position:0%
+ 
+ 
+
+00:06:18.430 --> 00:06:19.780 align:start position:0%
+ 
+ 
+
+00:06:19.780 --> 00:06:21.730 align:start position:0%
+ 
+ 
+
+00:06:21.730 --> 00:06:24.370 align:start position:0%
+ 
+ 
+
+00:06:24.370 --> 00:06:25.990 align:start position:0%
+ 
+ 
+
+00:06:25.990 --> 00:06:28.270 align:start position:0%
+ 
+ 
+
+00:06:28.270 --> 00:06:29.830 align:start position:0%
+ 
+ 
+
+00:06:29.830 --> 00:06:32.650 align:start position:0%
+ 
+ 
+
+00:06:32.650 --> 00:06:34.000 align:start position:0%
+ 
+ 
+
+00:06:34.000 --> 00:06:36.550 align:start position:0%
+ 
+ 
+
+00:06:36.550 --> 00:06:38.320 align:start position:0%
+ 
+ 
+
+00:06:38.320 --> 00:06:40.750 align:start position:0%
+ 
+ 
+
+00:06:40.750 --> 00:06:42.370 align:start position:0%
+ 
+ 
+
+00:06:42.370 --> 00:06:44.260 align:start position:0%
+ 
+ 
+
+00:06:44.260 --> 00:06:46.000 align:start position:0%
+ 
+ 
+
+00:06:46.000 --> 00:06:46.830 align:start position:0%
+ 
+ 
+
+00:06:46.830 --> 00:06:49.050 align:start position:0%
+ 
+ 
+
+00:06:49.050 --> 00:06:51.240 align:start position:0%
+ 
+ 
+
+00:06:51.240 --> 00:06:53.730 align:start position:0%
+ 
+ 
+
+00:06:53.730 --> 00:06:56.520 align:start position:0%
+ 
+ 
+
+00:06:56.520 --> 00:06:58.800 align:start position:0%
+ 
+ 
+
+00:06:58.800 --> 00:07:00.960 align:start position:0%
+ 
+ 
+
+00:07:00.960 --> 00:07:03.570 align:start position:0%
+ 
+ 
+
+00:07:03.570 --> 00:07:05.909 align:start position:0%
+ 
+ 
+
+00:07:05.909 --> 00:07:07.050 align:start position:0%
+ 
+ 
+
+00:07:07.050 --> 00:07:09.659 align:start position:0%
+ 
+ 
+
+00:07:09.659 --> 00:07:11.340 align:start position:0%
+ 
+ 
+
+00:07:11.340 --> 00:07:14.430 align:start position:0%
+ 
+ 
+
+00:07:14.430 --> 00:07:17.460 align:start position:0%
+ 
+ 
+
+00:07:17.460 --> 00:07:20.190 align:start position:0%
+ 
+ 
+
+00:07:20.190 --> 00:07:22.140 align:start position:0%
+ 
+ 
+
+00:07:22.140 --> 00:07:23.730 align:start position:0%
+ 
+ 
+
+00:07:23.730 --> 00:07:25.740 align:start position:0%
+ 
+ 
+
+00:07:25.740 --> 00:07:27.390 align:start position:0%
+ 
+ 
+
+00:07:27.390 --> 00:07:30.480 align:start position:0%
+ 
+ 
+
+00:07:30.480 --> 00:07:32.010 align:start position:0%
+ 
+ 
+
+00:07:32.010 --> 00:07:35.370 align:start position:0%
+ 
+ 
+
+00:07:35.370 --> 00:07:37.290 align:start position:0%
+ 
+ 
+
+00:07:37.290 --> 00:07:39.300 align:start position:0%
+ 
+ 
+
+00:07:39.300 --> 00:07:41.250 align:start position:0%
+ 
+ 
+
+00:07:41.250 --> 00:07:43.260 align:start position:0%
+ 
+ 
+
+00:07:43.260 --> 00:07:44.850 align:start position:0%
+ 
+ 
+
+00:07:44.850 --> 00:07:46.980 align:start position:0%
+ 
+ 
+
+00:07:46.980 --> 00:07:50.610 align:start position:0%
+ 
+ 
+
+00:07:50.610 --> 00:07:52.500 align:start position:0%
+ 
+ 
+
+00:07:52.500 --> 00:07:54.510 align:start position:0%
+ 
+ 
+
+00:07:54.510 --> 00:07:56.700 align:start position:0%
+ 
+ 
+
+00:07:56.700 --> 00:07:58.980 align:start position:0%
+ 
+ 
+
+00:07:58.980 --> 00:08:00.629 align:start position:0%
+ 
+ 
+
+00:08:00.629 --> 00:08:03.300 align:start position:0%
+ 
+ 
+
+00:08:03.300 --> 00:08:05.040 align:start position:0%
+ 
+ 
+
+00:08:05.040 --> 00:08:07.589 align:start position:0%
+ 
+ 
+
+00:08:07.589 --> 00:08:10.050 align:start position:0%
+ 
+ 
+
+00:08:10.050 --> 00:08:12.810 align:start position:0%
+ 
+ 
+
+00:08:12.810 --> 00:08:15.330 align:start position:0%
+ 
+ 
+
+00:08:15.330 --> 00:08:16.740 align:start position:0%
+ 
+ 
+
+00:08:16.740 --> 00:08:19.170 align:start position:0%
+ 
+ 
+
+00:08:19.170 --> 00:08:21.060 align:start position:0%
+ 
+ 
+
+00:08:21.060 --> 00:08:23.400 align:start position:0%
+ 
+ 
+
+00:08:23.400 --> 00:08:26.159 align:start position:0%
+ 
+ 
+
+00:08:26.159 --> 00:08:28.110 align:start position:0%
+ 
+ 
+
+00:08:28.110 --> 00:08:29.870 align:start position:0%
+ 
+ 
+
+00:08:29.870 --> 00:08:34.019 align:start position:0%
+ 
+ 
+
+00:08:34.019 --> 00:08:35.880 align:start position:0%
+ 
+ 
+
+00:08:35.880 --> 00:08:37.589 align:start position:0%
+ 
+ 
+
+00:08:37.589 --> 00:08:39.060 align:start position:0%
+ 
+ 
+
+00:08:39.060 --> 00:08:40.920 align:start position:0%
+ 
+ 
+
+00:08:40.920 --> 00:08:45.150 align:start position:0%
+ 
+ 
+
+00:08:45.150 --> 00:08:46.800 align:start position:0%
+ 
+ 
+
+00:08:46.800 --> 00:08:48.420 align:start position:0%
+ 
+ 
+
+00:08:48.420 --> 00:08:50.280 align:start position:0%
+ 
+ 
+
+00:08:50.280 --> 00:08:51.630 align:start position:0%
+ 
+ 
+
+00:08:51.630 --> 00:08:53.699 align:start position:0%
+ 
+ 
+
+00:08:53.699 --> 00:08:55.920 align:start position:0%
+ 
+ 
+
+00:08:55.920 --> 00:08:57.300 align:start position:0%
+ 
+ 
+
+00:08:57.300 --> 00:08:59.340 align:start position:0%
+ 
+ 
+
+00:08:59.340 --> 00:09:01.530 align:start position:0%
+ 
+ 
+
+00:09:01.530 --> 00:09:03.420 align:start position:0%
+ 
+ 
+
+00:09:03.420 --> 00:09:06.210 align:start position:0%
+ 
+ 
+
+00:09:06.210 --> 00:09:07.860 align:start position:0%
+ 
+ 
+
+00:09:07.860 --> 00:09:09.240 align:start position:0%
+ 
+ 
+
+00:09:09.240 --> 00:09:11.280 align:start position:0%
+ 
+ 
+
+00:09:11.280 --> 00:09:13.680 align:start position:0%
+ 
+ 
+
+00:09:13.680 --> 00:09:15.780 align:start position:0%
+ 
+ 
+
+00:09:15.780 --> 00:09:18.060 align:start position:0%
+ 
+ 
+
+00:09:18.060 --> 00:09:19.380 align:start position:0%
+ 
+ 
+
+00:09:19.380 --> 00:09:21.210 align:start position:0%
+ 
+ 
+
+00:09:21.210 --> 00:09:24.000 align:start position:0%
+ 
+ 
+
+00:09:24.000 --> 00:09:26.160 align:start position:0%
+ 
+ 
+
+00:09:26.160 --> 00:09:27.210 align:start position:0%
+ 
+ 
+
+00:09:27.210 --> 00:09:28.980 align:start position:0%
+ 
+ 
+
+00:09:28.980 --> 00:09:30.870 align:start position:0%
+ 
+ 
+
+00:09:30.870 --> 00:09:33.240 align:start position:0%
+ 
+ 
+
+00:09:33.240 --> 00:09:35.819 align:start position:0%
+ 
+ 
+
+00:09:35.819 --> 00:09:37.500 align:start position:0%
+ 
+ 
+
+00:09:37.500 --> 00:09:40.170 align:start position:0%
+ 
+ 
+
+00:09:40.170 --> 00:09:43.350 align:start position:0%
+ 
+ 
+
+00:09:43.350 --> 00:09:45.540 align:start position:0%
+ 
+ 
+
+00:09:45.540 --> 00:09:48.329 align:start position:0%
+ 
+ 
+
+00:09:48.329 --> 00:09:50.460 align:start position:0%
+ 
+ 
+
+00:09:50.460 --> 00:09:52.079 align:start position:0%
+ 
+ 
+
+00:09:52.079 --> 00:09:54.930 align:start position:0%
+ 
+ 
+
+00:09:54.930 --> 00:09:57.000 align:start position:0%
+ 
+ 
+
+00:09:57.000 --> 00:10:00.390 align:start position:0%
+ 
+ 
+
+00:10:00.390 --> 00:10:03.900 align:start position:0%
+ 
+ 
+
+00:10:03.900 --> 00:10:05.880 align:start position:0%
+ 
+ 
+
+00:10:05.880 --> 00:10:08.280 align:start position:0%
+ 
+ 
+
+00:10:08.280 --> 00:10:10.890 align:start position:0%
+ 
+ 
+
+00:10:10.890 --> 00:10:12.690 align:start position:0%
+ 
+ 
+
+00:10:12.690 --> 00:10:14.579 align:start position:0%
+ 
+ 
+
+00:10:14.579 --> 00:10:16.380 align:start position:0%
+ 
+ 
+
+00:10:16.380 --> 00:10:18.630 align:start position:0%
+ 
+ 
+
+00:10:18.630 --> 00:10:21.930 align:start position:0%
+ 
+ 
+
+00:10:21.930 --> 00:10:24.930 align:start position:0%
+ 
+ 
+
+00:10:24.930 --> 00:10:26.940 align:start position:0%
+ 
+ 
+
+00:10:26.940 --> 00:10:29.640 align:start position:0%
+ 
+ 
+
+00:10:29.640 --> 00:10:32.250 align:start position:0%
+ 
+ 
+
+00:10:32.250 --> 00:10:33.960 align:start position:0%
+ 
+ 
+
+00:10:33.960 --> 00:10:36.000 align:start position:0%
+ 
+ 
+
+00:10:36.000 --> 00:10:38.400 align:start position:0%
+ 
+ 
+
+00:10:38.400 --> 00:10:40.710 align:start position:0%
+ 
+ 
+
+00:10:40.710 --> 00:10:42.810 align:start position:0%
+ 
+ 
+
+00:10:42.810 --> 00:10:45.420 align:start position:0%
+ 
+ 
+
+00:10:45.420 --> 00:10:47.640 align:start position:0%
+ 
+ 
+
+00:10:47.640 --> 00:10:49.800 align:start position:0%
+ 
+ 
+
+00:10:49.800 --> 00:10:52.199 align:start position:0%
+ 
+ 
+
+00:10:52.199 --> 00:10:55.110 align:start position:0%
+ 
+ 
+
+00:10:55.110 --> 00:10:57.210 align:start position:0%
+ 
+ 
+
+00:10:57.210 --> 00:10:59.190 align:start position:0%
+ 
+ 
+
+00:10:59.190 --> 00:11:02.250 align:start position:0%
+ 
+ 
+
+00:11:02.250 --> 00:11:04.829 align:start position:0%
+ 
+ 
+
+00:11:04.829 --> 00:11:06.930 align:start position:0%
+ 
+ 
+
+00:11:06.930 --> 00:11:09.480 align:start position:0%
+ 
+ 
+
+00:11:09.480 --> 00:11:11.910 align:start position:0%
+ 
+ 
+
+00:11:11.910 --> 00:11:13.800 align:start position:0%
+ 
+ 
+
+00:11:13.800 --> 00:11:15.769 align:start position:0%
+ 
+ 
+
+00:11:15.769 --> 00:11:26.519 align:start position:0%
+ 
+ 
+
+00:11:26.519 --> 00:11:32.759 align:start position:0%
+ 
+ 
+
+00:11:32.759 --> 00:11:35.939 align:start position:0%
+ 
+ 
+
+00:11:35.939 --> 00:11:38.160 align:start position:0%
+ 
+ 
+
+00:11:38.160 --> 00:11:40.920 align:start position:0%
+ 
+ 
+
+00:11:40.920 --> 00:11:43.199 align:start position:0%
+ 
+ 
+
+00:11:43.199 --> 00:11:45.600 align:start position:0%
+ 
+ 
+
+00:11:45.600 --> 00:11:48.060 align:start position:0%
+ 
+ 
+
+00:11:48.060 --> 00:11:51.269 align:start position:0%
+ 
+ 
+
+00:11:51.269 --> 00:11:53.310 align:start position:0%
+ 
+ 
+
+00:11:53.310 --> 00:11:55.019 align:start position:0%
+ 
+ 
+
+00:11:55.019 --> 00:11:56.460 align:start position:0%
+ 
+ 
+
+00:11:56.460 --> 00:11:58.199 align:start position:0%
+ 
+ 
+
+00:11:58.199 --> 00:11:59.939 align:start position:0%
+ 
+ 
+
+00:11:59.939 --> 00:12:02.040 align:start position:0%
+ 
+ 
+
+00:12:02.040 --> 00:12:03.660 align:start position:0%
+ 
+ 
+
+00:12:03.660 --> 00:12:06.540 align:start position:0%
+ 
+ 
+
+00:12:06.540 --> 00:12:08.519 align:start position:0%
+ 
+ 
+
+00:12:08.519 --> 00:12:11.189 align:start position:0%
+ 
+ 
+
+00:12:11.189 --> 00:12:13.139 align:start position:0%
+ 
+ 
+
+00:12:13.139 --> 00:12:15.629 align:start position:0%
+ 
+ 
+
+00:12:15.629 --> 00:12:17.670 align:start position:0%
+ 
+ 
+
+00:12:17.670 --> 00:12:20.400 align:start position:0%
+ 
+ 
+
+00:12:20.400 --> 00:12:22.410 align:start position:0%
+ 
+ 
+
+00:12:22.410 --> 00:12:25.290 align:start position:0%
+ 
+ 
+
+00:12:25.290 --> 00:12:27.449 align:start position:0%
+ 
+ 
+
+00:12:27.449 --> 00:12:29.460 align:start position:0%
+ 
+ 
+
+00:12:29.460 --> 00:12:31.490 align:start position:0%
+ 
+ 
+
+00:12:31.490 --> 00:12:34.290 align:start position:0%
+ 
+ 
+
+00:12:34.290 --> 00:12:35.759 align:start position:0%
+ 
+ 
+
+00:12:35.759 --> 00:12:38.189 align:start position:0%
+ 
+ 
+
+00:12:38.189 --> 00:12:39.960 align:start position:0%
+ 
+ 
+
+00:12:39.960 --> 00:12:41.790 align:start position:0%
+ 
+ 
+
+00:12:41.790 --> 00:12:43.170 align:start position:0%
+ 
+ 
+
+00:12:43.170 --> 00:12:44.160 align:start position:0%
+ 
+ 
+
+00:12:44.160 --> 00:12:46.680 align:start position:0%
+ 
+ 
+
+00:12:46.680 --> 00:12:48.810 align:start position:0%
+ 
+ 
+
+00:12:48.810 --> 00:12:51.240 align:start position:0%
+ 
+ 
+
+00:12:51.240 --> 00:12:53.699 align:start position:0%
+ 
+ 
+
+00:12:53.699 --> 00:12:55.199 align:start position:0%
+ 
+ 
+
+00:12:55.199 --> 00:12:57.750 align:start position:0%
+ 
+ 
+
+00:12:57.750 --> 00:12:59.490 align:start position:0%
+ 
+ 
+
+00:12:59.490 --> 00:13:02.759 align:start position:0%
+ 
+ 
+
+00:13:02.759 --> 00:13:04.920 align:start position:0%
+ 
+ 
+
+00:13:04.920 --> 00:13:08.160 align:start position:0%
+ 
+ 
+
+00:13:08.160 --> 00:13:10.230 align:start position:0%
+ 
+ 
+
+00:13:10.230 --> 00:13:12.389 align:start position:0%
+ 
+ 
+
+00:13:12.389 --> 00:13:14.850 align:start position:0%
+ 
+ 
+
+00:13:14.850 --> 00:13:16.949 align:start position:0%
+ 
+ 
+
+00:13:16.949 --> 00:13:18.840 align:start position:0%
+ 
+ 
+
+00:13:18.840 --> 00:13:20.579 align:start position:0%
+ 
+ 
+
+00:13:20.579 --> 00:13:22.290 align:start position:0%
+ 
+ 
+
+00:13:22.290 --> 00:13:25.620 align:start position:0%
+ 
+ 
+
+00:13:25.620 --> 00:13:25.630 align:start position:0%
+ 
+ 
+
+00:13:25.630 --> 00:13:26.079 align:start position:0%
+ 
+
+
+00:13:26.079 --> 00:13:27.970 align:start position:0%
+ 
+ 
+
+00:13:27.970 --> 00:13:29.710 align:start position:0%
+ 
+ 
+
+00:13:29.710 --> 00:13:31.840 align:start position:0%
+ 
+ 
+
+00:13:31.840 --> 00:13:33.879 align:start position:0%
+ 
+ 
+
+00:13:33.879 --> 00:13:35.530 align:start position:0%
+ 
+ 
+
+00:13:35.530 --> 00:13:37.929 align:start position:0%
+ 
+ 
+
+00:13:37.929 --> 00:13:40.420 align:start position:0%
+ 
+ 
+
+00:13:40.420 --> 00:13:43.150 align:start position:0%
+ 
+ 
+
+00:13:43.150 --> 00:13:45.549 align:start position:0%
+ 
+ 
+
+00:13:45.549 --> 00:13:46.780 align:start position:0%
+ 
+ 
+
+00:13:46.780 --> 00:13:48.100 align:start position:0%
+ 
+ 
+
+00:13:48.100 --> 00:13:50.769 align:start position:0%
+ 
+ 
+
+00:13:50.769 --> 00:13:53.340 align:start position:0%
+ 
+ 
+
+00:13:53.340 --> 00:13:55.929 align:start position:0%
+ 
+ 
+
+00:13:55.929 --> 00:13:59.499 align:start position:0%
+ 
+ 
+
+00:13:59.499 --> 00:14:01.269 align:start position:0%
+ 
+ 
+
+00:14:01.269 --> 00:14:04.809 align:start position:0%
+ 
+ 
+
+00:14:04.809 --> 00:14:07.809 align:start position:0%
+ 
+ 
+
+00:14:07.809 --> 00:14:10.059 align:start position:0%
+ 
+ 
+
+00:14:10.059 --> 00:14:12.009 align:start position:0%
+ 
+ 
+
+00:14:12.009 --> 00:14:14.319 align:start position:0%
+ 
+ 
+
+00:14:14.319 --> 00:14:17.379 align:start position:0%
+ 
+ 
+
+00:14:17.379 --> 00:14:19.900 align:start position:0%
+ 
+ 
+
+00:14:19.900 --> 00:14:23.999 align:start position:0%
+ 
+ 
+
+00:14:23.999 --> 00:14:26.319 align:start position:0%
+ 
+ 
+
+00:14:26.319 --> 00:14:29.139 align:start position:0%
+ 
+ 
+
+00:14:29.139 --> 00:14:31.389 align:start position:0%
+ 
+ 
+
+00:14:31.389 --> 00:14:33.730 align:start position:0%
+ 
+ 
+
+00:14:33.730 --> 00:14:35.559 align:start position:0%
+ 
+ 
+
+00:14:35.559 --> 00:14:37.449 align:start position:0%
+ 
+ 
+
+00:14:37.449 --> 00:14:39.369 align:start position:0%
+ 
+ 
+
+00:14:39.369 --> 00:14:42.309 align:start position:0%
+ 
+ 
+
+00:14:42.309 --> 00:14:44.619 align:start position:0%
+ 
+ 
+
+00:14:44.619 --> 00:14:46.720 align:start position:0%
+ 
+ 
+
+00:14:46.720 --> 00:14:48.790 align:start position:0%
+ 
+ 
+
+00:14:48.790 --> 00:14:50.230 align:start position:0%
+ 
+ 
+
+00:14:50.230 --> 00:14:51.519 align:start position:0%
+ 
+ 
+
+00:14:51.519 --> 00:14:54.189 align:start position:0%
+ 
+ 
+
+00:14:54.189 --> 00:14:56.410 align:start position:0%
+ 
+ 
+
+00:14:56.410 --> 00:14:58.929 align:start position:0%
+ 
+ 
+
+00:14:58.929 --> 00:15:00.850 align:start position:0%
+ 
+ 
+
+00:15:00.850 --> 00:15:02.829 align:start position:0%
+ 
+ 
+
+00:15:02.829 --> 00:15:04.749 align:start position:0%
+ 
+ 
+
+00:15:04.749 --> 00:15:06.879 align:start position:0%
+ 
+ 
+
+00:15:06.879 --> 00:15:08.679 align:start position:0%
+ 
+ 
+
+00:15:08.679 --> 00:15:12.819 align:start position:0%
+ 
+ 
+
+00:15:12.819 --> 00:15:14.799 align:start position:0%
+ 
+ 
+
+00:15:14.799 --> 00:15:16.540 align:start position:0%
+ 
+ 
+
+00:15:16.540 --> 00:15:22.269 align:start position:0%
+ 
+ 
+
+00:15:22.269 --> 00:15:25.660 align:start position:0%
+ 
+ 
+
+00:15:25.660 --> 00:15:26.799 align:start position:0%
+ 
+ 
+
+00:15:26.799 --> 00:15:30.189 align:start position:0%
+ 
+ 
+
+00:15:30.189 --> 00:15:32.559 align:start position:0%
+ 
+ 
+
+00:15:32.559 --> 00:15:34.660 align:start position:0%
+ 
+ 
+
+00:15:34.660 --> 00:15:36.280 align:start position:0%
+ 
+ 
+
+00:15:36.280 --> 00:15:37.990 align:start position:0%
+ 
+ 
+
+00:15:37.990 --> 00:15:39.970 align:start position:0%
+ 
+ 
+
+00:15:39.970 --> 00:15:41.560 align:start position:0%
+ 
+ 
+
+00:15:41.560 --> 00:15:43.030 align:start position:0%
+ 
+ 
+
+00:15:43.030 --> 00:15:45.760 align:start position:0%
+ 
+ 
+
+00:15:45.760 --> 00:15:48.010 align:start position:0%
+ 
+ 
+
+00:15:48.010 --> 00:15:49.510 align:start position:0%
+ 
+ 
+
+00:15:49.510 --> 00:15:52.000 align:start position:0%
+ 
+ 
+
+00:15:52.000 --> 00:15:53.380 align:start position:0%
+ 
+ 
+
+00:15:53.380 --> 00:15:56.110 align:start position:0%
+ 
+ 
+
+00:15:56.110 --> 00:15:57.880 align:start position:0%
+ 
+ 
+
+00:15:57.880 --> 00:15:59.770 align:start position:0%
+ 
+ 
+
+00:15:59.770 --> 00:16:02.860 align:start position:0%
+ 
+ 
+
+00:16:02.860 --> 00:16:04.690 align:start position:0%
+ 
+ 
+
+00:16:04.690 --> 00:16:07.540 align:start position:0%
+ 
+ 
+
+00:16:07.540 --> 00:16:08.890 align:start position:0%
+ 
+ 
+
+00:16:08.890 --> 00:16:10.930 align:start position:0%
+ 
+ 
+
+00:16:10.930 --> 00:16:14.170 align:start position:0%
+ 
+ 
+
+00:16:14.170 --> 00:16:15.670 align:start position:0%
+ 
+ 
+
+00:16:15.670 --> 00:16:18.250 align:start position:0%
+ 
+ 
+
+00:16:18.250 --> 00:16:19.540 align:start position:0%
+ 
+ 
+
+00:16:19.540 --> 00:16:21.250 align:start position:0%
+ 
+ 
+
+00:16:21.250 --> 00:16:23.410 align:start position:0%
+ 
+ 
+
+00:16:23.410 --> 00:16:25.480 align:start position:0%
+ 
+ 
+
+00:16:25.480 --> 00:16:27.340 align:start position:0%
+ 
+ 
+
+00:16:27.340 --> 00:16:29.460 align:start position:0%
+ 
+ 
+
+00:16:29.460 --> 00:16:31.540 align:start position:0%
+ 
+ 
+
+00:16:31.540 --> 00:16:33.520 align:start position:0%
+ 
+ 
+
+00:16:33.520 --> 00:16:36.430 align:start position:0%
+ 
+ 
+
+00:16:36.430 --> 00:16:37.990 align:start position:0%
+ 
+ 
+
+00:16:37.990 --> 00:16:40.570 align:start position:0%
+ 
+ 
+
+00:16:40.570 --> 00:16:43.390 align:start position:0%
+ 
+ 
+
+00:16:43.390 --> 00:16:45.280 align:start position:0%
+ 
+ 
+
+00:16:45.280 --> 00:16:48.730 align:start position:0%
+ 
+ 
+
+00:16:48.730 --> 00:16:49.810 align:start position:0%
+ 
+ 
+
+00:16:49.810 --> 00:16:52.180 align:start position:0%
+ 
+ 
+
+00:16:52.180 --> 00:16:54.520 align:start position:0%
+ 
+ 
+
+00:16:54.520 --> 00:16:56.380 align:start position:0%
+ 
+ 
+
+00:16:56.380 --> 00:16:58.540 align:start position:0%
+ 
+ 
+
+00:16:58.540 --> 00:17:00.400 align:start position:0%
+ 
+ 
+
+00:17:00.400 --> 00:17:02.620 align:start position:0%
+ 
+ 
+
+00:17:02.620 --> 00:17:05.740 align:start position:0%
+ 
+ 
+
+00:17:05.740 --> 00:17:09.010 align:start position:0%
+ 
+ 
+
+00:17:09.010 --> 00:17:10.300 align:start position:0%
+ 
+ 
+
+00:17:10.300 --> 00:17:15.130 align:start position:0%
+ 
+ 
+
+00:17:15.130 --> 00:17:17.530 align:start position:0%
+ 
+ 
+
+00:17:17.530 --> 00:17:19.960 align:start position:0%
+ 
+ 
+
+00:17:19.960 --> 00:17:22.390 align:start position:0%
+ 
+ 
+
+00:17:22.390 --> 00:17:24.400 align:start position:0%
+ 
+ 
+
+00:17:24.400 --> 00:17:25.810 align:start position:0%
+ 
+ 
+
+00:17:25.810 --> 00:17:30.310 align:start position:0%
+ 
+ 
+
+00:17:30.310 --> 00:17:33.550 align:start position:0%
+ 
+ 
+
+00:17:33.550 --> 00:17:34.960 align:start position:0%
+ 
+ 
+
+00:17:34.960 --> 00:17:37.000 align:start position:0%
+ 
+ 
+
+00:17:37.000 --> 00:17:39.970 align:start position:0%
+ 
+ 
+
+00:17:39.970 --> 00:17:42.040 align:start position:0%
+ 
+ 
+
+00:17:42.040 --> 00:17:44.650 align:start position:0%
+ 
+ 
+
+00:17:44.650 --> 00:17:47.620 align:start position:0%
+ 
+ 
+
+00:17:47.620 --> 00:17:52.840 align:start position:0%
+ 
+ 
+
+00:17:52.840 --> 00:17:53.860 align:start position:0%
+ 
+ 
+
+00:17:53.860 --> 00:17:56.830 align:start position:0%
+ 
+ 
+
+00:17:56.830 --> 00:17:58.630 align:start position:0%
+ 
+ 
+
+00:17:58.630 --> 00:18:02.020 align:start position:0%
+ 
+ 
+
+00:18:02.020 --> 00:18:04.000 align:start position:0%
+ 
+ 
+
+00:18:04.000 --> 00:18:05.620 align:start position:0%
+ 
+ 
+
+00:18:05.620 --> 00:18:08.290 align:start position:0%
+ 
+ 
+
+00:18:08.290 --> 00:18:10.870 align:start position:0%
+ 
+ 
+
+00:18:10.870 --> 00:18:12.580 align:start position:0%
+ 
+ 
+
+00:18:12.580 --> 00:18:15.130 align:start position:0%
+ 
+ 
+
+00:18:15.130 --> 00:18:16.390 align:start position:0%
+ 
+ 
+
+00:18:16.390 --> 00:18:19.000 align:start position:0%
+ 
+ 
+
+00:18:19.000 --> 00:18:20.380 align:start position:0%
+ 
+ 
+
+00:18:20.380 --> 00:18:22.900 align:start position:0%
+ 
+ 
+
+00:18:22.900 --> 00:18:25.510 align:start position:0%
+ 
+ 
+
+00:18:25.510 --> 00:18:28.210 align:start position:0%
+ 
+ 
+
+00:18:28.210 --> 00:18:32.620 align:start position:0%
+ 
+ 
+
+00:18:32.620 --> 00:18:34.419 align:start position:0%
+ 
+ 
+
+00:18:34.419 --> 00:18:35.740 align:start position:0%
+ 
+ 
+
+00:18:35.740 --> 00:18:37.570 align:start position:0%
+ 
+ 
+
+00:18:37.570 --> 00:18:39.220 align:start position:0%
+ 
+ 
+
+00:18:39.220 --> 00:18:40.780 align:start position:0%
+ 
+ 
+
+00:18:40.780 --> 00:18:42.520 align:start position:0%
+ 
+ 
+
+00:18:42.520 --> 00:18:44.799 align:start position:0%
+ 
+ 
+
+00:18:44.799 --> 00:18:47.380 align:start position:0%
+ 
+ 
+
+00:18:47.380 --> 00:18:48.549 align:start position:0%
+ 
+ 
+
+00:18:48.549 --> 00:18:50.380 align:start position:0%
+ 
+ 
+
+00:18:50.380 --> 00:18:52.060 align:start position:0%
+ 
+ 
+
+00:18:52.060 --> 00:18:56.440 align:start position:0%
+ 
+ 
+
+00:18:56.440 --> 00:18:58.480 align:start position:0%
+ 
+ 
+
+00:18:58.480 --> 00:19:00.340 align:start position:0%
+ 
+ 
+
+00:19:00.340 --> 00:19:02.230 align:start position:0%
+ 
+ 
+
+00:19:02.230 --> 00:19:04.960 align:start position:0%
+ 
+ 
+
+00:19:04.960 --> 00:19:08.230 align:start position:0%
+ 
+ 
+
+00:19:08.230 --> 00:19:10.660 align:start position:0%
+ 
+ 
+
+00:19:10.660 --> 00:19:13.030 align:start position:0%
+ 
+ 
+
+00:19:13.030 --> 00:19:15.700 align:start position:0%
+ 
+ 
+
+00:19:15.700 --> 00:19:17.110 align:start position:0%
+ 
+ 
+
+00:19:17.110 --> 00:19:19.210 align:start position:0%
+ 
+ 
+
+00:19:19.210 --> 00:19:21.310 align:start position:0%
+ 
+ 
+
+00:19:21.310 --> 00:19:23.500 align:start position:0%
+ 
+ 
+
+00:19:23.500 --> 00:19:25.600 align:start position:0%
+ 
+ 
+
+00:19:25.600 --> 00:19:28.810 align:start position:0%
+ 
+ 
+
+00:19:28.810 --> 00:19:30.610 align:start position:0%
+ 
+ 
+
+00:19:30.610 --> 00:19:32.680 align:start position:0%
+ 
+ 
+
+00:19:32.680 --> 00:19:34.540 align:start position:0%
+ 
+ 
+
+00:19:34.540 --> 00:19:37.210 align:start position:0%
+ 
+ 
+
+00:19:37.210 --> 00:19:39.910 align:start position:0%
+ 
+ 
+
+00:19:39.910 --> 00:19:43.060 align:start position:0%
+ 
+ 
+
+00:19:43.060 --> 00:19:45.370 align:start position:0%
+ 
+ 
+
+00:19:45.370 --> 00:19:47.440 align:start position:0%
+ 
+ 
+
+00:19:47.440 --> 00:19:48.850 align:start position:0%
+ 
+ 
+
+00:19:48.850 --> 00:19:50.680 align:start position:0%
+ 
+ 
+
+00:19:50.680 --> 00:19:52.419 align:start position:0%
+ 
+ 
+
+00:19:52.419 --> 00:19:54.220 align:start position:0%
+ 
+ 
+
+00:19:54.220 --> 00:19:57.880 align:start position:0%
+ 
+ 
+
+00:19:57.880 --> 00:20:00.400 align:start position:0%
+ 
+ 
+
+00:20:00.400 --> 00:20:02.500 align:start position:0%
+ 
+ 
+
+00:20:02.500 --> 00:20:04.530 align:start position:0%
+ 
+ 
+
+00:20:04.530 --> 00:20:07.240 align:start position:0%
+ 
+ 
+
+00:20:07.240 --> 00:20:11.800 align:start position:0%
+ 
+ 
+
+00:20:11.800 --> 00:20:14.290 align:start position:0%
+ 
+ 
+
+00:20:14.290 --> 00:20:16.090 align:start position:0%
+ 
+ 
+
+00:20:16.090 --> 00:20:18.010 align:start position:0%
+ 
+ 
+
+00:20:18.010 --> 00:20:19.900 align:start position:0%
+ 
+ 
+
+00:20:19.900 --> 00:20:21.160 align:start position:0%
+ 
+ 
+
+00:20:21.160 --> 00:20:24.250 align:start position:0%
+ 
+ 
+
+00:20:24.250 --> 00:20:27.970 align:start position:0%
+ 
+ 
+
+00:20:27.970 --> 00:20:29.650 align:start position:0%
+ 
+ 
+
+00:20:29.650 --> 00:20:31.270 align:start position:0%
+ 
+ 
+
+00:20:31.270 --> 00:20:34.090 align:start position:0%
+ 
+ 
+
+00:20:34.090 --> 00:20:36.190 align:start position:0%
+ 
+ 
+
+00:20:36.190 --> 00:20:38.380 align:start position:0%
+ 
+ 
+
+00:20:38.380 --> 00:20:40.360 align:start position:0%
+ 
+ 
+
+00:20:40.360 --> 00:20:42.400 align:start position:0%
+ 
+ 
+
+00:20:42.400 --> 00:20:44.590 align:start position:0%
+ 
+ 
+
+00:20:44.590 --> 00:20:47.320 align:start position:0%
+ 
+ 
+
+00:20:47.320 --> 00:20:49.720 align:start position:0%
+ 
+ 
+
+00:20:49.720 --> 00:20:51.940 align:start position:0%
+ 
+ 
+
+00:20:51.940 --> 00:20:53.350 align:start position:0%
+ 
+ 
+
+00:20:53.350 --> 00:20:55.390 align:start position:0%
+ 
+ 
+
+00:20:55.390 --> 00:20:57.070 align:start position:0%
+ 
+ 
+
+00:20:57.070 --> 00:20:59.050 align:start position:0%
+ 
+ 
+
+00:20:59.050 --> 00:21:01.330 align:start position:0%
+ 
+ 
+
+00:21:01.330 --> 00:21:02.680 align:start position:0%
+ 
+ 
+
+00:21:02.680 --> 00:21:05.740 align:start position:0%
+ 
+ 
+
+00:21:05.740 --> 00:21:07.720 align:start position:0%
+ 
+ 
+
+00:21:07.720 --> 00:21:10.600 align:start position:0%
+ 
+ 
+
+00:21:10.600 --> 00:21:13.660 align:start position:0%
+ 
+ 
+
+00:21:13.660 --> 00:21:16.120 align:start position:0%
+ 
+ 
+
+00:21:16.120 --> 00:21:18.820 align:start position:0%
+ 
+ 
+
+00:21:18.820 --> 00:21:21.010 align:start position:0%
+ 
+ 
+
+00:21:21.010 --> 00:21:24.280 align:start position:0%
+ 
+ 
+
+00:21:24.280 --> 00:21:27.400 align:start position:0%
+ 
+ 
+
+00:21:27.400 --> 00:21:29.560 align:start position:0%
+ 
+ 
+
+00:21:29.560 --> 00:21:31.210 align:start position:0%
+ 
+ 
+
+00:21:31.210 --> 00:21:32.590 align:start position:0%
+ 
+ 
+
+00:21:32.590 --> 00:21:36.460 align:start position:0%
+ 
+ 
+
+00:21:36.460 --> 00:21:38.140 align:start position:0%
+ 
+ 
+
+00:21:38.140 --> 00:21:39.700 align:start position:0%
+ 
+ 
+
+00:21:39.700 --> 00:21:41.620 align:start position:0%
+ 
+ 
+
+00:21:41.620 --> 00:21:43.720 align:start position:0%
+ 
+ 
+
+00:21:43.720 --> 00:21:48.010 align:start position:0%
+ 
+ 
+
+00:21:48.010 --> 00:21:50.320 align:start position:0%
+ 
+ 
+
+00:21:50.320 --> 00:21:54.010 align:start position:0%
+ 
+ 
+
+00:21:54.010 --> 00:21:56.710 align:start position:0%
+ 
+ 
+
+00:21:56.710 --> 00:21:59.920 align:start position:0%
+ 
+ 
+
+00:21:59.920 --> 00:22:01.900 align:start position:0%
+ 
+ 
+
+00:22:01.900 --> 00:22:05.410 align:start position:0%
+ 
+ 
+
+00:22:05.410 --> 00:22:09.070 align:start position:0%
+ 
+ 
+
+00:22:09.070 --> 00:22:12.310 align:start position:0%
+ 
+ 
+
+00:22:12.310 --> 00:22:15.490 align:start position:0%
+ 
+ 
+
+00:22:15.490 --> 00:22:16.660 align:start position:0%
+ 
+ 
+
+00:22:16.660 --> 00:22:19.419 align:start position:0%
+ 
+ 
+
+00:22:19.419 --> 00:22:20.770 align:start position:0%
+ 
+ 
+
+00:22:20.770 --> 00:22:22.450 align:start position:0%
+ 
+ 
+
+00:22:22.450 --> 00:22:24.910 align:start position:0%
+ 
+ 
+
+00:22:24.910 --> 00:22:26.980 align:start position:0%
+ 
+ 
+
+00:22:26.980 --> 00:22:28.360 align:start position:0%
+ 
+ 
+
+00:22:28.360 --> 00:22:30.670 align:start position:0%
+ 
+ 
+
+00:22:30.670 --> 00:22:33.070 align:start position:0%
+ 
+ 
+
+00:22:33.070 --> 00:22:35.410 align:start position:0%
+ 
+ 
+
+00:22:35.410 --> 00:22:36.490 align:start position:0%
+ 
+ 
+
+00:22:36.490 --> 00:22:38.980 align:start position:0%
+ 
+ 
+
+00:22:38.980 --> 00:22:41.620 align:start position:0%
+ 
+ 
+
+00:22:41.620 --> 00:22:43.690 align:start position:0%
+ 
+ 
+
+00:22:43.690 --> 00:22:45.190 align:start position:0%
+ 
+ 
+
+00:22:45.190 --> 00:22:46.930 align:start position:0%
+ 
+ 
+
+00:22:46.930 --> 00:22:49.240 align:start position:0%
+ 
+ 
+
+00:22:49.240 --> 00:22:51.550 align:start position:0%
+ 
+ 
+
+00:22:51.550 --> 00:22:54.190 align:start position:0%
+ 
+ 
+
+00:22:54.190 --> 00:22:56.050 align:start position:0%
+ 
+ 
+
+00:22:56.050 --> 00:22:59.920 align:start position:0%
+ 
+ 
+
+00:22:59.920 --> 00:23:02.440 align:start position:0%
+ 
+ 
+
+00:23:02.440 --> 00:23:04.330 align:start position:0%
+ 
+ 
+
+00:23:04.330 --> 00:23:07.960 align:start position:0%
+ 
+ 
+
+00:23:07.960 --> 00:23:10.510 align:start position:0%
+ 
+ 
+
+00:23:10.510 --> 00:23:13.390 align:start position:0%
+ 
+ 
+
+00:23:13.390 --> 00:23:15.370 align:start position:0%
+ 
+ 
+
+00:23:15.370 --> 00:23:17.020 align:start position:0%
+ 
+ 
+
+00:23:17.020 --> 00:23:19.480 align:start position:0%
+ 
+ 
+
+00:23:19.480 --> 00:23:22.750 align:start position:0%
+ 
+ 
+
+00:23:22.750 --> 00:23:25.300 align:start position:0%
+ 
+ 
+
+00:23:25.300 --> 00:23:28.900 align:start position:0%
+ 
+ 
+
+00:23:28.900 --> 00:23:30.700 align:start position:0%
+ 
+ 
+
+00:23:30.700 --> 00:23:33.310 align:start position:0%
+ 
+ 
+
+00:23:33.310 --> 00:23:36.340 align:start position:0%
+ 
+ 
+
+00:23:36.340 --> 00:23:39.910 align:start position:0%
+ 
+ 
+
+00:23:39.910 --> 00:23:42.490 align:start position:0%
+ 
+ 
+
+00:23:42.490 --> 00:23:44.320 align:start position:0%
+ 
+ 
+
+00:23:44.320 --> 00:23:46.750 align:start position:0%
+ 
+ 
+
+00:23:46.750 --> 00:23:49.270 align:start position:0%
+ 
+ 
+
+00:23:49.270 --> 00:23:51.160 align:start position:0%
+ 
+ 
+
+00:23:51.160 --> 00:23:53.980 align:start position:0%
+ 
+ 
+
+00:23:53.980 --> 00:23:55.450 align:start position:0%
+ 
+ 
+
+00:23:55.450 --> 00:23:57.220 align:start position:0%
+ 
+ 
+
+00:23:57.220 --> 00:24:01.930 align:start position:0%
+ 
+ 
+
+00:24:01.930 --> 00:24:05.980 align:start position:0%
+ 
+ 
+
+00:24:05.980 --> 00:24:07.570 align:start position:0%
+ 
+ 
+
+00:24:07.570 --> 00:24:08.680 align:start position:0%
+ 
+ 
+
+00:24:08.680 --> 00:24:12.450 align:start position:0%
+ 
+ 
+
+00:24:12.450 --> 00:24:15.130 align:start position:0%
+ 
+ 
+
+00:24:15.130 --> 00:24:18.220 align:start position:0%
+ 
+ 
+
+00:24:18.220 --> 00:24:21.520 align:start position:0%
+ 
+ 
+
+00:24:21.520 --> 00:24:24.520 align:start position:0%
+ 
+ 
+
+00:24:24.520 --> 00:24:26.080 align:start position:0%
+ 
+ 
+
+00:24:26.080 --> 00:24:27.490 align:start position:0%
+ 
+ 
+
+00:24:27.490 --> 00:24:29.440 align:start position:0%
+ 
+ 
+
+00:24:29.440 --> 00:24:31.690 align:start position:0%
+ 
+ 
+
+00:24:31.690 --> 00:24:33.910 align:start position:0%
+ 
+ 
+
+00:24:33.910 --> 00:24:35.560 align:start position:0%
+ 
+ 
+
+00:24:35.560 --> 00:24:38.380 align:start position:0%
+ 
+ 
+
+00:24:38.380 --> 00:24:40.000 align:start position:0%
+ 
+ 
+
+00:24:40.000 --> 00:24:41.710 align:start position:0%
+ 
+ 
+
+00:24:41.710 --> 00:24:46.480 align:start position:0%
+ 
+ 
+
+00:24:46.480 --> 00:24:48.340 align:start position:0%
+ 
+ 
+
+00:24:48.340 --> 00:24:52.420 align:start position:0%
+ 
+ 
+
+00:24:52.420 --> 00:24:54.480 align:start position:0%
+ 
+ 
+
+00:24:54.480 --> 00:24:57.790 align:start position:0%
+ 
+ 
+
+00:24:57.790 --> 00:25:00.490 align:start position:0%
+ 
+ 
+
+00:25:00.490 --> 00:25:03.220 align:start position:0%
+ 
+ 
+
+00:25:03.220 --> 00:25:05.770 align:start position:0%
+ 
+ 
+
+00:25:05.770 --> 00:25:08.560 align:start position:0%
+ 
+ 
+
+00:25:08.560 --> 00:25:09.730 align:start position:0%
+ 
+ 
+
+00:25:09.730 --> 00:25:12.670 align:start position:0%
+ 
+ 
+
+00:25:12.670 --> 00:25:14.410 align:start position:0%
+ 
+ 
+
+00:25:14.410 --> 00:25:16.780 align:start position:0%
+ 
+ 
+
+00:25:16.780 --> 00:25:18.580 align:start position:0%
+ 
+ 
+
+00:25:18.580 --> 00:25:20.920 align:start position:0%
+ 
+ 
+
+00:25:20.920 --> 00:25:23.170 align:start position:0%
+ 
+ 
+
+00:25:23.170 --> 00:25:26.710 align:start position:0%
+ 
+ 
+
+00:25:26.710 --> 00:25:31.450 align:start position:0%
+ 
+ 
+
+00:25:31.450 --> 00:25:33.700 align:start position:0%
+ 
+ 
+
+00:25:33.700 --> 00:25:36.160 align:start position:0%
+ 
+ 
+
+00:25:36.160 --> 00:25:38.050 align:start position:0%
+ 
+ 
+
+00:25:38.050 --> 00:25:39.760 align:start position:0%
+ 
+ 
+
+00:25:39.760 --> 00:25:42.340 align:start position:0%
+ 
+ 
+
+00:25:42.340 --> 00:25:43.870 align:start position:0%
+ 
+ 
+
+00:25:43.870 --> 00:25:46.360 align:start position:0%
+ 
+ 
+
+00:25:46.360 --> 00:25:49.090 align:start position:0%
+ 
+ 
+
+00:25:49.090 --> 00:25:51.190 align:start position:0%
+ 
+ 
+
+00:25:51.190 --> 00:25:52.840 align:start position:0%
+ 
+ 
+
+00:25:52.840 --> 00:25:54.280 align:start position:0%
+ 
+ 
+
+00:25:54.280 --> 00:25:55.840 align:start position:0%
+ 
+ 
+
+00:25:55.840 --> 00:25:59.470 align:start position:0%
+ 
+ 
+
+00:25:59.470 --> 00:26:01.750 align:start position:0%
+ 
+ 
+
+00:26:01.750 --> 00:26:03.640 align:start position:0%
+ 
+ 
+
+00:26:03.640 --> 00:26:06.520 align:start position:0%
+ 
+ 
+
+00:26:06.520 --> 00:26:08.710 align:start position:0%
+ 
+ 
+
+00:26:08.710 --> 00:26:11.470 align:start position:0%
+ 
+ 
+
+00:26:11.470 --> 00:26:13.800 align:start position:0%
+ 
+ 
+
+00:26:13.800 --> 00:26:16.570 align:start position:0%
+ 
+ 
+
+00:26:16.570 --> 00:26:18.940 align:start position:0%
+ 
+ 
+
+00:26:18.940 --> 00:26:22.030 align:start position:0%
+ 
+ 
+
+00:26:22.030 --> 00:26:24.520 align:start position:0%
+ 
+ 
+
+00:26:24.520 --> 00:26:26.560 align:start position:0%
+ 
+ 
+
+00:26:26.560 --> 00:26:28.720 align:start position:0%
+ 
+ 
+
+00:26:28.720 --> 00:26:30.430 align:start position:0%
+ 
+ 
+
+00:26:30.430 --> 00:26:31.870 align:start position:0%
+ 
+ 
+
+00:26:31.870 --> 00:26:33.580 align:start position:0%
+ 
+ 
+
+00:26:33.580 --> 00:26:37.840 align:start position:0%
+ 
+ 
+
+00:26:37.840 --> 00:26:39.640 align:start position:0%
+ 
+ 
+
+00:26:39.640 --> 00:26:41.380 align:start position:0%
+ 
+ 
+
+00:26:41.380 --> 00:26:44.260 align:start position:0%
+ 
+ 
+
+00:26:44.260 --> 00:26:45.850 align:start position:0%
+ 
+ 
+
+00:26:45.850 --> 00:26:47.560 align:start position:0%
+ 
+ 
+
+00:26:47.560 --> 00:26:50.140 align:start position:0%
+ 
+ 
+
+00:26:50.140 --> 00:26:52.240 align:start position:0%
+ 
+ 
+
+00:26:52.240 --> 00:26:54.370 align:start position:0%
+ 
+ 
+
+00:26:54.370 --> 00:26:56.170 align:start position:0%
+ 
+ 
+
+00:26:56.170 --> 00:26:58.180 align:start position:0%
+ 
+ 
+
+00:26:58.180 --> 00:26:59.650 align:start position:0%
+ 
+ 
+
+00:26:59.650 --> 00:27:02.020 align:start position:0%
+ 
+ 
+
+00:27:02.020 --> 00:27:04.180 align:start position:0%
+ 
+ 
+
+00:27:04.180 --> 00:27:06.100 align:start position:0%
+ 
+ 
+
+00:27:06.100 --> 00:27:08.560 align:start position:0%
+ 
+ 
+
+00:27:08.560 --> 00:27:11.140 align:start position:0%
+ 
+ 
+
+00:27:11.140 --> 00:27:12.700 align:start position:0%
+ 
+ 
+
+00:27:12.700 --> 00:27:14.950 align:start position:0%
+ 
+ 
+
+00:27:14.950 --> 00:27:18.280 align:start position:0%
+ 
+ 
+
+00:27:18.280 --> 00:27:20.110 align:start position:0%
+ 
+ 
+
+00:27:20.110 --> 00:27:22.750 align:start position:0%
+ 
+ 
+
+00:27:22.750 --> 00:27:25.510 align:start position:0%
+ 
+ 
+
+00:27:25.510 --> 00:27:27.040 align:start position:0%
+ 
+ 
+
+00:27:27.040 --> 00:27:28.870 align:start position:0%
+ 
+ 
+
+00:27:28.870 --> 00:27:30.550 align:start position:0%
+ 
+ 
+
+00:27:30.550 --> 00:27:33.390 align:start position:0%
+ 
+ 
+
+00:27:33.390 --> 00:27:36.160 align:start position:0%
+ 
+ 
+
+00:27:36.160 --> 00:27:38.260 align:start position:0%
+ 
+ 
+
+00:27:38.260 --> 00:27:39.910 align:start position:0%
+ 
+ 
+
+00:27:39.910 --> 00:27:43.180 align:start position:0%
+ 
+ 
+
+00:27:43.180 --> 00:27:45.400 align:start position:0%
+ 
+ 
+
+00:27:45.400 --> 00:27:49.330 align:start position:0%
+ 
+ 
+
+00:27:49.330 --> 00:27:50.770 align:start position:0%
+ 
+ 
+
+00:27:50.770 --> 00:27:53.680 align:start position:0%
+ 
+ 
+
+00:27:53.680 --> 00:27:58.750 align:start position:0%
+ 
+ 
+
+00:27:58.750 --> 00:28:01.150 align:start position:0%
+ 
+ 
+
+00:28:01.150 --> 00:28:03.280 align:start position:0%
+ 
+ 
+
+00:28:03.280 --> 00:28:05.170 align:start position:0%
+ 
+ 
+
+00:28:05.170 --> 00:28:07.330 align:start position:0%
+ 
+ 
+
+00:28:07.330 --> 00:28:11.200 align:start position:0%
+ 
+ 
+
+00:28:11.200 --> 00:28:14.050 align:start position:0%
+ 
+ 
+
+00:28:14.050 --> 00:28:17.350 align:start position:0%
+ 
+ 
+
+00:28:17.350 --> 00:28:19.720 align:start position:0%
+ 
+ 
+
+00:28:19.720 --> 00:28:21.370 align:start position:0%
+ 
+ 
+
+00:28:21.370 --> 00:28:24.760 align:start position:0%
+ 
+ 
+
+00:28:24.760 --> 00:28:26.530 align:start position:0%
+ 
+ 
+
+00:28:26.530 --> 00:28:29.080 align:start position:0%
+ 
+ 
+
+00:28:29.080 --> 00:28:30.430 align:start position:0%
+ 
+ 
+
+00:28:30.430 --> 00:28:32.650 align:start position:0%
+ 
+ 
+
+00:28:32.650 --> 00:28:34.420 align:start position:0%
+ 
+ 
+
+00:28:34.420 --> 00:28:36.040 align:start position:0%
+ 
+ 
+
+00:28:36.040 --> 00:28:38.380 align:start position:0%
+ 
+ 
+
+00:28:38.380 --> 00:28:40.240 align:start position:0%
+ 
+ 
+
+00:28:40.240 --> 00:28:43.050 align:start position:0%
+ 
+ 
+
+00:28:43.050 --> 00:28:45.850 align:start position:0%
+ 
+ 
+
+00:28:45.850 --> 00:28:48.580 align:start position:0%
+ 
+ 
+
+00:28:48.580 --> 00:28:50.860 align:start position:0%
+ 
+ 
+
+00:28:50.860 --> 00:28:52.600 align:start position:0%
+ 
+ 
+
+00:28:52.600 --> 00:28:55.830 align:start position:0%
+ 
+ 
+
+00:28:55.830 --> 00:28:58.030 align:start position:0%
+ 
+ 
+
+00:28:58.030 --> 00:28:59.890 align:start position:0%
+ 
+ 
+
+00:28:59.890 --> 00:28:59.900 align:start position:0%
+ 
+ 
+
+00:28:59.900 --> 00:29:00.940 align:start position:0%
+ 
+
+
+00:29:00.940 --> 00:29:03.220 align:start position:0%
+ 
+ 
+
+00:29:03.220 --> 00:29:06.759 align:start position:0%
+ 
+ 
+
+00:29:06.759 --> 00:29:10.149 align:start position:0%
+ 
+ 
+
+00:29:10.149 --> 00:29:11.289 align:start position:0%
+ 
+ 
+
+00:29:11.289 --> 00:29:13.289 align:start position:0%
+ 
+ 
+
+00:29:13.289 --> 00:29:16.419 align:start position:0%
+ 
+ 
+
+00:29:16.419 --> 00:29:17.950 align:start position:0%
+ 
+ 
+
+00:29:17.950 --> 00:29:19.810 align:start position:0%
+ 
+ 
+
+00:29:19.810 --> 00:29:21.610 align:start position:0%
+ 
+ 
+
+00:29:21.610 --> 00:29:24.820 align:start position:0%
+ 
+ 
+
+00:29:24.820 --> 00:29:26.620 align:start position:0%
+ 
+ 
+
+00:29:26.620 --> 00:29:29.139 align:start position:0%
+ 
+ 
+
+00:29:29.139 --> 00:29:31.870 align:start position:0%
+ 
+ 
+
+00:29:31.870 --> 00:29:33.519 align:start position:0%
+ 
+ 
+
+00:29:33.519 --> 00:29:35.620 align:start position:0%
+ 
+ 
+
+00:29:35.620 --> 00:29:37.840 align:start position:0%
+ 
+ 
+
+00:29:37.840 --> 00:29:41.379 align:start position:0%
+ 
+ 
+
+00:29:41.379 --> 00:29:45.129 align:start position:0%
+ 
+ 
+
+00:29:45.129 --> 00:29:47.080 align:start position:0%
+ 
+ 
+
+00:29:47.080 --> 00:29:49.000 align:start position:0%
+ 
+ 
+
+00:29:49.000 --> 00:29:53.169 align:start position:0%
+ 
+ 
+
+00:29:53.169 --> 00:29:56.049 align:start position:0%
+ 
+ 
+
+00:29:56.049 --> 00:30:04.220 align:start position:0%
+ 
+ 
+
+00:30:04.220 --> 00:30:07.380 align:start position:0%
+ 
+ 
+
+00:30:07.380 --> 00:30:09.690 align:start position:0%
+ 
+ 
+
+00:30:09.690 --> 00:30:12.570 align:start position:0%
+ 
+ 
+
+00:30:12.570 --> 00:30:14.940 align:start position:0%
+ 
+ 
+
+00:30:14.940 --> 00:30:17.160 align:start position:0%
+ 
+ 
+
+00:30:17.160 --> 00:30:19.560 align:start position:0%
+ 
+ 
+
+00:30:19.560 --> 00:30:21.150 align:start position:0%
+ 
+ 
+
+00:30:21.150 --> 00:30:23.130 align:start position:0%
+ 
+ 
+
+00:30:23.130 --> 00:30:24.510 align:start position:0%
+ 
+ 
+
+00:30:24.510 --> 00:30:25.950 align:start position:0%
+ 
+ 
+
+00:30:25.950 --> 00:30:27.390 align:start position:0%
+ 
+ 
+
+00:30:27.390 --> 00:30:30.030 align:start position:0%
+ 
+ 
+
+00:30:30.030 --> 00:30:32.820 align:start position:0%
+ 
+ 
+
+00:30:32.820 --> 00:30:35.460 align:start position:0%
+ 
+ 
+
+00:30:35.460 --> 00:30:37.740 align:start position:0%
+ 
+ 
+
+00:30:37.740 --> 00:30:38.850 align:start position:0%
+ 
+ 
+
+00:30:38.850 --> 00:30:40.860 align:start position:0%
+ 
+ 
+
+00:30:40.860 --> 00:30:44.100 align:start position:0%
+ 
+ 
+
+00:30:44.100 --> 00:30:47.280 align:start position:0%
+ 
+ 
+
+00:30:47.280 --> 00:30:49.140 align:start position:0%
+ 
+ 
+
+00:30:49.140 --> 00:30:51.450 align:start position:0%
+ 
+ 
+
+00:30:51.450 --> 00:30:53.370 align:start position:0%
+ 
+ 
+
+00:30:53.370 --> 00:30:55.920 align:start position:0%
+ 
+ 
+
+00:30:55.920 --> 00:30:57.450 align:start position:0%
+ 
+ 
+
+00:30:57.450 --> 00:30:59.190 align:start position:0%
+ 
+ 
+
+00:30:59.190 --> 00:31:01.020 align:start position:0%
+ 
+ 
+
+00:31:01.020 --> 00:31:09.830 align:start position:0%
+ 
+ 
+
+00:31:09.830 --> 00:31:12.480 align:start position:0%
+ 
+ 
+
+00:31:12.480 --> 00:31:14.280 align:start position:0%
+ 
+ 
+
+00:31:14.280 --> 00:31:16.380 align:start position:0%
+ 
+ 
+
+00:31:16.380 --> 00:31:18.000 align:start position:0%
+ 
+ 
+
+00:31:18.000 --> 00:31:20.390 align:start position:0%
+ 
+ 
+
+00:31:20.390 --> 00:31:25.530 align:start position:0%
+ 
+ 
+
+00:31:25.530 --> 00:31:27.030 align:start position:0%
+ 
+ 
+
+00:31:27.030 --> 00:31:29.460 align:start position:0%
+ 
+ 
+
+00:31:29.460 --> 00:31:32.700 align:start position:0%
+ 
+ 
+
+00:31:32.700 --> 00:31:34.530 align:start position:0%
+ 
+ 
+
+00:31:34.530 --> 00:31:37.320 align:start position:0%
+ 
+ 
+
+00:31:37.320 --> 00:31:39.540 align:start position:0%
+ 
+ 
+
+00:31:39.540 --> 00:31:40.680 align:start position:0%
+ 
+ 
+
+00:31:40.680 --> 00:31:43.890 align:start position:0%
+ 
+ 
+
+00:31:43.890 --> 00:31:45.750 align:start position:0%
+ 
+ 
+
+00:31:45.750 --> 00:31:48.330 align:start position:0%
+ 
+ 
+
+00:31:48.330 --> 00:31:51.330 align:start position:0%
+ 
+ 
+
+00:31:51.330 --> 00:31:53.370 align:start position:0%
+ 
+ 
+
+00:31:53.370 --> 00:31:55.260 align:start position:0%
+ 
+ 
+
+00:31:55.260 --> 00:31:58.170 align:start position:0%
+ 
+ 
+
+00:31:58.170 --> 00:32:00.180 align:start position:0%
+ 
+ 
+
+00:32:00.180 --> 00:32:01.170 align:start position:0%
+ 
+ 
+
+00:32:01.170 --> 00:32:02.820 align:start position:0%
+ 
+ 
+
+00:32:02.820 --> 00:32:04.380 align:start position:0%
+ 
+ 
+
+00:32:04.380 --> 00:32:09.580 align:start position:0%
+ 
+ 
+
+00:32:09.580 --> 00:32:11.780 align:start position:0%
+ 
+ 
+
+00:32:11.780 --> 00:32:13.760 align:start position:0%
+ 
+ 
+
+00:32:13.760 --> 00:32:16.550 align:start position:0%
+ 
+ 
+
+00:32:16.550 --> 00:32:19.010 align:start position:0%
+ 
+ 
+
+00:32:19.010 --> 00:32:21.290 align:start position:0%
+ 
+ 
+
+00:32:21.290 --> 00:32:22.640 align:start position:0%
+ 
+ 
+
+00:32:22.640 --> 00:32:24.200 align:start position:0%
+ 
+ 
+
+00:32:24.200 --> 00:32:27.820 align:start position:0%
+ 
+ 
+
+00:32:27.820 --> 00:32:29.960 align:start position:0%
+ 
+ 
+
+00:32:29.960 --> 00:32:32.270 align:start position:0%
+ 
+ 
+
+00:32:32.270 --> 00:32:33.500 align:start position:0%
+ 
+ 
+
+00:32:33.500 --> 00:32:35.540 align:start position:0%
+ 
+ 
+
+00:32:35.540 --> 00:32:36.860 align:start position:0%
+ 
+ 
+
+00:32:36.860 --> 00:32:39.080 align:start position:0%
+ 
+ 
+
+00:32:39.080 --> 00:32:41.690 align:start position:0%
+ 
+ 
+
+00:32:41.690 --> 00:32:45.550 align:start position:0%
+ 
+ 
+
+00:32:45.550 --> 00:32:47.720 align:start position:0%
+ 
+ 
+
+00:32:47.720 --> 00:32:49.250 align:start position:0%
+ 
+ 
+
+00:32:49.250 --> 00:32:54.830 align:start position:0%
+ 
+ 
+
+00:32:54.830 --> 00:32:56.270 align:start position:0%
+ 
+ 
+
+00:32:56.270 --> 00:32:57.980 align:start position:0%
+ 
+ 
+
+00:32:57.980 --> 00:33:00.290 align:start position:0%
+ 
+ 
+
+00:33:00.290 --> 00:33:02.990 align:start position:0%
+ 
+ 
+
+00:33:02.990 --> 00:33:05.180 align:start position:0%
+ 
+ 
+
+00:33:05.180 --> 00:33:06.710 align:start position:0%
+ 
+ 
+
+00:33:06.710 --> 00:33:08.330 align:start position:0%
+ 
+ 
+
+00:33:08.330 --> 00:33:10.730 align:start position:0%
+ 
+ 
+
+00:33:10.730 --> 00:33:13.250 align:start position:0%
+ 
+ 
+
+00:33:13.250 --> 00:33:15.830 align:start position:0%
+ 
+ 
+
+00:33:15.830 --> 00:33:17.690 align:start position:0%
+ 
+ 
+
+00:33:17.690 --> 00:33:20.780 align:start position:0%
+ 
+ 
+
+00:33:20.780 --> 00:33:22.460 align:start position:0%
+ 
+ 
+
+00:33:22.460 --> 00:33:24.710 align:start position:0%
+ 
+ 
+
+00:33:24.710 --> 00:33:27.290 align:start position:0%
+ 
+ 
+
+00:33:27.290 --> 00:33:28.610 align:start position:0%
+ 
+ 
+
+00:33:28.610 --> 00:33:31.760 align:start position:0%
+ 
+ 
+
+00:33:31.760 --> 00:33:33.170 align:start position:0%
+ 
+ 
+
+00:33:33.170 --> 00:33:34.970 align:start position:0%
+ 
+ 
+
+00:33:34.970 --> 00:33:39.230 align:start position:0%
+ 
+ 
+
+00:33:39.230 --> 00:33:41.660 align:start position:0%
+ 
+ 
+
+00:33:41.660 --> 00:33:43.820 align:start position:0%
+ 
+ 
+
+00:33:43.820 --> 00:33:47.390 align:start position:0%
+ 
+ 
+
+00:33:47.390 --> 00:33:48.980 align:start position:0%
+ 
+ 
+
+00:33:48.980 --> 00:33:52.160 align:start position:0%
+ 
+ 
+
+00:33:52.160 --> 00:33:54.980 align:start position:0%
+ 
+ 
+
+00:33:54.980 --> 00:33:57.050 align:start position:0%
+ 
+ 
+
+00:33:57.050 --> 00:33:58.370 align:start position:0%
+ 
+ 
+
+00:33:58.370 --> 00:34:00.530 align:start position:0%
+ 
+ 
+
+00:34:00.530 --> 00:34:02.540 align:start position:0%
+ 
+ 
+
+00:34:02.540 --> 00:34:04.430 align:start position:0%
+ 
+ 
+
+00:34:04.430 --> 00:34:05.840 align:start position:0%
+ 
+ 
+
+00:34:05.840 --> 00:34:08.180 align:start position:0%
+ 
+ 
+
+00:34:08.180 --> 00:34:09.860 align:start position:0%
+ 
+ 
+
+00:34:09.860 --> 00:34:15.040 align:start position:0%
+ 
+ 
+
+00:34:15.040 --> 00:34:18.990 align:start position:0%
+ 
+ 
+
+00:34:18.990 --> 00:34:21.730 align:start position:0%
+ 
+ 
+
+00:34:21.730 --> 00:34:26.080 align:start position:0%
+ 
+ 
+
+00:34:26.080 --> 00:34:28.300 align:start position:0%
+ 
+ 
+
+00:34:28.300 --> 00:34:30.190 align:start position:0%
+ 
+ 
+
+00:34:30.190 --> 00:34:33.100 align:start position:0%
+ 
+ 
+
+00:34:33.100 --> 00:34:36.130 align:start position:0%
+ 
+ 
+
+00:34:36.130 --> 00:34:40.120 align:start position:0%
+ 
+ 
+
+00:34:40.120 --> 00:34:43.270 align:start position:0%
+ 
+ 
+
+00:34:43.270 --> 00:34:46.810 align:start position:0%
+ 
+ 
+
+00:34:46.810 --> 00:34:51.000 align:start position:0%
+ 
+ 
+
+00:34:51.000 --> 00:34:55.090 align:start position:0%
+ 
+ 
+
+00:34:55.090 --> 00:34:58.060 align:start position:0%
+ 
+ 
+
+00:34:58.060 --> 00:35:00.940 align:start position:0%
+ 
+ 
+
+00:35:00.940 --> 00:35:04.420 align:start position:0%
+ 
+ 
+
+00:35:04.420 --> 00:35:05.920 align:start position:0%
+ 
+ 
+
+00:35:05.920 --> 00:35:09.490 align:start position:0%
+ 
+ 
+
+00:35:09.490 --> 00:35:11.530 align:start position:0%
+ 
+ 
+
+00:35:11.530 --> 00:35:15.520 align:start position:0%
+ 
+ 
+
+00:35:15.520 --> 00:35:18.040 align:start position:0%
+ 
+ 
+
+00:35:18.040 --> 00:35:19.990 align:start position:0%
+ 
+ 
+
+00:35:19.990 --> 00:35:22.210 align:start position:0%
+ 
+ 
+
+00:35:22.210 --> 00:35:26.320 align:start position:0%
+ 
+ 
+
+00:35:26.320 --> 00:35:28.810 align:start position:0%
+ 
+ 
+
+00:35:28.810 --> 00:35:31.480 align:start position:0%
+ 
+ 
+
+00:35:31.480 --> 00:35:33.520 align:start position:0%
+ 
+ 
+
+00:35:33.520 --> 00:35:37.540 align:start position:0%
+ 
+ 
+
+00:35:37.540 --> 00:35:39.550 align:start position:0%
+ 
+ 
+
+00:35:39.550 --> 00:35:41.590 align:start position:0%
+ 
+ 
+
+00:35:41.590 --> 00:35:43.480 align:start position:0%
+ 
+ 
+
+00:35:43.480 --> 00:35:46.780 align:start position:0%
+ 
+ 
+
+00:35:46.780 --> 00:35:48.370 align:start position:0%
+ 
+ 
+
+00:35:48.370 --> 00:35:50.650 align:start position:0%
+ 
+ 
+
+00:35:50.650 --> 00:35:52.630 align:start position:0%
+ 
+ 
+
+00:35:52.630 --> 00:35:54.070 align:start position:0%
+ 
+ 
+
+00:35:54.070 --> 00:35:56.530 align:start position:0%
+ 
+ 
+
+00:35:56.530 --> 00:35:58.450 align:start position:0%
+ 
+ 
+
+00:35:58.450 --> 00:36:00.280 align:start position:0%
+ 
+ 
+
+00:36:00.280 --> 00:36:03.280 align:start position:0%
+ 
+ 
+
+00:36:03.280 --> 00:36:04.900 align:start position:0%
+ 
+ 
+
+00:36:04.900 --> 00:36:06.280 align:start position:0%
+ 
+ 
+
+00:36:06.280 --> 00:36:08.740 align:start position:0%
+ 
+ 
+
+00:36:08.740 --> 00:36:11.290 align:start position:0%
+ 
+ 
+
+00:36:11.290 --> 00:36:14.500 align:start position:0%
+ 
+ 
+
+00:36:14.500 --> 00:36:16.540 align:start position:0%
+ 
+ 
+
+00:36:16.540 --> 00:36:18.850 align:start position:0%
+ 
+ 
+
+00:36:18.850 --> 00:36:21.910 align:start position:0%
+ 
+ 
+
+00:36:21.910 --> 00:36:24.250 align:start position:0%
+ 
+ 
+
+00:36:24.250 --> 00:36:26.800 align:start position:0%
+ 
+ 
+
+00:36:26.800 --> 00:36:28.090 align:start position:0%
+ 
+ 
+
+00:36:28.090 --> 00:36:29.680 align:start position:0%
+ 
+ 
+
+00:36:29.680 --> 00:36:32.500 align:start position:0%
+ 
+ 
+
+00:36:32.500 --> 00:36:34.360 align:start position:0%
+ 
+ 
+
+00:36:34.360 --> 00:36:36.790 align:start position:0%
+ 
+ 
+
+00:36:36.790 --> 00:36:38.200 align:start position:0%
+ 
+ 
+
+00:36:38.200 --> 00:36:40.870 align:start position:0%
+ 
+ 
+
+00:36:40.870 --> 00:36:43.270 align:start position:0%
+ 
+ 
+
+00:36:43.270 --> 00:36:45.940 align:start position:0%
+ 
+ 
+
+00:36:45.940 --> 00:36:47.230 align:start position:0%
+ 
+ 
+
+00:36:47.230 --> 00:36:50.440 align:start position:0%
+ 
+ 
+
+00:36:50.440 --> 00:36:54.630 align:start position:0%
+ 
+ 
+
+00:36:54.630 --> 00:36:58.870 align:start position:0%
+ 
+ 
+
+00:36:58.870 --> 00:37:01.750 align:start position:0%
+ 
+ 
+
+00:37:01.750 --> 00:37:03.910 align:start position:0%
+ 
+ 
+
+00:37:03.910 --> 00:37:06.010 align:start position:0%
+ 
+ 
+
+00:37:06.010 --> 00:37:08.230 align:start position:0%
+ 
+ 
+
+00:37:08.230 --> 00:37:10.450 align:start position:0%
+ 
+ 
+
+00:37:10.450 --> 00:37:12.010 align:start position:0%
+ 
+ 
+
+00:37:12.010 --> 00:37:14.050 align:start position:0%
+ 
+ 
+
+00:37:14.050 --> 00:37:16.030 align:start position:0%
+ 
+ 
+
+00:37:16.030 --> 00:37:19.030 align:start position:0%
+ 
+ 
+
+00:37:19.030 --> 00:37:21.280 align:start position:0%
+ 
+ 
+
+00:37:21.280 --> 00:37:30.160 align:start position:0%
+ 
+ 
+
+00:37:30.160 --> 00:37:32.520 align:start position:0%
+ 
+ 
+
+00:37:32.520 --> 00:37:35.350 align:start position:0%
+ 
+ 
+
+00:37:35.350 --> 00:37:37.000 align:start position:0%
+ 
+ 
+
+00:37:37.000 --> 00:37:38.590 align:start position:0%
+ 
+ 
+
+00:37:38.590 --> 00:37:41.080 align:start position:0%
+ 
+ 
+
+00:37:41.080 --> 00:37:42.940 align:start position:0%
+ 
+ 
+
+00:37:42.940 --> 00:37:45.670 align:start position:0%
+ 
+ 
+
+00:37:45.670 --> 00:37:47.050 align:start position:0%
+ 
+ 
+
+00:37:47.050 --> 00:37:49.510 align:start position:0%
+ 
+ 
+
+00:37:49.510 --> 00:37:52.720 align:start position:0%
+ 
+ 
+
+00:37:52.720 --> 00:37:55.360 align:start position:0%
+ 
+ 
+
+00:37:55.360 --> 00:37:56.980 align:start position:0%
+ 
+ 
+
+00:37:56.980 --> 00:37:59.200 align:start position:0%
+ 
+ 
+
+00:37:59.200 --> 00:38:01.870 align:start position:0%
+ 
+ 
+
+00:38:01.870 --> 00:38:03.940 align:start position:0%
+ 
+ 
+
+00:38:03.940 --> 00:38:06.190 align:start position:0%
+ 
+ 
+
+00:38:06.190 --> 00:38:07.960 align:start position:0%
+ 
+ 
+
+00:38:07.960 --> 00:38:10.000 align:start position:0%
+ 
+ 
+
+00:38:10.000 --> 00:38:12.670 align:start position:0%
+ 
+ 
+
+00:38:12.670 --> 00:38:14.740 align:start position:0%
+ 
+ 
+
+00:38:14.740 --> 00:38:17.200 align:start position:0%
+ 
+ 
+
+00:38:17.200 --> 00:38:19.120 align:start position:0%
+ 
+ 
+
+00:38:19.120 --> 00:38:20.890 align:start position:0%
+ 
+ 
+
+00:38:20.890 --> 00:38:22.630 align:start position:0%
+ 
+ 
+
+00:38:22.630 --> 00:38:24.130 align:start position:0%
+ 
+ 
+
+00:38:24.130 --> 00:38:26.620 align:start position:0%
+ 
+ 
+
+00:38:26.620 --> 00:38:27.790 align:start position:0%
+ 
+ 
+
+00:38:27.790 --> 00:38:30.550 align:start position:0%
+ 
+ 
+
+00:38:30.550 --> 00:38:33.580 align:start position:0%
+ 
+ 
+
+00:38:33.580 --> 00:38:36.400 align:start position:0%
+ 
+ 
+
+00:38:36.400 --> 00:38:38.230 align:start position:0%
+ 
+ 
+
+00:38:38.230 --> 00:38:40.510 align:start position:0%
+ 
+ 
+
+00:38:40.510 --> 00:38:41.430 align:start position:0%
+ 
+ 
+
+00:38:41.430 --> 00:38:43.210 align:start position:0%
+ 
+ 
+
+00:38:43.210 --> 00:38:51.150 align:start position:0%
+ 
+ 
+
+00:38:51.150 --> 00:38:58.229 align:start position:0%
+ 
+ 
+
+00:38:58.229 --> 00:39:03.329 align:start position:0%
+ 
+ 
+
+00:39:03.329 --> 00:39:05.470 align:start position:0%
+ 
+ 
+
+00:39:05.470 --> 00:39:08.559 align:start position:0%
+ 
+ 
+
+00:39:08.559 --> 00:39:12.069 align:start position:0%
+ 
+ 
+
+00:39:12.069 --> 00:39:13.989 align:start position:0%
+ 
+ 
+
+00:39:13.989 --> 00:39:15.729 align:start position:0%
+ 
+ 
+
+00:39:15.729 --> 00:39:18.309 align:start position:0%
+ 
+ 
+
+00:39:18.309 --> 00:39:20.170 align:start position:0%
+ 
+ 
+
+00:39:20.170 --> 00:39:22.509 align:start position:0%
+ 
+ 
+
+00:39:22.509 --> 00:39:24.190 align:start position:0%
+ 
+ 
+
+00:39:24.190 --> 00:39:27.430 align:start position:0%
+ 
+ 
+
+00:39:27.430 --> 00:39:30.099 align:start position:0%
+ 
+ 
+
+00:39:30.099 --> 00:39:31.029 align:start position:0%
+ 
+ 
+
+00:39:31.029 --> 00:39:34.089 align:start position:0%
+ 
+ 
+
+00:39:34.089 --> 00:39:35.710 align:start position:0%
+ 
+ 
+
+00:39:35.710 --> 00:39:39.339 align:start position:0%
+ 
+ 
+
+00:39:39.339 --> 00:39:41.680 align:start position:0%
+ 
+ 
+
+00:39:41.680 --> 00:39:42.930 align:start position:0%
+ 
+ 
+
+00:39:42.930 --> 00:39:46.239 align:start position:0%
+ 
+ 
+
+00:39:46.239 --> 00:39:49.539 align:start position:0%
+ 
+ 
+
+00:39:49.539 --> 00:39:51.670 align:start position:0%
+ 
+ 
+
+00:39:51.670 --> 00:39:54.940 align:start position:0%
+ 
+ 
+
+00:39:54.940 --> 00:39:57.039 align:start position:0%
+ 
+ 
+
+00:39:57.039 --> 00:39:58.930 align:start position:0%
+ 
+ 
+
+00:39:58.930 --> 00:40:01.839 align:start position:0%
+ 
+ 
+
+00:40:01.839 --> 00:40:03.309 align:start position:0%
+ 
+ 
+
+00:40:03.309 --> 00:40:05.349 align:start position:0%
+ 
+ 
+
+00:40:05.349 --> 00:40:08.289 align:start position:0%
+ 
+ 
+
+00:40:08.289 --> 00:40:10.660 align:start position:0%
+ 
+ 
+
+00:40:10.660 --> 00:40:13.210 align:start position:0%
+ 
+ 
+
+00:40:13.210 --> 00:40:16.150 align:start position:0%
+ 
+ 
+
+00:40:16.150 --> 00:40:20.049 align:start position:0%
+ 
+ 
+
+00:40:20.049 --> 00:40:24.970 align:start position:0%
+ 
+ 
+
+00:40:24.970 --> 00:40:26.710 align:start position:0%
+ 
+ 
+
+00:40:26.710 --> 00:40:28.900 align:start position:0%
+ 
+ 
+
+00:40:28.900 --> 00:40:30.640 align:start position:0%
+ 
+ 
+
+00:40:30.640 --> 00:40:38.629 align:start position:0%
+ 
+ 
+
+00:40:38.629 --> 00:40:41.669 align:start position:0%
+ 
+ 
+
+00:40:41.669 --> 00:40:43.679 align:start position:0%
+ 
+ 
+
+00:40:43.679 --> 00:40:46.259 align:start position:0%
+ 
+ 
+
+00:40:46.259 --> 00:40:48.509 align:start position:0%
+ 
+ 
+
+00:40:48.509 --> 00:40:51.209 align:start position:0%
+ 
+ 
+
+00:40:51.209 --> 00:40:53.099 align:start position:0%
+ 
+ 
+
+00:40:53.099 --> 00:40:55.349 align:start position:0%
+ 
+ 
+
+00:40:55.349 --> 00:40:59.099 align:start position:0%
+ 
+ 
+
+00:40:59.099 --> 00:41:01.169 align:start position:0%
+ 
+ 
+
+00:41:01.169 --> 00:41:03.029 align:start position:0%
+ 
+ 
+
+00:41:03.029 --> 00:41:05.370 align:start position:0%
+ 
+ 
+
+00:41:05.370 --> 00:41:07.620 align:start position:0%
+ 
+ 
+
+00:41:07.620 --> 00:41:09.779 align:start position:0%
+ 
+ 
+
+00:41:09.779 --> 00:41:11.519 align:start position:0%
+ 
+ 
+
+00:41:11.519 --> 00:41:13.589 align:start position:0%
+ 
+ 
+
+00:41:13.589 --> 00:41:15.839 align:start position:0%
+ 
+ 
+
+00:41:15.839 --> 00:41:17.549 align:start position:0%
+ 
+ 
+
+00:41:17.549 --> 00:41:19.559 align:start position:0%
+ 
+ 
+
+00:41:19.559 --> 00:41:21.809 align:start position:0%
+ 
+ 
+
+00:41:21.809 --> 00:41:23.309 align:start position:0%
+ 
+ 
+
+00:41:23.309 --> 00:41:25.349 align:start position:0%
+ 
+ 
+
+00:41:25.349 --> 00:41:26.939 align:start position:0%
+ 
+ 
+
+00:41:26.939 --> 00:41:28.949 align:start position:0%
+ 
+ 
+
+00:41:28.949 --> 00:41:31.139 align:start position:0%
+ 
+ 
+
+00:41:31.139 --> 00:41:32.149 align:start position:0%
+ 
+ 
+
+00:41:32.149 --> 00:41:33.929 align:start position:0%
+ 
+ 
+
+00:41:33.929 --> 00:41:35.370 align:start position:0%
+ 
+ 
+
+00:41:35.370 --> 00:41:37.109 align:start position:0%
+ 
+ 
+
+00:41:37.109 --> 00:41:38.669 align:start position:0%
+ 
+ 
+
+00:41:38.669 --> 00:41:41.669 align:start position:0%
+ 
+ 
+
+00:41:41.669 --> 00:41:47.770 align:start position:0%
+ 
+ 
+
+00:41:47.770 --> 00:41:48.770 align:start position:0%
+ 
+ 
+
