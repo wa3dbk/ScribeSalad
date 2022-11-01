@@ -1,0 +1,2928 @@
+WEBVTT
+Kind: captions
+Language: en
+
+00:00:00.160 --> 00:00:03.590 align:start position:0%
+ 
+let's optimize some javascript  hey today we're going to be doing a deep  dive on optimizing a chunk of javascript  code  specifically i have a fairly unoptimized  class that we've built up  in a previous tutorial we left a lot of  performance on the table  in the interest of making it easy to  understand and readable  today we're walking through and i'll be  showing you how to profile and optimize  this  ending up with something significantly  faster  now whether you're interested in game  specific optimization or just general  javascript optimization  i think you'll learn and pick up a few  tips today anyway  so leading off from the last tutorial we  covered the basic  implementation of a spatial hash grid  which can be super useful in game  situations  and given it's such a simple and easy  data structure to implement  it lends itself really well to profiling  and optimization  before we go make sure you're subscribed  so you don't miss out on future videos  so let's get started my rough strategy  is to start with some high level  questions about the code and  gradually refine them usually you start  with some questions like  is this whatever it is is it having a  real tangible effect  on your code is this actually important  to spend time optimizing  i'm not usually the type to start  optimizing something right away so you  need to prove that it's a problem first  next you want to try and isolate the  code you're optimizing into a benchmark  of some sort or  at least a reproducible situation to  create a baseline to optimize against  in games this might either be by  actually creating a real benchmark by  running the code in an isolated  situation  or by using a scenario that's at least  consistent in our case i created a  synthetic little benchmark comparing the  results of thousands of find nearby  or update calls after that you want to  examine the code in question and ask  some general questions  things like can this code run  realistically faster  if so and if the stars were aligned the  moon's in the right position  whatever roughly how fast could it go  what's the upper bound here  the speed of light the fastest you can  go without resorting to magic  this is an important question because  there's an absolute bottom line of work  that a bit of code has to do  despite any and all optimizations and if  you estimate that things still won't go  fast enough  it's time to step back and think about  optimizing at a higher level  the example that's usually thrown around  is that one pregnant woman can produce a  baby in roughly nine months  but nine pregnant women can't produce a  baby in one month  let's dive into the code the very first  thing i'm going to do is take the  original spatial grid  slow class and copy paste it into a new  class  the reason is that i want to be able to  do a b tests and compare the performance  directly between the old and new code  giving the exact same inputs  now that's out of the way let's take a  quick tour of the benchmark code  there's not much to explain here other  than we generate a bunch of client data  and we use this grid tester class to  batch a large number of calls to find  nearby or update  let's make sure there's actually enough  work to profile so let's bump up the  numbers to like 10 000  meaning we'll do 10 000 queries per  benchmark run  this is just to make it easier to gauge  the results of profiling  next we'll grab a profile so if you  didn't know chrome has a built-in  profiler  you just need to bring up devtools so  you just go press this little icon here  i think it's called a hamburger icon  i'm not sure go to more tools and then  you can open up developer tools  you can also just press ctrl shift c to  bring it up with a keyboard shortcut  you should see a bunch of tabs here  we're going to use the performance tab  so i'll just click on that  at first it's pretty empty we have to  actually record a profile  there's two buttons to take profiles  there's the record button which just  sort of starts profiling right away  the other is a bit of a convenience one  what it does is starts profiling and  then reloads the page for you  and i'll use that since the benchmark i  wrote just runs as soon as the page  loads  so after you press the button here i  just need to wait a few seconds and then  i can hit stop  it'll process things for a second and  then you'll get this timeline view of  the main thread as well as other threads  and you can see the dependencies  and ipc's between processes if you press  the sources tab you'll get this cool  breakdown of how much time was  attributed to individual lines  of code which is mostly what i'll be  using today so let's kind of browse  through a bit  and we can roughly see where time is  getting spent there's a little bit of  time getting lost in some unnecessary  stuff like destructuring like on these  lines we're spending a bit of time here  and there but  overall it's pretty obvious that we're  sinking most of our time into the big  calls  i don't really like killing these tiny  things anyway because they make things  nice and readable which is important  because  when there's bigger fish to fry trying  to go after these is really scraping the  bottom of the barrel  there's a time and place for those kind  of micro optimizations but  it's not now anyway let's take a deeper  look at a few of these lines  specifically client.add and delete and  we should understand what these are and  why they're slow  the clients and cells these are either  set containers or map containers  both of which are depending on the  implementation going to be order log n  or order one time complexity for things  like access  so reasonably fast a couple observations  right off the bat  we're taking a ton of time in just a few  spots those being the  set add and deletes now there's two  major hot spots the first isn't find  nearby where the results is a set  you can see it's declared down here and  we add to it over on this line  now the reason for this is simple units  can be inserted into multiple cells  recall back to the first video if you  have a large unit that spans multiple  cells  it gets inserted into multiple cells  which is simple enough  but it has this side effect that when  you retrieve the client from multiple  cells  there's a chance of duplicates the  strength of a set container is that it  guarantees that all the elements in the  container are unique which  in this case is great because that means  we can just add every client from every  cell and the set will take care of  making sure that we don't have any  duplicates  but there's a slight downside in that  it's not as fast as it could be which is  pretty obvious from the profile  internally the set container will be  implemented either with some sort of  tree or  hash table meaning operations will be  subliner  if it's a tree it's probably a red black  tree and so insertion will be something  like order log n  and if it's a hash table then insertion  will be amortized  order one this is a long way of saying  they're fast  but when you're doing these calls  hundreds or thousands of times per frame  they're not fast enough so what is fast  enough or i guess the better question is  if we wanted to do this as fast as  possible  what would it look like well fast as  possible assuming we still want to put  together a list to be returned  would be to return an array the only  problem is that we still need to  de-duplicate  the items in there so we don't return  the same client multiple times  a set was kind of overkilled to do this  because we know that each client is  uniquely allocated anyway  meaning whoever calls new client expects  to get a brand new unique client  every single call so we're going to make  some small changes here so that we can  ensure that we get no duplicates in the  list  but at almost zero cost so what we can  do is scroll up to new client  and make a small change to the client  definition  what we're doing in here is we're adding  a new field called query id and we're  going to default this to negative 1 to  start  next we need to go up to the constructor  and declare a new member property  we're calling it this dot query ids and  just initialize it to 0 to begin with  we're going to be using this to  deduplicate clients and define nearby  functions so let's scroll down there and  put it to use  the first thing we'll do is change the  result set into an array  since appending to an array is about as  cheap as it gets  and we're going to be using the query id  property that we just added to remove  duplicates  next we're going to increment the query  id right here before the main loop  this ensures that the query id we're  using in this call is unique  then while we're iterating the list of  clients within in individual cell  what we can do is check the client's  query id versus the current query id  if it's different it means that we  haven't seen this client yet so go ahead  and add it to the results array  by the way since the results array isn't  the set anymore we need to switch from  add to push  then we need to make sure to set this  client's query id to the current query  id  and that means if it turns up in another  cell this if statement will fail  and it won't be added to the list and so  we're good  this little change gets rid of the set  container we were using for the results  and let's compare the performance and  we're seeing a considerable improvement  here  the slow grid fine nearby calls took  roughly around 107 milliseconds or so  but  the new improved one only took about 44.  looks like it's roughly two times faster  but there's still a lot of low-hanging  fruit in the function  so let's go back first thing we can do  is take a new profile  so go ahead and press the second  profiling button here which starts  profiling and reloads the page  a few seconds should be good and then we  can stop the capture and take a look i'm  going to go straight to the source tab  this time since i want to see how hot  spots in find nearby changed  we're still losing a lot of time in here  and the biggest thing to notice  is that a lot of it is just going to  iterating over the values in the cell  and checking if the cell even exists  those two add up to quite a few  milliseconds and there's not a whole lot  of reason for this  to check to see if the cell exists is  just because we lazily created them  if we didn't lazily create each cell  we'd know for certain it  exists and iterating the values in the  set well that's never going to be as  cheap as iterating a linked list or an  array  there's not a whole lot we can do  without fundamentally changing the data  structure we're using  to go as fast as possible you want a  simple data structure here  the choices being either a link list or  some sort of array  now in this particular case of just  iterating the elements of the cell  both of these choices work so you  probably go with array since it's almost  certainly faster  but data structure changes have a more  global effect on the class  so we need to see how the insert and  remove function would be affected  given the choice of either data  structure so let's  look at insert first this is pretty  simple  it gets the bounds of a client iterates  all cells that overlap it and inserts  the client into that cell  so either data structure works here you  can trivially push to an array or a  linked list  nothing complicated about that so let's  move on in the remove function we do a  similar looping through all cells but  there's  a small gotcha here in any given cell we  need to remove the client  previously these were set containers  which can do a lookup and find the item  you're trying to delete in order login  or even order one time  but if we change this into something  other than a set we need some way of  deleting elements quickly  finding and deleting a specific element  from an array or  linked list for example is order n it's  slow as dirt  but there's a couple tricks here we can  use that can speed things up  considerably  with an array finding an item is the  bottleneck but if you already know the  index of an item  under certain conditions this can be  extremely fast  consider this array you could imagine  these are items in your world  for example and say here at this index  you want to remove this guy here  normally when you think of removing an  item from an array  you have to do a somewhat complicated  bit of surgery to the array  you take the item out then you go and  shift everything left by one so that  everything is back in the same order  no gaps or anything just missing the  item you wanted removed  but here's where you can make it faster  if you don't give a crap about the order  of the items  instead of shifting everything over you  can simply swap the item with the last  item in the list and then pop it off the  end  job done barely takes any time at all  similarly for a linked list  finding the item is the bottleneck but  given a node in a list  removing it is trivial let's use a  doubly linked list  as an example you've got your pointers  to the previous to next items in the  chain  so removing an item is as simple as  modifying the previous item in the chain  and pointing it past you to the next  item and then doing the same for the  next item in the chain just pointing it  to the one behind you  at that point the item you wanted  removed isn't referenced anywhere  effectively removing it from the list  back to the code  so how does this help us in the context  of this delete function  it means that if the client had carried  some extra information about exactly  where it was in the list for any given  cell  this delete function would be trivial  you might be able to get an  array to work here but i'm going to go  with a doubly linked list for simplicity  so what we'll do is we'll need to make a  handful of small changes throughout the  class to change everything to use a  doubly linked list  starting with the constructor we're not  going to allocate a single map anymore  instead we're going to allocate a  two-dimensional array of nodes  each one corresponding to a cell and of  course since we haven't inserted  anything into the grid yet  each cell will be initialized to null  this will take care of having to do any  kind of checks to see whether or not a  cell exists  before we access it since they all exist  even they're  just null it's a bit of a trade-off  using a bit more memory  so you can decide if it's the way you  want to go now a new client i'm going to  change things a bit in the client dict  instead of the indices we're going to  store a few more things  i'll change this to a full-on subject  calling it cells  and it'll store the indices of the cells  this client has been inserted into  which isn't much different than before  we'll also add this new field called  nodes and what this is going to do  is for any given cell we can access the  linked list node that was created to  insert this client  okay so the initialization is out of the  way we just need to make some  modifications to find nearby  insert and delete to support the new  linked list  starting with find nearby the old code  used to use the xy  cell indices to create a hash string to  access the cells map  but we can just use x and y directly to  access the head node for that cell  at that point it's just a simple matter  of iterating the linked list  so while head is defined we can access  the client from the node's client  property  and then we assign head to next the  inner part of this loop is identical to  the old version where we check the query  id and then insert it into the results  array let's scroll down to the insert  function now  this changes a little bit more the first  thing is that since  insert is what's called to actually  insert the client into each cell  we want to track the nodes so we declare  that at the top here and in the first  iteration of the x-axis  we just insert another array making it  two-dimensional  now in the inner loop this used to be a  simple add call  but we're going to have to do a bit more  work now we define a dict called head  which is a node in the doubly linked  list and default the previous next  pointers to null  at that point we insert it into the  nodes array which is going to get saved  on the client  then we're going to set head.next to  equal to the head of the cells linked  list  effectively making this the new head of  the linked list  so you just set the current cell's  previous node to head and then you set  the cell to point ahead  at the end of the function we just need  to do a little maintenance on the  client so we need to fill out the cell  stick with indices and nodes  so that's all we're doing here okay last  up we need to modify the remove function  so let's take a look in here  this was a relatively bare bones  function before since the  set's delete function took care of  everything for us  in the inner loop we need to make a  bunch of modifications  basically doing the doubly linked list  removal for ourselves  so the first thing you want to do is get  a reference to the linked list node  and we save that back in the insert  function you just need to access the  client.cells.nodes with the proper  indices  removing from a doubly linked list is as  simple as inserting so what you need to  do is look at the next node in the list  and if it exists you have it reference  the previous item in the chain  same with the previous item you need to  check that exists and if it does  assign its next to the next item in the  list  lastly there's one final check that  needs to be done and that's of you  deleting the head node because it's  referenced by this dot  cells at x and y so if you're deleting  the head node just make sure you update  the reference there to point at the next  one in the list  and that's it we're done it was a little  involved but if you're familiar with  linked lists there should have been a  breeze  let's test the performance out so i  won't bother with a profile and i'll  just reload and let's check out the  numbers  the first thing that pops out is the  find near calls appear to be slightly  slower but that's not too unexpected  the major difference in find nearby is  the use of a linked list instead of the  built-in set type so i could believe  there's some heavy duty optimization on  v8's end of things to make the set  container as fast as possible  faster than iterating our own hand  rolled link list  the real changes come from the insert  delete functions that's quite a bit  faster  the time difference here is massive  around two and a half to three times  faster so this is really substantial  depending on the game and the usage  patterns this trade-off is probably  easily worth it and there's still room  for more improvement and easy wins in  there  back in the code let's scroll over to  the update function  this is implemented in a super simple  way we simply remove the item from the  grid  and then we reinsert it now you can try  and do something more complicated like  figure out which indices it used to be  in  and which ones it should be in now and  do a difference on the two  but let's think about the problem a bit  let's start with a basic rectangular  world so i'll just draw a super crappy  one  and then let's just throw some random  crap in there real quick so i'll add  some people and monsters and whatever  else  you can just endure me drawing some  stuff so if i overlay a grid on top  and now let's think about what's  happening in any given frame  the game is likely to be running at  something like 30 fps  minimum meaning you get about 1 30th of  a second to do anything like movement  and whatever else  now even if you're using small cells 1  30th of a second  isn't a whole lot of time if this guy is  walking across the field  they'll barely make it anywhere in any  given frame update  chances are that a few units will cross  cell boundaries but in reality most will  just be in a slightly different spot in  the same grid cell they were in before  basically we can expect a lot of  temporal coherence between frames  everything is mostly going to be in the  same place it was in the previous frame  back in the code that means that we  shouldn't reasonably expect that a given  client will move far enough to trigger a  full removal slash insert  in fact we can build in a check to see  whether or not this has happened  so we look at the cell's indices this  unit overlaps with and check whether or  not they're  the exact same ones that are stored in  the client we store the min max indices  so you're just doing four equality  checks here and if they're all the same  we can early out and return from the  function  let's test out the performance here  which just means reloading the page  and the numbers are super promising  again no need to look at the fine nearby  numbers since there's no relevant  changes there  but look at the update numbers now these  are awesome down to just 20 milliseconds  or so at least in this synthetic  benchmark  this is roughly 15 times faster than the  original implementation  and five times faster than the improved  faster one  now our synthetic benchmark only allowed  a small bit of movement to kind of  simulate an  individual unit moving around on a map  but depending on the size of your cells  or how fast or frequently things move  around you may be hitting that slower  remove  insert path more often so both  optimizations could be necessary  for fun we can take a quick profile so i  just head over to the performance tab  clear out the existing profile and hit  the reload button  i want to capture a solid couple seconds  of time before hitting stop and then i  can poke around  there's always more things you can do  like in this case i'm scrolling through  the graph here  and you can see there's quite a few gcs  or garbage collections being triggered  there may be some wins to be had by  creating our own allocators and reusing  objects heavily  i can also go poke around in the sources  tab to see what else is available  but in reality here's where we can kind  of leave things i just wanted to give  you a step-by-step  idea of what i might do when i'm  profiling and we've been able to take  this initial spatial grid implementation  and make it considerably faster given  just a few half-assed passes  to make it do less stupid things hope  you enjoyed this and learned something  in the process  code should all be up on the github like  i sometimes remember to do  let me know what you thought in the  comments also remember to like and  subscribe  and until next time cheers
+
+00:00:03.590 --> 00:00:05.670 align:start position:0%
+let's optimize some javascript  hey today we're going to be doing a deep  dive on optimizing a chunk of javascript  code  specifically i have a fairly unoptimized  class that we've built up  in a previous tutorial we left a lot of  performance on the table  in the interest of making it easy to  understand and readable  today we're walking through and i'll be  showing you how to profile and optimize  this  ending up with something significantly  faster  now whether you're interested in game  specific optimization or just general  javascript optimization  i think you'll learn and pick up a few  tips today anyway  so leading off from the last tutorial we  covered the basic  implementation of a spatial hash grid  which can be super useful in game  situations  and given it's such a simple and easy  data structure to implement  it lends itself really well to profiling  and optimization  before we go make sure you're subscribed  so you don't miss out on future videos  so let's get started my rough strategy  is to start with some high level  questions about the code and  gradually refine them usually you start  with some questions like  is this whatever it is is it having a  real tangible effect  on your code is this actually important  to spend time optimizing  i'm not usually the type to start  optimizing something right away so you  need to prove that it's a problem first  next you want to try and isolate the  code you're optimizing into a benchmark  of some sort or  at least a reproducible situation to  create a baseline to optimize against  in games this might either be by  actually creating a real benchmark by  running the code in an isolated  situation  or by using a scenario that's at least  consistent in our case i created a  synthetic little benchmark comparing the  results of thousands of find nearby  or update calls after that you want to  examine the code in question and ask  some general questions  things like can this code run  realistically faster  if so and if the stars were aligned the  moon's in the right position  whatever roughly how fast could it go  what's the upper bound here  the speed of light the fastest you can  go without resorting to magic  this is an important question because  there's an absolute bottom line of work  that a bit of code has to do  despite any and all optimizations and if  you estimate that things still won't go  fast enough  it's time to step back and think about  optimizing at a higher level  the example that's usually thrown around  is that one pregnant woman can produce a  baby in roughly nine months  but nine pregnant women can't produce a  baby in one month  let's dive into the code the very first  thing i'm going to do is take the  original spatial grid  slow class and copy paste it into a new  class  the reason is that i want to be able to  do a b tests and compare the performance  directly between the old and new code  giving the exact same inputs  now that's out of the way let's take a  quick tour of the benchmark code  there's not much to explain here other  than we generate a bunch of client data  and we use this grid tester class to  batch a large number of calls to find  nearby or update  let's make sure there's actually enough  work to profile so let's bump up the  numbers to like 10 000  meaning we'll do 10 000 queries per  benchmark run  this is just to make it easier to gauge  the results of profiling  next we'll grab a profile so if you  didn't know chrome has a built-in  profiler  you just need to bring up devtools so  you just go press this little icon here  i think it's called a hamburger icon  i'm not sure go to more tools and then  you can open up developer tools  you can also just press ctrl shift c to  bring it up with a keyboard shortcut  you should see a bunch of tabs here  we're going to use the performance tab  so i'll just click on that  at first it's pretty empty we have to  actually record a profile  there's two buttons to take profiles  there's the record button which just  sort of starts profiling right away  the other is a bit of a convenience one  what it does is starts profiling and  then reloads the page for you  and i'll use that since the benchmark i  wrote just runs as soon as the page  loads  so after you press the button here i  just need to wait a few seconds and then  i can hit stop  it'll process things for a second and  then you'll get this timeline view of  the main thread as well as other threads  and you can see the dependencies  and ipc's between processes if you press  the sources tab you'll get this cool  breakdown of how much time was  attributed to individual lines  of code which is mostly what i'll be  using today so let's kind of browse  through a bit  and we can roughly see where time is  getting spent there's a little bit of  time getting lost in some unnecessary  stuff like destructuring like on these  lines we're spending a bit of time here  and there but  overall it's pretty obvious that we're  sinking most of our time into the big  calls  i don't really like killing these tiny  things anyway because they make things  nice and readable which is important  because  when there's bigger fish to fry trying  to go after these is really scraping the  bottom of the barrel  there's a time and place for those kind  of micro optimizations but  it's not now anyway let's take a deeper  look at a few of these lines  specifically client.add and delete and  we should understand what these are and  why they're slow  the clients and cells these are either  set containers or map containers  both of which are depending on the  implementation going to be order log n  or order one time complexity for things  like access  so reasonably fast a couple observations  right off the bat  we're taking a ton of time in just a few  spots those being the  set add and deletes now there's two  major hot spots the first isn't find  nearby where the results is a set  you can see it's declared down here and  we add to it over on this line  now the reason for this is simple units  can be inserted into multiple cells  recall back to the first video if you  have a large unit that spans multiple  cells  it gets inserted into multiple cells  which is simple enough  but it has this side effect that when  you retrieve the client from multiple  cells  there's a chance of duplicates the  strength of a set container is that it  guarantees that all the elements in the  container are unique which  in this case is great because that means  we can just add every client from every  cell and the set will take care of  making sure that we don't have any  duplicates  but there's a slight downside in that  it's not as fast as it could be which is  pretty obvious from the profile  internally the set container will be  implemented either with some sort of  tree or  hash table meaning operations will be  subliner  if it's a tree it's probably a red black  tree and so insertion will be something  like order log n  and if it's a hash table then insertion  will be amortized  order one this is a long way of saying  they're fast  but when you're doing these calls  hundreds or thousands of times per frame  they're not fast enough so what is fast  enough or i guess the better question is  if we wanted to do this as fast as  possible  what would it look like well fast as  possible assuming we still want to put  together a list to be returned  would be to return an array the only  problem is that we still need to  de-duplicate  the items in there so we don't return  the same client multiple times  a set was kind of overkilled to do this  because we know that each client is  uniquely allocated anyway  meaning whoever calls new client expects  to get a brand new unique client  every single call so we're going to make  some small changes here so that we can  ensure that we get no duplicates in the  list  but at almost zero cost so what we can  do is scroll up to new client  and make a small change to the client  definition  what we're doing in here is we're adding  a new field called query id and we're  going to default this to negative 1 to  start  next we need to go up to the constructor  and declare a new member property  we're calling it this dot query ids and  just initialize it to 0 to begin with  we're going to be using this to  deduplicate clients and define nearby  functions so let's scroll down there and  put it to use  the first thing we'll do is change the  result set into an array  since appending to an array is about as  cheap as it gets  and we're going to be using the query id  property that we just added to remove  duplicates  next we're going to increment the query  id right here before the main loop  this ensures that the query id we're  using in this call is unique  then while we're iterating the list of  clients within in individual cell  what we can do is check the client's  query id versus the current query id  if it's different it means that we  haven't seen this client yet so go ahead  and add it to the results array  by the way since the results array isn't  the set anymore we need to switch from  add to push  then we need to make sure to set this  client's query id to the current query  id  and that means if it turns up in another  cell this if statement will fail  and it won't be added to the list and so  we're good  this little change gets rid of the set  container we were using for the results  and let's compare the performance and  we're seeing a considerable improvement  here  the slow grid fine nearby calls took  roughly around 107 milliseconds or so  but  the new improved one only took about 44.  looks like it's roughly two times faster  but there's still a lot of low-hanging  fruit in the function  so let's go back first thing we can do  is take a new profile  so go ahead and press the second  profiling button here which starts  profiling and reloads the page  a few seconds should be good and then we  can stop the capture and take a look i'm  going to go straight to the source tab  this time since i want to see how hot  spots in find nearby changed  we're still losing a lot of time in here  and the biggest thing to notice  is that a lot of it is just going to  iterating over the values in the cell  and checking if the cell even exists  those two add up to quite a few  milliseconds and there's not a whole lot  of reason for this  to check to see if the cell exists is  just because we lazily created them  if we didn't lazily create each cell  we'd know for certain it  exists and iterating the values in the  set well that's never going to be as  cheap as iterating a linked list or an  array  there's not a whole lot we can do  without fundamentally changing the data  structure we're using  to go as fast as possible you want a  simple data structure here  the choices being either a link list or  some sort of array  now in this particular case of just  iterating the elements of the cell  both of these choices work so you  probably go with array since it's almost  certainly faster  but data structure changes have a more  global effect on the class  so we need to see how the insert and  remove function would be affected  given the choice of either data  structure so let's  look at insert first this is pretty  simple  it gets the bounds of a client iterates  all cells that overlap it and inserts  the client into that cell  so either data structure works here you  can trivially push to an array or a  linked list  nothing complicated about that so let's  move on in the remove function we do a  similar looping through all cells but  there's  a small gotcha here in any given cell we  need to remove the client  previously these were set containers  which can do a lookup and find the item  you're trying to delete in order login  or even order one time  but if we change this into something  other than a set we need some way of  deleting elements quickly  finding and deleting a specific element  from an array or  linked list for example is order n it's  slow as dirt  but there's a couple tricks here we can  use that can speed things up  considerably  with an array finding an item is the  bottleneck but if you already know the  index of an item  under certain conditions this can be  extremely fast  consider this array you could imagine  these are items in your world  for example and say here at this index  you want to remove this guy here  normally when you think of removing an  item from an array  you have to do a somewhat complicated  bit of surgery to the array  you take the item out then you go and  shift everything left by one so that  everything is back in the same order  no gaps or anything just missing the  item you wanted removed  but here's where you can make it faster  if you don't give a crap about the order  of the items  instead of shifting everything over you  can simply swap the item with the last  item in the list and then pop it off the  end  job done barely takes any time at all  similarly for a linked list  finding the item is the bottleneck but  given a node in a list  removing it is trivial let's use a  doubly linked list  as an example you've got your pointers  to the previous to next items in the  chain  so removing an item is as simple as  modifying the previous item in the chain  and pointing it past you to the next  item and then doing the same for the  next item in the chain just pointing it  to the one behind you  at that point the item you wanted  removed isn't referenced anywhere  effectively removing it from the list  back to the code  so how does this help us in the context  of this delete function  it means that if the client had carried  some extra information about exactly  where it was in the list for any given  cell  this delete function would be trivial  you might be able to get an  array to work here but i'm going to go  with a doubly linked list for simplicity  so what we'll do is we'll need to make a  handful of small changes throughout the  class to change everything to use a  doubly linked list  starting with the constructor we're not  going to allocate a single map anymore  instead we're going to allocate a  two-dimensional array of nodes  each one corresponding to a cell and of  course since we haven't inserted  anything into the grid yet  each cell will be initialized to null  this will take care of having to do any  kind of checks to see whether or not a  cell exists  before we access it since they all exist  even they're  just null it's a bit of a trade-off  using a bit more memory  so you can decide if it's the way you  want to go now a new client i'm going to  change things a bit in the client dict  instead of the indices we're going to  store a few more things  i'll change this to a full-on subject  calling it cells  and it'll store the indices of the cells  this client has been inserted into  which isn't much different than before  we'll also add this new field called  nodes and what this is going to do  is for any given cell we can access the  linked list node that was created to  insert this client  okay so the initialization is out of the  way we just need to make some  modifications to find nearby  insert and delete to support the new  linked list  starting with find nearby the old code  used to use the xy  cell indices to create a hash string to  access the cells map  but we can just use x and y directly to  access the head node for that cell  at that point it's just a simple matter  of iterating the linked list  so while head is defined we can access  the client from the node's client  property  and then we assign head to next the  inner part of this loop is identical to  the old version where we check the query  id and then insert it into the results  array let's scroll down to the insert  function now  this changes a little bit more the first  thing is that since  insert is what's called to actually  insert the client into each cell  we want to track the nodes so we declare  that at the top here and in the first  iteration of the x-axis  we just insert another array making it  two-dimensional  now in the inner loop this used to be a  simple add call  but we're going to have to do a bit more  work now we define a dict called head  which is a node in the doubly linked  list and default the previous next  pointers to null  at that point we insert it into the  nodes array which is going to get saved  on the client  then we're going to set head.next to  equal to the head of the cells linked  list  effectively making this the new head of  the linked list  so you just set the current cell's  previous node to head and then you set  the cell to point ahead  at the end of the function we just need  to do a little maintenance on the  client so we need to fill out the cell  stick with indices and nodes  so that's all we're doing here okay last  up we need to modify the remove function  so let's take a look in here  this was a relatively bare bones  function before since the  set's delete function took care of  everything for us  in the inner loop we need to make a  bunch of modifications  basically doing the doubly linked list  removal for ourselves  so the first thing you want to do is get  a reference to the linked list node  and we save that back in the insert  function you just need to access the  client.cells.nodes with the proper  indices  removing from a doubly linked list is as  simple as inserting so what you need to  do is look at the next node in the list  and if it exists you have it reference  the previous item in the chain  same with the previous item you need to  check that exists and if it does  assign its next to the next item in the  list  lastly there's one final check that  needs to be done and that's of you  deleting the head node because it's  referenced by this dot  cells at x and y so if you're deleting  the head node just make sure you update  the reference there to point at the next  one in the list  and that's it we're done it was a little  involved but if you're familiar with  linked lists there should have been a  breeze  let's test the performance out so i  won't bother with a profile and i'll  just reload and let's check out the  numbers  the first thing that pops out is the  find near calls appear to be slightly  slower but that's not too unexpected  the major difference in find nearby is  the use of a linked list instead of the  built-in set type so i could believe  there's some heavy duty optimization on  v8's end of things to make the set  container as fast as possible  faster than iterating our own hand  rolled link list  the real changes come from the insert  delete functions that's quite a bit  faster  the time difference here is massive  around two and a half to three times  faster so this is really substantial  depending on the game and the usage  patterns this trade-off is probably  easily worth it and there's still room  for more improvement and easy wins in  there  back in the code let's scroll over to  the update function  this is implemented in a super simple  way we simply remove the item from the  grid  and then we reinsert it now you can try  and do something more complicated like  figure out which indices it used to be  in  and which ones it should be in now and  do a difference on the two  but let's think about the problem a bit  let's start with a basic rectangular  world so i'll just draw a super crappy  one  and then let's just throw some random  crap in there real quick so i'll add  some people and monsters and whatever  else  you can just endure me drawing some  stuff so if i overlay a grid on top  and now let's think about what's  happening in any given frame  the game is likely to be running at  something like 30 fps  minimum meaning you get about 1 30th of  a second to do anything like movement  and whatever else  now even if you're using small cells 1  30th of a second  isn't a whole lot of time if this guy is  walking across the field  they'll barely make it anywhere in any  given frame update  chances are that a few units will cross  cell boundaries but in reality most will  just be in a slightly different spot in  the same grid cell they were in before  basically we can expect a lot of  temporal coherence between frames  everything is mostly going to be in the  same place it was in the previous frame  back in the code that means that we  shouldn't reasonably expect that a given  client will move far enough to trigger a  full removal slash insert  in fact we can build in a check to see  whether or not this has happened  so we look at the cell's indices this  unit overlaps with and check whether or  not they're  the exact same ones that are stored in  the client we store the min max indices  so you're just doing four equality  checks here and if they're all the same  we can early out and return from the  function  let's test out the performance here  which just means reloading the page  and the numbers are super promising  again no need to look at the fine nearby  numbers since there's no relevant  changes there  but look at the update numbers now these  are awesome down to just 20 milliseconds  or so at least in this synthetic  benchmark  this is roughly 15 times faster than the  original implementation  and five times faster than the improved  faster one  now our synthetic benchmark only allowed  a small bit of movement to kind of  simulate an  individual unit moving around on a map  but depending on the size of your cells  or how fast or frequently things move  around you may be hitting that slower  remove  insert path more often so both  optimizations could be necessary  for fun we can take a quick profile so i  just head over to the performance tab  clear out the existing profile and hit  the reload button  i want to capture a solid couple seconds  of time before hitting stop and then i  can poke around  there's always more things you can do  like in this case i'm scrolling through  the graph here  and you can see there's quite a few gcs  or garbage collections being triggered  there may be some wins to be had by  creating our own allocators and reusing  objects heavily  i can also go poke around in the sources  tab to see what else is available  but in reality here's where we can kind  of leave things i just wanted to give  you a step-by-step  idea of what i might do when i'm  profiling and we've been able to take  this initial spatial grid implementation  and make it considerably faster given  just a few half-assed passes  to make it do less stupid things hope  you enjoyed this and learned something  in the process  code should all be up on the github like  i sometimes remember to do  let me know what you thought in the  comments also remember to like and  subscribe  and until next time cheers
+ 
+
+00:00:05.670 --> 00:00:08.390 align:start position:0%
+ 
+ 
+
+00:00:08.390 --> 00:00:08.400 align:start position:0%
+ 
+ 
+
+00:00:08.400 --> 00:00:09.509 align:start position:0%
+ 
+
+
+00:00:09.509 --> 00:00:12.150 align:start position:0%
+ 
+ 
+
+00:00:12.150 --> 00:00:13.509 align:start position:0%
+ 
+ 
+
+00:00:13.509 --> 00:00:15.589 align:start position:0%
+ 
+ 
+
+00:00:15.589 --> 00:00:17.029 align:start position:0%
+ 
+ 
+
+00:00:17.029 --> 00:00:19.109 align:start position:0%
+ 
+ 
+
+00:00:19.109 --> 00:00:20.710 align:start position:0%
+ 
+ 
+
+00:00:20.710 --> 00:00:22.470 align:start position:0%
+ 
+ 
+
+00:00:22.470 --> 00:00:24.390 align:start position:0%
+ 
+ 
+
+00:00:24.390 --> 00:00:24.400 align:start position:0%
+ 
+ 
+
+00:00:24.400 --> 00:00:24.790 align:start position:0%
+ 
+
+
+00:00:24.790 --> 00:00:26.630 align:start position:0%
+ 
+ 
+
+00:00:26.630 --> 00:00:26.640 align:start position:0%
+ 
+ 
+
+00:00:26.640 --> 00:00:27.830 align:start position:0%
+ 
+
+
+00:00:27.830 --> 00:00:29.669 align:start position:0%
+ 
+ 
+
+00:00:29.669 --> 00:00:32.150 align:start position:0%
+ 
+ 
+
+00:00:32.150 --> 00:00:33.830 align:start position:0%
+ 
+ 
+
+00:00:33.830 --> 00:00:35.270 align:start position:0%
+ 
+ 
+
+00:00:35.270 --> 00:00:36.950 align:start position:0%
+ 
+ 
+
+00:00:36.950 --> 00:00:39.030 align:start position:0%
+ 
+ 
+
+00:00:39.030 --> 00:00:40.310 align:start position:0%
+ 
+ 
+
+00:00:40.310 --> 00:00:42.709 align:start position:0%
+ 
+ 
+
+00:00:42.709 --> 00:00:44.630 align:start position:0%
+ 
+ 
+
+00:00:44.630 --> 00:00:44.640 align:start position:0%
+ 
+ 
+
+00:00:44.640 --> 00:00:45.750 align:start position:0%
+ 
+
+
+00:00:45.750 --> 00:00:47.910 align:start position:0%
+ 
+ 
+
+00:00:47.910 --> 00:00:49.350 align:start position:0%
+ 
+ 
+
+00:00:49.350 --> 00:00:51.510 align:start position:0%
+ 
+ 
+
+00:00:51.510 --> 00:00:52.950 align:start position:0%
+ 
+ 
+
+00:00:52.950 --> 00:00:54.709 align:start position:0%
+ 
+ 
+
+00:00:54.709 --> 00:00:57.029 align:start position:0%
+ 
+ 
+
+00:00:57.029 --> 00:00:59.750 align:start position:0%
+ 
+ 
+
+00:00:59.750 --> 00:01:01.349 align:start position:0%
+ 
+ 
+
+00:01:01.349 --> 00:01:02.869 align:start position:0%
+ 
+ 
+
+00:01:02.869 --> 00:01:05.590 align:start position:0%
+ 
+ 
+
+00:01:05.590 --> 00:01:06.950 align:start position:0%
+ 
+ 
+
+00:01:06.950 --> 00:01:09.429 align:start position:0%
+ 
+ 
+
+00:01:09.429 --> 00:01:10.789 align:start position:0%
+ 
+ 
+
+00:01:10.789 --> 00:01:13.109 align:start position:0%
+ 
+ 
+
+00:01:13.109 --> 00:01:14.870 align:start position:0%
+ 
+ 
+
+00:01:14.870 --> 00:01:16.230 align:start position:0%
+ 
+ 
+
+00:01:16.230 --> 00:01:18.310 align:start position:0%
+ 
+ 
+
+00:01:18.310 --> 00:01:20.630 align:start position:0%
+ 
+ 
+
+00:01:20.630 --> 00:01:22.230 align:start position:0%
+ 
+ 
+
+00:01:22.230 --> 00:01:24.230 align:start position:0%
+ 
+ 
+
+00:01:24.230 --> 00:01:25.190 align:start position:0%
+ 
+ 
+
+00:01:25.190 --> 00:01:27.670 align:start position:0%
+ 
+ 
+
+00:01:27.670 --> 00:01:30.149 align:start position:0%
+ 
+ 
+
+00:01:30.149 --> 00:01:32.069 align:start position:0%
+ 
+ 
+
+00:01:32.069 --> 00:01:33.749 align:start position:0%
+ 
+ 
+
+00:01:33.749 --> 00:01:35.429 align:start position:0%
+ 
+ 
+
+00:01:35.429 --> 00:01:35.439 align:start position:0%
+ 
+ 
+
+00:01:35.439 --> 00:01:36.550 align:start position:0%
+ 
+
+
+00:01:36.550 --> 00:01:38.550 align:start position:0%
+ 
+ 
+
+00:01:38.550 --> 00:01:40.789 align:start position:0%
+ 
+ 
+
+00:01:40.789 --> 00:01:42.550 align:start position:0%
+ 
+ 
+
+00:01:42.550 --> 00:01:44.630 align:start position:0%
+ 
+ 
+
+00:01:44.630 --> 00:01:47.510 align:start position:0%
+ 
+ 
+
+00:01:47.510 --> 00:01:49.270 align:start position:0%
+ 
+ 
+
+00:01:49.270 --> 00:01:50.789 align:start position:0%
+ 
+ 
+
+00:01:50.789 --> 00:01:52.550 align:start position:0%
+ 
+ 
+
+00:01:52.550 --> 00:01:54.149 align:start position:0%
+ 
+ 
+
+00:01:54.149 --> 00:01:56.550 align:start position:0%
+ 
+ 
+
+00:01:56.550 --> 00:01:57.910 align:start position:0%
+ 
+ 
+
+00:01:57.910 --> 00:02:00.230 align:start position:0%
+ 
+ 
+
+00:02:00.230 --> 00:02:01.749 align:start position:0%
+ 
+ 
+
+00:02:01.749 --> 00:02:03.910 align:start position:0%
+ 
+ 
+
+00:02:03.910 --> 00:02:05.910 align:start position:0%
+ 
+ 
+
+00:02:05.910 --> 00:02:07.590 align:start position:0%
+ 
+ 
+
+00:02:07.590 --> 00:02:09.190 align:start position:0%
+ 
+ 
+
+00:02:09.190 --> 00:02:10.710 align:start position:0%
+ 
+ 
+
+00:02:10.710 --> 00:02:13.350 align:start position:0%
+ 
+ 
+
+00:02:13.350 --> 00:02:14.949 align:start position:0%
+ 
+ 
+
+00:02:14.949 --> 00:02:15.910 align:start position:0%
+ 
+ 
+
+00:02:15.910 --> 00:02:17.510 align:start position:0%
+ 
+ 
+
+00:02:17.510 --> 00:02:19.510 align:start position:0%
+ 
+ 
+
+00:02:19.510 --> 00:02:21.430 align:start position:0%
+ 
+ 
+
+00:02:21.430 --> 00:02:23.510 align:start position:0%
+ 
+ 
+
+00:02:23.510 --> 00:02:25.430 align:start position:0%
+ 
+ 
+
+00:02:25.430 --> 00:02:27.589 align:start position:0%
+ 
+ 
+
+00:02:27.589 --> 00:02:29.350 align:start position:0%
+ 
+ 
+
+00:02:29.350 --> 00:02:31.430 align:start position:0%
+ 
+ 
+
+00:02:31.430 --> 00:02:32.710 align:start position:0%
+ 
+ 
+
+00:02:32.710 --> 00:02:34.229 align:start position:0%
+ 
+ 
+
+00:02:34.229 --> 00:02:36.710 align:start position:0%
+ 
+ 
+
+00:02:36.710 --> 00:02:36.720 align:start position:0%
+ 
+ 
+
+00:02:36.720 --> 00:02:37.509 align:start position:0%
+ 
+
+
+00:02:37.509 --> 00:02:38.949 align:start position:0%
+ 
+ 
+
+00:02:38.949 --> 00:02:41.190 align:start position:0%
+ 
+ 
+
+00:02:41.190 --> 00:02:43.190 align:start position:0%
+ 
+ 
+
+00:02:43.190 --> 00:02:45.270 align:start position:0%
+ 
+ 
+
+00:02:45.270 --> 00:02:46.869 align:start position:0%
+ 
+ 
+
+00:02:46.869 --> 00:02:48.949 align:start position:0%
+ 
+ 
+
+00:02:48.949 --> 00:02:50.710 align:start position:0%
+ 
+ 
+
+00:02:50.710 --> 00:02:52.869 align:start position:0%
+ 
+ 
+
+00:02:52.869 --> 00:02:55.030 align:start position:0%
+ 
+ 
+
+00:02:55.030 --> 00:02:56.949 align:start position:0%
+ 
+ 
+
+00:02:56.949 --> 00:02:58.550 align:start position:0%
+ 
+ 
+
+00:02:58.550 --> 00:02:59.750 align:start position:0%
+ 
+ 
+
+00:02:59.750 --> 00:03:01.589 align:start position:0%
+ 
+ 
+
+00:03:01.589 --> 00:03:03.110 align:start position:0%
+ 
+ 
+
+00:03:03.110 --> 00:03:05.270 align:start position:0%
+ 
+ 
+
+00:03:05.270 --> 00:03:06.550 align:start position:0%
+ 
+ 
+
+00:03:06.550 --> 00:03:08.390 align:start position:0%
+ 
+ 
+
+00:03:08.390 --> 00:03:10.149 align:start position:0%
+ 
+ 
+
+00:03:10.149 --> 00:03:12.550 align:start position:0%
+ 
+ 
+
+00:03:12.550 --> 00:03:14.070 align:start position:0%
+ 
+ 
+
+00:03:14.070 --> 00:03:14.080 align:start position:0%
+ 
+ 
+
+00:03:14.080 --> 00:03:14.869 align:start position:0%
+ 
+
+
+00:03:14.869 --> 00:03:17.350 align:start position:0%
+ 
+ 
+
+00:03:17.350 --> 00:03:19.190 align:start position:0%
+ 
+ 
+
+00:03:19.190 --> 00:03:21.030 align:start position:0%
+ 
+ 
+
+00:03:21.030 --> 00:03:23.430 align:start position:0%
+ 
+ 
+
+00:03:23.430 --> 00:03:25.430 align:start position:0%
+ 
+ 
+
+00:03:25.430 --> 00:03:27.589 align:start position:0%
+ 
+ 
+
+00:03:27.589 --> 00:03:29.509 align:start position:0%
+ 
+ 
+
+00:03:29.509 --> 00:03:31.110 align:start position:0%
+ 
+ 
+
+00:03:31.110 --> 00:03:32.869 align:start position:0%
+ 
+ 
+
+00:03:32.869 --> 00:03:34.630 align:start position:0%
+ 
+ 
+
+00:03:34.630 --> 00:03:36.470 align:start position:0%
+ 
+ 
+
+00:03:36.470 --> 00:03:38.149 align:start position:0%
+ 
+ 
+
+00:03:38.149 --> 00:03:39.990 align:start position:0%
+ 
+ 
+
+00:03:39.990 --> 00:03:41.750 align:start position:0%
+ 
+ 
+
+00:03:41.750 --> 00:03:44.149 align:start position:0%
+ 
+ 
+
+00:03:44.149 --> 00:03:45.990 align:start position:0%
+ 
+ 
+
+00:03:45.990 --> 00:03:47.589 align:start position:0%
+ 
+ 
+
+00:03:47.589 --> 00:03:49.430 align:start position:0%
+ 
+ 
+
+00:03:49.430 --> 00:03:51.430 align:start position:0%
+ 
+ 
+
+00:03:51.430 --> 00:03:53.110 align:start position:0%
+ 
+ 
+
+00:03:53.110 --> 00:03:53.120 align:start position:0%
+ 
+ 
+
+00:03:53.120 --> 00:03:53.670 align:start position:0%
+ 
+
+
+00:03:53.670 --> 00:03:55.670 align:start position:0%
+ 
+ 
+
+00:03:55.670 --> 00:03:57.270 align:start position:0%
+ 
+ 
+
+00:03:57.270 --> 00:03:58.710 align:start position:0%
+ 
+ 
+
+00:03:58.710 --> 00:04:00.710 align:start position:0%
+ 
+ 
+
+00:04:00.710 --> 00:04:02.710 align:start position:0%
+ 
+ 
+
+00:04:02.710 --> 00:04:04.630 align:start position:0%
+ 
+ 
+
+00:04:04.630 --> 00:04:06.390 align:start position:0%
+ 
+ 
+
+00:04:06.390 --> 00:04:09.350 align:start position:0%
+ 
+ 
+
+00:04:09.350 --> 00:04:10.949 align:start position:0%
+ 
+ 
+
+00:04:10.949 --> 00:04:12.309 align:start position:0%
+ 
+ 
+
+00:04:12.309 --> 00:04:13.990 align:start position:0%
+ 
+ 
+
+00:04:13.990 --> 00:04:15.750 align:start position:0%
+ 
+ 
+
+00:04:15.750 --> 00:04:17.909 align:start position:0%
+ 
+ 
+
+00:04:17.909 --> 00:04:18.629 align:start position:0%
+ 
+ 
+
+00:04:18.629 --> 00:04:20.469 align:start position:0%
+ 
+ 
+
+00:04:20.469 --> 00:04:22.230 align:start position:0%
+ 
+ 
+
+00:04:22.230 --> 00:04:24.230 align:start position:0%
+ 
+ 
+
+00:04:24.230 --> 00:04:26.150 align:start position:0%
+ 
+ 
+
+00:04:26.150 --> 00:04:28.230 align:start position:0%
+ 
+ 
+
+00:04:28.230 --> 00:04:29.510 align:start position:0%
+ 
+ 
+
+00:04:29.510 --> 00:04:31.189 align:start position:0%
+ 
+ 
+
+00:04:31.189 --> 00:04:33.110 align:start position:0%
+ 
+ 
+
+00:04:33.110 --> 00:04:33.120 align:start position:0%
+ 
+ 
+
+00:04:33.120 --> 00:04:34.150 align:start position:0%
+ 
+
+
+00:04:34.150 --> 00:04:35.670 align:start position:0%
+ 
+ 
+
+00:04:35.670 --> 00:04:37.670 align:start position:0%
+ 
+ 
+
+00:04:37.670 --> 00:04:39.350 align:start position:0%
+ 
+ 
+
+00:04:39.350 --> 00:04:39.360 align:start position:0%
+ 
+ 
+
+00:04:39.360 --> 00:04:39.830 align:start position:0%
+ 
+
+
+00:04:39.830 --> 00:04:41.510 align:start position:0%
+ 
+ 
+
+00:04:41.510 --> 00:04:43.590 align:start position:0%
+ 
+ 
+
+00:04:43.590 --> 00:04:45.110 align:start position:0%
+ 
+ 
+
+00:04:45.110 --> 00:04:46.550 align:start position:0%
+ 
+ 
+
+00:04:46.550 --> 00:04:48.790 align:start position:0%
+ 
+ 
+
+00:04:48.790 --> 00:04:51.430 align:start position:0%
+ 
+ 
+
+00:04:51.430 --> 00:04:52.950 align:start position:0%
+ 
+ 
+
+00:04:52.950 --> 00:04:55.909 align:start position:0%
+ 
+ 
+
+00:04:55.909 --> 00:04:57.430 align:start position:0%
+ 
+ 
+
+00:04:57.430 --> 00:04:59.189 align:start position:0%
+ 
+ 
+
+00:04:59.189 --> 00:05:01.350 align:start position:0%
+ 
+ 
+
+00:05:01.350 --> 00:05:04.070 align:start position:0%
+ 
+ 
+
+00:05:04.070 --> 00:05:05.830 align:start position:0%
+ 
+ 
+
+00:05:05.830 --> 00:05:08.390 align:start position:0%
+ 
+ 
+
+00:05:08.390 --> 00:05:10.710 align:start position:0%
+ 
+ 
+
+00:05:10.710 --> 00:05:11.909 align:start position:0%
+ 
+ 
+
+00:05:11.909 --> 00:05:15.749 align:start position:0%
+ 
+ 
+
+00:05:15.749 --> 00:05:16.870 align:start position:0%
+ 
+ 
+
+00:05:16.870 --> 00:05:18.710 align:start position:0%
+ 
+ 
+
+00:05:18.710 --> 00:05:20.150 align:start position:0%
+ 
+ 
+
+00:05:20.150 --> 00:05:23.110 align:start position:0%
+ 
+ 
+
+00:05:23.110 --> 00:05:25.189 align:start position:0%
+ 
+ 
+
+00:05:25.189 --> 00:05:27.990 align:start position:0%
+ 
+ 
+
+00:05:27.990 --> 00:05:30.070 align:start position:0%
+ 
+ 
+
+00:05:30.070 --> 00:05:32.310 align:start position:0%
+ 
+ 
+
+00:05:32.310 --> 00:05:34.469 align:start position:0%
+ 
+ 
+
+00:05:34.469 --> 00:05:36.710 align:start position:0%
+ 
+ 
+
+00:05:36.710 --> 00:05:38.790 align:start position:0%
+ 
+ 
+
+00:05:38.790 --> 00:05:40.629 align:start position:0%
+ 
+ 
+
+00:05:40.629 --> 00:05:40.639 align:start position:0%
+ 
+ 
+
+00:05:40.639 --> 00:05:41.110 align:start position:0%
+ 
+
+
+00:05:41.110 --> 00:05:43.430 align:start position:0%
+ 
+ 
+
+00:05:43.430 --> 00:05:44.950 align:start position:0%
+ 
+ 
+
+00:05:44.950 --> 00:05:46.550 align:start position:0%
+ 
+ 
+
+00:05:46.550 --> 00:05:48.150 align:start position:0%
+ 
+ 
+
+00:05:48.150 --> 00:05:48.160 align:start position:0%
+ 
+ 
+
+00:05:48.160 --> 00:05:48.710 align:start position:0%
+ 
+
+
+00:05:48.710 --> 00:05:50.790 align:start position:0%
+ 
+ 
+
+00:05:50.790 --> 00:05:52.629 align:start position:0%
+ 
+ 
+
+00:05:52.629 --> 00:05:54.230 align:start position:0%
+ 
+ 
+
+00:05:54.230 --> 00:05:55.749 align:start position:0%
+ 
+ 
+
+00:05:55.749 --> 00:05:57.350 align:start position:0%
+ 
+ 
+
+00:05:57.350 --> 00:05:59.270 align:start position:0%
+ 
+ 
+
+00:05:59.270 --> 00:06:00.629 align:start position:0%
+ 
+ 
+
+00:06:00.629 --> 00:06:01.990 align:start position:0%
+ 
+ 
+
+00:06:01.990 --> 00:06:02.000 align:start position:0%
+ 
+ 
+
+00:06:02.000 --> 00:06:03.430 align:start position:0%
+ 
+
+
+00:06:03.430 --> 00:06:05.029 align:start position:0%
+ 
+ 
+
+00:06:05.029 --> 00:06:06.870 align:start position:0%
+ 
+ 
+
+00:06:06.870 --> 00:06:09.510 align:start position:0%
+ 
+ 
+
+00:06:09.510 --> 00:06:11.270 align:start position:0%
+ 
+ 
+
+00:06:11.270 --> 00:06:12.790 align:start position:0%
+ 
+ 
+
+00:06:12.790 --> 00:06:13.430 align:start position:0%
+ 
+ 
+
+00:06:13.430 --> 00:06:15.590 align:start position:0%
+ 
+ 
+
+00:06:15.590 --> 00:06:15.600 align:start position:0%
+ 
+ 
+
+00:06:15.600 --> 00:06:17.029 align:start position:0%
+ 
+
+
+00:06:17.029 --> 00:06:19.350 align:start position:0%
+ 
+ 
+
+00:06:19.350 --> 00:06:21.029 align:start position:0%
+ 
+ 
+
+00:06:21.029 --> 00:06:22.150 align:start position:0%
+ 
+ 
+
+00:06:22.150 --> 00:06:24.230 align:start position:0%
+ 
+ 
+
+00:06:24.230 --> 00:06:25.430 align:start position:0%
+ 
+ 
+
+00:06:25.430 --> 00:06:27.749 align:start position:0%
+ 
+ 
+
+00:06:27.749 --> 00:06:28.629 align:start position:0%
+ 
+ 
+
+00:06:28.629 --> 00:06:29.990 align:start position:0%
+ 
+ 
+
+00:06:29.990 --> 00:06:32.550 align:start position:0%
+ 
+ 
+
+00:06:32.550 --> 00:06:35.029 align:start position:0%
+ 
+ 
+
+00:06:35.029 --> 00:06:37.110 align:start position:0%
+ 
+ 
+
+00:06:37.110 --> 00:06:39.029 align:start position:0%
+ 
+ 
+
+00:06:39.029 --> 00:06:39.039 align:start position:0%
+ 
+ 
+
+00:06:39.039 --> 00:06:39.909 align:start position:0%
+ 
+
+
+00:06:39.909 --> 00:06:42.150 align:start position:0%
+ 
+ 
+
+00:06:42.150 --> 00:06:43.990 align:start position:0%
+ 
+ 
+
+00:06:43.990 --> 00:06:45.590 align:start position:0%
+ 
+ 
+
+00:06:45.590 --> 00:06:47.909 align:start position:0%
+ 
+ 
+
+00:06:47.909 --> 00:06:49.189 align:start position:0%
+ 
+ 
+
+00:06:49.189 --> 00:06:49.199 align:start position:0%
+ 
+ 
+
+00:06:49.199 --> 00:06:50.150 align:start position:0%
+ 
+
+
+00:06:50.150 --> 00:06:52.230 align:start position:0%
+ 
+ 
+
+00:06:52.230 --> 00:06:54.550 align:start position:0%
+ 
+ 
+
+00:06:54.550 --> 00:06:56.550 align:start position:0%
+ 
+ 
+
+00:06:56.550 --> 00:06:58.150 align:start position:0%
+ 
+ 
+
+00:06:58.150 --> 00:07:00.070 align:start position:0%
+ 
+ 
+
+00:07:00.070 --> 00:07:02.070 align:start position:0%
+ 
+ 
+
+00:07:02.070 --> 00:07:03.909 align:start position:0%
+ 
+ 
+
+00:07:03.909 --> 00:07:05.990 align:start position:0%
+ 
+ 
+
+00:07:05.990 --> 00:07:07.830 align:start position:0%
+ 
+ 
+
+00:07:07.830 --> 00:07:09.510 align:start position:0%
+ 
+ 
+
+00:07:09.510 --> 00:07:09.520 align:start position:0%
+ 
+ 
+
+00:07:09.520 --> 00:07:09.909 align:start position:0%
+ 
+
+
+00:07:09.909 --> 00:07:12.870 align:start position:0%
+ 
+ 
+
+00:07:12.870 --> 00:07:14.790 align:start position:0%
+ 
+ 
+
+00:07:14.790 --> 00:07:17.029 align:start position:0%
+ 
+ 
+
+00:07:17.029 --> 00:07:17.039 align:start position:0%
+ 
+ 
+
+00:07:17.039 --> 00:07:18.150 align:start position:0%
+ 
+
+
+00:07:18.150 --> 00:07:19.749 align:start position:0%
+ 
+ 
+
+00:07:19.749 --> 00:07:21.749 align:start position:0%
+ 
+ 
+
+00:07:21.749 --> 00:07:23.589 align:start position:0%
+ 
+ 
+
+00:07:23.589 --> 00:07:23.599 align:start position:0%
+ 
+ 
+
+00:07:23.599 --> 00:07:24.790 align:start position:0%
+ 
+
+
+00:07:24.790 --> 00:07:27.270 align:start position:0%
+ 
+ 
+
+00:07:27.270 --> 00:07:29.270 align:start position:0%
+ 
+ 
+
+00:07:29.270 --> 00:07:31.990 align:start position:0%
+ 
+ 
+
+00:07:31.990 --> 00:07:34.710 align:start position:0%
+ 
+ 
+
+00:07:34.710 --> 00:07:35.830 align:start position:0%
+ 
+ 
+
+00:07:35.830 --> 00:07:38.070 align:start position:0%
+ 
+ 
+
+00:07:38.070 --> 00:07:40.070 align:start position:0%
+ 
+ 
+
+00:07:40.070 --> 00:07:41.430 align:start position:0%
+ 
+ 
+
+00:07:41.430 --> 00:07:42.950 align:start position:0%
+ 
+ 
+
+00:07:42.950 --> 00:07:44.710 align:start position:0%
+ 
+ 
+
+00:07:44.710 --> 00:07:46.710 align:start position:0%
+ 
+ 
+
+00:07:46.710 --> 00:07:47.749 align:start position:0%
+ 
+ 
+
+00:07:47.749 --> 00:07:49.670 align:start position:0%
+ 
+ 
+
+00:07:49.670 --> 00:07:51.430 align:start position:0%
+ 
+ 
+
+00:07:51.430 --> 00:07:51.440 align:start position:0%
+ 
+ 
+
+00:07:51.440 --> 00:07:52.790 align:start position:0%
+ 
+
+
+00:07:52.790 --> 00:07:54.790 align:start position:0%
+ 
+ 
+
+00:07:54.790 --> 00:07:57.189 align:start position:0%
+ 
+ 
+
+00:07:57.189 --> 00:07:59.029 align:start position:0%
+ 
+ 
+
+00:07:59.029 --> 00:08:01.029 align:start position:0%
+ 
+ 
+
+00:08:01.029 --> 00:08:02.629 align:start position:0%
+ 
+ 
+
+00:08:02.629 --> 00:08:05.029 align:start position:0%
+ 
+ 
+
+00:08:05.029 --> 00:08:06.629 align:start position:0%
+ 
+ 
+
+00:08:06.629 --> 00:08:09.589 align:start position:0%
+ 
+ 
+
+00:08:09.589 --> 00:08:10.950 align:start position:0%
+ 
+ 
+
+00:08:10.950 --> 00:08:12.950 align:start position:0%
+ 
+ 
+
+00:08:12.950 --> 00:08:14.869 align:start position:0%
+ 
+ 
+
+00:08:14.869 --> 00:08:17.110 align:start position:0%
+ 
+ 
+
+00:08:17.110 --> 00:08:18.950 align:start position:0%
+ 
+ 
+
+00:08:18.950 --> 00:08:20.070 align:start position:0%
+ 
+ 
+
+00:08:20.070 --> 00:08:21.589 align:start position:0%
+ 
+ 
+
+00:08:21.589 --> 00:08:23.670 align:start position:0%
+ 
+ 
+
+00:08:23.670 --> 00:08:23.680 align:start position:0%
+ 
+ 
+
+00:08:23.680 --> 00:08:24.150 align:start position:0%
+ 
+
+
+00:08:24.150 --> 00:08:25.830 align:start position:0%
+ 
+ 
+
+00:08:25.830 --> 00:08:27.909 align:start position:0%
+ 
+ 
+
+00:08:27.909 --> 00:08:30.230 align:start position:0%
+ 
+ 
+
+00:08:30.230 --> 00:08:31.029 align:start position:0%
+ 
+ 
+
+00:08:31.029 --> 00:08:32.630 align:start position:0%
+ 
+ 
+
+00:08:32.630 --> 00:08:34.870 align:start position:0%
+ 
+ 
+
+00:08:34.870 --> 00:08:37.909 align:start position:0%
+ 
+ 
+
+00:08:37.909 --> 00:08:39.829 align:start position:0%
+ 
+ 
+
+00:08:39.829 --> 00:08:39.839 align:start position:0%
+ 
+ 
+
+00:08:39.839 --> 00:08:40.469 align:start position:0%
+ 
+
+
+00:08:40.469 --> 00:08:42.389 align:start position:0%
+ 
+ 
+
+00:08:42.389 --> 00:08:45.030 align:start position:0%
+ 
+ 
+
+00:08:45.030 --> 00:08:45.040 align:start position:0%
+ 
+ 
+
+00:08:45.040 --> 00:08:45.430 align:start position:0%
+ 
+
+
+00:08:45.430 --> 00:08:48.949 align:start position:0%
+ 
+ 
+
+00:08:48.949 --> 00:08:51.509 align:start position:0%
+ 
+ 
+
+00:08:51.509 --> 00:08:52.949 align:start position:0%
+ 
+ 
+
+00:08:52.949 --> 00:08:53.990 align:start position:0%
+ 
+ 
+
+00:08:53.990 --> 00:08:56.630 align:start position:0%
+ 
+ 
+
+00:08:56.630 --> 00:08:57.829 align:start position:0%
+ 
+ 
+
+00:08:57.829 --> 00:08:59.350 align:start position:0%
+ 
+ 
+
+00:08:59.350 --> 00:09:01.110 align:start position:0%
+ 
+ 
+
+00:09:01.110 --> 00:09:03.350 align:start position:0%
+ 
+ 
+
+00:09:03.350 --> 00:09:05.350 align:start position:0%
+ 
+ 
+
+00:09:05.350 --> 00:09:07.990 align:start position:0%
+ 
+ 
+
+00:09:07.990 --> 00:09:09.430 align:start position:0%
+ 
+ 
+
+00:09:09.430 --> 00:09:11.190 align:start position:0%
+ 
+ 
+
+00:09:11.190 --> 00:09:13.910 align:start position:0%
+ 
+ 
+
+00:09:13.910 --> 00:09:15.750 align:start position:0%
+ 
+ 
+
+00:09:15.750 --> 00:09:17.190 align:start position:0%
+ 
+ 
+
+00:09:17.190 --> 00:09:18.790 align:start position:0%
+ 
+ 
+
+00:09:18.790 --> 00:09:20.630 align:start position:0%
+ 
+ 
+
+00:09:20.630 --> 00:09:23.590 align:start position:0%
+ 
+ 
+
+00:09:23.590 --> 00:09:24.870 align:start position:0%
+ 
+ 
+
+00:09:24.870 --> 00:09:27.030 align:start position:0%
+ 
+ 
+
+00:09:27.030 --> 00:09:28.150 align:start position:0%
+ 
+ 
+
+00:09:28.150 --> 00:09:29.990 align:start position:0%
+ 
+ 
+
+00:09:29.990 --> 00:09:32.790 align:start position:0%
+ 
+ 
+
+00:09:32.790 --> 00:09:34.790 align:start position:0%
+ 
+ 
+
+00:09:34.790 --> 00:09:35.990 align:start position:0%
+ 
+ 
+
+00:09:35.990 --> 00:09:38.230 align:start position:0%
+ 
+ 
+
+00:09:38.230 --> 00:09:39.750 align:start position:0%
+ 
+ 
+
+00:09:39.750 --> 00:09:41.509 align:start position:0%
+ 
+ 
+
+00:09:41.509 --> 00:09:41.519 align:start position:0%
+ 
+ 
+
+00:09:41.519 --> 00:09:42.630 align:start position:0%
+ 
+
+
+00:09:42.630 --> 00:09:43.990 align:start position:0%
+ 
+ 
+
+00:09:43.990 --> 00:09:46.070 align:start position:0%
+ 
+ 
+
+00:09:46.070 --> 00:09:47.269 align:start position:0%
+ 
+ 
+
+00:09:47.269 --> 00:09:49.030 align:start position:0%
+ 
+ 
+
+00:09:49.030 --> 00:09:50.870 align:start position:0%
+ 
+ 
+
+00:09:50.870 --> 00:09:52.870 align:start position:0%
+ 
+ 
+
+00:09:52.870 --> 00:09:54.550 align:start position:0%
+ 
+ 
+
+00:09:54.550 --> 00:09:56.630 align:start position:0%
+ 
+ 
+
+00:09:56.630 --> 00:09:58.230 align:start position:0%
+ 
+ 
+
+00:09:58.230 --> 00:09:59.990 align:start position:0%
+ 
+ 
+
+00:09:59.990 --> 00:10:01.670 align:start position:0%
+ 
+ 
+
+00:10:01.670 --> 00:10:03.350 align:start position:0%
+ 
+ 
+
+00:10:03.350 --> 00:10:05.110 align:start position:0%
+ 
+ 
+
+00:10:05.110 --> 00:10:06.550 align:start position:0%
+ 
+ 
+
+00:10:06.550 --> 00:10:08.310 align:start position:0%
+ 
+ 
+
+00:10:08.310 --> 00:10:10.230 align:start position:0%
+ 
+ 
+
+00:10:10.230 --> 00:10:11.829 align:start position:0%
+ 
+ 
+
+00:10:11.829 --> 00:10:13.430 align:start position:0%
+ 
+ 
+
+00:10:13.430 --> 00:10:16.069 align:start position:0%
+ 
+ 
+
+00:10:16.069 --> 00:10:16.079 align:start position:0%
+ 
+ 
+
+00:10:16.079 --> 00:10:16.550 align:start position:0%
+ 
+
+
+00:10:16.550 --> 00:10:18.790 align:start position:0%
+ 
+ 
+
+00:10:18.790 --> 00:10:20.790 align:start position:0%
+ 
+ 
+
+00:10:20.790 --> 00:10:22.470 align:start position:0%
+ 
+ 
+
+00:10:22.470 --> 00:10:24.550 align:start position:0%
+ 
+ 
+
+00:10:24.550 --> 00:10:26.389 align:start position:0%
+ 
+ 
+
+00:10:26.389 --> 00:10:27.110 align:start position:0%
+ 
+ 
+
+00:10:27.110 --> 00:10:29.110 align:start position:0%
+ 
+ 
+
+00:10:29.110 --> 00:10:31.509 align:start position:0%
+ 
+ 
+
+00:10:31.509 --> 00:10:33.190 align:start position:0%
+ 
+ 
+
+00:10:33.190 --> 00:10:33.200 align:start position:0%
+ 
+ 
+
+00:10:33.200 --> 00:10:33.590 align:start position:0%
+ 
+
+
+00:10:33.590 --> 00:10:36.150 align:start position:0%
+ 
+ 
+
+00:10:36.150 --> 00:10:37.670 align:start position:0%
+ 
+ 
+
+00:10:37.670 --> 00:10:39.750 align:start position:0%
+ 
+ 
+
+00:10:39.750 --> 00:10:41.670 align:start position:0%
+ 
+ 
+
+00:10:41.670 --> 00:10:43.670 align:start position:0%
+ 
+ 
+
+00:10:43.670 --> 00:10:45.350 align:start position:0%
+ 
+ 
+
+00:10:45.350 --> 00:10:46.949 align:start position:0%
+ 
+ 
+
+00:10:46.949 --> 00:10:48.790 align:start position:0%
+ 
+ 
+
+00:10:48.790 --> 00:10:50.550 align:start position:0%
+ 
+ 
+
+00:10:50.550 --> 00:10:52.550 align:start position:0%
+ 
+ 
+
+00:10:52.550 --> 00:10:53.670 align:start position:0%
+ 
+ 
+
+00:10:53.670 --> 00:10:56.150 align:start position:0%
+ 
+ 
+
+00:10:56.150 --> 00:10:57.350 align:start position:0%
+ 
+ 
+
+00:10:57.350 --> 00:10:58.870 align:start position:0%
+ 
+ 
+
+00:10:58.870 --> 00:11:00.310 align:start position:0%
+ 
+ 
+
+00:11:00.310 --> 00:11:00.320 align:start position:0%
+ 
+ 
+
+00:11:00.320 --> 00:11:01.430 align:start position:0%
+ 
+
+
+00:11:01.430 --> 00:11:03.430 align:start position:0%
+ 
+ 
+
+00:11:03.430 --> 00:11:05.509 align:start position:0%
+ 
+ 
+
+00:11:05.509 --> 00:11:06.790 align:start position:0%
+ 
+ 
+
+00:11:06.790 --> 00:11:08.630 align:start position:0%
+ 
+ 
+
+00:11:08.630 --> 00:11:10.389 align:start position:0%
+ 
+ 
+
+00:11:10.389 --> 00:11:12.550 align:start position:0%
+ 
+ 
+
+00:11:12.550 --> 00:11:14.310 align:start position:0%
+ 
+ 
+
+00:11:14.310 --> 00:11:17.190 align:start position:0%
+ 
+ 
+
+00:11:17.190 --> 00:11:19.110 align:start position:0%
+ 
+ 
+
+00:11:19.110 --> 00:11:20.870 align:start position:0%
+ 
+ 
+
+00:11:20.870 --> 00:11:22.150 align:start position:0%
+ 
+ 
+
+00:11:22.150 --> 00:11:23.750 align:start position:0%
+ 
+ 
+
+00:11:23.750 --> 00:11:25.590 align:start position:0%
+ 
+ 
+
+00:11:25.590 --> 00:11:27.350 align:start position:0%
+ 
+ 
+
+00:11:27.350 --> 00:11:29.269 align:start position:0%
+ 
+ 
+
+00:11:29.269 --> 00:11:31.030 align:start position:0%
+ 
+ 
+
+00:11:31.030 --> 00:11:32.870 align:start position:0%
+ 
+ 
+
+00:11:32.870 --> 00:11:34.550 align:start position:0%
+ 
+ 
+
+00:11:34.550 --> 00:11:36.630 align:start position:0%
+ 
+ 
+
+00:11:36.630 --> 00:11:38.069 align:start position:0%
+ 
+ 
+
+00:11:38.069 --> 00:11:38.870 align:start position:0%
+ 
+ 
+
+00:11:38.870 --> 00:11:40.790 align:start position:0%
+ 
+ 
+
+00:11:40.790 --> 00:11:42.710 align:start position:0%
+ 
+ 
+
+00:11:42.710 --> 00:11:44.470 align:start position:0%
+ 
+ 
+
+00:11:44.470 --> 00:11:44.480 align:start position:0%
+ 
+ 
+
+00:11:44.480 --> 00:11:45.030 align:start position:0%
+ 
+
+
+00:11:45.030 --> 00:11:47.430 align:start position:0%
+ 
+ 
+
+00:11:47.430 --> 00:11:49.110 align:start position:0%
+ 
+ 
+
+00:11:49.110 --> 00:11:51.430 align:start position:0%
+ 
+ 
+
+00:11:51.430 --> 00:11:52.870 align:start position:0%
+ 
+ 
+
+00:11:52.870 --> 00:11:55.110 align:start position:0%
+ 
+ 
+
+00:11:55.110 --> 00:11:56.069 align:start position:0%
+ 
+ 
+
+00:11:56.069 --> 00:11:58.230 align:start position:0%
+ 
+ 
+
+00:11:58.230 --> 00:12:00.150 align:start position:0%
+ 
+ 
+
+00:12:00.150 --> 00:12:00.160 align:start position:0%
+ 
+ 
+
+00:12:00.160 --> 00:12:00.550 align:start position:0%
+ 
+
+
+00:12:00.550 --> 00:12:02.629 align:start position:0%
+ 
+ 
+
+00:12:02.629 --> 00:12:04.949 align:start position:0%
+ 
+ 
+
+00:12:04.949 --> 00:12:06.790 align:start position:0%
+ 
+ 
+
+00:12:06.790 --> 00:12:08.629 align:start position:0%
+ 
+ 
+
+00:12:08.629 --> 00:12:10.310 align:start position:0%
+ 
+ 
+
+00:12:10.310 --> 00:12:11.670 align:start position:0%
+ 
+ 
+
+00:12:11.670 --> 00:12:13.190 align:start position:0%
+ 
+ 
+
+00:12:13.190 --> 00:12:15.430 align:start position:0%
+ 
+ 
+
+00:12:15.430 --> 00:12:17.750 align:start position:0%
+ 
+ 
+
+00:12:17.750 --> 00:12:18.949 align:start position:0%
+ 
+ 
+
+00:12:18.949 --> 00:12:21.430 align:start position:0%
+ 
+ 
+
+00:12:21.430 --> 00:12:22.790 align:start position:0%
+ 
+ 
+
+00:12:22.790 --> 00:12:24.389 align:start position:0%
+ 
+ 
+
+00:12:24.389 --> 00:12:26.389 align:start position:0%
+ 
+ 
+
+00:12:26.389 --> 00:12:28.389 align:start position:0%
+ 
+ 
+
+00:12:28.389 --> 00:12:28.399 align:start position:0%
+ 
+ 
+
+00:12:28.399 --> 00:12:28.949 align:start position:0%
+ 
+
+
+00:12:28.949 --> 00:12:31.190 align:start position:0%
+ 
+ 
+
+00:12:31.190 --> 00:12:32.310 align:start position:0%
+ 
+ 
+
+00:12:32.310 --> 00:12:33.910 align:start position:0%
+ 
+ 
+
+00:12:33.910 --> 00:12:36.550 align:start position:0%
+ 
+ 
+
+00:12:36.550 --> 00:12:39.110 align:start position:0%
+ 
+ 
+
+00:12:39.110 --> 00:12:40.949 align:start position:0%
+ 
+ 
+
+00:12:40.949 --> 00:12:42.629 align:start position:0%
+ 
+ 
+
+00:12:42.629 --> 00:12:44.230 align:start position:0%
+ 
+ 
+
+00:12:44.230 --> 00:12:45.829 align:start position:0%
+ 
+ 
+
+00:12:45.829 --> 00:12:47.829 align:start position:0%
+ 
+ 
+
+00:12:47.829 --> 00:12:49.190 align:start position:0%
+ 
+ 
+
+00:12:49.190 --> 00:12:51.269 align:start position:0%
+ 
+ 
+
+00:12:51.269 --> 00:12:53.910 align:start position:0%
+ 
+ 
+
+00:12:53.910 --> 00:12:55.269 align:start position:0%
+ 
+ 
+
+00:12:55.269 --> 00:12:56.710 align:start position:0%
+ 
+ 
+
+00:12:56.710 --> 00:12:58.790 align:start position:0%
+ 
+ 
+
+00:12:58.790 --> 00:13:00.470 align:start position:0%
+ 
+ 
+
+00:13:00.470 --> 00:13:01.990 align:start position:0%
+ 
+ 
+
+00:13:01.990 --> 00:13:02.870 align:start position:0%
+ 
+ 
+
+00:13:02.870 --> 00:13:05.350 align:start position:0%
+ 
+ 
+
+00:13:05.350 --> 00:13:05.910 align:start position:0%
+ 
+ 
+
+00:13:05.910 --> 00:13:08.230 align:start position:0%
+ 
+ 
+
+00:13:08.230 --> 00:13:09.590 align:start position:0%
+ 
+ 
+
+00:13:09.590 --> 00:13:11.030 align:start position:0%
+ 
+ 
+
+00:13:11.030 --> 00:13:13.350 align:start position:0%
+ 
+ 
+
+00:13:13.350 --> 00:13:15.670 align:start position:0%
+ 
+ 
+
+00:13:15.670 --> 00:13:17.190 align:start position:0%
+ 
+ 
+
+00:13:17.190 --> 00:13:18.949 align:start position:0%
+ 
+ 
+
+00:13:18.949 --> 00:13:21.030 align:start position:0%
+ 
+ 
+
+00:13:21.030 --> 00:13:22.550 align:start position:0%
+ 
+ 
+
+00:13:22.550 --> 00:13:24.710 align:start position:0%
+ 
+ 
+
+00:13:24.710 --> 00:13:26.790 align:start position:0%
+ 
+ 
+
+00:13:26.790 --> 00:13:28.949 align:start position:0%
+ 
+ 
+
+00:13:28.949 --> 00:13:30.710 align:start position:0%
+ 
+ 
+
+00:13:30.710 --> 00:13:32.310 align:start position:0%
+ 
+ 
+
+00:13:32.310 --> 00:13:34.949 align:start position:0%
+ 
+ 
+
+00:13:34.949 --> 00:13:36.790 align:start position:0%
+ 
+ 
+
+00:13:36.790 --> 00:13:38.310 align:start position:0%
+ 
+ 
+
+00:13:38.310 --> 00:13:40.310 align:start position:0%
+ 
+ 
+
+00:13:40.310 --> 00:13:41.670 align:start position:0%
+ 
+ 
+
+00:13:41.670 --> 00:13:43.750 align:start position:0%
+ 
+ 
+
+00:13:43.750 --> 00:13:45.750 align:start position:0%
+ 
+ 
+
+00:13:45.750 --> 00:13:46.790 align:start position:0%
+ 
+ 
+
+00:13:46.790 --> 00:13:49.030 align:start position:0%
+ 
+ 
+
+00:13:49.030 --> 00:13:50.790 align:start position:0%
+ 
+ 
+
+00:13:50.790 --> 00:13:52.870 align:start position:0%
+ 
+ 
+
+00:13:52.870 --> 00:13:54.470 align:start position:0%
+ 
+ 
+
+00:13:54.470 --> 00:13:56.710 align:start position:0%
+ 
+ 
+
+00:13:56.710 --> 00:13:59.030 align:start position:0%
+ 
+ 
+
+00:13:59.030 --> 00:14:00.790 align:start position:0%
+ 
+ 
+
+00:14:00.790 --> 00:14:02.629 align:start position:0%
+ 
+ 
+
+00:14:02.629 --> 00:14:04.949 align:start position:0%
+ 
+ 
+
+00:14:04.949 --> 00:14:06.389 align:start position:0%
+ 
+ 
+
+00:14:06.389 --> 00:14:06.399 align:start position:0%
+ 
+ 
+
+00:14:06.399 --> 00:14:07.189 align:start position:0%
+ 
+
+
+00:14:07.189 --> 00:14:09.430 align:start position:0%
+ 
+ 
+
+00:14:09.430 --> 00:14:11.350 align:start position:0%
+ 
+ 
+
+00:14:11.350 --> 00:14:13.110 align:start position:0%
+ 
+ 
+
+00:14:13.110 --> 00:14:15.110 align:start position:0%
+ 
+ 
+
+00:14:15.110 --> 00:14:17.350 align:start position:0%
+ 
+ 
+
+00:14:17.350 --> 00:14:18.470 align:start position:0%
+ 
+ 
+
+00:14:18.470 --> 00:14:20.949 align:start position:0%
+ 
+ 
+
+00:14:20.949 --> 00:14:21.990 align:start position:0%
+ 
+ 
+
+00:14:21.990 --> 00:14:23.430 align:start position:0%
+ 
+ 
+
+00:14:23.430 --> 00:14:25.430 align:start position:0%
+ 
+ 
+
+00:14:25.430 --> 00:14:27.990 align:start position:0%
+ 
+ 
+
+00:14:27.990 --> 00:14:29.829 align:start position:0%
+ 
+ 
+
+00:14:29.829 --> 00:14:31.509 align:start position:0%
+ 
+ 
+
+00:14:31.509 --> 00:14:33.829 align:start position:0%
+ 
+ 
+
+00:14:33.829 --> 00:14:33.839 align:start position:0%
+ 
+ 
+
+00:14:33.839 --> 00:14:35.030 align:start position:0%
+ 
+
+
+00:14:35.030 --> 00:14:37.030 align:start position:0%
+ 
+ 
+
+00:14:37.030 --> 00:14:38.150 align:start position:0%
+ 
+ 
+
+00:14:38.150 --> 00:14:39.430 align:start position:0%
+ 
+ 
+
+00:14:39.430 --> 00:14:42.069 align:start position:0%
+ 
+ 
+
+00:14:42.069 --> 00:14:43.670 align:start position:0%
+ 
+ 
+
+00:14:43.670 --> 00:14:45.990 align:start position:0%
+ 
+ 
+
+00:14:45.990 --> 00:14:47.269 align:start position:0%
+ 
+ 
+
+00:14:47.269 --> 00:14:48.870 align:start position:0%
+ 
+ 
+
+00:14:48.870 --> 00:14:50.870 align:start position:0%
+ 
+ 
+
+00:14:50.870 --> 00:14:52.230 align:start position:0%
+ 
+ 
+
+00:14:52.230 --> 00:14:54.310 align:start position:0%
+ 
+ 
+
+00:14:54.310 --> 00:14:56.230 align:start position:0%
+ 
+ 
+
+00:14:56.230 --> 00:14:56.240 align:start position:0%
+ 
+ 
+
+00:14:56.240 --> 00:14:57.189 align:start position:0%
+ 
+
+
+00:14:57.189 --> 00:14:59.110 align:start position:0%
+ 
+ 
+
+00:14:59.110 --> 00:15:00.629 align:start position:0%
+ 
+ 
+
+00:15:00.629 --> 00:15:02.230 align:start position:0%
+ 
+ 
+
+00:15:02.230 --> 00:15:04.150 align:start position:0%
+ 
+ 
+
+00:15:04.150 --> 00:15:08.949 align:start position:0%
+ 
+ 
+
+00:15:08.949 --> 00:15:10.550 align:start position:0%
+ 
+ 
+
+00:15:10.550 --> 00:15:11.990 align:start position:0%
+ 
+ 
+
+00:15:11.990 --> 00:15:13.829 align:start position:0%
+ 
+ 
+
+00:15:13.829 --> 00:15:15.750 align:start position:0%
+ 
+ 
+
+00:15:15.750 --> 00:15:18.069 align:start position:0%
+ 
+ 
+
+00:15:18.069 --> 00:15:20.310 align:start position:0%
+ 
+ 
+
+00:15:20.310 --> 00:15:21.990 align:start position:0%
+ 
+ 
+
+00:15:21.990 --> 00:15:23.750 align:start position:0%
+ 
+ 
+
+00:15:23.750 --> 00:15:25.110 align:start position:0%
+ 
+ 
+
+00:15:25.110 --> 00:15:26.870 align:start position:0%
+ 
+ 
+
+00:15:26.870 --> 00:15:28.150 align:start position:0%
+ 
+ 
+
+00:15:28.150 --> 00:15:29.670 align:start position:0%
+ 
+ 
+
+00:15:29.670 --> 00:15:31.269 align:start position:0%
+ 
+ 
+
+00:15:31.269 --> 00:15:33.189 align:start position:0%
+ 
+ 
+
+00:15:33.189 --> 00:15:34.790 align:start position:0%
+ 
+ 
+
+00:15:34.790 --> 00:15:36.150 align:start position:0%
+ 
+ 
+
+00:15:36.150 --> 00:15:37.829 align:start position:0%
+ 
+ 
+
+00:15:37.829 --> 00:15:39.590 align:start position:0%
+ 
+ 
+
+00:15:39.590 --> 00:15:42.590 align:start position:0%
+ 
+ 
+
+00:15:42.590 --> 00:15:44.470 align:start position:0%
+ 
+ 
+
+00:15:44.470 --> 00:15:44.480 align:start position:0%
+ 
+ 
+
+00:15:44.480 --> 00:15:45.509 align:start position:0%
+ 
+
+
+00:15:45.509 --> 00:15:47.509 align:start position:0%
+ 
+ 
+
+00:15:47.509 --> 00:15:49.350 align:start position:0%
+ 
+ 
+
+00:15:49.350 --> 00:15:51.749 align:start position:0%
+ 
+ 
+
+00:15:51.749 --> 00:15:53.990 align:start position:0%
+ 
+ 
+
+00:15:53.990 --> 00:15:56.069 align:start position:0%
+ 
+ 
+
+00:15:56.069 --> 00:15:57.910 align:start position:0%
+ 
+ 
+
+00:15:57.910 --> 00:15:59.670 align:start position:0%
+ 
+ 
+
+00:15:59.670 --> 00:16:02.150 align:start position:0%
+ 
+ 
+
+00:16:02.150 --> 00:16:02.160 align:start position:0%
+ 
+ 
+
+00:16:02.160 --> 00:16:03.350 align:start position:0%
+ 
+
+
+00:16:03.350 --> 00:16:05.110 align:start position:0%
+ 
+ 
+
+00:16:05.110 --> 00:16:06.389 align:start position:0%
+ 
+ 
+
+00:16:06.389 --> 00:16:08.069 align:start position:0%
+ 
+ 
+
+00:16:08.069 --> 00:16:09.509 align:start position:0%
+ 
+ 
+
+00:16:09.509 --> 00:16:12.389 align:start position:0%
+ 
+ 
+
+00:16:12.389 --> 00:16:14.069 align:start position:0%
+ 
+ 
+
+00:16:14.069 --> 00:16:15.829 align:start position:0%
+ 
+ 
+
+00:16:15.829 --> 00:16:17.269 align:start position:0%
+ 
+ 
+
+00:16:17.269 --> 00:16:19.269 align:start position:0%
+ 
+ 
+
+00:16:19.269 --> 00:16:21.110 align:start position:0%
+ 
+ 
+
+00:16:21.110 --> 00:16:22.310 align:start position:0%
+ 
+ 
+
+00:16:22.310 --> 00:16:22.320 align:start position:0%
+ 
+ 
+
+00:16:22.320 --> 00:16:23.350 align:start position:0%
+ 
+
+
+00:16:23.350 --> 00:16:25.350 align:start position:0%
+ 
+ 
+
+00:16:25.350 --> 00:16:26.870 align:start position:0%
+ 
+ 
+
+00:16:26.870 --> 00:16:28.470 align:start position:0%
+ 
+ 
+
+00:16:28.470 --> 00:16:28.480 align:start position:0%
+ 
+ 
+
+00:16:28.480 --> 00:16:29.749 align:start position:0%
+ 
+
+
+00:16:29.749 --> 00:16:31.189 align:start position:0%
+ 
+ 
+
+00:16:31.189 --> 00:16:33.030 align:start position:0%
+ 
+ 
+
+00:16:33.030 --> 00:16:35.670 align:start position:0%
+ 
+ 
+
+00:16:35.670 --> 00:16:37.749 align:start position:0%
+ 
+ 
+
+00:16:37.749 --> 00:16:39.509 align:start position:0%
+ 
+ 
+
+00:16:39.509 --> 00:16:41.430 align:start position:0%
+ 
+ 
+
+00:16:41.430 --> 00:16:43.350 align:start position:0%
+ 
+ 
+
+00:16:43.350 --> 00:16:45.030 align:start position:0%
+ 
+ 
+
+00:16:45.030 --> 00:16:47.030 align:start position:0%
+ 
+ 
+
+00:16:47.030 --> 00:16:48.870 align:start position:0%
+ 
+ 
+
+00:16:48.870 --> 00:16:50.069 align:start position:0%
+ 
+ 
+
+00:16:50.069 --> 00:16:51.990 align:start position:0%
+ 
+ 
+
+00:16:51.990 --> 00:16:53.910 align:start position:0%
+ 
+ 
+
+00:16:53.910 --> 00:16:53.920 align:start position:0%
+ 
+ 
+
+00:16:53.920 --> 00:16:54.790 align:start position:0%
+ 
+
+
+00:16:54.790 --> 00:16:56.470 align:start position:0%
+ 
+ 
+
+00:16:56.470 --> 00:16:58.069 align:start position:0%
+ 
+ 
+
+00:16:58.069 --> 00:17:00.550 align:start position:0%
+ 
+ 
+
+00:17:00.550 --> 00:17:02.150 align:start position:0%
+ 
+ 
+
+00:17:02.150 --> 00:17:04.230 align:start position:0%
+ 
+ 
+
+00:17:04.230 --> 00:17:06.309 align:start position:0%
+ 
+ 
+
+00:17:06.309 --> 00:17:08.230 align:start position:0%
+ 
+ 
+
+00:17:08.230 --> 00:17:08.240 align:start position:0%
+ 
+ 
+
+00:17:08.240 --> 00:17:08.870 align:start position:0%
+ 
+
+
+00:17:08.870 --> 00:17:10.630 align:start position:0%
+ 
+ 
+
+00:17:10.630 --> 00:17:11.990 align:start position:0%
+ 
+ 
+
+00:17:11.990 --> 00:17:14.069 align:start position:0%
+ 
+ 
+
+00:17:14.069 --> 00:17:16.230 align:start position:0%
+ 
+ 
+
+00:17:16.230 --> 00:17:16.240 align:start position:0%
+ 
+ 
+
+00:17:16.240 --> 00:17:16.630 align:start position:0%
+ 
+
+
+00:17:16.630 --> 00:17:18.789 align:start position:0%
+ 
+ 
+
+00:17:18.789 --> 00:17:20.390 align:start position:0%
+ 
+ 
+
+00:17:20.390 --> 00:17:22.470 align:start position:0%
+ 
+ 
+
+00:17:22.470 --> 00:17:22.480 align:start position:0%
+ 
+ 
+
+00:17:22.480 --> 00:17:22.789 align:start position:0%
+ 
+
+
+00:17:22.789 --> 00:17:24.390 align:start position:0%
+ 
+ 
+
+00:17:24.390 --> 00:17:26.069 align:start position:0%
+ 
+ 
+
+00:17:26.069 --> 00:17:28.309 align:start position:0%
+ 
+ 
+
+00:17:28.309 --> 00:17:30.070 align:start position:0%
+ 
+ 
+
+00:17:30.070 --> 00:17:31.750 align:start position:0%
+ 
+ 
+
+00:17:31.750 --> 00:17:31.760 align:start position:0%
+ 
+ 
+
+00:17:31.760 --> 00:17:33.110 align:start position:0%
+ 
+
+
+00:17:33.110 --> 00:17:34.630 align:start position:0%
+ 
+ 
+
+00:17:34.630 --> 00:17:36.230 align:start position:0%
+ 
+ 
+
+00:17:36.230 --> 00:17:38.630 align:start position:0%
+ 
+ 
+
+00:17:38.630 --> 00:17:38.640 align:start position:0%
+ 
+ 
+
+00:17:38.640 --> 00:17:39.110 align:start position:0%
+ 
+
+
+00:17:39.110 --> 00:17:41.190 align:start position:0%
+ 
+ 
+
+00:17:41.190 --> 00:17:44.070 align:start position:0%
+ 
+ 
+
+00:17:44.070 --> 00:17:45.270 align:start position:0%
+ 
+ 
+
+00:17:45.270 --> 00:17:47.350 align:start position:0%
+ 
+ 
+
+00:17:47.350 --> 00:17:48.950 align:start position:0%
+ 
+ 
+
+00:17:48.950 --> 00:17:50.549 align:start position:0%
+ 
+ 
+
+00:17:50.549 --> 00:17:53.029 align:start position:0%
+ 
+ 
+
+00:17:53.029 --> 00:17:54.870 align:start position:0%
+ 
+ 
+
+00:17:54.870 --> 00:17:56.310 align:start position:0%
+ 
+ 
+
+00:17:56.310 --> 00:17:58.789 align:start position:0%
+ 
+ 
+
+00:17:58.789 --> 00:17:59.990 align:start position:0%
+ 
+ 
+
+00:17:59.990 --> 00:18:02.150 align:start position:0%
+ 
+ 
+
+00:18:02.150 --> 00:18:03.430 align:start position:0%
+ 
+ 
+
+00:18:03.430 --> 00:18:05.270 align:start position:0%
+ 
+ 
+
+00:18:05.270 --> 00:18:06.789 align:start position:0%
+ 
+ 
+
+00:18:06.789 --> 00:18:08.710 align:start position:0%
+ 
+ 
+
+00:18:08.710 --> 00:18:11.029 align:start position:0%
+ 
+ 
+
+00:18:11.029 --> 00:18:12.789 align:start position:0%
+ 
+ 
+
+00:18:12.789 --> 00:18:15.350 align:start position:0%
+ 
+ 
+
+00:18:15.350 --> 00:18:16.870 align:start position:0%
+ 
+ 
+
+00:18:16.870 --> 00:18:19.270 align:start position:0%
+ 
+ 
+
+00:18:19.270 --> 00:18:20.870 align:start position:0%
+ 
+ 
+
+00:18:20.870 --> 00:18:23.190 align:start position:0%
+ 
+ 
+
+00:18:23.190 --> 00:18:24.630 align:start position:0%
+ 
+ 
+
+00:18:24.630 --> 00:18:26.630 align:start position:0%
+ 
+ 
+
+00:18:26.630 --> 00:18:28.390 align:start position:0%
+ 
+ 
+
+00:18:28.390 --> 00:18:30.630 align:start position:0%
+ 
+ 
+
+00:18:30.630 --> 00:18:32.549 align:start position:0%
+ 
+ 
+
+00:18:32.549 --> 00:18:33.909 align:start position:0%
+ 
+ 
+
+00:18:33.909 --> 00:18:35.909 align:start position:0%
+ 
+ 
+
+00:18:35.909 --> 00:18:37.750 align:start position:0%
+ 
+ 
+
+00:18:37.750 --> 00:18:38.310 align:start position:0%
+ 
+ 
+
+00:18:38.310 --> 00:18:40.150 align:start position:0%
+ 
+ 
+
+00:18:40.150 --> 00:18:42.950 align:start position:0%
+ 
+ 
+
+00:18:42.950 --> 00:18:44.549 align:start position:0%
+ 
+ 
+
+00:18:44.549 --> 00:18:46.230 align:start position:0%
+ 
+ 
+
+00:18:46.230 --> 00:18:47.909 align:start position:0%
+ 
+ 
+
+00:18:47.909 --> 00:18:47.919 align:start position:0%
+ 
+ 
+
+00:18:47.919 --> 00:18:49.110 align:start position:0%
+ 
+
+
+00:18:49.110 --> 00:18:50.789 align:start position:0%
+ 
+ 
+
+00:18:50.789 --> 00:18:53.270 align:start position:0%
+ 
+ 
+
+00:18:53.270 --> 00:18:55.590 align:start position:0%
+ 
+ 
+
+00:18:55.590 --> 00:18:57.510 align:start position:0%
+ 
+ 
+
+00:18:57.510 --> 00:18:58.950 align:start position:0%
+ 
+ 
+
+00:18:58.950 --> 00:19:00.230 align:start position:0%
+ 
+ 
+
+00:19:00.230 --> 00:19:02.470 align:start position:0%
+ 
+ 
+
+00:19:02.470 --> 00:19:04.630 align:start position:0%
+ 
+ 
+
+00:19:04.630 --> 00:19:06.470 align:start position:0%
+ 
+ 
+
+00:19:06.470 --> 00:19:06.480 align:start position:0%
+ 
+ 
+
+00:19:06.480 --> 00:19:07.669 align:start position:0%
+ 
+
+
+00:19:07.669 --> 00:19:09.990 align:start position:0%
+ 
+ 
+
+00:19:09.990 --> 00:19:11.350 align:start position:0%
+ 
+ 
+
+00:19:11.350 --> 00:19:13.430 align:start position:0%
+ 
+ 
+
+00:19:13.430 --> 00:19:14.470 align:start position:0%
+ 
+ 
+
+00:19:14.470 --> 00:19:16.870 align:start position:0%
+ 
+ 
+
+00:19:16.870 --> 00:19:18.789 align:start position:0%
+ 
+ 
+
+00:19:18.789 --> 00:19:19.590 align:start position:0%
+ 
+ 
+
+00:19:19.590 --> 00:19:22.070 align:start position:0%
+ 
+ 
+
+00:19:22.070 --> 00:19:23.750 align:start position:0%
+ 
+ 
+
+00:19:23.750 --> 00:19:25.669 align:start position:0%
+ 
+ 
+
+00:19:25.669 --> 00:19:27.510 align:start position:0%
+ 
+ 
+
+00:19:27.510 --> 00:19:27.520 align:start position:0%
+ 
+ 
+
+00:19:27.520 --> 00:19:27.990 align:start position:0%
+ 
+
+
+00:19:27.990 --> 00:19:30.470 align:start position:0%
+ 
+ 
+
+00:19:30.470 --> 00:19:32.789 align:start position:0%
+ 
+ 
+
+00:19:32.789 --> 00:19:35.029 align:start position:0%
+ 
+ 
+
+00:19:35.029 --> 00:19:36.950 align:start position:0%
+ 
+ 
+
+00:19:36.950 --> 00:19:39.270 align:start position:0%
+ 
+ 
+
+00:19:39.270 --> 00:19:40.950 align:start position:0%
+ 
+ 
+
+00:19:40.950 --> 00:19:43.110 align:start position:0%
+ 
+ 
+
+00:19:43.110 --> 00:19:44.950 align:start position:0%
+ 
+ 
+
+00:19:44.950 --> 00:19:46.390 align:start position:0%
+ 
+ 
+
+00:19:46.390 --> 00:19:48.310 align:start position:0%
+ 
+ 
+
+00:19:48.310 --> 00:19:50.230 align:start position:0%
+ 
+ 
+
+00:19:50.230 --> 00:19:51.110 align:start position:0%
+ 
+ 
+
+00:19:51.110 --> 00:19:53.430 align:start position:0%
+ 
+ 
+
+00:19:53.430 --> 00:19:55.750 align:start position:0%
+ 
+ 
+
+00:19:55.750 --> 00:19:57.430 align:start position:0%
+ 
+ 
+
+00:19:57.430 --> 00:19:59.590 align:start position:0%
+ 
+ 
+
+00:19:59.590 --> 00:20:00.950 align:start position:0%
+ 
+ 
+
+00:20:00.950 --> 00:20:02.950 align:start position:0%
+ 
+ 
+
+00:20:02.950 --> 00:20:05.029 align:start position:0%
+ 
+ 
+
+00:20:05.029 --> 00:20:06.950 align:start position:0%
+ 
+ 
+
+00:20:06.950 --> 00:20:08.789 align:start position:0%
+ 
+ 
+
+00:20:08.789 --> 00:20:09.750 align:start position:0%
+ 
+ 
+
+00:20:09.750 --> 00:20:11.270 align:start position:0%
+ 
+ 
+
+00:20:11.270 --> 00:20:13.270 align:start position:0%
+ 
+ 
+
+00:20:13.270 --> 00:20:15.750 align:start position:0%
+ 
+ 
+
+00:20:15.750 --> 00:20:18.390 align:start position:0%
+ 
+ 
+
+00:20:18.390 --> 00:20:19.990 align:start position:0%
+ 
+ 
+
+00:20:19.990 --> 00:20:22.630 align:start position:0%
+ 
+ 
+
+00:20:22.630 --> 00:20:23.990 align:start position:0%
+ 
+ 
+
+00:20:23.990 --> 00:20:24.950 align:start position:0%
+ 
+ 
+
+00:20:24.950 --> 00:20:26.950 align:start position:0%
+ 
+ 
+
+00:20:26.950 --> 00:20:28.710 align:start position:0%
+ 
+ 
+
+00:20:28.710 --> 00:20:29.909 align:start position:0%
+ 
+ 
+
+00:20:29.909 --> 00:20:32.070 align:start position:0%
+ 
+ 
+
+00:20:32.070 --> 00:20:32.080 align:start position:0%
+ 
+ 
+
+00:20:32.080 --> 00:20:32.789 align:start position:0%
+ 
+
+
+00:20:32.789 --> 00:20:36.480 align:start position:0%
+ 
+ 
+

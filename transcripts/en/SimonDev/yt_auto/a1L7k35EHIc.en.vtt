@@ -1,0 +1,1672 @@
+WEBVTT
+Kind: captions
+Language: en
+
+00:00:00.080 --> 00:00:01.510 align:start position:0%
+ 
+in this project we'll be covering  threading using javascript's dedicated  workers  and this will really help with the  hiccups and overall jankiness you might  have seen in previous versions of the  terrain generation code  so just to recap we've been building out  a series on 3d world generation  and procedural terrain in javascript and  3gs  starting with basic mesh generation and  moving on to entire worlds  and advanced texturing techniques let's  take a step back now and work on making  the entire thing a bit faster  because right now it's it's pretty slow  and we'll be using web workers which are  javascript's way of running things in  the background in another thread  off the main execution thread what that  means is we can run the game at full  speed on the main thread  and build the terrain in other threads  in the background without interrupting  or slowing things down  before we begin make sure you're  subscribed to this channel and on  twitter so that you're notified when new  videos are released and you can also get  previews of what's coming up  so this was inspired by another user who  saw my planet generation videos and  built a really cool version using web  workers  i've included the link to their video in  the description  so let's go screw with the code and make  it faster threading or pushing work into  background tasks  isn't intrinsically complicated to  understand we can look at a simple  example of how to do it  here's a little basic chunk of code what  you do is declare a worker like this or  const w equals new worker and worker.js  then to actually do some work you need  to pass data to the worker  and supply a callback for when the  worker responds  something like w dot post message and  you put some parameters in there  and then w dot on message and supply a  callback  now in worker.js we also need to declare  an onmessage handler  and remember this is the code that runs  in the background  here we'll declare an on message handler  check the subject  push a few extra items into the list and  post it back to the main thread using  post message  now let's run this and what you'll see  is the console output has the list of  items one through six  not super exciting but it should help  you begin to understand the  architectural requirements when you  thread things  in general what you need to understand  is that you've got the main execution  thread  imagine it as a single line moving to  the right as time advances  you've got these chunks of work that  take some time let's represent those  with boxes  and so they could be anything in a game  you've got update the ai  that's a box you've got three chunks of  terrain to build those are three boxes  then you've gotta draw everything and  that's a box  in a single threaded context these boxes  all have to be done in sequence  so you do various bits of work you build  those chunks of terrain  then you draw and you repeat it next  frame do some work draw do some work  draw  etc etc in a simplified multi-threaded  context  things are a bit more complicated you  have multiple timelines  or threads where work can be conceivably  done in parallel  so imagine now i have this second line  where work can be done  representing the worker now your first  instinct might be to do something like  this  where you push the work of rebuilding  these chunks to the worker and then wait  till it's done  then draw and that's fine it kind of  works especially if you have lots of  workers  things will definitely go faster than in  the single threaded case  but if some chunk of work takes an  especially long time  what ends up happening is the main  thread ends up waiting around  pointlessly  and the game stalls and feels a little  jerky as it freezes for a bit  a better way to do this is to push the  work to the worker but we don't wait for  it to finish  what we do is we just move on with our  lives at that point and when the worker  is done  it sends the work back and whenever that  happens to be is when we update the  terrain  so let's code this up luckily we didn't  write a mess of spaghetti code last time  responsibility was delegated reasonably  well from the main  terrain class to a builder class and  chunks were encapsulated with the train  chunk class  to thread this it'll require almost no  changes to the original application we  just need to write a  new terrain builder threaded class to  replace the existing terrain builder  and we'll be on our way as a side note  threading is a complicated subject but  taking a bit of time to use good  software design practices  made injecting it into our code really  easy let's take a quick look at the  original  single threaded terrain builder class  you can see here  the public api isn't that extensive you  have an allocate chunk function which  just creates a new chunk of train  you've got this busy property that  signals the builder is busy at the  moment and can't take  new requests a rebuild function which is  a request to rebuild these particular  chunks  and an update function which is called  once per frame to do whatever work and  bookkeeping needs to be done  let's go and thread this thing the first  thing we want to do is make the worker  interface a bit friendlier  we'll start by making our own worker  class that wraps the built-in worker  we'll extend it by adding an id and the  reason we're doing this is because it'll  make it really easy to make a worker  pool  that sends work back to the next free  worker  there's also an on message which just  wraps their workers on message and calls  whatever callback was saved for this  work item  and a post message which saves a  callback and then posts a message to the  worker  they're mostly just wrapper code so now  we'll make this worker pool  and it has to instantiate an array of  workers which is what we do to begin  now the whole point of the worker pool  will be to make it easy to send some  work to the pool  which will then delegate it to the first  available worker  so we keep track of who's busy and who's  free when we start of course  every worker is free now we have this in  queue function  and this is only a couple lines its  responsibility  is to shove the work into a queue and  then it calls pump q  which is the real workhorse of the class  so let's go look at what that does  pump queue is a little complex but at a  high level what it's doing  is whenever there's work to be done it  takes the next free worker  see this line here where it pops it off  the free list and then marks it as busy  then we take the next work item and send  it to the worker  the call back in here since the work is  now complete it removes that work from  the busy list and reinserts it into the  free list  then the callback associated with the  work item is called and we pump the  queue again  let's build out the threaded terrain  generator now  we'll start by making a terrain chunk  rebuilder  threaded class to replace the existing  one  in the constructor here we'll allocate a  worker pool  where we'll be sending all the actual  chunk building to get done  now we'll need to swap out the  implementation starting with allocate  chunk what we do here is we create a  chunk and hide it immediately  like before then what we're going to do  is send a message to our pool of workers  saying we've got a new chunk  here are the parameters we also supply a  callback here which is called when the  worker  successfully builds the chunk and sends  it back at this point onresult is called  and we pass the data to the chunk with  this rebuild mesh from data function  which is mostly responsible for passing  the data along to 3.js and webgl you can  see here all it's doing is passing the  pointers directly to those set attribute  calls  the busy function doesn't change much  instead of checking locally if it's  building something  the threaded version just checks if the  worker pool is busy or idle in the  rebuild function  this is responsible for taking a list of  chunks and cueing them up to be rebuilt  this is super easy here all we need to  do is pass these directly to the worker  pool  finally in update whenever the work is  complete we just hide the old  chunks that's it it's not really much to  do here let's take a look inside the  actual worker code  so that's all in  terrainbuilderthreadedworker.js  down here in the on message function we  just check the subject to make sure it's  about  rebuilding chunks now since that's all  we do in this app it will always pass  but you could conceivably have different  messages handled here  kind of like this we call chunk.init  with the parameters from the message and  call rebuild and post it back  most of this code should look pretty  familiar since it's basically just a  copy paste of the old terrain chunk  class  but there's a few small changes that  need to be made to support the workers  notice the chunk.init call you can't  pass actual instances of classes through  to the worker  so what we do here is in the init call  you can see we've passed the parameters  that were used to instantiate the noise  and other helper functions and now we  instantiate them here instead  looking back at the terrain class you  can see that i've left the old lines of  code here  it used to instantiate the noise and  everything and then pass those instances  as parameters to create chunks but with  a worker you can't pass an instance of a  class  i mean you you could probably do  something smart here but that just seems  like wasted effort  we'll pass the original parameters  instead like we do here  anyway the rebuild function is a  near-exact copy paste of the original  terrain chunk build function  but instead of being a generator we  remove all the yields that were  sprinkled throughout and just  straight up do all the calculations at  the end we use another trick to speed  things up  we could just straight up send the data  across and then upload it  we've still saved all that time  computing but we're going to be using  shared array buffer instead  now a quick aside shared array buffer is  pretty sweet  what it allows you to do is create a  memory buffer that's shared between both  threads  meaning you don't need to copy the data  between the worker thread and the main  thread  instead if you instantiate these shared  array buffer instances  which is what these new shared array  buffer calls do  and you pass the length of the buffer  you need and remember these are byte  arrays so you need to multiply by the  size of a float which is four bytes  what happens is that you write into them  which is what we're doing with these  lines of code here we're copying all of  the generated mesh data  into these shared array buffer instances  and then you pass these back to the main  thread by a post message  when you do that you avoid a whole bunch  of extraneous copies  and that's it once you've done all that  you can load up the planet and see the  smoothness that you've created  as i move around you don't see that kind  of janky smooth and freeze crap that you  saw with the old one  even with all the effort to use  generators it wasn't smooth  but as i zoom in and out move around  everything is totally seamless  let's put them side by side and you can  see that the old one is pretty bad  first of all it takes forever to load  let's just sit here and wait for it  there we go that took a little while and  now let's try moving around  you can see it hanging up all the time  compare that with the left side of the  screen  if we restart you can see it loads up  super fast  all the chunks coming in quickly while  the right side seems to be sitting on  his ass doing nothing  when you move around it's all smooth  nothing freezes  there's no sort of jerkiness to it it's  all good and that's because we're using  the full power of my computer at this  point  i have eight cores in this desktop so  i'm able to build the terrain  significantly faster than in the single  threaded version  i hope you enjoyed this if you haven't  already subscribe both here and on  twitter  you'll get notifications for when new  videos drop and previews on what's  coming up next  i also chat with people and try to get a  sense of what you all want to see next  make sure to like the video and leave a  comment on what you want to see covered  in a future tutorial  the code is all up on github so knock  yourself out  like always do whatever you want with it  doesn't matter  free to use and if you don't understand  anything just ask me  cheers everyone
+
+00:00:01.510 --> 00:00:03.750 align:start position:0%
+in this project we'll be covering  threading using javascript's dedicated  workers  and this will really help with the  hiccups and overall jankiness you might  have seen in previous versions of the  terrain generation code  so just to recap we've been building out  a series on 3d world generation  and procedural terrain in javascript and  3gs  starting with basic mesh generation and  moving on to entire worlds  and advanced texturing techniques let's  take a step back now and work on making  the entire thing a bit faster  because right now it's it's pretty slow  and we'll be using web workers which are  javascript's way of running things in  the background in another thread  off the main execution thread what that  means is we can run the game at full  speed on the main thread  and build the terrain in other threads  in the background without interrupting  or slowing things down  before we begin make sure you're  subscribed to this channel and on  twitter so that you're notified when new  videos are released and you can also get  previews of what's coming up  so this was inspired by another user who  saw my planet generation videos and  built a really cool version using web  workers  i've included the link to their video in  the description  so let's go screw with the code and make  it faster threading or pushing work into  background tasks  isn't intrinsically complicated to  understand we can look at a simple  example of how to do it  here's a little basic chunk of code what  you do is declare a worker like this or  const w equals new worker and worker.js  then to actually do some work you need  to pass data to the worker  and supply a callback for when the  worker responds  something like w dot post message and  you put some parameters in there  and then w dot on message and supply a  callback  now in worker.js we also need to declare  an onmessage handler  and remember this is the code that runs  in the background  here we'll declare an on message handler  check the subject  push a few extra items into the list and  post it back to the main thread using  post message  now let's run this and what you'll see  is the console output has the list of  items one through six  not super exciting but it should help  you begin to understand the  architectural requirements when you  thread things  in general what you need to understand  is that you've got the main execution  thread  imagine it as a single line moving to  the right as time advances  you've got these chunks of work that  take some time let's represent those  with boxes  and so they could be anything in a game  you've got update the ai  that's a box you've got three chunks of  terrain to build those are three boxes  then you've gotta draw everything and  that's a box  in a single threaded context these boxes  all have to be done in sequence  so you do various bits of work you build  those chunks of terrain  then you draw and you repeat it next  frame do some work draw do some work  draw  etc etc in a simplified multi-threaded  context  things are a bit more complicated you  have multiple timelines  or threads where work can be conceivably  done in parallel  so imagine now i have this second line  where work can be done  representing the worker now your first  instinct might be to do something like  this  where you push the work of rebuilding  these chunks to the worker and then wait  till it's done  then draw and that's fine it kind of  works especially if you have lots of  workers  things will definitely go faster than in  the single threaded case  but if some chunk of work takes an  especially long time  what ends up happening is the main  thread ends up waiting around  pointlessly  and the game stalls and feels a little  jerky as it freezes for a bit  a better way to do this is to push the  work to the worker but we don't wait for  it to finish  what we do is we just move on with our  lives at that point and when the worker  is done  it sends the work back and whenever that  happens to be is when we update the  terrain  so let's code this up luckily we didn't  write a mess of spaghetti code last time  responsibility was delegated reasonably  well from the main  terrain class to a builder class and  chunks were encapsulated with the train  chunk class  to thread this it'll require almost no  changes to the original application we  just need to write a  new terrain builder threaded class to  replace the existing terrain builder  and we'll be on our way as a side note  threading is a complicated subject but  taking a bit of time to use good  software design practices  made injecting it into our code really  easy let's take a quick look at the  original  single threaded terrain builder class  you can see here  the public api isn't that extensive you  have an allocate chunk function which  just creates a new chunk of train  you've got this busy property that  signals the builder is busy at the  moment and can't take  new requests a rebuild function which is  a request to rebuild these particular  chunks  and an update function which is called  once per frame to do whatever work and  bookkeeping needs to be done  let's go and thread this thing the first  thing we want to do is make the worker  interface a bit friendlier  we'll start by making our own worker  class that wraps the built-in worker  we'll extend it by adding an id and the  reason we're doing this is because it'll  make it really easy to make a worker  pool  that sends work back to the next free  worker  there's also an on message which just  wraps their workers on message and calls  whatever callback was saved for this  work item  and a post message which saves a  callback and then posts a message to the  worker  they're mostly just wrapper code so now  we'll make this worker pool  and it has to instantiate an array of  workers which is what we do to begin  now the whole point of the worker pool  will be to make it easy to send some  work to the pool  which will then delegate it to the first  available worker  so we keep track of who's busy and who's  free when we start of course  every worker is free now we have this in  queue function  and this is only a couple lines its  responsibility  is to shove the work into a queue and  then it calls pump q  which is the real workhorse of the class  so let's go look at what that does  pump queue is a little complex but at a  high level what it's doing  is whenever there's work to be done it  takes the next free worker  see this line here where it pops it off  the free list and then marks it as busy  then we take the next work item and send  it to the worker  the call back in here since the work is  now complete it removes that work from  the busy list and reinserts it into the  free list  then the callback associated with the  work item is called and we pump the  queue again  let's build out the threaded terrain  generator now  we'll start by making a terrain chunk  rebuilder  threaded class to replace the existing  one  in the constructor here we'll allocate a  worker pool  where we'll be sending all the actual  chunk building to get done  now we'll need to swap out the  implementation starting with allocate  chunk what we do here is we create a  chunk and hide it immediately  like before then what we're going to do  is send a message to our pool of workers  saying we've got a new chunk  here are the parameters we also supply a  callback here which is called when the  worker  successfully builds the chunk and sends  it back at this point onresult is called  and we pass the data to the chunk with  this rebuild mesh from data function  which is mostly responsible for passing  the data along to 3.js and webgl you can  see here all it's doing is passing the  pointers directly to those set attribute  calls  the busy function doesn't change much  instead of checking locally if it's  building something  the threaded version just checks if the  worker pool is busy or idle in the  rebuild function  this is responsible for taking a list of  chunks and cueing them up to be rebuilt  this is super easy here all we need to  do is pass these directly to the worker  pool  finally in update whenever the work is  complete we just hide the old  chunks that's it it's not really much to  do here let's take a look inside the  actual worker code  so that's all in  terrainbuilderthreadedworker.js  down here in the on message function we  just check the subject to make sure it's  about  rebuilding chunks now since that's all  we do in this app it will always pass  but you could conceivably have different  messages handled here  kind of like this we call chunk.init  with the parameters from the message and  call rebuild and post it back  most of this code should look pretty  familiar since it's basically just a  copy paste of the old terrain chunk  class  but there's a few small changes that  need to be made to support the workers  notice the chunk.init call you can't  pass actual instances of classes through  to the worker  so what we do here is in the init call  you can see we've passed the parameters  that were used to instantiate the noise  and other helper functions and now we  instantiate them here instead  looking back at the terrain class you  can see that i've left the old lines of  code here  it used to instantiate the noise and  everything and then pass those instances  as parameters to create chunks but with  a worker you can't pass an instance of a  class  i mean you you could probably do  something smart here but that just seems  like wasted effort  we'll pass the original parameters  instead like we do here  anyway the rebuild function is a  near-exact copy paste of the original  terrain chunk build function  but instead of being a generator we  remove all the yields that were  sprinkled throughout and just  straight up do all the calculations at  the end we use another trick to speed  things up  we could just straight up send the data  across and then upload it  we've still saved all that time  computing but we're going to be using  shared array buffer instead  now a quick aside shared array buffer is  pretty sweet  what it allows you to do is create a  memory buffer that's shared between both  threads  meaning you don't need to copy the data  between the worker thread and the main  thread  instead if you instantiate these shared  array buffer instances  which is what these new shared array  buffer calls do  and you pass the length of the buffer  you need and remember these are byte  arrays so you need to multiply by the  size of a float which is four bytes  what happens is that you write into them  which is what we're doing with these  lines of code here we're copying all of  the generated mesh data  into these shared array buffer instances  and then you pass these back to the main  thread by a post message  when you do that you avoid a whole bunch  of extraneous copies  and that's it once you've done all that  you can load up the planet and see the  smoothness that you've created  as i move around you don't see that kind  of janky smooth and freeze crap that you  saw with the old one  even with all the effort to use  generators it wasn't smooth  but as i zoom in and out move around  everything is totally seamless  let's put them side by side and you can  see that the old one is pretty bad  first of all it takes forever to load  let's just sit here and wait for it  there we go that took a little while and  now let's try moving around  you can see it hanging up all the time  compare that with the left side of the  screen  if we restart you can see it loads up  super fast  all the chunks coming in quickly while  the right side seems to be sitting on  his ass doing nothing  when you move around it's all smooth  nothing freezes  there's no sort of jerkiness to it it's  all good and that's because we're using  the full power of my computer at this  point  i have eight cores in this desktop so  i'm able to build the terrain  significantly faster than in the single  threaded version  i hope you enjoyed this if you haven't  already subscribe both here and on  twitter  you'll get notifications for when new  videos drop and previews on what's  coming up next  i also chat with people and try to get a  sense of what you all want to see next  make sure to like the video and leave a  comment on what you want to see covered  in a future tutorial  the code is all up on github so knock  yourself out  like always do whatever you want with it  doesn't matter  free to use and if you don't understand  anything just ask me  cheers everyone
+ 
+
+00:00:03.750 --> 00:00:03.760 align:start position:0%
+ 
+ 
+
+00:00:03.760 --> 00:00:04.789 align:start position:0%
+ 
+
+
+00:00:04.789 --> 00:00:06.070 align:start position:0%
+ 
+ 
+
+00:00:06.070 --> 00:00:08.390 align:start position:0%
+ 
+ 
+
+00:00:08.390 --> 00:00:10.150 align:start position:0%
+ 
+ 
+
+00:00:10.150 --> 00:00:12.629 align:start position:0%
+ 
+ 
+
+00:00:12.629 --> 00:00:15.110 align:start position:0%
+ 
+ 
+
+00:00:15.110 --> 00:00:17.189 align:start position:0%
+ 
+ 
+
+00:00:17.189 --> 00:00:19.590 align:start position:0%
+ 
+ 
+
+00:00:19.590 --> 00:00:19.600 align:start position:0%
+ 
+ 
+
+00:00:19.600 --> 00:00:20.550 align:start position:0%
+ 
+
+
+00:00:20.550 --> 00:00:22.630 align:start position:0%
+ 
+ 
+
+00:00:22.630 --> 00:00:24.550 align:start position:0%
+ 
+ 
+
+00:00:24.550 --> 00:00:27.349 align:start position:0%
+ 
+ 
+
+00:00:27.349 --> 00:00:29.269 align:start position:0%
+ 
+ 
+
+00:00:29.269 --> 00:00:30.870 align:start position:0%
+ 
+ 
+
+00:00:30.870 --> 00:00:33.110 align:start position:0%
+ 
+ 
+
+00:00:33.110 --> 00:00:35.030 align:start position:0%
+ 
+ 
+
+00:00:35.030 --> 00:00:36.950 align:start position:0%
+ 
+ 
+
+00:00:36.950 --> 00:00:38.790 align:start position:0%
+ 
+ 
+
+00:00:38.790 --> 00:00:41.510 align:start position:0%
+ 
+ 
+
+00:00:41.510 --> 00:00:43.430 align:start position:0%
+ 
+ 
+
+00:00:43.430 --> 00:00:44.950 align:start position:0%
+ 
+ 
+
+00:00:44.950 --> 00:00:46.869 align:start position:0%
+ 
+ 
+
+00:00:46.869 --> 00:00:48.790 align:start position:0%
+ 
+ 
+
+00:00:48.790 --> 00:00:50.709 align:start position:0%
+ 
+ 
+
+00:00:50.709 --> 00:00:52.389 align:start position:0%
+ 
+ 
+
+00:00:52.389 --> 00:00:53.990 align:start position:0%
+ 
+ 
+
+00:00:53.990 --> 00:00:55.830 align:start position:0%
+ 
+ 
+
+00:00:55.830 --> 00:00:57.590 align:start position:0%
+ 
+ 
+
+00:00:57.590 --> 00:00:59.590 align:start position:0%
+ 
+ 
+
+00:00:59.590 --> 00:01:01.990 align:start position:0%
+ 
+ 
+
+00:01:01.990 --> 00:01:04.229 align:start position:0%
+ 
+ 
+
+00:01:04.229 --> 00:01:06.149 align:start position:0%
+ 
+ 
+
+00:01:06.149 --> 00:01:06.159 align:start position:0%
+ 
+ 
+
+00:01:06.159 --> 00:01:07.109 align:start position:0%
+ 
+
+
+00:01:07.109 --> 00:01:08.950 align:start position:0%
+ 
+ 
+
+00:01:08.950 --> 00:01:10.630 align:start position:0%
+ 
+ 
+
+00:01:10.630 --> 00:01:12.230 align:start position:0%
+ 
+ 
+
+00:01:12.230 --> 00:01:15.270 align:start position:0%
+ 
+ 
+
+00:01:15.270 --> 00:01:16.390 align:start position:0%
+ 
+ 
+
+00:01:16.390 --> 00:01:18.390 align:start position:0%
+ 
+ 
+
+00:01:18.390 --> 00:01:20.390 align:start position:0%
+ 
+ 
+
+00:01:20.390 --> 00:01:21.910 align:start position:0%
+ 
+ 
+
+00:01:21.910 --> 00:01:23.990 align:start position:0%
+ 
+ 
+
+00:01:23.990 --> 00:01:26.149 align:start position:0%
+ 
+ 
+
+00:01:26.149 --> 00:01:31.030 align:start position:0%
+ 
+ 
+
+00:01:31.030 --> 00:01:32.950 align:start position:0%
+ 
+ 
+
+00:01:32.950 --> 00:01:34.550 align:start position:0%
+ 
+ 
+
+00:01:34.550 --> 00:01:36.069 align:start position:0%
+ 
+ 
+
+00:01:36.069 --> 00:01:37.749 align:start position:0%
+ 
+ 
+
+00:01:37.749 --> 00:01:40.230 align:start position:0%
+ 
+ 
+
+00:01:40.230 --> 00:01:42.870 align:start position:0%
+ 
+ 
+
+00:01:42.870 --> 00:01:45.670 align:start position:0%
+ 
+ 
+
+00:01:45.670 --> 00:01:45.680 align:start position:0%
+ 
+ 
+
+00:01:45.680 --> 00:01:47.030 align:start position:0%
+ 
+
+
+00:01:47.030 --> 00:01:49.830 align:start position:0%
+ 
+ 
+
+00:01:49.830 --> 00:01:51.270 align:start position:0%
+ 
+ 
+
+00:01:51.270 --> 00:01:52.950 align:start position:0%
+ 
+ 
+
+00:01:52.950 --> 00:01:54.550 align:start position:0%
+ 
+ 
+
+00:01:54.550 --> 00:01:57.030 align:start position:0%
+ 
+ 
+
+00:01:57.030 --> 00:01:58.149 align:start position:0%
+ 
+ 
+
+00:01:58.149 --> 00:02:00.469 align:start position:0%
+ 
+ 
+
+00:02:00.469 --> 00:02:02.149 align:start position:0%
+ 
+ 
+
+00:02:02.149 --> 00:02:03.830 align:start position:0%
+ 
+ 
+
+00:02:03.830 --> 00:02:05.990 align:start position:0%
+ 
+ 
+
+00:02:05.990 --> 00:02:08.150 align:start position:0%
+ 
+ 
+
+00:02:08.150 --> 00:02:10.229 align:start position:0%
+ 
+ 
+
+00:02:10.229 --> 00:02:12.070 align:start position:0%
+ 
+ 
+
+00:02:12.070 --> 00:02:13.350 align:start position:0%
+ 
+ 
+
+00:02:13.350 --> 00:02:15.110 align:start position:0%
+ 
+ 
+
+00:02:15.110 --> 00:02:16.470 align:start position:0%
+ 
+ 
+
+00:02:16.470 --> 00:02:18.229 align:start position:0%
+ 
+ 
+
+00:02:18.229 --> 00:02:19.910 align:start position:0%
+ 
+ 
+
+00:02:19.910 --> 00:02:19.920 align:start position:0%
+ 
+ 
+
+00:02:19.920 --> 00:02:20.630 align:start position:0%
+ 
+
+
+00:02:20.630 --> 00:02:22.550 align:start position:0%
+ 
+ 
+
+00:02:22.550 --> 00:02:24.630 align:start position:0%
+ 
+ 
+
+00:02:24.630 --> 00:02:26.229 align:start position:0%
+ 
+ 
+
+00:02:26.229 --> 00:02:27.990 align:start position:0%
+ 
+ 
+
+00:02:27.990 --> 00:02:28.869 align:start position:0%
+ 
+ 
+
+00:02:28.869 --> 00:02:30.869 align:start position:0%
+ 
+ 
+
+00:02:30.869 --> 00:02:32.630 align:start position:0%
+ 
+ 
+
+00:02:32.630 --> 00:02:34.790 align:start position:0%
+ 
+ 
+
+00:02:34.790 --> 00:02:37.589 align:start position:0%
+ 
+ 
+
+00:02:37.589 --> 00:02:39.270 align:start position:0%
+ 
+ 
+
+00:02:39.270 --> 00:02:40.710 align:start position:0%
+ 
+ 
+
+00:02:40.710 --> 00:02:42.869 align:start position:0%
+ 
+ 
+
+00:02:42.869 --> 00:02:44.390 align:start position:0%
+ 
+ 
+
+00:02:44.390 --> 00:02:46.309 align:start position:0%
+ 
+ 
+
+00:02:46.309 --> 00:02:47.509 align:start position:0%
+ 
+ 
+
+00:02:47.509 --> 00:02:49.110 align:start position:0%
+ 
+ 
+
+00:02:49.110 --> 00:02:51.350 align:start position:0%
+ 
+ 
+
+00:02:51.350 --> 00:02:51.360 align:start position:0%
+ 
+ 
+
+00:02:51.360 --> 00:02:51.750 align:start position:0%
+ 
+
+
+00:02:51.750 --> 00:02:55.430 align:start position:0%
+ 
+ 
+
+00:02:55.430 --> 00:02:55.440 align:start position:0%
+ 
+ 
+
+00:02:55.440 --> 00:02:56.229 align:start position:0%
+ 
+
+
+00:02:56.229 --> 00:02:58.390 align:start position:0%
+ 
+ 
+
+00:02:58.390 --> 00:02:59.750 align:start position:0%
+ 
+ 
+
+00:02:59.750 --> 00:03:01.990 align:start position:0%
+ 
+ 
+
+00:03:01.990 --> 00:03:03.509 align:start position:0%
+ 
+ 
+
+00:03:03.509 --> 00:03:05.430 align:start position:0%
+ 
+ 
+
+00:03:05.430 --> 00:03:06.550 align:start position:0%
+ 
+ 
+
+00:03:06.550 --> 00:03:09.270 align:start position:0%
+ 
+ 
+
+00:03:09.270 --> 00:03:10.869 align:start position:0%
+ 
+ 
+
+00:03:10.869 --> 00:03:10.879 align:start position:0%
+ 
+ 
+
+00:03:10.879 --> 00:03:11.430 align:start position:0%
+ 
+
+
+00:03:11.430 --> 00:03:13.110 align:start position:0%
+ 
+ 
+
+00:03:13.110 --> 00:03:14.869 align:start position:0%
+ 
+ 
+
+00:03:14.869 --> 00:03:15.750 align:start position:0%
+ 
+ 
+
+00:03:15.750 --> 00:03:18.070 align:start position:0%
+ 
+ 
+
+00:03:18.070 --> 00:03:19.670 align:start position:0%
+ 
+ 
+
+00:03:19.670 --> 00:03:19.680 align:start position:0%
+ 
+ 
+
+00:03:19.680 --> 00:03:20.630 align:start position:0%
+ 
+
+
+00:03:20.630 --> 00:03:22.550 align:start position:0%
+ 
+ 
+
+00:03:22.550 --> 00:03:24.710 align:start position:0%
+ 
+ 
+
+00:03:24.710 --> 00:03:27.830 align:start position:0%
+ 
+ 
+
+00:03:27.830 --> 00:03:29.670 align:start position:0%
+ 
+ 
+
+00:03:29.670 --> 00:03:31.430 align:start position:0%
+ 
+ 
+
+00:03:31.430 --> 00:03:32.789 align:start position:0%
+ 
+ 
+
+00:03:32.789 --> 00:03:32.799 align:start position:0%
+ 
+ 
+
+00:03:32.799 --> 00:03:33.830 align:start position:0%
+ 
+
+
+00:03:33.830 --> 00:03:35.350 align:start position:0%
+ 
+ 
+
+00:03:35.350 --> 00:03:37.350 align:start position:0%
+ 
+ 
+
+00:03:37.350 --> 00:03:39.350 align:start position:0%
+ 
+ 
+
+00:03:39.350 --> 00:03:41.350 align:start position:0%
+ 
+ 
+
+00:03:41.350 --> 00:03:42.390 align:start position:0%
+ 
+ 
+
+00:03:42.390 --> 00:03:44.149 align:start position:0%
+ 
+ 
+
+00:03:44.149 --> 00:03:46.390 align:start position:0%
+ 
+ 
+
+00:03:46.390 --> 00:03:46.869 align:start position:0%
+ 
+ 
+
+00:03:46.869 --> 00:03:49.110 align:start position:0%
+ 
+ 
+
+00:03:49.110 --> 00:03:50.789 align:start position:0%
+ 
+ 
+
+00:03:50.789 --> 00:03:50.799 align:start position:0%
+ 
+ 
+
+00:03:50.799 --> 00:03:51.750 align:start position:0%
+ 
+
+
+00:03:51.750 --> 00:03:54.630 align:start position:0%
+ 
+ 
+
+00:03:54.630 --> 00:03:56.789 align:start position:0%
+ 
+ 
+
+00:03:56.789 --> 00:03:59.110 align:start position:0%
+ 
+ 
+
+00:03:59.110 --> 00:03:59.990 align:start position:0%
+ 
+ 
+
+00:03:59.990 --> 00:04:02.229 align:start position:0%
+ 
+ 
+
+00:04:02.229 --> 00:04:04.149 align:start position:0%
+ 
+ 
+
+00:04:04.149 --> 00:04:05.350 align:start position:0%
+ 
+ 
+
+00:04:05.350 --> 00:04:07.910 align:start position:0%
+ 
+ 
+
+00:04:07.910 --> 00:04:09.990 align:start position:0%
+ 
+ 
+
+00:04:09.990 --> 00:04:11.110 align:start position:0%
+ 
+ 
+
+00:04:11.110 --> 00:04:13.190 align:start position:0%
+ 
+ 
+
+00:04:13.190 --> 00:04:15.270 align:start position:0%
+ 
+ 
+
+00:04:15.270 --> 00:04:18.069 align:start position:0%
+ 
+ 
+
+00:04:18.069 --> 00:04:20.229 align:start position:0%
+ 
+ 
+
+00:04:20.229 --> 00:04:21.749 align:start position:0%
+ 
+ 
+
+00:04:21.749 --> 00:04:23.350 align:start position:0%
+ 
+ 
+
+00:04:23.350 --> 00:04:25.510 align:start position:0%
+ 
+ 
+
+00:04:25.510 --> 00:04:27.430 align:start position:0%
+ 
+ 
+
+00:04:27.430 --> 00:04:27.440 align:start position:0%
+ 
+ 
+
+00:04:27.440 --> 00:04:27.990 align:start position:0%
+ 
+
+
+00:04:27.990 --> 00:04:30.710 align:start position:0%
+ 
+ 
+
+00:04:30.710 --> 00:04:31.670 align:start position:0%
+ 
+ 
+
+00:04:31.670 --> 00:04:34.390 align:start position:0%
+ 
+ 
+
+00:04:34.390 --> 00:04:36.230 align:start position:0%
+ 
+ 
+
+00:04:36.230 --> 00:04:38.629 align:start position:0%
+ 
+ 
+
+00:04:38.629 --> 00:04:40.230 align:start position:0%
+ 
+ 
+
+00:04:40.230 --> 00:04:41.909 align:start position:0%
+ 
+ 
+
+00:04:41.909 --> 00:04:43.030 align:start position:0%
+ 
+ 
+
+00:04:43.030 --> 00:04:46.390 align:start position:0%
+ 
+ 
+
+00:04:46.390 --> 00:04:48.390 align:start position:0%
+ 
+ 
+
+00:04:48.390 --> 00:04:48.400 align:start position:0%
+ 
+ 
+
+00:04:48.400 --> 00:04:49.590 align:start position:0%
+ 
+
+
+00:04:49.590 --> 00:04:51.350 align:start position:0%
+ 
+ 
+
+00:04:51.350 --> 00:04:53.270 align:start position:0%
+ 
+ 
+
+00:04:53.270 --> 00:04:55.270 align:start position:0%
+ 
+ 
+
+00:04:55.270 --> 00:04:57.189 align:start position:0%
+ 
+ 
+
+00:04:57.189 --> 00:04:59.030 align:start position:0%
+ 
+ 
+
+00:04:59.030 --> 00:05:00.629 align:start position:0%
+ 
+ 
+
+00:05:00.629 --> 00:05:02.390 align:start position:0%
+ 
+ 
+
+00:05:02.390 --> 00:05:04.710 align:start position:0%
+ 
+ 
+
+00:05:04.710 --> 00:05:07.430 align:start position:0%
+ 
+ 
+
+00:05:07.430 --> 00:05:09.110 align:start position:0%
+ 
+ 
+
+00:05:09.110 --> 00:05:11.110 align:start position:0%
+ 
+ 
+
+00:05:11.110 --> 00:05:11.120 align:start position:0%
+ 
+ 
+
+00:05:11.120 --> 00:05:11.670 align:start position:0%
+ 
+
+
+00:05:11.670 --> 00:05:14.070 align:start position:0%
+ 
+ 
+
+00:05:14.070 --> 00:05:14.080 align:start position:0%
+ 
+ 
+
+00:05:14.080 --> 00:05:15.029 align:start position:0%
+ 
+
+
+00:05:15.029 --> 00:05:17.270 align:start position:0%
+ 
+ 
+
+00:05:17.270 --> 00:05:19.350 align:start position:0%
+ 
+ 
+
+00:05:19.350 --> 00:05:21.029 align:start position:0%
+ 
+ 
+
+00:05:21.029 --> 00:05:21.990 align:start position:0%
+ 
+ 
+
+00:05:21.990 --> 00:05:23.830 align:start position:0%
+ 
+ 
+
+00:05:23.830 --> 00:05:25.590 align:start position:0%
+ 
+ 
+
+00:05:25.590 --> 00:05:25.600 align:start position:0%
+ 
+ 
+
+00:05:25.600 --> 00:05:26.150 align:start position:0%
+ 
+
+
+00:05:26.150 --> 00:05:28.790 align:start position:0%
+ 
+ 
+
+00:05:28.790 --> 00:05:30.150 align:start position:0%
+ 
+ 
+
+00:05:30.150 --> 00:05:32.230 align:start position:0%
+ 
+ 
+
+00:05:32.230 --> 00:05:34.469 align:start position:0%
+ 
+ 
+
+00:05:34.469 --> 00:05:36.310 align:start position:0%
+ 
+ 
+
+00:05:36.310 --> 00:05:37.909 align:start position:0%
+ 
+ 
+
+00:05:37.909 --> 00:05:38.870 align:start position:0%
+ 
+ 
+
+00:05:38.870 --> 00:05:40.870 align:start position:0%
+ 
+ 
+
+00:05:40.870 --> 00:05:42.469 align:start position:0%
+ 
+ 
+
+00:05:42.469 --> 00:05:44.390 align:start position:0%
+ 
+ 
+
+00:05:44.390 --> 00:05:46.230 align:start position:0%
+ 
+ 
+
+00:05:46.230 --> 00:05:48.550 align:start position:0%
+ 
+ 
+
+00:05:48.550 --> 00:05:49.430 align:start position:0%
+ 
+ 
+
+00:05:49.430 --> 00:05:51.670 align:start position:0%
+ 
+ 
+
+00:05:51.670 --> 00:05:51.680 align:start position:0%
+ 
+ 
+
+00:05:51.680 --> 00:05:52.629 align:start position:0%
+ 
+
+
+00:05:52.629 --> 00:05:54.629 align:start position:0%
+ 
+ 
+
+00:05:54.629 --> 00:05:55.909 align:start position:0%
+ 
+ 
+
+00:05:55.909 --> 00:05:57.990 align:start position:0%
+ 
+ 
+
+00:05:57.990 --> 00:06:00.150 align:start position:0%
+ 
+ 
+
+00:06:00.150 --> 00:06:02.469 align:start position:0%
+ 
+ 
+
+00:06:02.469 --> 00:06:03.909 align:start position:0%
+ 
+ 
+
+00:06:03.909 --> 00:06:06.070 align:start position:0%
+ 
+ 
+
+00:06:06.070 --> 00:06:08.390 align:start position:0%
+ 
+ 
+
+00:06:08.390 --> 00:06:10.070 align:start position:0%
+ 
+ 
+
+00:06:10.070 --> 00:06:12.469 align:start position:0%
+ 
+ 
+
+00:06:12.469 --> 00:06:14.469 align:start position:0%
+ 
+ 
+
+00:06:14.469 --> 00:06:15.830 align:start position:0%
+ 
+ 
+
+00:06:15.830 --> 00:06:17.990 align:start position:0%
+ 
+ 
+
+00:06:17.990 --> 00:06:19.909 align:start position:0%
+ 
+ 
+
+00:06:19.909 --> 00:06:22.070 align:start position:0%
+ 
+ 
+
+00:06:22.070 --> 00:06:23.110 align:start position:0%
+ 
+ 
+
+00:06:23.110 --> 00:06:24.870 align:start position:0%
+ 
+ 
+
+00:06:24.870 --> 00:06:26.550 align:start position:0%
+ 
+ 
+
+00:06:26.550 --> 00:06:27.670 align:start position:0%
+ 
+ 
+
+00:06:27.670 --> 00:06:29.350 align:start position:0%
+ 
+ 
+
+00:06:29.350 --> 00:06:30.790 align:start position:0%
+ 
+ 
+
+00:06:30.790 --> 00:06:33.189 align:start position:0%
+ 
+ 
+
+00:06:33.189 --> 00:06:33.199 align:start position:0%
+ 
+ 
+
+00:06:33.199 --> 00:06:33.990 align:start position:0%
+ 
+
+
+00:06:33.990 --> 00:06:36.309 align:start position:0%
+ 
+ 
+
+00:06:36.309 --> 00:06:36.319 align:start position:0%
+ 
+ 
+
+00:06:36.319 --> 00:06:37.510 align:start position:0%
+ 
+
+
+00:06:37.510 --> 00:06:39.909 align:start position:0%
+ 
+ 
+
+00:06:39.909 --> 00:06:40.790 align:start position:0%
+ 
+ 
+
+00:06:40.790 --> 00:06:42.469 align:start position:0%
+ 
+ 
+
+00:06:42.469 --> 00:06:44.309 align:start position:0%
+ 
+ 
+
+00:06:44.309 --> 00:06:45.749 align:start position:0%
+ 
+ 
+
+00:06:45.749 --> 00:06:47.749 align:start position:0%
+ 
+ 
+
+00:06:47.749 --> 00:06:49.990 align:start position:0%
+ 
+ 
+
+00:06:49.990 --> 00:06:51.589 align:start position:0%
+ 
+ 
+
+00:06:51.589 --> 00:06:53.830 align:start position:0%
+ 
+ 
+
+00:06:53.830 --> 00:06:55.830 align:start position:0%
+ 
+ 
+
+00:06:55.830 --> 00:06:57.189 align:start position:0%
+ 
+ 
+
+00:06:57.189 --> 00:06:59.909 align:start position:0%
+ 
+ 
+
+00:06:59.909 --> 00:07:01.589 align:start position:0%
+ 
+ 
+
+00:07:01.589 --> 00:07:01.599 align:start position:0%
+ 
+ 
+
+00:07:01.599 --> 00:07:02.070 align:start position:0%
+ 
+
+
+00:07:02.070 --> 00:07:03.909 align:start position:0%
+ 
+ 
+
+00:07:03.909 --> 00:07:06.790 align:start position:0%
+ 
+ 
+
+00:07:06.790 --> 00:07:08.629 align:start position:0%
+ 
+ 
+
+00:07:08.629 --> 00:07:11.029 align:start position:0%
+ 
+ 
+
+00:07:11.029 --> 00:07:12.950 align:start position:0%
+ 
+ 
+
+00:07:12.950 --> 00:07:16.150 align:start position:0%
+ 
+ 
+
+00:07:16.150 --> 00:07:17.830 align:start position:0%
+ 
+ 
+
+00:07:17.830 --> 00:07:19.909 align:start position:0%
+ 
+ 
+
+00:07:19.909 --> 00:07:19.919 align:start position:0%
+ 
+ 
+
+00:07:19.919 --> 00:07:21.110 align:start position:0%
+ 
+
+
+00:07:21.110 --> 00:07:23.110 align:start position:0%
+ 
+ 
+
+00:07:23.110 --> 00:07:24.629 align:start position:0%
+ 
+ 
+
+00:07:24.629 --> 00:07:25.589 align:start position:0%
+ 
+ 
+
+00:07:25.589 --> 00:07:27.430 align:start position:0%
+ 
+ 
+
+00:07:27.430 --> 00:07:30.150 align:start position:0%
+ 
+ 
+
+00:07:30.150 --> 00:07:31.189 align:start position:0%
+ 
+ 
+
+00:07:31.189 --> 00:07:33.189 align:start position:0%
+ 
+ 
+
+00:07:33.189 --> 00:07:35.350 align:start position:0%
+ 
+ 
+
+00:07:35.350 --> 00:07:37.189 align:start position:0%
+ 
+ 
+
+00:07:37.189 --> 00:07:39.189 align:start position:0%
+ 
+ 
+
+00:07:39.189 --> 00:07:39.199 align:start position:0%
+ 
+ 
+
+00:07:39.199 --> 00:07:40.070 align:start position:0%
+ 
+
+
+00:07:40.070 --> 00:07:42.629 align:start position:0%
+ 
+ 
+
+00:07:42.629 --> 00:07:43.990 align:start position:0%
+ 
+ 
+
+00:07:43.990 --> 00:07:45.909 align:start position:0%
+ 
+ 
+
+00:07:45.909 --> 00:07:48.390 align:start position:0%
+ 
+ 
+
+00:07:48.390 --> 00:07:49.670 align:start position:0%
+ 
+ 
+
+00:07:49.670 --> 00:07:52.110 align:start position:0%
+ 
+ 
+
+00:07:52.110 --> 00:07:52.120 align:start position:0%
+ 
+ 
+
+00:07:52.120 --> 00:07:53.830 align:start position:0%
+ 
+
+
+00:07:53.830 --> 00:07:56.070 align:start position:0%
+ 
+ 
+
+00:07:56.070 --> 00:07:57.749 align:start position:0%
+ 
+ 
+
+00:07:57.749 --> 00:07:57.759 align:start position:0%
+ 
+ 
+
+00:07:57.759 --> 00:07:57.990 align:start position:0%
+ 
+
+
+00:07:57.990 --> 00:08:00.710 align:start position:0%
+ 
+ 
+
+00:08:00.710 --> 00:08:02.710 align:start position:0%
+ 
+ 
+
+00:08:02.710 --> 00:08:04.710 align:start position:0%
+ 
+ 
+
+00:08:04.710 --> 00:08:08.950 align:start position:0%
+ 
+ 
+
+00:08:08.950 --> 00:08:11.749 align:start position:0%
+ 
+ 
+
+00:08:11.749 --> 00:08:13.510 align:start position:0%
+ 
+ 
+
+00:08:13.510 --> 00:08:15.830 align:start position:0%
+ 
+ 
+
+00:08:15.830 --> 00:08:17.510 align:start position:0%
+ 
+ 
+
+00:08:17.510 --> 00:08:19.270 align:start position:0%
+ 
+ 
+
+00:08:19.270 --> 00:08:21.189 align:start position:0%
+ 
+ 
+
+00:08:21.189 --> 00:08:21.199 align:start position:0%
+ 
+ 
+
+00:08:21.199 --> 00:08:21.909 align:start position:0%
+ 
+
+
+00:08:21.909 --> 00:08:23.589 align:start position:0%
+ 
+ 
+
+00:08:23.589 --> 00:08:26.309 align:start position:0%
+ 
+ 
+
+00:08:26.309 --> 00:08:28.550 align:start position:0%
+ 
+ 
+
+00:08:28.550 --> 00:08:31.110 align:start position:0%
+ 
+ 
+
+00:08:31.110 --> 00:08:32.070 align:start position:0%
+ 
+ 
+
+00:08:32.070 --> 00:08:34.550 align:start position:0%
+ 
+ 
+
+00:08:34.550 --> 00:08:36.149 align:start position:0%
+ 
+ 
+
+00:08:36.149 --> 00:08:38.230 align:start position:0%
+ 
+ 
+
+00:08:38.230 --> 00:08:40.389 align:start position:0%
+ 
+ 
+
+00:08:40.389 --> 00:08:42.310 align:start position:0%
+ 
+ 
+
+00:08:42.310 --> 00:08:43.990 align:start position:0%
+ 
+ 
+
+00:08:43.990 --> 00:08:45.590 align:start position:0%
+ 
+ 
+
+00:08:45.590 --> 00:08:46.389 align:start position:0%
+ 
+ 
+
+00:08:46.389 --> 00:08:48.310 align:start position:0%
+ 
+ 
+
+00:08:48.310 --> 00:08:50.710 align:start position:0%
+ 
+ 
+
+00:08:50.710 --> 00:08:53.110 align:start position:0%
+ 
+ 
+
+00:08:53.110 --> 00:08:55.110 align:start position:0%
+ 
+ 
+
+00:08:55.110 --> 00:08:55.120 align:start position:0%
+ 
+ 
+
+00:08:55.120 --> 00:08:55.910 align:start position:0%
+ 
+
+
+00:08:55.910 --> 00:08:57.110 align:start position:0%
+ 
+ 
+
+00:08:57.110 --> 00:08:58.949 align:start position:0%
+ 
+ 
+
+00:08:58.949 --> 00:09:00.150 align:start position:0%
+ 
+ 
+
+00:09:00.150 --> 00:09:01.670 align:start position:0%
+ 
+ 
+
+00:09:01.670 --> 00:09:03.509 align:start position:0%
+ 
+ 
+
+00:09:03.509 --> 00:09:05.430 align:start position:0%
+ 
+ 
+
+00:09:05.430 --> 00:09:07.430 align:start position:0%
+ 
+ 
+
+00:09:07.430 --> 00:09:09.110 align:start position:0%
+ 
+ 
+
+00:09:09.110 --> 00:09:10.949 align:start position:0%
+ 
+ 
+
+00:09:10.949 --> 00:09:12.389 align:start position:0%
+ 
+ 
+
+00:09:12.389 --> 00:09:13.670 align:start position:0%
+ 
+ 
+
+00:09:13.670 --> 00:09:16.150 align:start position:0%
+ 
+ 
+
+00:09:16.150 --> 00:09:17.750 align:start position:0%
+ 
+ 
+
+00:09:17.750 --> 00:09:18.630 align:start position:0%
+ 
+ 
+
+00:09:18.630 --> 00:09:20.230 align:start position:0%
+ 
+ 
+
+00:09:20.230 --> 00:09:21.670 align:start position:0%
+ 
+ 
+
+00:09:21.670 --> 00:09:23.110 align:start position:0%
+ 
+ 
+
+00:09:23.110 --> 00:09:25.030 align:start position:0%
+ 
+ 
+
+00:09:25.030 --> 00:09:26.949 align:start position:0%
+ 
+ 
+
+00:09:26.949 --> 00:09:29.910 align:start position:0%
+ 
+ 
+
+00:09:29.910 --> 00:09:30.710 align:start position:0%
+ 
+ 
+
+00:09:30.710 --> 00:09:32.310 align:start position:0%
+ 
+ 
+
+00:09:32.310 --> 00:09:34.150 align:start position:0%
+ 
+ 
+
+00:09:34.150 --> 00:09:34.160 align:start position:0%
+ 
+ 
+
+00:09:34.160 --> 00:09:35.030 align:start position:0%
+ 
+
+
+00:09:35.030 --> 00:09:36.550 align:start position:0%
+ 
+ 
+
+00:09:36.550 --> 00:09:37.910 align:start position:0%
+ 
+ 
+
+00:09:37.910 --> 00:09:37.920 align:start position:0%
+ 
+ 
+
+00:09:37.920 --> 00:09:38.550 align:start position:0%
+ 
+
+
+00:09:38.550 --> 00:09:40.949 align:start position:0%
+ 
+ 
+
+00:09:40.949 --> 00:09:42.470 align:start position:0%
+ 
+ 
+
+00:09:42.470 --> 00:09:44.230 align:start position:0%
+ 
+ 
+
+00:09:44.230 --> 00:09:45.509 align:start position:0%
+ 
+ 
+
+00:09:45.509 --> 00:09:46.949 align:start position:0%
+ 
+ 
+
+00:09:46.949 --> 00:09:48.790 align:start position:0%
+ 
+ 
+
+00:09:48.790 --> 00:09:50.710 align:start position:0%
+ 
+ 
+
+00:09:50.710 --> 00:09:52.790 align:start position:0%
+ 
+ 
+
+00:09:52.790 --> 00:09:54.790 align:start position:0%
+ 
+ 
+
+00:09:54.790 --> 00:09:55.910 align:start position:0%
+ 
+ 
+
+00:09:55.910 --> 00:09:57.910 align:start position:0%
+ 
+ 
+
+00:09:57.910 --> 00:09:59.509 align:start position:0%
+ 
+ 
+
+00:09:59.509 --> 00:10:02.310 align:start position:0%
+ 
+ 
+
+00:10:02.310 --> 00:10:04.069 align:start position:0%
+ 
+ 
+
+00:10:04.069 --> 00:10:05.829 align:start position:0%
+ 
+ 
+
+00:10:05.829 --> 00:10:07.750 align:start position:0%
+ 
+ 
+
+00:10:07.750 --> 00:10:09.509 align:start position:0%
+ 
+ 
+
+00:10:09.509 --> 00:10:11.269 align:start position:0%
+ 
+ 
+
+00:10:11.269 --> 00:10:13.030 align:start position:0%
+ 
+ 
+
+00:10:13.030 --> 00:10:15.269 align:start position:0%
+ 
+ 
+
+00:10:15.269 --> 00:10:17.110 align:start position:0%
+ 
+ 
+
+00:10:17.110 --> 00:10:19.990 align:start position:0%
+ 
+ 
+
+00:10:19.990 --> 00:10:21.750 align:start position:0%
+ 
+ 
+
+00:10:21.750 --> 00:10:23.590 align:start position:0%
+ 
+ 
+
+00:10:23.590 --> 00:10:25.750 align:start position:0%
+ 
+ 
+
+00:10:25.750 --> 00:10:28.230 align:start position:0%
+ 
+ 
+
+00:10:28.230 --> 00:10:30.310 align:start position:0%
+ 
+ 
+
+00:10:30.310 --> 00:10:32.230 align:start position:0%
+ 
+ 
+
+00:10:32.230 --> 00:10:34.470 align:start position:0%
+ 
+ 
+
+00:10:34.470 --> 00:10:36.710 align:start position:0%
+ 
+ 
+
+00:10:36.710 --> 00:10:43.910 align:start position:0%
+ 
+ 
+
+00:10:43.910 --> 00:10:46.389 align:start position:0%
+ 
+ 
+
+00:10:46.389 --> 00:10:48.470 align:start position:0%
+ 
+ 
+
+00:10:48.470 --> 00:10:50.790 align:start position:0%
+ 
+ 
+
+00:10:50.790 --> 00:10:52.389 align:start position:0%
+ 
+ 
+
+00:10:52.389 --> 00:10:52.399 align:start position:0%
+ 
+ 
+
+00:10:52.399 --> 00:10:52.949 align:start position:0%
+ 
+
+
+00:10:52.949 --> 00:10:54.949 align:start position:0%
+ 
+ 
+
+00:10:54.949 --> 00:10:55.990 align:start position:0%
+ 
+ 
+
+00:10:55.990 --> 00:10:57.670 align:start position:0%
+ 
+ 
+
+00:10:57.670 --> 00:10:59.110 align:start position:0%
+ 
+ 
+
+00:10:59.110 --> 00:11:01.590 align:start position:0%
+ 
+ 
+
+00:11:01.590 --> 00:11:03.509 align:start position:0%
+ 
+ 
+
+00:11:03.509 --> 00:11:04.630 align:start position:0%
+ 
+ 
+
+00:11:04.630 --> 00:11:06.710 align:start position:0%
+ 
+ 
+
+00:11:06.710 --> 00:11:08.550 align:start position:0%
+ 
+ 
+
+00:11:08.550 --> 00:11:10.230 align:start position:0%
+ 
+ 
+
+00:11:10.230 --> 00:11:10.240 align:start position:0%
+ 
+ 
+
+00:11:10.240 --> 00:11:10.790 align:start position:0%
+ 
+
+
+00:11:10.790 --> 00:11:12.949 align:start position:0%
+ 
+ 
+
+00:11:12.949 --> 00:11:14.230 align:start position:0%
+ 
+ 
+
+00:11:14.230 --> 00:11:16.550 align:start position:0%
+ 
+ 
+
+00:11:16.550 --> 00:11:18.470 align:start position:0%
+ 
+ 
+
+00:11:18.470 --> 00:11:20.310 align:start position:0%
+ 
+ 
+
+00:11:20.310 --> 00:11:22.550 align:start position:0%
+ 
+ 
+
+00:11:22.550 --> 00:11:22.560 align:start position:0%
+ 
+ 
+
+00:11:22.560 --> 00:11:23.110 align:start position:0%
+ 
+
+
+00:11:23.110 --> 00:11:24.870 align:start position:0%
+ 
+ 
+
+00:11:24.870 --> 00:11:26.470 align:start position:0%
+ 
+ 
+
+00:11:26.470 --> 00:11:27.590 align:start position:0%
+ 
+ 
+
+00:11:27.590 --> 00:11:29.350 align:start position:0%
+ 
+ 
+
+00:11:29.350 --> 00:11:31.750 align:start position:0%
+ 
+ 
+
+00:11:31.750 --> 00:11:33.190 align:start position:0%
+ 
+ 
+
+00:11:33.190 --> 00:11:34.790 align:start position:0%
+ 
+ 
+
+00:11:34.790 --> 00:11:36.230 align:start position:0%
+ 
+ 
+
+00:11:36.230 --> 00:11:38.389 align:start position:0%
+ 
+ 
+
+00:11:38.389 --> 00:11:39.430 align:start position:0%
+ 
+ 
+
+00:11:39.430 --> 00:11:41.509 align:start position:0%
+ 
+ 
+
+00:11:41.509 --> 00:11:42.550 align:start position:0%
+ 
+ 
+
+00:11:42.550 --> 00:11:44.470 align:start position:0%
+ 
+ 
+
+00:11:44.470 --> 00:11:46.310 align:start position:0%
+ 
+ 
+
+00:11:46.310 --> 00:11:49.360 align:start position:0%
+ 
+ 
+
