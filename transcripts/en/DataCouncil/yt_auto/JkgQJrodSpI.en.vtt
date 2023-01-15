@@ -1,0 +1,2332 @@
+WEBVTT
+Kind: captions
+Language: en
+
+00:00:18.080 --> 00:00:19.109 align:start position:0%
+ 
+all right so i'm going to be talking  about my journey to optimize a piece of  code i had written a few weeks ago  and  it plays into our ddos production  and it required to do  um  quite a few requests per second per core  because of our traffic um  this is not going to be about how we do  ddos protection um but this is going to  be about how i optimize the code  and  it mostly started  um  as my first project as a joint clockwise  so i was pretty excited  um it's a layer 70 us attack protection  um so  our goal is to not let botnet traffic  through our cloud and protect the origin  um just as a reminder layer 7 is the  application layer that's the http layer  um  and  the component i'm going to be focusing  on is  going to be about the heavy hitters spot  where where you identify heavy hitters  and and then you take some action  um  but before i get started with that um  this is one attack we saw recently uh  this is these are the user agent strings  and the number of requests they were  making from the same ip  so  either many clients behind the same ip  doing about the same number of requests  for everyone equally as you see  the distribution is pretty uniform which  is  suspicious and one of the user agent  strengths is uh  is not a well-known string that seems  incorrect  um  but what makes  well one way to be very certain about um  if it was not a human being is to see  the effort there  the referee actually um  that's a misspelling that happens to be  part of the spec because the unix  the dictionaries did not have the  correct spelling in them  or any spelling rather  um but so so as you guys are familiar  reference the  is a field in the http headers uh which  tells the  destination site what url you came from  and uh  so it should clearly be a url um  but as you can see the red ones are  junk and it was  uh probably the but that some probably  the bot that was written was not um  carefully done so that's junk anyway so  what's the architecture of this thing  um so we have lots of computers on the  edges and uh from all over the world  they send log data to our kafka cluster  uh that's millions of requests per  second  um and from that  cluster there are many different  consumers which consume data and process  it and take a different action so one of  them is the green list which is the gray  cluster  and  so it reads millions of requests per  second from kafka and  and then does some state coordination  with with one server  um  so  uh the request per second there i'm  calling that lambda and that's uh that's  something in our hands  um so the goal is to have that be  manageable  um so  one obvious way to have that is just  have a low  low lambda there um  so  so you keep track of say the top k  heavy hitters and and because anything  below that that is um nonsense so you  don't keep track of it uh that way you  reduce the coordination effort that's  required between different instances of  the grill lister  um  yeah and that was a design on on the  high level  um so  how do we find out the stream of  um incoming requests how do you find  like the who are the hitters  there's an algorithm called space-saving  algorithm which is a online algorithm  and um  um  it it happens to be  pretty good for most cases  and nfl go for that cloudflare had  already implemented this as a librarian  go so i was like  this is perfect um  let's just implement just use this and  see how it goes so i did that and  and uh so what's next then i had to  benchmark it so  um  how do you benchmark stuff you write a  benchmark test uh benchmark tests start  with uh bench uh  something and they take a testing.b  pointer to testing.b instance and um on  that instance you have b dot n and is  the number of times that's that test is  going to be run so you're supposed to  uh do what your benchmarking n times  and there's like more details on how to  do this um dave has a good blog post and  he's pretty awesome so  you should go read that if you want more  details um  what were the results it was doing at  about 3 000 requests per second per core  which was not gonna fly albert would  never let me put that in production not  keep up  um  uh so why was it slow uh so you do  you want to see what the cpu is doing  because it was uh the guerrillas over  cpu bound  so you can have it  you can use the same go test tool  to run the benchmark and output the cpu  profile for that it also creates a  binary for the test file which has the  relevant symbols to use people off to  map things out and where time is being  spent  so where was the time being spent  um  that's part of the output i got it was  all external code mostly ninety percent  but  and um  when the profiler does not understand  what kodi is being called it it calls it  external code  uh which  seemed pretty [ __ ] so  um  turns out it was because i was using a  virtual cpu i was using virtualbox and  they do not work well well at least i  couldn't figure out how to get the  virtualbox cpu to act like uh like  pretend to be his real cpu  um but  uh vmware does that that check mark at  the bottom of the field that says um  that promises to not break modern code  profiling applications um you need to  turn that on before you put the machine  and and  yeah  and then your profiler is gonna hurt  um so what did the real cpu profile say  um  so  most of the time was being spent in  copying memory around and um  that so that had to be optimized uh one  way to do that is to copy less of things  um  so pointers to strings  work way faster than copying the string  along  and and the space saving library was  keeping elements sorted uh using like an  array  and like a simple insert so it was it  was um  in worst case it's order n and if it  used like a priority queue it would be  worst case uh or to log in  just to visualize that  as  on the x x-axis as the input size grows  uh the y-axis is where the time is spent  um  the dark line is the log n and  that behaves much more friendly to you  than  other ran um  this is not a graph just to point out  this is not a graph from production this  is just a graph i built i i plotted off  ordering and  just the same  um  yeah so that was like one improvement  that could be done and and  the first pass of optimization involved  basically copying pointers and just  reducing the number of times you do copy  so that would uh  that turns out to be pretty awesome and  it  took me 275 requests per second per core  um so  i was really excited i was really happy  uh turns out the output was wrong  so  so uh  the processing rate was like approaching  workable it was not it workable and now  like i had this junk output  um so  why was that um  turns out  again this is not production  distribution but the distribution looks  like this it's like long tail they're  like a few heavy hitters and most of  them are like not hitting much  um so  so the uh i should have read the paper  properly that's one lesson i learned  always read your papers properly turns  out the streaming algorithm like most  streaming algorithms it out it was an  estimate algorithm and  for our distribution it just fails  so went back to the drawing bird  uh decided to do like a  like just  follow a naive approach  um why not just keep a map of all things  you see like and and swap things out  obviously  um  there is no second player it was just  just that and um  we  so here is when uh back of the envelope  calculations really help you should like  uh get in the habit to do that and um  don't say it's not going to exhaust all  our memory like not even close so it was  fine  so how do you find the top k from this  map then  um  the two  um  the first two things that come to mind  is like uh using sorting and soft things  uh most most implementations of sorting  things use quicksort and on average it  takes uh order and log n  or you could do quick select that finds  the kth value in the set it's  and that's order n  um  so again for visualization the dark is n  log n and the like third one is autoran  they do not deviate that much um it's  pretty okay uh but they do deviate  um  as the request as a set as as n  increases  so  ins  instead of implementing quicksort and  it's a quick select um i decided to just  use the sort and  for that you could reduce the data set  so if you go back to our distribution uh  they're like ultra low values which are  obviously uh there's  it's almost impossible that they are  going to contribute to be the top k  heavy hitter so you  uh  prune all them prune the map of ultra  low values so now you have a manageable  set of values and and you just use the  standard library start um  that  that actually was a correct  that  resulted in correct output and um it did  like 120 requests per second per core  so what's the next step next step was to  test in production obviously  um  but more like this  keyframe and test in production i  clearly did not test the image before  but run it in like a dark mode where you  have no side effects it's taking  production traffic you see how it's  doing  um but but you are not affecting the  rest of the system so  and which was done that was a good thing  i guess  um  it it wasn't fast enough i had not  accounted for like when the attacks  during peak loads the peak loads is even  higher and then um  uh it needed to be faster  so i could either go back and profile  things fix my benchmark test and um  um  and have the  benchmark produce output that's closer  to production  but the thing was already running and i  didn't have any  hooks in it to get like a cpu profile  while it's running  um  so  um hello perftop it's uh  perf is like uh it's a really nice  utility that's gonna perftop is gonna  give you like um  it's gonna display a top like output  it's gonna show you your hottest  functions in the process  and um you can find it on like linux  tools on like a debian  on debian and i think other things as  well obviously  um  so this is uh this is the final perf  stop i was lazy i didn't go back to do  with the old one but  in the old one what what produced  uh  the most time i spent in handling  garbage the garbage collector was  kicking in a lot and  the reason for that is because a bunch  of string manipulation was going on like  encoding information into like a string  and then decoding it when you are  analyzing it again  and  the reason i was doing that  was because you can't use like slices  and there were other data structures um  in s keys and maps  so  instead  i moved to like i moved to using a  struct that involved that could be used  as a key in a map and slices were  converted to arrays  that was like that was the biggest speed  up i  i experienced which did take me to 480  requests per second per core um it was  good enough um for multiple  uh  if the production load  is  it can handle multiple of the production  load which is um what you  should plan for anyway  um  i can i'm happy to  play around with the final map but  on the on the left side what you see is  which is a kafka go client which  produces a lot of garbage so if anyone  out there is looking for like a fun go  project you could probably do a  less garbage producing kafka library and  we'll be really happy  um but as you notice uh it's mostly all  the boxes are  there's no obvious big box except like  the futex i guess and um and  so it was no no low hanging fruit  anymore and it was good for production  so um that was good what were my  takeaways from this whole experience  start simple i did not start simple i  start like let's use a fancy algorithm  to not do that if you don't need to  benchmark things profile things verify  for correctness that's very important  tests are correct but like  you should always verify for correctness  eventually and back of the animal  calculations are always helpful  um  this was put in production um  and later we  did  did do some  changes to the algorithms we use some  luxury algorithms so  the  future xbox is much smaller now which  yep and  that's kind of it i think we're hiring  um you should join club fair  special thanks to albert who's here in  the audience you want to say hi  uh you should bug him with the tough  questions  um and stefan who also helped me he's  not here i think um  yeah that's it i'll take all these  questions and you can find me on the  internet  so what was the nature of the struct  that you ended up using as a cache key  translating uh an array or a slice i  guess into extract how did you do that  um what was the data structure that was  uh not  out of the box fit for and map  um it involved ips and other things and  ips are a  is basically behind the scenes a slice  and there are other some that's some of  the things you need to do like ipv6 all  the bottom  64 bits are not  they are free for the client to set so  you only want to keep track of the top  60 for higher 64 bits and things like  those so um instead we just had like  them at raw byte already  yeah  so  the compiler should these days actually  recognize if you do  a bite slice into a string as part of a  map  you should recognize that and not take  the overhead of actually making a string  on it  um  that was not kind of the only thing  though there was it was a string it was  like a custom encoding it had like bunch  of information i was creating strings  and yeah  it is a different story but if you just  have a white slice that you really want  to use as a map just go ahead and  convert it to a string as part of the  snap axis it should work just fine  any more questions  um  oh that was that good is no longer being  used i was like part of the other  library um it was to keep things sorted  and that was required as part of the  space saving algorithm  um yeah  uh  now we run it on the servers and we  actually take it from the real machine  yeah  what yeah do you see the uh real  hardware is comparable to what results  you're getting from the vm  uh  yeah they were like  huge boxes before that was spending a  lot of garbage even if it was like five  percent error it was too big enough to  fix  so that was fine  all right thank you everyone
+
+00:00:19.109 --> 00:00:21.510 align:start position:0%
+all right so i'm going to be talking  about my journey to optimize a piece of  code i had written a few weeks ago  and  it plays into our ddos production  and it required to do  um  quite a few requests per second per core  because of our traffic um  this is not going to be about how we do  ddos protection um but this is going to  be about how i optimize the code  and  it mostly started  um  as my first project as a joint clockwise  so i was pretty excited  um it's a layer 70 us attack protection  um so  our goal is to not let botnet traffic  through our cloud and protect the origin  um just as a reminder layer 7 is the  application layer that's the http layer  um  and  the component i'm going to be focusing  on is  going to be about the heavy hitters spot  where where you identify heavy hitters  and and then you take some action  um  but before i get started with that um  this is one attack we saw recently uh  this is these are the user agent strings  and the number of requests they were  making from the same ip  so  either many clients behind the same ip  doing about the same number of requests  for everyone equally as you see  the distribution is pretty uniform which  is  suspicious and one of the user agent  strengths is uh  is not a well-known string that seems  incorrect  um  but what makes  well one way to be very certain about um  if it was not a human being is to see  the effort there  the referee actually um  that's a misspelling that happens to be  part of the spec because the unix  the dictionaries did not have the  correct spelling in them  or any spelling rather  um but so so as you guys are familiar  reference the  is a field in the http headers uh which  tells the  destination site what url you came from  and uh  so it should clearly be a url um  but as you can see the red ones are  junk and it was  uh probably the but that some probably  the bot that was written was not um  carefully done so that's junk anyway so  what's the architecture of this thing  um so we have lots of computers on the  edges and uh from all over the world  they send log data to our kafka cluster  uh that's millions of requests per  second  um and from that  cluster there are many different  consumers which consume data and process  it and take a different action so one of  them is the green list which is the gray  cluster  and  so it reads millions of requests per  second from kafka and  and then does some state coordination  with with one server  um  so  uh the request per second there i'm  calling that lambda and that's uh that's  something in our hands  um so the goal is to have that be  manageable  um so  one obvious way to have that is just  have a low  low lambda there um  so  so you keep track of say the top k  heavy hitters and and because anything  below that that is um nonsense so you  don't keep track of it uh that way you  reduce the coordination effort that's  required between different instances of  the grill lister  um  yeah and that was a design on on the  high level  um so  how do we find out the stream of  um incoming requests how do you find  like the who are the hitters  there's an algorithm called space-saving  algorithm which is a online algorithm  and um  um  it it happens to be  pretty good for most cases  and nfl go for that cloudflare had  already implemented this as a librarian  go so i was like  this is perfect um  let's just implement just use this and  see how it goes so i did that and  and uh so what's next then i had to  benchmark it so  um  how do you benchmark stuff you write a  benchmark test uh benchmark tests start  with uh bench uh  something and they take a testing.b  pointer to testing.b instance and um on  that instance you have b dot n and is  the number of times that's that test is  going to be run so you're supposed to  uh do what your benchmarking n times  and there's like more details on how to  do this um dave has a good blog post and  he's pretty awesome so  you should go read that if you want more  details um  what were the results it was doing at  about 3 000 requests per second per core  which was not gonna fly albert would  never let me put that in production not  keep up  um  uh so why was it slow uh so you do  you want to see what the cpu is doing  because it was uh the guerrillas over  cpu bound  so you can have it  you can use the same go test tool  to run the benchmark and output the cpu  profile for that it also creates a  binary for the test file which has the  relevant symbols to use people off to  map things out and where time is being  spent  so where was the time being spent  um  that's part of the output i got it was  all external code mostly ninety percent  but  and um  when the profiler does not understand  what kodi is being called it it calls it  external code  uh which  seemed pretty [ __ ] so  um  turns out it was because i was using a  virtual cpu i was using virtualbox and  they do not work well well at least i  couldn't figure out how to get the  virtualbox cpu to act like uh like  pretend to be his real cpu  um but  uh vmware does that that check mark at  the bottom of the field that says um  that promises to not break modern code  profiling applications um you need to  turn that on before you put the machine  and and  yeah  and then your profiler is gonna hurt  um so what did the real cpu profile say  um  so  most of the time was being spent in  copying memory around and um  that so that had to be optimized uh one  way to do that is to copy less of things  um  so pointers to strings  work way faster than copying the string  along  and and the space saving library was  keeping elements sorted uh using like an  array  and like a simple insert so it was it  was um  in worst case it's order n and if it  used like a priority queue it would be  worst case uh or to log in  just to visualize that  as  on the x x-axis as the input size grows  uh the y-axis is where the time is spent  um  the dark line is the log n and  that behaves much more friendly to you  than  other ran um  this is not a graph just to point out  this is not a graph from production this  is just a graph i built i i plotted off  ordering and  just the same  um  yeah so that was like one improvement  that could be done and and  the first pass of optimization involved  basically copying pointers and just  reducing the number of times you do copy  so that would uh  that turns out to be pretty awesome and  it  took me 275 requests per second per core  um so  i was really excited i was really happy  uh turns out the output was wrong  so  so uh  the processing rate was like approaching  workable it was not it workable and now  like i had this junk output  um so  why was that um  turns out  again this is not production  distribution but the distribution looks  like this it's like long tail they're  like a few heavy hitters and most of  them are like not hitting much  um so  so the uh i should have read the paper  properly that's one lesson i learned  always read your papers properly turns  out the streaming algorithm like most  streaming algorithms it out it was an  estimate algorithm and  for our distribution it just fails  so went back to the drawing bird  uh decided to do like a  like just  follow a naive approach  um why not just keep a map of all things  you see like and and swap things out  obviously  um  there is no second player it was just  just that and um  we  so here is when uh back of the envelope  calculations really help you should like  uh get in the habit to do that and um  don't say it's not going to exhaust all  our memory like not even close so it was  fine  so how do you find the top k from this  map then  um  the two  um  the first two things that come to mind  is like uh using sorting and soft things  uh most most implementations of sorting  things use quicksort and on average it  takes uh order and log n  or you could do quick select that finds  the kth value in the set it's  and that's order n  um  so again for visualization the dark is n  log n and the like third one is autoran  they do not deviate that much um it's  pretty okay uh but they do deviate  um  as the request as a set as as n  increases  so  ins  instead of implementing quicksort and  it's a quick select um i decided to just  use the sort and  for that you could reduce the data set  so if you go back to our distribution uh  they're like ultra low values which are  obviously uh there's  it's almost impossible that they are  going to contribute to be the top k  heavy hitter so you  uh  prune all them prune the map of ultra  low values so now you have a manageable  set of values and and you just use the  standard library start um  that  that actually was a correct  that  resulted in correct output and um it did  like 120 requests per second per core  so what's the next step next step was to  test in production obviously  um  but more like this  keyframe and test in production i  clearly did not test the image before  but run it in like a dark mode where you  have no side effects it's taking  production traffic you see how it's  doing  um but but you are not affecting the  rest of the system so  and which was done that was a good thing  i guess  um  it it wasn't fast enough i had not  accounted for like when the attacks  during peak loads the peak loads is even  higher and then um  uh it needed to be faster  so i could either go back and profile  things fix my benchmark test and um  um  and have the  benchmark produce output that's closer  to production  but the thing was already running and i  didn't have any  hooks in it to get like a cpu profile  while it's running  um  so  um hello perftop it's uh  perf is like uh it's a really nice  utility that's gonna perftop is gonna  give you like um  it's gonna display a top like output  it's gonna show you your hottest  functions in the process  and um you can find it on like linux  tools on like a debian  on debian and i think other things as  well obviously  um  so this is uh this is the final perf  stop i was lazy i didn't go back to do  with the old one but  in the old one what what produced  uh  the most time i spent in handling  garbage the garbage collector was  kicking in a lot and  the reason for that is because a bunch  of string manipulation was going on like  encoding information into like a string  and then decoding it when you are  analyzing it again  and  the reason i was doing that  was because you can't use like slices  and there were other data structures um  in s keys and maps  so  instead  i moved to like i moved to using a  struct that involved that could be used  as a key in a map and slices were  converted to arrays  that was like that was the biggest speed  up i  i experienced which did take me to 480  requests per second per core um it was  good enough um for multiple  uh  if the production load  is  it can handle multiple of the production  load which is um what you  should plan for anyway  um  i can i'm happy to  play around with the final map but  on the on the left side what you see is  which is a kafka go client which  produces a lot of garbage so if anyone  out there is looking for like a fun go  project you could probably do a  less garbage producing kafka library and  we'll be really happy  um but as you notice uh it's mostly all  the boxes are  there's no obvious big box except like  the futex i guess and um and  so it was no no low hanging fruit  anymore and it was good for production  so um that was good what were my  takeaways from this whole experience  start simple i did not start simple i  start like let's use a fancy algorithm  to not do that if you don't need to  benchmark things profile things verify  for correctness that's very important  tests are correct but like  you should always verify for correctness  eventually and back of the animal  calculations are always helpful  um  this was put in production um  and later we  did  did do some  changes to the algorithms we use some  luxury algorithms so  the  future xbox is much smaller now which  yep and  that's kind of it i think we're hiring  um you should join club fair  special thanks to albert who's here in  the audience you want to say hi  uh you should bug him with the tough  questions  um and stefan who also helped me he's  not here i think um  yeah that's it i'll take all these  questions and you can find me on the  internet  so what was the nature of the struct  that you ended up using as a cache key  translating uh an array or a slice i  guess into extract how did you do that  um what was the data structure that was  uh not  out of the box fit for and map  um it involved ips and other things and  ips are a  is basically behind the scenes a slice  and there are other some that's some of  the things you need to do like ipv6 all  the bottom  64 bits are not  they are free for the client to set so  you only want to keep track of the top  60 for higher 64 bits and things like  those so um instead we just had like  them at raw byte already  yeah  so  the compiler should these days actually  recognize if you do  a bite slice into a string as part of a  map  you should recognize that and not take  the overhead of actually making a string  on it  um  that was not kind of the only thing  though there was it was a string it was  like a custom encoding it had like bunch  of information i was creating strings  and yeah  it is a different story but if you just  have a white slice that you really want  to use as a map just go ahead and  convert it to a string as part of the  snap axis it should work just fine  any more questions  um  oh that was that good is no longer being  used i was like part of the other  library um it was to keep things sorted  and that was required as part of the  space saving algorithm  um yeah  uh  now we run it on the servers and we  actually take it from the real machine  yeah  what yeah do you see the uh real  hardware is comparable to what results  you're getting from the vm  uh  yeah they were like  huge boxes before that was spending a  lot of garbage even if it was like five  percent error it was too big enough to  fix  so that was fine  all right thank you everyone
+ 
+
+00:00:21.510 --> 00:00:24.790 align:start position:0%
+ 
+ 
+
+00:00:24.790 --> 00:00:24.800 align:start position:0%
+ 
+ 
+
+00:00:24.800 --> 00:00:25.670 align:start position:0%
+ 
+
+
+00:00:25.670 --> 00:00:28.870 align:start position:0%
+ 
+ 
+
+00:00:28.870 --> 00:00:30.870 align:start position:0%
+ 
+ 
+
+00:00:30.870 --> 00:00:30.880 align:start position:0%
+ 
+ 
+
+00:00:30.880 --> 00:00:31.990 align:start position:0%
+ 
+
+
+00:00:31.990 --> 00:00:34.069 align:start position:0%
+ 
+ 
+
+00:00:34.069 --> 00:00:36.470 align:start position:0%
+ 
+ 
+
+00:00:36.470 --> 00:00:38.069 align:start position:0%
+ 
+ 
+
+00:00:38.069 --> 00:00:40.709 align:start position:0%
+ 
+ 
+
+00:00:40.709 --> 00:00:43.270 align:start position:0%
+ 
+ 
+
+00:00:43.270 --> 00:00:43.280 align:start position:0%
+ 
+ 
+
+00:00:43.280 --> 00:00:44.229 align:start position:0%
+ 
+
+
+00:00:44.229 --> 00:00:45.750 align:start position:0%
+ 
+ 
+
+00:00:45.750 --> 00:00:45.760 align:start position:0%
+ 
+ 
+
+00:00:45.760 --> 00:00:46.709 align:start position:0%
+ 
+
+
+00:00:46.709 --> 00:00:48.709 align:start position:0%
+ 
+ 
+
+00:00:48.709 --> 00:00:50.709 align:start position:0%
+ 
+ 
+
+00:00:50.709 --> 00:00:53.910 align:start position:0%
+ 
+ 
+
+00:00:53.910 --> 00:00:56.389 align:start position:0%
+ 
+ 
+
+00:00:56.389 --> 00:00:58.869 align:start position:0%
+ 
+ 
+
+00:00:58.869 --> 00:01:01.750 align:start position:0%
+ 
+ 
+
+00:01:01.750 --> 00:01:04.789 align:start position:0%
+ 
+ 
+
+00:01:04.789 --> 00:01:07.429 align:start position:0%
+ 
+ 
+
+00:01:07.429 --> 00:01:07.439 align:start position:0%
+ 
+ 
+
+00:01:07.439 --> 00:01:08.550 align:start position:0%
+ 
+
+
+00:01:08.550 --> 00:01:08.560 align:start position:0%
+ 
+ 
+
+00:01:08.560 --> 00:01:09.590 align:start position:0%
+ 
+
+
+00:01:09.590 --> 00:01:11.510 align:start position:0%
+ 
+ 
+
+00:01:11.510 --> 00:01:12.390 align:start position:0%
+ 
+ 
+
+00:01:12.390 --> 00:01:13.990 align:start position:0%
+ 
+ 
+
+00:01:13.990 --> 00:01:16.070 align:start position:0%
+ 
+ 
+
+00:01:16.070 --> 00:01:18.390 align:start position:0%
+ 
+ 
+
+00:01:18.390 --> 00:01:18.400 align:start position:0%
+ 
+ 
+
+00:01:18.400 --> 00:01:19.590 align:start position:0%
+ 
+
+
+00:01:19.590 --> 00:01:21.990 align:start position:0%
+ 
+ 
+
+00:01:21.990 --> 00:01:24.469 align:start position:0%
+ 
+ 
+
+00:01:24.469 --> 00:01:27.109 align:start position:0%
+ 
+ 
+
+00:01:27.109 --> 00:01:28.550 align:start position:0%
+ 
+ 
+
+00:01:28.550 --> 00:01:30.230 align:start position:0%
+ 
+ 
+
+00:01:30.230 --> 00:01:30.240 align:start position:0%
+ 
+ 
+
+00:01:30.240 --> 00:01:31.030 align:start position:0%
+ 
+
+
+00:01:31.030 --> 00:01:33.030 align:start position:0%
+ 
+ 
+
+00:01:33.030 --> 00:01:35.510 align:start position:0%
+ 
+ 
+
+00:01:35.510 --> 00:01:38.390 align:start position:0%
+ 
+ 
+
+00:01:38.390 --> 00:01:40.069 align:start position:0%
+ 
+ 
+
+00:01:40.069 --> 00:01:40.079 align:start position:0%
+ 
+ 
+
+00:01:40.079 --> 00:01:40.710 align:start position:0%
+ 
+
+
+00:01:40.710 --> 00:01:43.109 align:start position:0%
+ 
+ 
+
+00:01:43.109 --> 00:01:44.870 align:start position:0%
+ 
+ 
+
+00:01:44.870 --> 00:01:47.190 align:start position:0%
+ 
+ 
+
+00:01:47.190 --> 00:01:47.200 align:start position:0%
+ 
+ 
+
+00:01:47.200 --> 00:01:49.350 align:start position:0%
+ 
+
+
+00:01:49.350 --> 00:01:49.360 align:start position:0%
+ 
+ 
+
+00:01:49.360 --> 00:01:51.030 align:start position:0%
+ 
+
+
+00:01:51.030 --> 00:01:52.870 align:start position:0%
+ 
+ 
+
+00:01:52.870 --> 00:01:57.109 align:start position:0%
+ 
+ 
+
+00:01:57.109 --> 00:01:59.830 align:start position:0%
+ 
+ 
+
+00:01:59.830 --> 00:02:01.429 align:start position:0%
+ 
+ 
+
+00:02:01.429 --> 00:02:03.990 align:start position:0%
+ 
+ 
+
+00:02:03.990 --> 00:02:06.389 align:start position:0%
+ 
+ 
+
+00:02:06.389 --> 00:02:09.350 align:start position:0%
+ 
+ 
+
+00:02:09.350 --> 00:02:11.190 align:start position:0%
+ 
+ 
+
+00:02:11.190 --> 00:02:13.110 align:start position:0%
+ 
+ 
+
+00:02:13.110 --> 00:02:14.710 align:start position:0%
+ 
+ 
+
+00:02:14.710 --> 00:02:17.910 align:start position:0%
+ 
+ 
+
+00:02:17.910 --> 00:02:19.830 align:start position:0%
+ 
+ 
+
+00:02:19.830 --> 00:02:22.869 align:start position:0%
+ 
+ 
+
+00:02:22.869 --> 00:02:24.630 align:start position:0%
+ 
+ 
+
+00:02:24.630 --> 00:02:28.150 align:start position:0%
+ 
+ 
+
+00:02:28.150 --> 00:02:29.910 align:start position:0%
+ 
+ 
+
+00:02:29.910 --> 00:02:32.710 align:start position:0%
+ 
+ 
+
+00:02:32.710 --> 00:02:34.869 align:start position:0%
+ 
+ 
+
+00:02:34.869 --> 00:02:36.710 align:start position:0%
+ 
+ 
+
+00:02:36.710 --> 00:02:39.270 align:start position:0%
+ 
+ 
+
+00:02:39.270 --> 00:02:42.630 align:start position:0%
+ 
+ 
+
+00:02:42.630 --> 00:02:45.190 align:start position:0%
+ 
+ 
+
+00:02:45.190 --> 00:02:48.830 align:start position:0%
+ 
+ 
+
+00:02:48.830 --> 00:02:52.150 align:start position:0%
+ 
+ 
+
+00:02:52.150 --> 00:02:54.550 align:start position:0%
+ 
+ 
+
+00:02:54.550 --> 00:02:56.869 align:start position:0%
+ 
+ 
+
+00:02:56.869 --> 00:02:58.949 align:start position:0%
+ 
+ 
+
+00:02:58.949 --> 00:02:58.959 align:start position:0%
+ 
+ 
+
+00:02:58.959 --> 00:02:59.910 align:start position:0%
+ 
+
+
+00:02:59.910 --> 00:03:02.309 align:start position:0%
+ 
+ 
+
+00:03:02.309 --> 00:03:03.589 align:start position:0%
+ 
+ 
+
+00:03:03.589 --> 00:03:05.430 align:start position:0%
+ 
+ 
+
+00:03:05.430 --> 00:03:07.750 align:start position:0%
+ 
+ 
+
+00:03:07.750 --> 00:03:09.830 align:start position:0%
+ 
+ 
+
+00:03:09.830 --> 00:03:09.840 align:start position:0%
+ 
+ 
+
+00:03:09.840 --> 00:03:10.949 align:start position:0%
+ 
+
+
+00:03:10.949 --> 00:03:10.959 align:start position:0%
+ 
+ 
+
+00:03:10.959 --> 00:03:11.910 align:start position:0%
+ 
+
+
+00:03:11.910 --> 00:03:13.350 align:start position:0%
+ 
+ 
+
+00:03:13.350 --> 00:03:16.070 align:start position:0%
+ 
+ 
+
+00:03:16.070 --> 00:03:18.869 align:start position:0%
+ 
+ 
+
+00:03:18.869 --> 00:03:21.190 align:start position:0%
+ 
+ 
+
+00:03:21.190 --> 00:03:21.200 align:start position:0%
+ 
+ 
+
+00:03:21.200 --> 00:03:22.710 align:start position:0%
+ 
+
+
+00:03:22.710 --> 00:03:22.720 align:start position:0%
+ 
+ 
+
+00:03:22.720 --> 00:03:23.670 align:start position:0%
+ 
+
+
+00:03:23.670 --> 00:03:26.070 align:start position:0%
+ 
+ 
+
+00:03:26.070 --> 00:03:27.830 align:start position:0%
+ 
+ 
+
+00:03:27.830 --> 00:03:29.670 align:start position:0%
+ 
+ 
+
+00:03:29.670 --> 00:03:32.229 align:start position:0%
+ 
+ 
+
+00:03:32.229 --> 00:03:32.239 align:start position:0%
+ 
+ 
+
+00:03:32.239 --> 00:03:33.589 align:start position:0%
+ 
+
+
+00:03:33.589 --> 00:03:35.110 align:start position:0%
+ 
+ 
+
+00:03:35.110 --> 00:03:37.110 align:start position:0%
+ 
+ 
+
+00:03:37.110 --> 00:03:38.309 align:start position:0%
+ 
+ 
+
+00:03:38.309 --> 00:03:40.869 align:start position:0%
+ 
+ 
+
+00:03:40.869 --> 00:03:40.879 align:start position:0%
+ 
+ 
+
+00:03:40.879 --> 00:03:42.390 align:start position:0%
+ 
+
+
+00:03:42.390 --> 00:03:45.030 align:start position:0%
+ 
+ 
+
+00:03:45.030 --> 00:03:47.350 align:start position:0%
+ 
+ 
+
+00:03:47.350 --> 00:03:49.990 align:start position:0%
+ 
+ 
+
+00:03:49.990 --> 00:03:52.390 align:start position:0%
+ 
+ 
+
+00:03:52.390 --> 00:03:54.630 align:start position:0%
+ 
+ 
+
+00:03:54.630 --> 00:03:56.630 align:start position:0%
+ 
+ 
+
+00:03:56.630 --> 00:03:57.910 align:start position:0%
+ 
+ 
+
+00:03:57.910 --> 00:03:57.920 align:start position:0%
+ 
+ 
+
+00:03:57.920 --> 00:03:59.350 align:start position:0%
+ 
+
+
+00:03:59.350 --> 00:04:01.670 align:start position:0%
+ 
+ 
+
+00:04:01.670 --> 00:04:02.869 align:start position:0%
+ 
+ 
+
+00:04:02.869 --> 00:04:04.309 align:start position:0%
+ 
+ 
+
+00:04:04.309 --> 00:04:07.429 align:start position:0%
+ 
+ 
+
+00:04:07.429 --> 00:04:09.830 align:start position:0%
+ 
+ 
+
+00:04:09.830 --> 00:04:13.589 align:start position:0%
+ 
+ 
+
+00:04:13.589 --> 00:04:15.270 align:start position:0%
+ 
+ 
+
+00:04:15.270 --> 00:04:18.069 align:start position:0%
+ 
+ 
+
+00:04:18.069 --> 00:04:19.430 align:start position:0%
+ 
+ 
+
+00:04:19.430 --> 00:04:19.440 align:start position:0%
+ 
+ 
+
+00:04:19.440 --> 00:04:20.310 align:start position:0%
+ 
+
+
+00:04:20.310 --> 00:04:22.950 align:start position:0%
+ 
+ 
+
+00:04:22.950 --> 00:04:24.950 align:start position:0%
+ 
+ 
+
+00:04:24.950 --> 00:04:27.590 align:start position:0%
+ 
+ 
+
+00:04:27.590 --> 00:04:29.590 align:start position:0%
+ 
+ 
+
+00:04:29.590 --> 00:04:31.749 align:start position:0%
+ 
+ 
+
+00:04:31.749 --> 00:04:35.030 align:start position:0%
+ 
+ 
+
+00:04:35.030 --> 00:04:37.670 align:start position:0%
+ 
+ 
+
+00:04:37.670 --> 00:04:40.830 align:start position:0%
+ 
+ 
+
+00:04:40.830 --> 00:04:43.350 align:start position:0%
+ 
+ 
+
+00:04:43.350 --> 00:04:45.110 align:start position:0%
+ 
+ 
+
+00:04:45.110 --> 00:04:45.120 align:start position:0%
+ 
+ 
+
+00:04:45.120 --> 00:04:46.390 align:start position:0%
+ 
+
+
+00:04:46.390 --> 00:04:47.990 align:start position:0%
+ 
+ 
+
+00:04:47.990 --> 00:04:50.870 align:start position:0%
+ 
+ 
+
+00:04:50.870 --> 00:04:53.430 align:start position:0%
+ 
+ 
+
+00:04:53.430 --> 00:04:56.230 align:start position:0%
+ 
+ 
+
+00:04:56.230 --> 00:04:59.909 align:start position:0%
+ 
+ 
+
+00:04:59.909 --> 00:05:02.469 align:start position:0%
+ 
+ 
+
+00:05:02.469 --> 00:05:04.310 align:start position:0%
+ 
+ 
+
+00:05:04.310 --> 00:05:06.710 align:start position:0%
+ 
+ 
+
+00:05:06.710 --> 00:05:10.469 align:start position:0%
+ 
+ 
+
+00:05:10.469 --> 00:05:11.990 align:start position:0%
+ 
+ 
+
+00:05:11.990 --> 00:05:14.870 align:start position:0%
+ 
+ 
+
+00:05:14.870 --> 00:05:19.749 align:start position:0%
+ 
+ 
+
+00:05:19.749 --> 00:05:21.189 align:start position:0%
+ 
+ 
+
+00:05:21.189 --> 00:05:24.310 align:start position:0%
+ 
+ 
+
+00:05:24.310 --> 00:05:26.469 align:start position:0%
+ 
+ 
+
+00:05:26.469 --> 00:05:28.870 align:start position:0%
+ 
+ 
+
+00:05:28.870 --> 00:05:30.710 align:start position:0%
+ 
+ 
+
+00:05:30.710 --> 00:05:32.390 align:start position:0%
+ 
+ 
+
+00:05:32.390 --> 00:05:33.430 align:start position:0%
+ 
+ 
+
+00:05:33.430 --> 00:05:33.440 align:start position:0%
+ 
+ 
+
+00:05:33.440 --> 00:05:34.870 align:start position:0%
+ 
+
+
+00:05:34.870 --> 00:05:40.230 align:start position:0%
+ 
+ 
+
+00:05:40.230 --> 00:05:41.990 align:start position:0%
+ 
+ 
+
+00:05:41.990 --> 00:05:43.909 align:start position:0%
+ 
+ 
+
+00:05:43.909 --> 00:05:45.270 align:start position:0%
+ 
+ 
+
+00:05:45.270 --> 00:05:46.550 align:start position:0%
+ 
+ 
+
+00:05:46.550 --> 00:05:48.710 align:start position:0%
+ 
+ 
+
+00:05:48.710 --> 00:05:51.430 align:start position:0%
+ 
+ 
+
+00:05:51.430 --> 00:05:54.550 align:start position:0%
+ 
+ 
+
+00:05:54.550 --> 00:05:56.150 align:start position:0%
+ 
+ 
+
+00:05:56.150 --> 00:05:59.670 align:start position:0%
+ 
+ 
+
+00:05:59.670 --> 00:06:01.110 align:start position:0%
+ 
+ 
+
+00:06:01.110 --> 00:06:01.120 align:start position:0%
+ 
+ 
+
+00:06:01.120 --> 00:06:02.070 align:start position:0%
+ 
+
+
+00:06:02.070 --> 00:06:04.230 align:start position:0%
+ 
+ 
+
+00:06:04.230 --> 00:06:04.240 align:start position:0%
+ 
+ 
+
+00:06:04.240 --> 00:06:05.270 align:start position:0%
+ 
+
+
+00:06:05.270 --> 00:06:07.909 align:start position:0%
+ 
+ 
+
+00:06:07.909 --> 00:06:10.469 align:start position:0%
+ 
+ 
+
+00:06:10.469 --> 00:06:10.479 align:start position:0%
+ 
+ 
+
+00:06:10.479 --> 00:06:11.350 align:start position:0%
+ 
+
+
+00:06:11.350 --> 00:06:12.710 align:start position:0%
+ 
+ 
+
+00:06:12.710 --> 00:06:14.150 align:start position:0%
+ 
+ 
+
+00:06:14.150 --> 00:06:16.070 align:start position:0%
+ 
+ 
+
+00:06:16.070 --> 00:06:17.430 align:start position:0%
+ 
+ 
+
+00:06:17.430 --> 00:06:18.830 align:start position:0%
+ 
+ 
+
+00:06:18.830 --> 00:06:22.550 align:start position:0%
+ 
+ 
+
+00:06:22.550 --> 00:06:22.560 align:start position:0%
+ 
+ 
+
+00:06:22.560 --> 00:06:24.070 align:start position:0%
+ 
+
+
+00:06:24.070 --> 00:06:26.070 align:start position:0%
+ 
+ 
+
+00:06:26.070 --> 00:06:28.710 align:start position:0%
+ 
+ 
+
+00:06:28.710 --> 00:06:31.270 align:start position:0%
+ 
+ 
+
+00:06:31.270 --> 00:06:32.870 align:start position:0%
+ 
+ 
+
+00:06:32.870 --> 00:06:35.110 align:start position:0%
+ 
+ 
+
+00:06:35.110 --> 00:06:37.430 align:start position:0%
+ 
+ 
+
+00:06:37.430 --> 00:06:38.870 align:start position:0%
+ 
+ 
+
+00:06:38.870 --> 00:06:41.670 align:start position:0%
+ 
+ 
+
+00:06:41.670 --> 00:06:43.909 align:start position:0%
+ 
+ 
+
+00:06:43.909 --> 00:06:45.909 align:start position:0%
+ 
+ 
+
+00:06:45.909 --> 00:06:48.390 align:start position:0%
+ 
+ 
+
+00:06:48.390 --> 00:06:49.990 align:start position:0%
+ 
+ 
+
+00:06:49.990 --> 00:06:51.510 align:start position:0%
+ 
+ 
+
+00:06:51.510 --> 00:06:51.520 align:start position:0%
+ 
+ 
+
+00:06:51.520 --> 00:06:53.510 align:start position:0%
+ 
+
+
+00:06:53.510 --> 00:06:57.350 align:start position:0%
+ 
+ 
+
+00:06:57.350 --> 00:07:00.950 align:start position:0%
+ 
+ 
+
+00:07:00.950 --> 00:07:00.960 align:start position:0%
+ 
+ 
+
+00:07:00.960 --> 00:07:02.390 align:start position:0%
+ 
+
+
+00:07:02.390 --> 00:07:02.400 align:start position:0%
+ 
+ 
+
+00:07:02.400 --> 00:07:03.189 align:start position:0%
+ 
+
+
+00:07:03.189 --> 00:07:04.790 align:start position:0%
+ 
+ 
+
+00:07:04.790 --> 00:07:07.990 align:start position:0%
+ 
+ 
+
+00:07:07.990 --> 00:07:10.950 align:start position:0%
+ 
+ 
+
+00:07:10.950 --> 00:07:14.309 align:start position:0%
+ 
+ 
+
+00:07:14.309 --> 00:07:14.319 align:start position:0%
+ 
+ 
+
+00:07:14.319 --> 00:07:15.350 align:start position:0%
+ 
+
+
+00:07:15.350 --> 00:07:17.350 align:start position:0%
+ 
+ 
+
+00:07:17.350 --> 00:07:19.510 align:start position:0%
+ 
+ 
+
+00:07:19.510 --> 00:07:19.520 align:start position:0%
+ 
+ 
+
+00:07:19.520 --> 00:07:20.629 align:start position:0%
+ 
+
+
+00:07:20.629 --> 00:07:22.710 align:start position:0%
+ 
+ 
+
+00:07:22.710 --> 00:07:25.189 align:start position:0%
+ 
+ 
+
+00:07:25.189 --> 00:07:25.199 align:start position:0%
+ 
+ 
+
+00:07:25.199 --> 00:07:26.790 align:start position:0%
+ 
+
+
+00:07:26.790 --> 00:07:29.510 align:start position:0%
+ 
+ 
+
+00:07:29.510 --> 00:07:31.510 align:start position:0%
+ 
+ 
+
+00:07:31.510 --> 00:07:34.309 align:start position:0%
+ 
+ 
+
+00:07:34.309 --> 00:07:36.629 align:start position:0%
+ 
+ 
+
+00:07:36.629 --> 00:07:39.029 align:start position:0%
+ 
+ 
+
+00:07:39.029 --> 00:07:41.589 align:start position:0%
+ 
+ 
+
+00:07:41.589 --> 00:07:41.599 align:start position:0%
+ 
+ 
+
+00:07:41.599 --> 00:07:42.469 align:start position:0%
+ 
+
+
+00:07:42.469 --> 00:07:44.629 align:start position:0%
+ 
+ 
+
+00:07:44.629 --> 00:07:47.670 align:start position:0%
+ 
+ 
+
+00:07:47.670 --> 00:07:47.680 align:start position:0%
+ 
+ 
+
+00:07:47.680 --> 00:07:48.870 align:start position:0%
+ 
+
+
+00:07:48.870 --> 00:07:52.230 align:start position:0%
+ 
+ 
+
+00:07:52.230 --> 00:07:54.950 align:start position:0%
+ 
+ 
+
+00:07:54.950 --> 00:07:54.960 align:start position:0%
+ 
+ 
+
+00:07:54.960 --> 00:07:55.749 align:start position:0%
+ 
+
+
+00:07:55.749 --> 00:07:58.790 align:start position:0%
+ 
+ 
+
+00:07:58.790 --> 00:08:01.350 align:start position:0%
+ 
+ 
+
+00:08:01.350 --> 00:08:03.270 align:start position:0%
+ 
+ 
+
+00:08:03.270 --> 00:08:05.749 align:start position:0%
+ 
+ 
+
+00:08:05.749 --> 00:08:08.230 align:start position:0%
+ 
+ 
+
+00:08:08.230 --> 00:08:09.670 align:start position:0%
+ 
+ 
+
+00:08:09.670 --> 00:08:09.680 align:start position:0%
+ 
+ 
+
+00:08:09.680 --> 00:08:11.510 align:start position:0%
+ 
+
+
+00:08:11.510 --> 00:08:13.110 align:start position:0%
+ 
+ 
+
+00:08:13.110 --> 00:08:15.110 align:start position:0%
+ 
+ 
+
+00:08:15.110 --> 00:08:16.790 align:start position:0%
+ 
+ 
+
+00:08:16.790 --> 00:08:18.390 align:start position:0%
+ 
+ 
+
+00:08:18.390 --> 00:08:20.550 align:start position:0%
+ 
+ 
+
+00:08:20.550 --> 00:08:23.110 align:start position:0%
+ 
+ 
+
+00:08:23.110 --> 00:08:24.790 align:start position:0%
+ 
+ 
+
+00:08:24.790 --> 00:08:24.800 align:start position:0%
+ 
+ 
+
+00:08:24.800 --> 00:08:25.670 align:start position:0%
+ 
+
+
+00:08:25.670 --> 00:08:28.710 align:start position:0%
+ 
+ 
+
+00:08:28.710 --> 00:08:30.550 align:start position:0%
+ 
+ 
+
+00:08:30.550 --> 00:08:32.790 align:start position:0%
+ 
+ 
+
+00:08:32.790 --> 00:08:37.829 align:start position:0%
+ 
+ 
+
+00:08:37.829 --> 00:08:37.839 align:start position:0%
+ 
+ 
+
+00:08:37.839 --> 00:08:38.829 align:start position:0%
+ 
+
+
+00:08:38.829 --> 00:08:41.110 align:start position:0%
+ 
+ 
+
+00:08:41.110 --> 00:08:43.110 align:start position:0%
+ 
+ 
+
+00:08:43.110 --> 00:08:44.949 align:start position:0%
+ 
+ 
+
+00:08:44.949 --> 00:08:47.190 align:start position:0%
+ 
+ 
+
+00:08:47.190 --> 00:08:48.630 align:start position:0%
+ 
+ 
+
+00:08:48.630 --> 00:08:50.389 align:start position:0%
+ 
+ 
+
+00:08:50.389 --> 00:08:51.430 align:start position:0%
+ 
+ 
+
+00:08:51.430 --> 00:08:53.590 align:start position:0%
+ 
+ 
+
+00:08:53.590 --> 00:08:55.030 align:start position:0%
+ 
+ 
+
+00:08:55.030 --> 00:08:56.230 align:start position:0%
+ 
+ 
+
+00:08:56.230 --> 00:08:58.150 align:start position:0%
+ 
+ 
+
+00:08:58.150 --> 00:09:00.470 align:start position:0%
+ 
+ 
+
+00:09:00.470 --> 00:09:03.910 align:start position:0%
+ 
+ 
+
+00:09:03.910 --> 00:09:06.389 align:start position:0%
+ 
+ 
+
+00:09:06.389 --> 00:09:08.550 align:start position:0%
+ 
+ 
+
+00:09:08.550 --> 00:09:11.269 align:start position:0%
+ 
+ 
+
+00:09:11.269 --> 00:09:13.509 align:start position:0%
+ 
+ 
+
+00:09:13.509 --> 00:09:15.590 align:start position:0%
+ 
+ 
+
+00:09:15.590 --> 00:09:18.150 align:start position:0%
+ 
+ 
+
+00:09:18.150 --> 00:09:21.350 align:start position:0%
+ 
+ 
+
+00:09:21.350 --> 00:09:23.590 align:start position:0%
+ 
+ 
+
+00:09:23.590 --> 00:09:25.590 align:start position:0%
+ 
+ 
+
+00:09:25.590 --> 00:09:27.190 align:start position:0%
+ 
+ 
+
+00:09:27.190 --> 00:09:28.870 align:start position:0%
+ 
+ 
+
+00:09:28.870 --> 00:09:31.509 align:start position:0%
+ 
+ 
+
+00:09:31.509 --> 00:09:34.070 align:start position:0%
+ 
+ 
+
+00:09:34.070 --> 00:09:34.080 align:start position:0%
+ 
+ 
+
+00:09:34.080 --> 00:09:35.030 align:start position:0%
+ 
+
+
+00:09:35.030 --> 00:09:35.040 align:start position:0%
+ 
+ 
+
+00:09:35.040 --> 00:09:36.389 align:start position:0%
+ 
+
+
+00:09:36.389 --> 00:09:37.990 align:start position:0%
+ 
+ 
+
+00:09:37.990 --> 00:09:41.670 align:start position:0%
+ 
+ 
+
+00:09:41.670 --> 00:09:41.680 align:start position:0%
+ 
+ 
+
+00:09:41.680 --> 00:09:42.470 align:start position:0%
+ 
+
+
+00:09:42.470 --> 00:09:45.269 align:start position:0%
+ 
+ 
+
+00:09:45.269 --> 00:09:47.269 align:start position:0%
+ 
+ 
+
+00:09:47.269 --> 00:09:50.389 align:start position:0%
+ 
+ 
+
+00:09:50.389 --> 00:09:51.910 align:start position:0%
+ 
+ 
+
+00:09:51.910 --> 00:09:53.750 align:start position:0%
+ 
+ 
+
+00:09:53.750 --> 00:09:53.760 align:start position:0%
+ 
+ 
+
+00:09:53.760 --> 00:09:56.470 align:start position:0%
+ 
+
+
+00:09:56.470 --> 00:09:58.389 align:start position:0%
+ 
+ 
+
+00:09:58.389 --> 00:09:59.670 align:start position:0%
+ 
+ 
+
+00:09:59.670 --> 00:09:59.680 align:start position:0%
+ 
+ 
+
+00:09:59.680 --> 00:10:00.949 align:start position:0%
+ 
+
+
+00:10:00.949 --> 00:10:02.230 align:start position:0%
+ 
+ 
+
+00:10:02.230 --> 00:10:02.240 align:start position:0%
+ 
+ 
+
+00:10:02.240 --> 00:10:03.350 align:start position:0%
+ 
+
+
+00:10:03.350 --> 00:10:05.030 align:start position:0%
+ 
+ 
+
+00:10:05.030 --> 00:10:08.550 align:start position:0%
+ 
+ 
+
+00:10:08.550 --> 00:10:10.870 align:start position:0%
+ 
+ 
+
+00:10:10.870 --> 00:10:13.509 align:start position:0%
+ 
+ 
+
+00:10:13.509 --> 00:10:15.829 align:start position:0%
+ 
+ 
+
+00:10:15.829 --> 00:10:17.750 align:start position:0%
+ 
+ 
+
+00:10:17.750 --> 00:10:20.550 align:start position:0%
+ 
+ 
+
+00:10:20.550 --> 00:10:22.150 align:start position:0%
+ 
+ 
+
+00:10:22.150 --> 00:10:22.160 align:start position:0%
+ 
+ 
+
+00:10:22.160 --> 00:10:24.550 align:start position:0%
+ 
+
+
+00:10:24.550 --> 00:10:27.670 align:start position:0%
+ 
+ 
+
+00:10:27.670 --> 00:10:31.350 align:start position:0%
+ 
+ 
+
+00:10:31.350 --> 00:10:34.790 align:start position:0%
+ 
+ 
+
+00:10:34.790 --> 00:10:37.750 align:start position:0%
+ 
+ 
+
+00:10:37.750 --> 00:10:37.760 align:start position:0%
+ 
+ 
+
+00:10:37.760 --> 00:10:39.110 align:start position:0%
+ 
+
+
+00:10:39.110 --> 00:10:42.230 align:start position:0%
+ 
+ 
+
+00:10:42.230 --> 00:10:42.240 align:start position:0%
+ 
+ 
+
+00:10:42.240 --> 00:10:43.670 align:start position:0%
+ 
+
+
+00:10:43.670 --> 00:10:43.680 align:start position:0%
+ 
+ 
+
+00:10:43.680 --> 00:10:45.670 align:start position:0%
+ 
+
+
+00:10:45.670 --> 00:10:45.680 align:start position:0%
+ 
+ 
+
+00:10:45.680 --> 00:10:46.630 align:start position:0%
+ 
+
+
+00:10:46.630 --> 00:10:48.389 align:start position:0%
+ 
+ 
+
+00:10:48.389 --> 00:10:50.550 align:start position:0%
+ 
+ 
+
+00:10:50.550 --> 00:10:52.150 align:start position:0%
+ 
+ 
+
+00:10:52.150 --> 00:10:54.230 align:start position:0%
+ 
+ 
+
+00:10:54.230 --> 00:10:56.310 align:start position:0%
+ 
+ 
+
+00:10:56.310 --> 00:10:58.310 align:start position:0%
+ 
+ 
+
+00:10:58.310 --> 00:11:00.470 align:start position:0%
+ 
+ 
+
+00:11:00.470 --> 00:11:01.670 align:start position:0%
+ 
+ 
+
+00:11:01.670 --> 00:11:03.829 align:start position:0%
+ 
+ 
+
+00:11:03.829 --> 00:11:05.350 align:start position:0%
+ 
+ 
+
+00:11:05.350 --> 00:11:05.360 align:start position:0%
+ 
+ 
+
+00:11:05.360 --> 00:11:06.870 align:start position:0%
+ 
+
+
+00:11:06.870 --> 00:11:08.710 align:start position:0%
+ 
+ 
+
+00:11:08.710 --> 00:11:10.470 align:start position:0%
+ 
+ 
+
+00:11:10.470 --> 00:11:12.790 align:start position:0%
+ 
+ 
+
+00:11:12.790 --> 00:11:15.590 align:start position:0%
+ 
+ 
+
+00:11:15.590 --> 00:11:15.600 align:start position:0%
+ 
+ 
+
+00:11:15.600 --> 00:11:16.470 align:start position:0%
+ 
+
+
+00:11:16.470 --> 00:11:19.269 align:start position:0%
+ 
+ 
+
+00:11:19.269 --> 00:11:19.279 align:start position:0%
+ 
+ 
+
+00:11:19.279 --> 00:11:19.990 align:start position:0%
+ 
+
+
+00:11:19.990 --> 00:11:22.550 align:start position:0%
+ 
+ 
+
+00:11:22.550 --> 00:11:25.509 align:start position:0%
+ 
+ 
+
+00:11:25.509 --> 00:11:28.069 align:start position:0%
+ 
+ 
+
+00:11:28.069 --> 00:11:30.710 align:start position:0%
+ 
+ 
+
+00:11:30.710 --> 00:11:30.720 align:start position:0%
+ 
+ 
+
+00:11:30.720 --> 00:11:31.590 align:start position:0%
+ 
+
+
+00:11:31.590 --> 00:11:34.230 align:start position:0%
+ 
+ 
+
+00:11:34.230 --> 00:11:36.389 align:start position:0%
+ 
+ 
+
+00:11:36.389 --> 00:11:40.389 align:start position:0%
+ 
+ 
+
+00:11:40.389 --> 00:11:42.310 align:start position:0%
+ 
+ 
+
+00:11:42.310 --> 00:11:43.590 align:start position:0%
+ 
+ 
+
+00:11:43.590 --> 00:11:45.030 align:start position:0%
+ 
+ 
+
+00:11:45.030 --> 00:11:45.040 align:start position:0%
+ 
+ 
+
+00:11:45.040 --> 00:11:45.910 align:start position:0%
+ 
+
+
+00:11:45.910 --> 00:11:48.630 align:start position:0%
+ 
+ 
+
+00:11:48.630 --> 00:11:50.389 align:start position:0%
+ 
+ 
+
+00:11:50.389 --> 00:11:52.069 align:start position:0%
+ 
+ 
+
+00:11:52.069 --> 00:11:52.949 align:start position:0%
+ 
+ 
+
+00:11:52.949 --> 00:11:52.959 align:start position:0%
+ 
+ 
+
+00:11:52.959 --> 00:11:55.110 align:start position:0%
+ 
+
+
+00:11:55.110 --> 00:11:57.269 align:start position:0%
+ 
+ 
+
+00:11:57.269 --> 00:11:59.269 align:start position:0%
+ 
+ 
+
+00:11:59.269 --> 00:12:01.190 align:start position:0%
+ 
+ 
+
+00:12:01.190 --> 00:12:03.030 align:start position:0%
+ 
+ 
+
+00:12:03.030 --> 00:12:06.069 align:start position:0%
+ 
+ 
+
+00:12:06.069 --> 00:12:07.670 align:start position:0%
+ 
+ 
+
+00:12:07.670 --> 00:12:11.269 align:start position:0%
+ 
+ 
+
+00:12:11.269 --> 00:12:11.279 align:start position:0%
+ 
+ 
+
+00:12:11.279 --> 00:12:12.389 align:start position:0%
+ 
+
+
+00:12:12.389 --> 00:12:13.910 align:start position:0%
+ 
+ 
+
+00:12:13.910 --> 00:12:15.829 align:start position:0%
+ 
+ 
+
+00:12:15.829 --> 00:12:17.750 align:start position:0%
+ 
+ 
+
+00:12:17.750 --> 00:12:19.750 align:start position:0%
+ 
+ 
+
+00:12:19.750 --> 00:12:21.190 align:start position:0%
+ 
+ 
+
+00:12:21.190 --> 00:12:23.190 align:start position:0%
+ 
+ 
+
+00:12:23.190 --> 00:12:24.470 align:start position:0%
+ 
+ 
+
+00:12:24.470 --> 00:12:24.480 align:start position:0%
+ 
+ 
+
+00:12:24.480 --> 00:12:25.670 align:start position:0%
+ 
+
+
+00:12:25.670 --> 00:12:25.680 align:start position:0%
+ 
+ 
+
+00:12:25.680 --> 00:12:28.150 align:start position:0%
+ 
+
+
+00:12:28.150 --> 00:12:30.550 align:start position:0%
+ 
+ 
+
+00:12:30.550 --> 00:12:33.670 align:start position:0%
+ 
+ 
+
+00:12:33.670 --> 00:12:35.670 align:start position:0%
+ 
+ 
+
+00:12:35.670 --> 00:12:37.670 align:start position:0%
+ 
+ 
+
+00:12:37.670 --> 00:12:39.750 align:start position:0%
+ 
+ 
+
+00:12:39.750 --> 00:12:40.949 align:start position:0%
+ 
+ 
+
+00:12:40.949 --> 00:12:42.470 align:start position:0%
+ 
+ 
+
+00:12:42.470 --> 00:12:44.629 align:start position:0%
+ 
+ 
+
+00:12:44.629 --> 00:12:46.790 align:start position:0%
+ 
+ 
+
+00:12:46.790 --> 00:12:48.870 align:start position:0%
+ 
+ 
+
+00:12:48.870 --> 00:12:50.069 align:start position:0%
+ 
+ 
+
+00:12:50.069 --> 00:12:50.079 align:start position:0%
+ 
+ 
+
+00:12:50.079 --> 00:12:51.509 align:start position:0%
+ 
+
+
+00:12:51.509 --> 00:12:54.230 align:start position:0%
+ 
+ 
+
+00:12:54.230 --> 00:12:56.310 align:start position:0%
+ 
+ 
+
+00:12:56.310 --> 00:12:58.069 align:start position:0%
+ 
+ 
+
+00:12:58.069 --> 00:13:00.550 align:start position:0%
+ 
+ 
+
+00:13:00.550 --> 00:13:00.560 align:start position:0%
+ 
+ 
+
+00:13:00.560 --> 00:13:01.430 align:start position:0%
+ 
+
+
+00:13:01.430 --> 00:13:03.110 align:start position:0%
+ 
+ 
+
+00:13:03.110 --> 00:13:04.389 align:start position:0%
+ 
+ 
+
+00:13:04.389 --> 00:13:06.470 align:start position:0%
+ 
+ 
+
+00:13:06.470 --> 00:13:08.310 align:start position:0%
+ 
+ 
+
+00:13:08.310 --> 00:13:10.710 align:start position:0%
+ 
+ 
+
+00:13:10.710 --> 00:13:12.550 align:start position:0%
+ 
+ 
+
+00:13:12.550 --> 00:13:14.230 align:start position:0%
+ 
+ 
+
+00:13:14.230 --> 00:13:15.910 align:start position:0%
+ 
+ 
+
+00:13:15.910 --> 00:13:15.920 align:start position:0%
+ 
+ 
+
+00:13:15.920 --> 00:13:17.269 align:start position:0%
+ 
+
+
+00:13:17.269 --> 00:13:18.870 align:start position:0%
+ 
+ 
+
+00:13:18.870 --> 00:13:21.350 align:start position:0%
+ 
+ 
+
+00:13:21.350 --> 00:13:23.750 align:start position:0%
+ 
+ 
+
+00:13:23.750 --> 00:13:25.670 align:start position:0%
+ 
+ 
+
+00:13:25.670 --> 00:13:25.680 align:start position:0%
+ 
+ 
+
+00:13:25.680 --> 00:13:26.389 align:start position:0%
+ 
+
+
+00:13:26.389 --> 00:13:26.399 align:start position:0%
+ 
+ 
+
+00:13:26.399 --> 00:13:29.269 align:start position:0%
+ 
+
+
+00:13:29.269 --> 00:13:31.110 align:start position:0%
+ 
+ 
+
+00:13:31.110 --> 00:13:32.790 align:start position:0%
+ 
+ 
+
+00:13:32.790 --> 00:13:34.949 align:start position:0%
+ 
+ 
+
+00:13:34.949 --> 00:13:36.710 align:start position:0%
+ 
+ 
+
+00:13:36.710 --> 00:13:38.389 align:start position:0%
+ 
+ 
+
+00:13:38.389 --> 00:13:39.670 align:start position:0%
+ 
+ 
+
+00:13:39.670 --> 00:13:42.389 align:start position:0%
+ 
+ 
+
+00:13:42.389 --> 00:13:44.550 align:start position:0%
+ 
+ 
+
+00:13:44.550 --> 00:13:47.350 align:start position:0%
+ 
+ 
+
+00:13:47.350 --> 00:13:47.360 align:start position:0%
+ 
+ 
+
+00:13:47.360 --> 00:13:48.389 align:start position:0%
+ 
+
+
+00:13:48.389 --> 00:13:50.629 align:start position:0%
+ 
+ 
+
+00:13:50.629 --> 00:13:50.639 align:start position:0%
+ 
+ 
+
+00:13:50.639 --> 00:13:51.430 align:start position:0%
+ 
+
+
+00:13:51.430 --> 00:13:53.030 align:start position:0%
+ 
+ 
+
+00:13:53.030 --> 00:13:55.990 align:start position:0%
+ 
+ 
+
+00:13:55.990 --> 00:13:57.910 align:start position:0%
+ 
+ 
+
+00:13:57.910 --> 00:13:57.920 align:start position:0%
+ 
+ 
+
+00:13:57.920 --> 00:13:58.710 align:start position:0%
+ 
+
+
+00:13:58.710 --> 00:14:00.949 align:start position:0%
+ 
+ 
+
+00:14:00.949 --> 00:14:03.670 align:start position:0%
+ 
+ 
+
+00:14:03.670 --> 00:14:05.829 align:start position:0%
+ 
+ 
+
+00:14:05.829 --> 00:14:07.350 align:start position:0%
+ 
+ 
+
+00:14:07.350 --> 00:14:09.670 align:start position:0%
+ 
+ 
+
+00:14:09.670 --> 00:14:11.030 align:start position:0%
+ 
+ 
+
+00:14:11.030 --> 00:14:13.670 align:start position:0%
+ 
+ 
+
+00:14:13.670 --> 00:14:16.069 align:start position:0%
+ 
+ 
+
+00:14:16.069 --> 00:14:20.710 align:start position:0%
+ 
+ 
+
+00:14:20.710 --> 00:14:24.230 align:start position:0%
+ 
+ 
+
+00:14:24.230 --> 00:14:25.670 align:start position:0%
+ 
+ 
+
+00:14:25.670 --> 00:14:27.350 align:start position:0%
+ 
+ 
+
+00:14:27.350 --> 00:14:30.470 align:start position:0%
+ 
+ 
+
+00:14:30.470 --> 00:14:32.629 align:start position:0%
+ 
+ 
+
+00:14:32.629 --> 00:14:34.710 align:start position:0%
+ 
+ 
+
+00:14:34.710 --> 00:14:37.189 align:start position:0%
+ 
+ 
+
+00:14:37.189 --> 00:14:39.430 align:start position:0%
+ 
+ 
+
+00:14:39.430 --> 00:14:41.269 align:start position:0%
+ 
+ 
+
+00:14:41.269 --> 00:14:44.550 align:start position:0%
+ 
+ 
+
+00:14:44.550 --> 00:14:46.710 align:start position:0%
+ 
+ 
+
+00:14:46.710 --> 00:14:48.949 align:start position:0%
+ 
+ 
+
+00:14:48.949 --> 00:14:50.790 align:start position:0%
+ 
+ 
+
+00:14:50.790 --> 00:14:54.870 align:start position:0%
+ 
+ 
+
+00:14:54.870 --> 00:14:58.150 align:start position:0%
+ 
+ 
+
+00:14:58.150 --> 00:14:59.670 align:start position:0%
+ 
+ 
+
+00:14:59.670 --> 00:15:01.990 align:start position:0%
+ 
+ 
+
+00:15:01.990 --> 00:15:02.000 align:start position:0%
+ 
+ 
+
+00:15:02.000 --> 00:15:03.670 align:start position:0%
+ 
+
+
+00:15:03.670 --> 00:15:06.150 align:start position:0%
+ 
+ 
+
+00:15:06.150 --> 00:15:08.150 align:start position:0%
+ 
+ 
+
+00:15:08.150 --> 00:15:08.160 align:start position:0%
+ 
+ 
+
+00:15:08.160 --> 00:15:09.509 align:start position:0%
+ 
+
+
+00:15:09.509 --> 00:15:11.269 align:start position:0%
+ 
+ 
+
+00:15:11.269 --> 00:15:13.189 align:start position:0%
+ 
+ 
+
+00:15:13.189 --> 00:15:14.870 align:start position:0%
+ 
+ 
+
+00:15:14.870 --> 00:15:14.880 align:start position:0%
+ 
+ 
+
+00:15:14.880 --> 00:15:16.150 align:start position:0%
+ 
+
+
+00:15:16.150 --> 00:15:20.069 align:start position:0%
+ 
+ 
+
+00:15:20.069 --> 00:15:21.590 align:start position:0%
+ 
+ 
+
+00:15:21.590 --> 00:15:24.829 align:start position:0%
+ 
+ 
+
+00:15:24.829 --> 00:15:32.310 align:start position:0%
+ 
+ 
+
+00:15:32.310 --> 00:15:33.910 align:start position:0%
+ 
+ 
+
+00:15:33.910 --> 00:15:36.949 align:start position:0%
+ 
+ 
+
+00:15:36.949 --> 00:15:38.150 align:start position:0%
+ 
+ 
+
+00:15:38.150 --> 00:15:38.160 align:start position:0%
+ 
+ 
+
+00:15:38.160 --> 00:15:38.949 align:start position:0%
+ 
+
+
+00:15:38.949 --> 00:15:40.949 align:start position:0%
+ 
+ 
+
+00:15:40.949 --> 00:15:42.790 align:start position:0%
+ 
+ 
+
+00:15:42.790 --> 00:15:44.550 align:start position:0%
+ 
+ 
+
+00:15:44.550 --> 00:15:45.750 align:start position:0%
+ 
+ 
+
+00:15:45.750 --> 00:15:45.760 align:start position:0%
+ 
+ 
+
+00:15:45.760 --> 00:15:55.590 align:start position:0%
+ 
+
+
+00:15:55.590 --> 00:15:57.590 align:start position:0%
+ 
+ 
+
+00:15:57.590 --> 00:15:59.910 align:start position:0%
+ 
+ 
+
+00:15:59.910 --> 00:16:02.629 align:start position:0%
+ 
+ 
+
+00:16:02.629 --> 00:16:04.310 align:start position:0%
+ 
+ 
+
+00:16:04.310 --> 00:16:06.949 align:start position:0%
+ 
+ 
+
+00:16:06.949 --> 00:16:08.790 align:start position:0%
+ 
+ 
+
+00:16:08.790 --> 00:16:11.110 align:start position:0%
+ 
+ 
+
+00:16:11.110 --> 00:16:13.350 align:start position:0%
+ 
+ 
+
+00:16:13.350 --> 00:16:15.189 align:start position:0%
+ 
+ 
+
+00:16:15.189 --> 00:16:18.310 align:start position:0%
+ 
+ 
+
+00:16:18.310 --> 00:16:20.470 align:start position:0%
+ 
+ 
+
+00:16:20.470 --> 00:16:22.150 align:start position:0%
+ 
+ 
+
+00:16:22.150 --> 00:16:23.470 align:start position:0%
+ 
+ 
+
+00:16:23.470 --> 00:16:26.629 align:start position:0%
+ 
+ 
+
+00:16:26.629 --> 00:16:28.550 align:start position:0%
+ 
+ 
+
+00:16:28.550 --> 00:16:30.069 align:start position:0%
+ 
+ 
+
+00:16:30.069 --> 00:16:32.230 align:start position:0%
+ 
+ 
+
+00:16:32.230 --> 00:16:34.550 align:start position:0%
+ 
+ 
+
+00:16:34.550 --> 00:16:36.790 align:start position:0%
+ 
+ 
+
+00:16:36.790 --> 00:16:36.800 align:start position:0%
+ 
+ 
+
+00:16:36.800 --> 00:16:42.629 align:start position:0%
+ 
+
+
+00:16:42.629 --> 00:16:42.639 align:start position:0%
+ 
+ 
+
+00:16:42.639 --> 00:16:44.069 align:start position:0%
+ 
+
+
+00:16:44.069 --> 00:16:46.389 align:start position:0%
+ 
+ 
+
+00:16:46.389 --> 00:16:49.269 align:start position:0%
+ 
+ 
+
+00:16:49.269 --> 00:16:51.110 align:start position:0%
+ 
+ 
+
+00:16:51.110 --> 00:16:51.120 align:start position:0%
+ 
+ 
+
+00:16:51.120 --> 00:16:51.910 align:start position:0%
+ 
+
+
+00:16:51.910 --> 00:16:53.509 align:start position:0%
+ 
+ 
+
+00:16:53.509 --> 00:16:55.189 align:start position:0%
+ 
+ 
+
+00:16:55.189 --> 00:16:57.350 align:start position:0%
+ 
+ 
+
+00:16:57.350 --> 00:16:57.360 align:start position:0%
+ 
+ 
+
+00:16:57.360 --> 00:16:59.189 align:start position:0%
+ 
+
+
+00:16:59.189 --> 00:17:01.269 align:start position:0%
+ 
+ 
+
+00:17:01.269 --> 00:17:03.030 align:start position:0%
+ 
+ 
+
+00:17:03.030 --> 00:17:04.789 align:start position:0%
+ 
+ 
+
+00:17:04.789 --> 00:17:06.470 align:start position:0%
+ 
+ 
+
+00:17:06.470 --> 00:17:07.909 align:start position:0%
+ 
+ 
+
+00:17:07.909 --> 00:17:09.590 align:start position:0%
+ 
+ 
+
+00:17:09.590 --> 00:17:11.029 align:start position:0%
+ 
+ 
+
+00:17:11.029 --> 00:17:12.549 align:start position:0%
+ 
+ 
+
+00:17:12.549 --> 00:17:14.549 align:start position:0%
+ 
+ 
+
+00:17:14.549 --> 00:17:21.270 align:start position:0%
+ 
+ 
+
+00:17:21.270 --> 00:17:26.150 align:start position:0%
+ 
+ 
+
+00:17:26.150 --> 00:17:26.160 align:start position:0%
+ 
+ 
+
+00:17:26.160 --> 00:17:31.590 align:start position:0%
+ 
+
+
+00:17:31.590 --> 00:17:33.590 align:start position:0%
+ 
+ 
+
+00:17:33.590 --> 00:17:35.110 align:start position:0%
+ 
+ 
+
+00:17:35.110 --> 00:17:38.470 align:start position:0%
+ 
+ 
+
+00:17:38.470 --> 00:17:40.150 align:start position:0%
+ 
+ 
+
+00:17:40.150 --> 00:17:42.310 align:start position:0%
+ 
+ 
+
+00:17:42.310 --> 00:17:51.590 align:start position:0%
+ 
+ 
+
+00:17:51.590 --> 00:17:51.600 align:start position:0%
+ 
+ 
+
+00:17:51.600 --> 00:17:53.270 align:start position:0%
+ 
+
+
+00:17:53.270 --> 00:17:54.789 align:start position:0%
+ 
+ 
+
+00:17:54.789 --> 00:17:56.070 align:start position:0%
+ 
+ 
+
+00:17:56.070 --> 00:17:56.080 align:start position:0%
+ 
+ 
+
+00:17:56.080 --> 00:18:01.669 align:start position:0%
+ 
+
+
+00:18:01.669 --> 00:18:04.070 align:start position:0%
+ 
+ 
+
+00:18:04.070 --> 00:18:06.230 align:start position:0%
+ 
+ 
+
+00:18:06.230 --> 00:18:08.470 align:start position:0%
+ 
+ 
+
+00:18:08.470 --> 00:18:08.480 align:start position:0%
+ 
+ 
+
+00:18:08.480 --> 00:18:09.270 align:start position:0%
+ 
+
+
+00:18:09.270 --> 00:18:10.870 align:start position:0%
+ 
+ 
+
+00:18:10.870 --> 00:18:12.950 align:start position:0%
+ 
+ 
+
+00:18:12.950 --> 00:18:15.350 align:start position:0%
+ 
+ 
+
+00:18:15.350 --> 00:18:17.270 align:start position:0%
+ 
+ 
+
+00:18:17.270 --> 00:18:17.280 align:start position:0%
+ 
+ 
+
+00:18:17.280 --> 00:18:18.070 align:start position:0%
+ 
+
+
+00:18:18.070 --> 00:18:22.070 align:start position:0%
+ 
+ 
+
+00:18:22.070 --> 00:18:23.070 align:start position:0%
+ 
+ 
+

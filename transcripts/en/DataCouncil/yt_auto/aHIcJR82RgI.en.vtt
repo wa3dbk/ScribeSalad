@@ -1,0 +1,2056 @@
+WEBVTT
+Kind: captions
+Language: en
+
+00:00:00.110 --> 00:00:24.550 align:start position:0%
+ 
+[Music]  so I I'm not a crossword editor I'm a  games platform engineer here at the  times and this is a talk about how we  built a recursive bigquery mapper to  move our data around in GCP a little bit  of background first crossword went out  in 1913 and then in 1924 crossword  editor called it a sinful waste of time  he did not like it took up space in the  newspaper and then Pearl Harbor happened  and The Times decided that it was a nice  thing to include in the paper to give  people something to look forward to when  they opened it up and in 1997 the  crossword went digital  it was released online on the web first  and then a long time later iOS and  Android came around and eventually we  launched the mini which is a 5 by 5  crossword today we support all of these  platforms PDFs web mobile web Android  iOS Kindle and Windows so a lot of users  spread across a lot of different  platforms which makes our infrastructure  a little more complicated  the background of this talk is that we  recently did an entire replied form from  was essentially a lamp stack on AWS to  GCP the times as a whole is moving  towards GCP so this just follows in line  with that it was a long complicated  endeavor or there's lots of different  phases lots of different moving data  around and you know launching new  services and shifting traffic and  eventually it came to look something  like this this is actually kind of  outdated there's a lot more to it now  but we've got micro services they're all  written and go they all run on App  Engine and our source of truth is  datastore which is a Google's document  store with memcache in front of it so  the problem is when we went from a lamp  stack to GCP with datastore we migrated  from my sequel to datastore and we lost  the ability to run  complex bespoke queries against our data  datastore is great like give me the  puzzle for this day giving me the  progress for this user and this puzzle  but you can't run aggregations across  the entire data set you need something  else for that  so the swimwear is datastore and the  somewhere else that we need it is  bigquery we really want to be able to do  these analytics across all of our users  or all of our puzzles and get those deep  insights that we used to have the first  solution that we had in GCP you can  launch a backup of data store and load  it into bigquery it's just you go into  the admin you click start back up and  then you let it run for a little while  every GCP or every App Engine project on  GCP has a what's called a default  service just one that you just have to  pick one  as it happens our default service is our  edge layer so when we kicked it off we  stopped paying attention to it and then  a few minutes later we started getting  tons of alerts because our default edge  server the latency went from about 100  milliseconds to over 10 seconds because  what GCP did was it launched all these  mapping jobs in the background on our  default service to move this data around  we found that it's incredibly slow way  too slow for our needs the default  version is in Python they have a Java  version but they don't really tell you  how to deploy it and we're a go shop we  don't write Java we don't we don't want  to write Java and it just does a backup  it doesn't do anything fancy and the  thing we really wanted was we wanted  streaming all new data going forward not  just historical this is kind of the  inspiration for the project  whoever captain code man is they wrote a  go version of this Python mapper which  we considered using problem as its third  party and then we'd have probably to  fork it to extend it to do the things  that we want the one thing I want to  call out is that has read me he says  that this was able to process about one  point six thousand entities per second  so that was kind of like our baseline  for performance for this  so we're gonna write our round we're  gonna write our own mapper we're gonna  deploy it to App Engine and we're gonna  use this to move our data between  datastore and bigquery we wanted to look  a little bit like this where you can  call an endpoint to kick off a job with  a data type that you want to move around  a start timestamp and an end time stamp  so you just do bulk loads of like you  know a month's worth of data or days  worth of data that's kind of what the  implant looks like you it looks for that  path and it accepted get requests and  calls that Lutz chorus function real  quickly we found out that so much data  is being moved around that you can't do  this in a single request App Engine has  a hard-coded 60 second time-out on an  HTTP request from just the outside web  so that didn't work so we needed some  kind of fan-out system so a request  comes in usually from us we query for  all the keys in datastore not the  entities just the keys now what we're  going to do is we're gonna publish those  keys out to pub/sub I don't know if  you're here for the talk yesterday but  pub/sub is basically TCPS message broker  but it really is the way to describe  just a sponge it's a place that you send  all of your data to be processed at some  point whenever some subscriber is ready  to do it so we posted mountain batches  of say 500 what the pub slab is going to  do is actually we've set up our service  to not only be the producer of these  messages we've also set up to be the  consumer of all the messages so when the  when we publish all the pub/sub they're  actually going to flood back into the  service that we set up and it's gonna  use the keys that it accepts on the  ingress to grab the entities out of  datastore and put them into bigquery so  now it looks something like this where  we kick off the job it starts publishing  out keys to pub/sub and then the keys  are gonna flood back into the service  App Engine you guys see all of these  requests coming in and it's gonna  automatically and very quickly scale  itself up to handle the load and it's  just going to keep scaling  as long as it has to and now that we've  got all these instances they can go and  grab all the data that we need out of  datastore and put it into bigquery and  it's pretty fast but it's not fast  enough and the problem is we found that  when we're loading a lot of data  the initial HTTP HTTP request that we  use to kick off the job only has 60  seconds we found that that 60 seconds  but sometimes not enough to publish all  of the keys we needed so that request  would die not all the keys would be  published all the rest of the jobs would  finish up all these App Engine instances  would go away and the job isn't complete  so we needed to figure out a way to fan  out even more and what we found is that  pub/sub is great for publishing messages  and assuming that they'll be taken care  of eventually kind of just a  fire-and-forget system but we wanted was  something with a little more control  about how we can use it and that's what  task queue is it's similar it's they're  almost interchangeable in some places  but Tess queue gives you a lot more  control over how your data is handled so  then you algorithm that we came up with  is that if a request calls for a range  of data that we've determined is too  large what we want to do is we want to  chunk up that time range into smaller  time ranges publish them to task queue  and then we're basically going to do the  same thing so we post them to task queue  we ingest those task queue job tasks  essentially use the new date range to  create for the keys publish the keys out  to pub/sub and the requests come back in  we scale herself up use the keys same  thing we did before and GCP to step to  set up a task queue I have to do is add  this animal the one thing I want to call  out is that the rate tess queue has a  maximum post rate of 500 per second so  if you put you put as many messages or  tests on it as you want but they'll only  flow back out at a rate  maximum 500 per second and they have  retries and everything this is kind of  what it looks like if we decided that  the date range is larger than say one  hour we're going to create a publisher  initialize or or sorry if it's less than  an hour we're going to initialize our  publisher and just publish post the keys  straight up out to pub/sub otherwise  we're gonna have to start in queuing  them on to test queue we give it an  endpoint path the total start and end  date for the entire query and the chunk  size which is one hour and it's kind of  what this looks like it's going to  create the path and just start creating  these post tasks and putting them onto  task queue in smaller chunks of the  original time range and a great thing  about this is that if we were gonna use  pub/sub again we would have to there's a  little bit overhead with that we'd have  to create new endpoints because yeah  there's creating line points we'd have  to create a struct for the payload that  comes in we'd have to have like encoders  and decoders for the messages that are  coming where's all the data that we  really want is just these start and end  time stamps and all we had to do was add  the ability for this endpoint to handle  post requests and bam it's the same  thing so now we've got App Engine  posting to task queue which then posts  its task back to App Engine which scales  up a little bit which then repost all of  their - their keys out - pub/sub which  doesn't flood back in so it scales it  scales at scales keep scaling itself as  long as it has to so now it's really  fast and our benchmarking we found that  it can load things in a big query at a  rate of 25,000 keys per second and it's  actually we found that it's too fast  bigquery has a 10 megabyte per second  stream limit which we would blow through  very quickly since this thing is  basically infinitely scalable so we  actually one of the reasons we use task  queue is that you can actually turn down  the rate very easily gives you that  really fine  to say how quickly you actually want  your data to be processed so we turned  it down to one per second one date range  and that shut up all the alerts that we  would get whenever it was trying to load  data to fast here's kind of what it  looks like in the logs see at the bottom  there's a get request that just says  here's a start timestamp and give me all  the data between then and now and then  the task queue post requests are coming  in afterward with chunked up time ranges  if you click on one of them you can see  that at the bottom it queried for all  the keys within that time range and it  published all the keys out pops up this  one published 97 thousand keys in about  40 seconds and then on the other end  when the pub/sub request comes back in  it had a request it had 500 keys and the  payload it grabbed 500 scores in this  case grabbing around a datastore put  them into bigquery and this is just what  the so look I mentioned we wanted to be  able to handle streaming new data into  bigquery  so what solve happens whenever you  finish the game so when you when we  detect that you've solved the crossword  we're gonna publish something called a  score the score just has some summary  data about the game that you played how  long you played you know did you cheat  whatever and that is gonna that's  published by another one of our services  and our bigquery service is a subscriber  to that topic and what it's going to do  is it's gonna take your score put that  in a big query and it's also going to  use the metadata from the score to grab  your progress which is the basically  summer summary state of your board put  that into bigquery for analytics and  it's also gonna grab all of your what we  call progress commits which are  snapshots that we take of your game over  time and the reason this was such a  for us is because these snapshots in  particular they all have a full copy of  your crossword board with a ton of other  metadata involved so it's a very it's  not a trivial thing to load in bulk  across services the other really cool  thing we were able to do is we're able  to give it a user ID and we can actually  go back in time and load all of the data  for a particular user we've used this a  lot when someone will email us and say  hey I've been doing the crossword online  forever but I only see that I have like  a 99.4% solve rate as in in all the  archive that we have I'm missing one or  two puzzles somewhere I really want to  go back and finish let me get that a  hundred percent salt right so we can  actually use this to load all of that  users data going all the way back in  time loaded into bigquery and query and  figure out what puzzles from 2012 that  this person was missing this is kind  what it looks like so we set this up on  a nightly cron everyday around 3:00 a.m.  it's gonna go and load all the progress  scores and parse commits for the  previous day so you can see every day at  3:00 a.m. it's gonna scale up to about  sixty instances on tone do all the  loading and then instantly scale back  down actually what you can see is that  this it's kind of evenly spaced except  for the second one on the right that one  is actually kind of anomaly and what  happened was another engineer act  actually ended up adding two fields to  our progress struct which meant that it  no longer in the code matched the schema  in bigquery so bigquery was rejecting  every single request so you can see that  it just started to stack up the queue  size in pub/sub but the great thing  about pub/sub is that it's super  resilient and it's gonna hold onto all  these messages for at least seven days  and it's just gonna keep retrying them  again and again and right there at the  end you see that I fixed the issue  the fields in bigquery and then BAM like  it flushed them all back out of the  queue into bigquery in one big one big  scoop so some of the cool things that  we've actually been able to learn about  our users or maybe a lot of these things  we had suspected but it's great now that  we actually have the data to back it up  so we segmented users into novice who  have completed lesson seven puzzles and  experts who have played more than seven  puzzles in the past month and as you can  see that novice users spend way more  time solving the puzzles and advanced  users they spend about 40 minutes on  average and expert users spend less than  about 35 almost half of all novice users  have to reveal a puzzle at some point to  get it solved where it's about you know  only a quarter of experts and novice  users abandon the puzzle a lot they just  54% just don't finish their puzzles and  whereas experts will finish about 80% of  the time you can't see this in graph  form so you can see that novice users in  the top left give up very quickly  and it seems that like after you get to  about the 50% board filled state you  pretty much guaranteed to finish it  whereas experts they finish if they  start a puzzle either abandon it right  away sometimes or they're almost  guaranteed to finish it and you can see  that on the bottom left novice users are  way more prone to cheating than expert  users and so you can see that the  Saturday is the light blue on the top  people are much more likely to cheat on  a Saturday than they are to Monday if  you don't know crossword puzzles get  harder throughout the week so Monday is  the easiest Saturday is the hardest and  some day is generally not as hard a  puzzle the clues are hard but it is much  bigger so it had it's difficult in that  way yeah so now we can segment users  into the  soft quantiles the gist of this is that  if you can solve a crossword puzzle in  about seven-and-a-half minutes you're in  the top one percent of all solvers  across the world and if you can do it in  30 minutes you're still top fifty  percent and here you can see how the  difficulty goes up throughout time so  the first day of the week is Sunday you  can see Sunday's a bigger puzzle so it  usually takes people about an hour to do  but Monday is a much easier puzzle only  takes people about 16 minutes and these  are solves without reveals so people who  solved it and did not cheat and we can  also compare quantiles across time so  this is a chart that compares one mini  puzzle of today versus the same day of  the week last week so the yellow is last  week the blue is today and you can see  that last week's puzzle was apparently  way harder than today's puzzle and I  want to give a shout out we are hiring  we have a lot of open positions in all  sorts of technologies but we write a lot  of go and do a lot of cool things at the  times thank you  [Applause]  is there a reason that you can't use the  task queues for the places in the code  where you use the pub/sub no there's no  reason we just when we started out we  wanted that kind of infinite scalability  captain code man third party ever looked  at exclusively used tasks keys hi what  is your feeling of AWS versus GCP I  haven't had a chance to interact with  AWS as much as GCP this definitely isn't  an argument to say that GCP is better  than AWS the takeaway is just that our  the legacy lamp stack that we had was  not performing the way that we had that  we required anymore and we wanted to  leverage the new technology of GCP  service mark you know micro services all  the other you know hot new technology  but the nice thing about GCP is really a  pinch an app engine is a really really  easy platform to develop on and a very  has a lot of really advanced tools the  logging is very advanced you get extra  logs and you get stackdriver for free so  we like it in those respects how do you  do you use gold routine within your pall  from the data store and how do you  ensure that 60 minutes time now is  enforced the with endo every request we  don't enforce it App Engine itself  enforces it do we use go routines yes to  some extent but we usually find that  they're not necessary the last thing we  want is messin with a bunch of  concurrency primitives within our code  and the go servers are already handling  every request in separate go routine  it's my understanding that the  architecture is supporting at at least  one so there may be a chance of  duplication how do you maintain  idempotency here we essentially there's  no good way to t do data when it gets  into datastore we've come to terms with  that you essentially just have to be  careful when you query to query across  unique keys and you use group bys and  distinct  hi I'm not 100% sure like why when we  are loading it to datastore you cannot  also load it to bigquery is there like a  reason that it's so decoupled well we  wanted this to be an offline system we  wouldn't want to be putting essentially  a backup within the hot path of our  service we like to keep latency as low  as possible especially because we  released a new puzzle at 10 p.m. every  night and you'll see a massive spike in  traffic and we definitely don't want to  interfere with that by it was  essentially a backup offline job  I your thoughts on using go versus Java  or C++ for your internal development  there we are very big fans of go we've  developed a lot of tooling around it we  developed the drone App Engine plugin  just written go we find that the tools  out of the box are really good in terms  of profiling memory management just  recently we used P prof tools to track  down memory leak that we were having so  in that respect go is very very useful  for very quick application development  as a whole the New York Times does use  Java and Scala to some extent but go has  become the language of choice for I  would say most developers and most teams  at this point  [Music]
+
+00:00:24.550 --> 00:00:28.370 align:start position:0%
+ 
+ 
+
+00:00:28.370 --> 00:00:30.319 align:start position:0%
+ 
+ 
+
+00:00:30.319 --> 00:00:33.490 align:start position:0%
+ 
+ 
+
+00:00:33.490 --> 00:00:35.720 align:start position:0%
+ 
+ 
+
+00:00:35.720 --> 00:00:38.810 align:start position:0%
+ 
+ 
+
+00:00:38.810 --> 00:00:40.549 align:start position:0%
+ 
+ 
+
+00:00:40.549 --> 00:00:44.990 align:start position:0%
+ 
+ 
+
+00:00:44.990 --> 00:00:47.060 align:start position:0%
+ 
+ 
+
+00:00:47.060 --> 00:00:50.210 align:start position:0%
+ 
+ 
+
+00:00:50.210 --> 00:00:54.290 align:start position:0%
+ 
+ 
+
+00:00:54.290 --> 00:00:57.799 align:start position:0%
+ 
+ 
+
+00:00:57.799 --> 00:00:59.720 align:start position:0%
+ 
+ 
+
+00:00:59.720 --> 00:01:03.380 align:start position:0%
+ 
+ 
+
+00:01:03.380 --> 00:01:08.570 align:start position:0%
+ 
+ 
+
+00:01:08.570 --> 00:01:09.830 align:start position:0%
+ 
+ 
+
+00:01:09.830 --> 00:01:12.050 align:start position:0%
+ 
+ 
+
+00:01:12.050 --> 00:01:14.240 align:start position:0%
+ 
+ 
+
+00:01:14.240 --> 00:01:16.460 align:start position:0%
+ 
+ 
+
+00:01:16.460 --> 00:01:18.340 align:start position:0%
+ 
+ 
+
+00:01:18.340 --> 00:01:22.310 align:start position:0%
+ 
+ 
+
+00:01:22.310 --> 00:01:27.260 align:start position:0%
+ 
+ 
+
+00:01:27.260 --> 00:01:32.540 align:start position:0%
+ 
+ 
+
+00:01:32.540 --> 00:01:33.770 align:start position:0%
+ 
+ 
+
+00:01:33.770 --> 00:01:36.139 align:start position:0%
+ 
+ 
+
+00:01:36.139 --> 00:01:37.160 align:start position:0%
+ 
+ 
+
+00:01:37.160 --> 00:01:39.109 align:start position:0%
+ 
+ 
+
+00:01:39.109 --> 00:01:41.660 align:start position:0%
+ 
+ 
+
+00:01:41.660 --> 00:01:44.180 align:start position:0%
+ 
+ 
+
+00:01:44.180 --> 00:01:45.770 align:start position:0%
+ 
+ 
+
+00:01:45.770 --> 00:01:48.260 align:start position:0%
+ 
+ 
+
+00:01:48.260 --> 00:01:51.430 align:start position:0%
+ 
+ 
+
+00:01:51.430 --> 00:01:53.570 align:start position:0%
+ 
+ 
+
+00:01:53.570 --> 00:01:56.630 align:start position:0%
+ 
+ 
+
+00:01:56.630 --> 00:01:59.690 align:start position:0%
+ 
+ 
+
+00:01:59.690 --> 00:02:01.400 align:start position:0%
+ 
+ 
+
+00:02:01.400 --> 00:02:03.320 align:start position:0%
+ 
+ 
+
+00:02:03.320 --> 00:02:04.580 align:start position:0%
+ 
+ 
+
+00:02:04.580 --> 00:02:06.919 align:start position:0%
+ 
+ 
+
+00:02:06.919 --> 00:02:09.919 align:start position:0%
+ 
+ 
+
+00:02:09.919 --> 00:02:11.089 align:start position:0%
+ 
+ 
+
+00:02:11.089 --> 00:02:14.809 align:start position:0%
+ 
+ 
+
+00:02:14.809 --> 00:02:17.750 align:start position:0%
+ 
+ 
+
+00:02:17.750 --> 00:02:22.360 align:start position:0%
+ 
+ 
+
+00:02:22.360 --> 00:02:25.190 align:start position:0%
+ 
+ 
+
+00:02:25.190 --> 00:02:29.720 align:start position:0%
+ 
+ 
+
+00:02:29.720 --> 00:02:31.280 align:start position:0%
+ 
+ 
+
+00:02:31.280 --> 00:02:33.690 align:start position:0%
+ 
+ 
+
+00:02:33.690 --> 00:02:37.250 align:start position:0%
+ 
+ 
+
+00:02:37.250 --> 00:02:39.120 align:start position:0%
+ 
+ 
+
+00:02:39.120 --> 00:02:40.460 align:start position:0%
+ 
+ 
+
+00:02:40.460 --> 00:02:42.900 align:start position:0%
+ 
+ 
+
+00:02:42.900 --> 00:02:45.720 align:start position:0%
+ 
+ 
+
+00:02:45.720 --> 00:02:47.490 align:start position:0%
+ 
+ 
+
+00:02:47.490 --> 00:02:47.940 align:start position:0%
+ 
+ 
+
+00:02:47.940 --> 00:02:50.640 align:start position:0%
+ 
+ 
+
+00:02:50.640 --> 00:02:51.750 align:start position:0%
+ 
+ 
+
+00:02:51.750 --> 00:02:53.700 align:start position:0%
+ 
+ 
+
+00:02:53.700 --> 00:02:56.100 align:start position:0%
+ 
+ 
+
+00:02:56.100 --> 00:02:58.260 align:start position:0%
+ 
+ 
+
+00:02:58.260 --> 00:03:02.550 align:start position:0%
+ 
+ 
+
+00:03:02.550 --> 00:03:05.520 align:start position:0%
+ 
+ 
+
+00:03:05.520 --> 00:03:09.030 align:start position:0%
+ 
+ 
+
+00:03:09.030 --> 00:03:12.930 align:start position:0%
+ 
+ 
+
+00:03:12.930 --> 00:03:15.090 align:start position:0%
+ 
+ 
+
+00:03:15.090 --> 00:03:17.570 align:start position:0%
+ 
+ 
+
+00:03:17.570 --> 00:03:20.700 align:start position:0%
+ 
+ 
+
+00:03:20.700 --> 00:03:22.590 align:start position:0%
+ 
+ 
+
+00:03:22.590 --> 00:03:26.070 align:start position:0%
+ 
+ 
+
+00:03:26.070 --> 00:03:26.550 align:start position:0%
+ 
+ 
+
+00:03:26.550 --> 00:03:29.730 align:start position:0%
+ 
+ 
+
+00:03:29.730 --> 00:03:32.130 align:start position:0%
+ 
+ 
+
+00:03:32.130 --> 00:03:33.870 align:start position:0%
+ 
+ 
+
+00:03:33.870 --> 00:03:35.370 align:start position:0%
+ 
+ 
+
+00:03:35.370 --> 00:03:37.890 align:start position:0%
+ 
+ 
+
+00:03:37.890 --> 00:03:41.190 align:start position:0%
+ 
+ 
+
+00:03:41.190 --> 00:03:43.170 align:start position:0%
+ 
+ 
+
+00:03:43.170 --> 00:03:45.570 align:start position:0%
+ 
+ 
+
+00:03:45.570 --> 00:03:47.730 align:start position:0%
+ 
+ 
+
+00:03:47.730 --> 00:03:50.210 align:start position:0%
+ 
+ 
+
+00:03:50.210 --> 00:03:54.150 align:start position:0%
+ 
+ 
+
+00:03:54.150 --> 00:03:56.610 align:start position:0%
+ 
+ 
+
+00:03:56.610 --> 00:03:58.320 align:start position:0%
+ 
+ 
+
+00:03:58.320 --> 00:03:59.400 align:start position:0%
+ 
+ 
+
+00:03:59.400 --> 00:04:01.530 align:start position:0%
+ 
+ 
+
+00:04:01.530 --> 00:04:03.000 align:start position:0%
+ 
+ 
+
+00:04:03.000 --> 00:04:06.780 align:start position:0%
+ 
+ 
+
+00:04:06.780 --> 00:04:08.160 align:start position:0%
+ 
+ 
+
+00:04:08.160 --> 00:04:10.340 align:start position:0%
+ 
+ 
+
+00:04:10.340 --> 00:04:14.490 align:start position:0%
+ 
+ 
+
+00:04:14.490 --> 00:04:18.960 align:start position:0%
+ 
+ 
+
+00:04:18.960 --> 00:04:20.870 align:start position:0%
+ 
+ 
+
+00:04:20.870 --> 00:04:23.490 align:start position:0%
+ 
+ 
+
+00:04:23.490 --> 00:04:26.700 align:start position:0%
+ 
+ 
+
+00:04:26.700 --> 00:04:28.740 align:start position:0%
+ 
+ 
+
+00:04:28.740 --> 00:04:30.090 align:start position:0%
+ 
+ 
+
+00:04:30.090 --> 00:04:31.650 align:start position:0%
+ 
+ 
+
+00:04:31.650 --> 00:04:33.090 align:start position:0%
+ 
+ 
+
+00:04:33.090 --> 00:04:35.100 align:start position:0%
+ 
+ 
+
+00:04:35.100 --> 00:04:39.660 align:start position:0%
+ 
+ 
+
+00:04:39.660 --> 00:04:41.490 align:start position:0%
+ 
+ 
+
+00:04:41.490 --> 00:04:43.530 align:start position:0%
+ 
+ 
+
+00:04:43.530 --> 00:04:45.800 align:start position:0%
+ 
+ 
+
+00:04:45.800 --> 00:04:47.940 align:start position:0%
+ 
+ 
+
+00:04:47.940 --> 00:04:50.130 align:start position:0%
+ 
+ 
+
+00:04:50.130 --> 00:04:52.230 align:start position:0%
+ 
+ 
+
+00:04:52.230 --> 00:04:53.670 align:start position:0%
+ 
+ 
+
+00:04:53.670 --> 00:04:56.760 align:start position:0%
+ 
+ 
+
+00:04:56.760 --> 00:04:58.530 align:start position:0%
+ 
+ 
+
+00:04:58.530 --> 00:05:01.140 align:start position:0%
+ 
+ 
+
+00:05:01.140 --> 00:05:02.760 align:start position:0%
+ 
+ 
+
+00:05:02.760 --> 00:05:05.520 align:start position:0%
+ 
+ 
+
+00:05:05.520 --> 00:05:07.980 align:start position:0%
+ 
+ 
+
+00:05:07.980 --> 00:05:09.390 align:start position:0%
+ 
+ 
+
+00:05:09.390 --> 00:05:11.820 align:start position:0%
+ 
+ 
+
+00:05:11.820 --> 00:05:14.910 align:start position:0%
+ 
+ 
+
+00:05:14.910 --> 00:05:17.220 align:start position:0%
+ 
+ 
+
+00:05:17.220 --> 00:05:21.120 align:start position:0%
+ 
+ 
+
+00:05:21.120 --> 00:05:22.980 align:start position:0%
+ 
+ 
+
+00:05:22.980 --> 00:05:24.510 align:start position:0%
+ 
+ 
+
+00:05:24.510 --> 00:05:26.850 align:start position:0%
+ 
+ 
+
+00:05:26.850 --> 00:05:31.260 align:start position:0%
+ 
+ 
+
+00:05:31.260 --> 00:05:34.800 align:start position:0%
+ 
+ 
+
+00:05:34.800 --> 00:05:37.890 align:start position:0%
+ 
+ 
+
+00:05:37.890 --> 00:05:41.400 align:start position:0%
+ 
+ 
+
+00:05:41.400 --> 00:05:44.280 align:start position:0%
+ 
+ 
+
+00:05:44.280 --> 00:05:45.750 align:start position:0%
+ 
+ 
+
+00:05:45.750 --> 00:05:48.570 align:start position:0%
+ 
+ 
+
+00:05:48.570 --> 00:05:50.220 align:start position:0%
+ 
+ 
+
+00:05:50.220 --> 00:05:52.380 align:start position:0%
+ 
+ 
+
+00:05:52.380 --> 00:05:54.030 align:start position:0%
+ 
+ 
+
+00:05:54.030 --> 00:05:56.340 align:start position:0%
+ 
+ 
+
+00:05:56.340 --> 00:05:59.130 align:start position:0%
+ 
+ 
+
+00:05:59.130 --> 00:06:01.080 align:start position:0%
+ 
+ 
+
+00:06:01.080 --> 00:06:03.510 align:start position:0%
+ 
+ 
+
+00:06:03.510 --> 00:06:05.490 align:start position:0%
+ 
+ 
+
+00:06:05.490 --> 00:06:08.430 align:start position:0%
+ 
+ 
+
+00:06:08.430 --> 00:06:13.110 align:start position:0%
+ 
+ 
+
+00:06:13.110 --> 00:06:15.510 align:start position:0%
+ 
+ 
+
+00:06:15.510 --> 00:06:17.880 align:start position:0%
+ 
+ 
+
+00:06:17.880 --> 00:06:19.590 align:start position:0%
+ 
+ 
+
+00:06:19.590 --> 00:06:22.530 align:start position:0%
+ 
+ 
+
+00:06:22.530 --> 00:06:24.150 align:start position:0%
+ 
+ 
+
+00:06:24.150 --> 00:06:26.219 align:start position:0%
+ 
+ 
+
+00:06:26.219 --> 00:06:28.380 align:start position:0%
+ 
+ 
+
+00:06:28.380 --> 00:06:31.560 align:start position:0%
+ 
+ 
+
+00:06:31.560 --> 00:06:34.680 align:start position:0%
+ 
+ 
+
+00:06:34.680 --> 00:06:38.730 align:start position:0%
+ 
+ 
+
+00:06:38.730 --> 00:06:39.960 align:start position:0%
+ 
+ 
+
+00:06:39.960 --> 00:06:42.659 align:start position:0%
+ 
+ 
+
+00:06:42.659 --> 00:06:44.790 align:start position:0%
+ 
+ 
+
+00:06:44.790 --> 00:06:46.370 align:start position:0%
+ 
+ 
+
+00:06:46.370 --> 00:06:48.690 align:start position:0%
+ 
+ 
+
+00:06:48.690 --> 00:06:49.800 align:start position:0%
+ 
+ 
+
+00:06:49.800 --> 00:06:52.140 align:start position:0%
+ 
+ 
+
+00:06:52.140 --> 00:06:56.610 align:start position:0%
+ 
+ 
+
+00:06:56.610 --> 00:06:58.620 align:start position:0%
+ 
+ 
+
+00:06:58.620 --> 00:07:02.010 align:start position:0%
+ 
+ 
+
+00:07:02.010 --> 00:07:03.750 align:start position:0%
+ 
+ 
+
+00:07:03.750 --> 00:07:04.950 align:start position:0%
+ 
+ 
+
+00:07:04.950 --> 00:07:08.040 align:start position:0%
+ 
+ 
+
+00:07:08.040 --> 00:07:10.860 align:start position:0%
+ 
+ 
+
+00:07:10.860 --> 00:07:13.860 align:start position:0%
+ 
+ 
+
+00:07:13.860 --> 00:07:15.690 align:start position:0%
+ 
+ 
+
+00:07:15.690 --> 00:07:18.990 align:start position:0%
+ 
+ 
+
+00:07:18.990 --> 00:07:21.510 align:start position:0%
+ 
+ 
+
+00:07:21.510 --> 00:07:23.310 align:start position:0%
+ 
+ 
+
+00:07:23.310 --> 00:07:25.830 align:start position:0%
+ 
+ 
+
+00:07:25.830 --> 00:07:28.740 align:start position:0%
+ 
+ 
+
+00:07:28.740 --> 00:07:31.590 align:start position:0%
+ 
+ 
+
+00:07:31.590 --> 00:07:33.390 align:start position:0%
+ 
+ 
+
+00:07:33.390 --> 00:07:34.950 align:start position:0%
+ 
+ 
+
+00:07:34.950 --> 00:07:36.480 align:start position:0%
+ 
+ 
+
+00:07:36.480 --> 00:07:39.270 align:start position:0%
+ 
+ 
+
+00:07:39.270 --> 00:07:43.820 align:start position:0%
+ 
+ 
+
+00:07:43.820 --> 00:07:48.210 align:start position:0%
+ 
+ 
+
+00:07:48.210 --> 00:07:51.030 align:start position:0%
+ 
+ 
+
+00:07:51.030 --> 00:07:53.670 align:start position:0%
+ 
+ 
+
+00:07:53.670 --> 00:07:56.250 align:start position:0%
+ 
+ 
+
+00:07:56.250 --> 00:07:59.990 align:start position:0%
+ 
+ 
+
+00:07:59.990 --> 00:08:02.100 align:start position:0%
+ 
+ 
+
+00:08:02.100 --> 00:08:04.530 align:start position:0%
+ 
+ 
+
+00:08:04.530 --> 00:08:06.260 align:start position:0%
+ 
+ 
+
+00:08:06.260 --> 00:08:08.160 align:start position:0%
+ 
+ 
+
+00:08:08.160 --> 00:08:11.940 align:start position:0%
+ 
+ 
+
+00:08:11.940 --> 00:08:13.950 align:start position:0%
+ 
+ 
+
+00:08:13.950 --> 00:08:17.640 align:start position:0%
+ 
+ 
+
+00:08:17.640 --> 00:08:19.590 align:start position:0%
+ 
+ 
+
+00:08:19.590 --> 00:08:21.510 align:start position:0%
+ 
+ 
+
+00:08:21.510 --> 00:08:24.000 align:start position:0%
+ 
+ 
+
+00:08:24.000 --> 00:08:27.060 align:start position:0%
+ 
+ 
+
+00:08:27.060 --> 00:08:29.850 align:start position:0%
+ 
+ 
+
+00:08:29.850 --> 00:08:34.130 align:start position:0%
+ 
+ 
+
+00:08:34.130 --> 00:08:37.589 align:start position:0%
+ 
+ 
+
+00:08:37.589 --> 00:08:41.700 align:start position:0%
+ 
+ 
+
+00:08:41.700 --> 00:08:43.380 align:start position:0%
+ 
+ 
+
+00:08:43.380 --> 00:08:46.080 align:start position:0%
+ 
+ 
+
+00:08:46.080 --> 00:08:48.600 align:start position:0%
+ 
+ 
+
+00:08:48.600 --> 00:08:53.640 align:start position:0%
+ 
+ 
+
+00:08:53.640 --> 00:08:55.890 align:start position:0%
+ 
+ 
+
+00:08:55.890 --> 00:08:58.980 align:start position:0%
+ 
+ 
+
+00:08:58.980 --> 00:09:00.810 align:start position:0%
+ 
+ 
+
+00:09:00.810 --> 00:09:04.530 align:start position:0%
+ 
+ 
+
+00:09:04.530 --> 00:09:07.440 align:start position:0%
+ 
+ 
+
+00:09:07.440 --> 00:09:09.530 align:start position:0%
+ 
+ 
+
+00:09:09.530 --> 00:09:11.920 align:start position:0%
+ 
+ 
+
+00:09:11.920 --> 00:09:15.830 align:start position:0%
+ 
+ 
+
+00:09:15.830 --> 00:09:17.900 align:start position:0%
+ 
+ 
+
+00:09:17.900 --> 00:09:20.600 align:start position:0%
+ 
+ 
+
+00:09:20.600 --> 00:09:23.300 align:start position:0%
+ 
+ 
+
+00:09:23.300 --> 00:09:25.750 align:start position:0%
+ 
+ 
+
+00:09:25.750 --> 00:09:29.540 align:start position:0%
+ 
+ 
+
+00:09:29.540 --> 00:09:31.160 align:start position:0%
+ 
+ 
+
+00:09:31.160 --> 00:09:32.690 align:start position:0%
+ 
+ 
+
+00:09:32.690 --> 00:09:34.520 align:start position:0%
+ 
+ 
+
+00:09:34.520 --> 00:09:35.630 align:start position:0%
+ 
+ 
+
+00:09:35.630 --> 00:09:38.780 align:start position:0%
+ 
+ 
+
+00:09:38.780 --> 00:09:41.750 align:start position:0%
+ 
+ 
+
+00:09:41.750 --> 00:09:44.660 align:start position:0%
+ 
+ 
+
+00:09:44.660 --> 00:09:47.150 align:start position:0%
+ 
+ 
+
+00:09:47.150 --> 00:09:50.560 align:start position:0%
+ 
+ 
+
+00:09:50.560 --> 00:09:54.320 align:start position:0%
+ 
+ 
+
+00:09:54.320 --> 00:09:56.420 align:start position:0%
+ 
+ 
+
+00:09:56.420 --> 00:09:59.780 align:start position:0%
+ 
+ 
+
+00:09:59.780 --> 00:10:03.140 align:start position:0%
+ 
+ 
+
+00:10:03.140 --> 00:10:04.700 align:start position:0%
+ 
+ 
+
+00:10:04.700 --> 00:10:07.730 align:start position:0%
+ 
+ 
+
+00:10:07.730 --> 00:10:08.780 align:start position:0%
+ 
+ 
+
+00:10:08.780 --> 00:10:10.820 align:start position:0%
+ 
+ 
+
+00:10:10.820 --> 00:10:12.380 align:start position:0%
+ 
+ 
+
+00:10:12.380 --> 00:10:14.630 align:start position:0%
+ 
+ 
+
+00:10:14.630 --> 00:10:18.020 align:start position:0%
+ 
+ 
+
+00:10:18.020 --> 00:10:19.940 align:start position:0%
+ 
+ 
+
+00:10:19.940 --> 00:10:21.500 align:start position:0%
+ 
+ 
+
+00:10:21.500 --> 00:10:23.450 align:start position:0%
+ 
+ 
+
+00:10:23.450 --> 00:10:27.670 align:start position:0%
+ 
+ 
+
+00:10:27.670 --> 00:10:30.080 align:start position:0%
+ 
+ 
+
+00:10:30.080 --> 00:10:31.940 align:start position:0%
+ 
+ 
+
+00:10:31.940 --> 00:10:36.170 align:start position:0%
+ 
+ 
+
+00:10:36.170 --> 00:10:38.360 align:start position:0%
+ 
+ 
+
+00:10:38.360 --> 00:10:40.100 align:start position:0%
+ 
+ 
+
+00:10:40.100 --> 00:10:42.920 align:start position:0%
+ 
+ 
+
+00:10:42.920 --> 00:10:46.160 align:start position:0%
+ 
+ 
+
+00:10:46.160 --> 00:10:48.200 align:start position:0%
+ 
+ 
+
+00:10:48.200 --> 00:10:50.060 align:start position:0%
+ 
+ 
+
+00:10:50.060 --> 00:10:53.720 align:start position:0%
+ 
+ 
+
+00:10:53.720 --> 00:10:55.880 align:start position:0%
+ 
+ 
+
+00:10:55.880 --> 00:10:58.940 align:start position:0%
+ 
+ 
+
+00:10:58.940 --> 00:11:04.640 align:start position:0%
+ 
+ 
+
+00:11:04.640 --> 00:11:06.220 align:start position:0%
+ 
+ 
+
+00:11:06.220 --> 00:11:09.050 align:start position:0%
+ 
+ 
+
+00:11:09.050 --> 00:11:11.510 align:start position:0%
+ 
+ 
+
+00:11:11.510 --> 00:11:14.120 align:start position:0%
+ 
+ 
+
+00:11:14.120 --> 00:11:17.120 align:start position:0%
+ 
+ 
+
+00:11:17.120 --> 00:11:20.510 align:start position:0%
+ 
+ 
+
+00:11:20.510 --> 00:11:21.770 align:start position:0%
+ 
+ 
+
+00:11:21.770 --> 00:11:24.170 align:start position:0%
+ 
+ 
+
+00:11:24.170 --> 00:11:24.820 align:start position:0%
+ 
+ 
+
+00:11:24.820 --> 00:11:27.010 align:start position:0%
+ 
+ 
+
+00:11:27.010 --> 00:11:29.890 align:start position:0%
+ 
+ 
+
+00:11:29.890 --> 00:11:33.660 align:start position:0%
+ 
+ 
+
+00:11:33.660 --> 00:11:36.820 align:start position:0%
+ 
+ 
+
+00:11:36.820 --> 00:11:40.060 align:start position:0%
+ 
+ 
+
+00:11:40.060 --> 00:11:43.090 align:start position:0%
+ 
+ 
+
+00:11:43.090 --> 00:11:46.270 align:start position:0%
+ 
+ 
+
+00:11:46.270 --> 00:11:49.270 align:start position:0%
+ 
+ 
+
+00:11:49.270 --> 00:11:51.490 align:start position:0%
+ 
+ 
+
+00:11:51.490 --> 00:11:54.220 align:start position:0%
+ 
+ 
+
+00:11:54.220 --> 00:11:56.770 align:start position:0%
+ 
+ 
+
+00:11:56.770 --> 00:12:00.690 align:start position:0%
+ 
+ 
+
+00:12:00.690 --> 00:12:03.340 align:start position:0%
+ 
+ 
+
+00:12:03.340 --> 00:12:05.830 align:start position:0%
+ 
+ 
+
+00:12:05.830 --> 00:12:08.860 align:start position:0%
+ 
+ 
+
+00:12:08.860 --> 00:12:10.390 align:start position:0%
+ 
+ 
+
+00:12:10.390 --> 00:12:13.240 align:start position:0%
+ 
+ 
+
+00:12:13.240 --> 00:12:18.160 align:start position:0%
+ 
+ 
+
+00:12:18.160 --> 00:12:21.100 align:start position:0%
+ 
+ 
+
+00:12:21.100 --> 00:12:24.520 align:start position:0%
+ 
+ 
+
+00:12:24.520 --> 00:12:27.400 align:start position:0%
+ 
+ 
+
+00:12:27.400 --> 00:12:29.440 align:start position:0%
+ 
+ 
+
+00:12:29.440 --> 00:12:35.200 align:start position:0%
+ 
+ 
+
+00:12:35.200 --> 00:12:40.780 align:start position:0%
+ 
+ 
+
+00:12:40.780 --> 00:12:45.160 align:start position:0%
+ 
+ 
+
+00:12:45.160 --> 00:12:45.170 align:start position:0%
+ 
+ 
+
+00:12:45.170 --> 00:12:46.030 align:start position:0%
+ 
+
+
+00:12:46.030 --> 00:12:47.470 align:start position:0%
+ 
+ 
+
+00:12:47.470 --> 00:12:51.940 align:start position:0%
+ 
+ 
+
+00:12:51.940 --> 00:12:53.290 align:start position:0%
+ 
+ 
+
+00:12:53.290 --> 00:12:56.170 align:start position:0%
+ 
+ 
+
+00:12:56.170 --> 00:12:58.090 align:start position:0%
+ 
+ 
+
+00:12:58.090 --> 00:12:59.650 align:start position:0%
+ 
+ 
+
+00:12:59.650 --> 00:13:01.150 align:start position:0%
+ 
+ 
+
+00:13:01.150 --> 00:13:06.610 align:start position:0%
+ 
+ 
+
+00:13:06.610 --> 00:13:07.990 align:start position:0%
+ 
+ 
+
+00:13:07.990 --> 00:13:10.780 align:start position:0%
+ 
+ 
+
+00:13:10.780 --> 00:13:13.720 align:start position:0%
+ 
+ 
+
+00:13:13.720 --> 00:13:15.640 align:start position:0%
+ 
+ 
+
+00:13:15.640 --> 00:13:17.590 align:start position:0%
+ 
+ 
+
+00:13:17.590 --> 00:13:20.560 align:start position:0%
+ 
+ 
+
+00:13:20.560 --> 00:13:23.710 align:start position:0%
+ 
+ 
+
+00:13:23.710 --> 00:13:26.770 align:start position:0%
+ 
+ 
+
+00:13:26.770 --> 00:13:28.750 align:start position:0%
+ 
+ 
+
+00:13:28.750 --> 00:13:31.000 align:start position:0%
+ 
+ 
+
+00:13:31.000 --> 00:13:32.980 align:start position:0%
+ 
+ 
+
+00:13:32.980 --> 00:13:35.410 align:start position:0%
+ 
+ 
+
+00:13:35.410 --> 00:13:38.560 align:start position:0%
+ 
+ 
+
+00:13:38.560 --> 00:13:41.710 align:start position:0%
+ 
+ 
+
+00:13:41.710 --> 00:13:43.960 align:start position:0%
+ 
+ 
+
+00:13:43.960 --> 00:13:46.290 align:start position:0%
+ 
+ 
+
+00:13:46.290 --> 00:13:48.850 align:start position:0%
+ 
+ 
+
+00:13:48.850 --> 00:13:52.110 align:start position:0%
+ 
+ 
+
+00:13:52.110 --> 00:13:57.400 align:start position:0%
+ 
+ 
+
+00:13:57.400 --> 00:13:59.770 align:start position:0%
+ 
+ 
+
+00:13:59.770 --> 00:14:03.400 align:start position:0%
+ 
+ 
+
+00:14:03.400 --> 00:14:05.200 align:start position:0%
+ 
+ 
+
+00:14:05.200 --> 00:14:08.110 align:start position:0%
+ 
+ 
+
+00:14:08.110 --> 00:14:11.950 align:start position:0%
+ 
+ 
+
+00:14:11.950 --> 00:14:14.350 align:start position:0%
+ 
+ 
+
+00:14:14.350 --> 00:14:17.620 align:start position:0%
+ 
+ 
+
+00:14:17.620 --> 00:14:22.120 align:start position:0%
+ 
+ 
+
+00:14:22.120 --> 00:14:25.390 align:start position:0%
+ 
+ 
+
+00:14:25.390 --> 00:14:28.390 align:start position:0%
+ 
+ 
+
+00:14:28.390 --> 00:14:29.350 align:start position:0%
+ 
+ 
+
+00:14:29.350 --> 00:14:30.910 align:start position:0%
+ 
+ 
+
+00:14:30.910 --> 00:14:32.260 align:start position:0%
+ 
+ 
+
+00:14:32.260 --> 00:14:33.730 align:start position:0%
+ 
+ 
+
+00:14:33.730 --> 00:14:37.690 align:start position:0%
+ 
+ 
+
+00:14:37.690 --> 00:14:41.080 align:start position:0%
+ 
+ 
+
+00:14:41.080 --> 00:14:44.710 align:start position:0%
+ 
+ 
+
+00:14:44.710 --> 00:14:45.820 align:start position:0%
+ 
+ 
+
+00:14:45.820 --> 00:14:48.750 align:start position:0%
+ 
+ 
+
+00:14:48.750 --> 00:14:52.150 align:start position:0%
+ 
+ 
+
+00:14:52.150 --> 00:14:54.160 align:start position:0%
+ 
+ 
+
+00:14:54.160 --> 00:14:56.890 align:start position:0%
+ 
+ 
+
+00:14:56.890 --> 00:14:58.240 align:start position:0%
+ 
+ 
+
+00:14:58.240 --> 00:15:00.580 align:start position:0%
+ 
+ 
+
+00:15:00.580 --> 00:15:01.960 align:start position:0%
+ 
+ 
+
+00:15:01.960 --> 00:15:06.070 align:start position:0%
+ 
+ 
+
+00:15:06.070 --> 00:15:08.080 align:start position:0%
+ 
+ 
+
+00:15:08.080 --> 00:15:11.290 align:start position:0%
+ 
+ 
+
+00:15:11.290 --> 00:15:13.570 align:start position:0%
+ 
+ 
+
+00:15:13.570 --> 00:15:15.610 align:start position:0%
+ 
+ 
+
+00:15:15.610 --> 00:15:18.730 align:start position:0%
+ 
+ 
+
+00:15:18.730 --> 00:15:22.840 align:start position:0%
+ 
+ 
+
+00:15:22.840 --> 00:15:25.870 align:start position:0%
+ 
+ 
+
+00:15:25.870 --> 00:15:29.980 align:start position:0%
+ 
+ 
+
+00:15:29.980 --> 00:15:34.090 align:start position:0%
+ 
+ 
+
+00:15:34.090 --> 00:15:36.430 align:start position:0%
+ 
+ 
+
+00:15:36.430 --> 00:15:38.740 align:start position:0%
+ 
+ 
+
+00:15:38.740 --> 00:15:39.850 align:start position:0%
+ 
+ 
+
+00:15:39.850 --> 00:15:41.560 align:start position:0%
+ 
+ 
+
+00:15:41.560 --> 00:15:42.820 align:start position:0%
+ 
+ 
+
+00:15:42.820 --> 00:15:45.460 align:start position:0%
+ 
+ 
+
+00:15:45.460 --> 00:15:48.040 align:start position:0%
+ 
+ 
+
+00:15:48.040 --> 00:15:50.759 align:start position:0%
+ 
+ 
+
+00:15:50.759 --> 00:15:52.949 align:start position:0%
+ 
+ 
+
+00:15:52.949 --> 00:15:56.669 align:start position:0%
+ 
+ 
+
+00:15:56.669 --> 00:15:59.879 align:start position:0%
+ 
+ 
+
+00:15:59.879 --> 00:16:03.119 align:start position:0%
+ 
+ 
+
+00:16:03.119 --> 00:16:05.040 align:start position:0%
+ 
+ 
+
+00:16:05.040 --> 00:16:09.419 align:start position:0%
+ 
+ 
+
+00:16:09.419 --> 00:16:12.059 align:start position:0%
+ 
+ 
+
+00:16:12.059 --> 00:16:15.269 align:start position:0%
+ 
+ 
+
+00:16:15.269 --> 00:16:19.229 align:start position:0%
+ 
+ 
+
+00:16:19.229 --> 00:16:20.759 align:start position:0%
+ 
+ 
+
+00:16:20.759 --> 00:16:23.759 align:start position:0%
+ 
+ 
+
+00:16:23.759 --> 00:16:26.669 align:start position:0%
+ 
+ 
+
+00:16:26.669 --> 00:16:30.269 align:start position:0%
+ 
+ 
+
+00:16:30.269 --> 00:16:31.919 align:start position:0%
+ 
+ 
+
+00:16:31.919 --> 00:16:34.079 align:start position:0%
+ 
+ 
+
+00:16:34.079 --> 00:16:37.139 align:start position:0%
+ 
+ 
+
+00:16:37.139 --> 00:16:41.729 align:start position:0%
+ 
+ 
+
+00:16:41.729 --> 00:16:44.160 align:start position:0%
+ 
+ 
+
+00:16:44.160 --> 00:16:48.269 align:start position:0%
+ 
+ 
+
+00:16:48.269 --> 00:16:51.600 align:start position:0%
+ 
+ 
+
+00:16:51.600 --> 00:16:54.319 align:start position:0%
+ 
+ 
+
+00:16:54.319 --> 00:16:58.109 align:start position:0%
+ 
+ 
+
+00:16:58.109 --> 00:17:00.809 align:start position:0%
+ 
+ 
+
+00:17:00.809 --> 00:17:03.419 align:start position:0%
+ 
+ 
+
+00:17:03.419 --> 00:17:07.949 align:start position:0%
+ 
+ 
+
+00:17:07.949 --> 00:17:10.679 align:start position:0%
+ 
+ 
+
+00:17:10.679 --> 00:17:13.110 align:start position:0%
+ 
+ 
+
+00:17:13.110 --> 00:17:16.500 align:start position:0%
+ 
+ 
+
+00:17:16.500 --> 00:17:18.779 align:start position:0%
+ 
+ 
+
+00:17:18.779 --> 00:17:22.260 align:start position:0%
+ 
+ 
+
+00:17:22.260 --> 00:17:24.510 align:start position:0%
+ 
+ 
+
+00:17:24.510 --> 00:17:26.399 align:start position:0%
+ 
+ 
+
+00:17:26.399 --> 00:17:31.049 align:start position:0%
+ 
+ 
+
+00:17:31.049 --> 00:17:33.240 align:start position:0%
+ 
+ 
+
+00:17:33.240 --> 00:17:36.450 align:start position:0%
+ 
+ 
+
+00:17:36.450 --> 00:17:38.879 align:start position:0%
+ 
+ 
+
+00:17:38.879 --> 00:17:40.430 align:start position:0%
+ 
+ 
+
+00:17:40.430 --> 00:17:42.810 align:start position:0%
+ 
+ 
+
+00:17:42.810 --> 00:17:44.610 align:start position:0%
+ 
+ 
+
+00:17:44.610 --> 00:17:46.680 align:start position:0%
+ 
+ 
+
+00:17:46.680 --> 00:17:47.970 align:start position:0%
+ 
+ 
+
+00:17:47.970 --> 00:17:51.289 align:start position:0%
+ 
+ 
+
+00:17:51.289 --> 00:17:54.480 align:start position:0%
+ 
+ 
+
+00:17:54.480 --> 00:17:56.039 align:start position:0%
+ 
+ 
+
+00:17:56.039 --> 00:17:59.070 align:start position:0%
+ 
+ 
+
+00:17:59.070 --> 00:18:03.690 align:start position:0%
+ 
+ 
+
+00:18:03.690 --> 00:18:04.470 align:start position:0%
+ 
+ 
+
+00:18:04.470 --> 00:18:08.159 align:start position:0%
+ 
+ 
+
+00:18:08.159 --> 00:18:09.509 align:start position:0%
+ 
+ 
+
+00:18:09.509 --> 00:18:11.399 align:start position:0%
+ 
+ 
+
+00:18:11.399 --> 00:18:13.259 align:start position:0%
+ 
+ 
+
+00:18:13.259 --> 00:18:16.019 align:start position:0%
+ 
+ 
+
+00:18:16.019 --> 00:18:17.820 align:start position:0%
+ 
+ 
+
+00:18:17.820 --> 00:18:22.409 align:start position:0%
+ 
+ 
+
+00:18:22.409 --> 00:18:24.499 align:start position:0%
+ 
+ 
+
+00:18:24.499 --> 00:18:26.639 align:start position:0%
+ 
+ 
+
+00:18:26.639 --> 00:18:28.229 align:start position:0%
+ 
+ 
+
+00:18:28.229 --> 00:18:29.700 align:start position:0%
+ 
+ 
+
+00:18:29.700 --> 00:18:33.539 align:start position:0%
+ 
+ 
+
+00:18:33.539 --> 00:18:37.109 align:start position:0%
+ 
+ 
+
+00:18:37.109 --> 00:18:39.629 align:start position:0%
+ 
+ 
+
+00:18:39.629 --> 00:18:45.720 align:start position:0%
+ 
+ 
+
+00:18:45.720 --> 00:18:47.519 align:start position:0%
+ 
+ 
+
+00:18:47.519 --> 00:18:50.879 align:start position:0%
+ 
+ 
+
+00:18:50.879 --> 00:18:55.320 align:start position:0%
+ 
+ 
+
+00:18:55.320 --> 00:18:59.519 align:start position:0%
+ 
+ 
+
+00:18:59.519 --> 00:19:01.649 align:start position:0%
+ 
+ 
+
+00:19:01.649 --> 00:19:03.419 align:start position:0%
+ 
+ 
+
+00:19:03.419 --> 00:19:10.259 align:start position:0%
+ 
+ 
+
+00:19:10.259 --> 00:19:11.549 align:start position:0%
+ 
+ 
+
+00:19:11.549 --> 00:19:14.789 align:start position:0%
+ 
+ 
+
+00:19:14.789 --> 00:19:17.279 align:start position:0%
+ 
+ 
+
+00:19:17.279 --> 00:19:18.690 align:start position:0%
+ 
+ 
+
+00:19:18.690 --> 00:19:20.590 align:start position:0%
+ 
+ 
+
+00:19:20.590 --> 00:19:20.600 align:start position:0%
+ 
+ 
+
+00:19:20.600 --> 00:19:47.670 align:start position:0%
+ 
+
+
+00:19:47.670 --> 00:19:51.040 align:start position:0%
+ 
+ 
+
+00:19:51.040 --> 00:19:53.140 align:start position:0%
+ 
+ 
+
+00:19:53.140 --> 00:19:55.660 align:start position:0%
+ 
+ 
+
+00:19:55.660 --> 00:19:57.790 align:start position:0%
+ 
+ 
+
+00:19:57.790 --> 00:20:02.460 align:start position:0%
+ 
+ 
+
+00:20:02.460 --> 00:20:05.380 align:start position:0%
+ 
+ 
+
+00:20:05.380 --> 00:20:10.180 align:start position:0%
+ 
+ 
+
+00:20:10.180 --> 00:20:14.980 align:start position:0%
+ 
+ 
+
+00:20:14.980 --> 00:20:16.660 align:start position:0%
+ 
+ 
+
+00:20:16.660 --> 00:20:23.740 align:start position:0%
+ 
+ 
+
+00:20:23.740 --> 00:20:25.510 align:start position:0%
+ 
+ 
+
+00:20:25.510 --> 00:20:28.690 align:start position:0%
+ 
+ 
+
+00:20:28.690 --> 00:20:32.050 align:start position:0%
+ 
+ 
+
+00:20:32.050 --> 00:20:35.080 align:start position:0%
+ 
+ 
+
+00:20:35.080 --> 00:20:37.990 align:start position:0%
+ 
+ 
+
+00:20:37.990 --> 00:20:40.260 align:start position:0%
+ 
+ 
+
+00:20:40.260 --> 00:20:46.510 align:start position:0%
+ 
+ 
+
+00:20:46.510 --> 00:20:48.720 align:start position:0%
+ 
+ 
+
+00:20:48.720 --> 00:20:55.090 align:start position:0%
+ 
+ 
+
+00:20:55.090 --> 00:20:57.310 align:start position:0%
+ 
+ 
+
+00:20:57.310 --> 00:21:01.980 align:start position:0%
+ 
+ 
+
+00:21:01.980 --> 00:21:04.420 align:start position:0%
+ 
+ 
+
+00:21:04.420 --> 00:21:08.590 align:start position:0%
+ 
+ 
+
+00:21:08.590 --> 00:21:12.880 align:start position:0%
+ 
+ 
+
+00:21:12.880 --> 00:21:21.160 align:start position:0%
+ 
+ 
+
+00:21:21.160 --> 00:21:24.820 align:start position:0%
+ 
+ 
+
+00:21:24.820 --> 00:21:26.860 align:start position:0%
+ 
+ 
+
+00:21:26.860 --> 00:21:29.940 align:start position:0%
+ 
+ 
+
+00:21:29.940 --> 00:21:34.540 align:start position:0%
+ 
+ 
+
+00:21:34.540 --> 00:21:36.510 align:start position:0%
+ 
+ 
+
+00:21:36.510 --> 00:21:41.260 align:start position:0%
+ 
+ 
+
+00:21:41.260 --> 00:21:44.170 align:start position:0%
+ 
+ 
+
+00:21:44.170 --> 00:21:47.620 align:start position:0%
+ 
+ 
+
+00:21:47.620 --> 00:21:49.920 align:start position:0%
+ 
+ 
+
+00:21:49.920 --> 00:21:52.649 align:start position:0%
+ 
+ 
+
+00:21:52.649 --> 00:21:57.870 align:start position:0%
+ 
+ 
+
+00:21:57.870 --> 00:22:08.419 align:start position:0%
+ 
+ 
+
+00:22:08.419 --> 00:22:10.680 align:start position:0%
+ 
+ 
+
+00:22:10.680 --> 00:22:13.680 align:start position:0%
+ 
+ 
+
+00:22:13.680 --> 00:22:15.810 align:start position:0%
+ 
+ 
+
+00:22:15.810 --> 00:22:17.970 align:start position:0%
+ 
+ 
+
+00:22:17.970 --> 00:22:22.019 align:start position:0%
+ 
+ 
+
+00:22:22.019 --> 00:22:24.240 align:start position:0%
+ 
+ 
+
+00:22:24.240 --> 00:22:26.639 align:start position:0%
+ 
+ 
+
+00:22:26.639 --> 00:22:29.220 align:start position:0%
+ 
+ 
+
+00:22:29.220 --> 00:22:32.399 align:start position:0%
+ 
+ 
+
+00:22:32.399 --> 00:22:34.350 align:start position:0%
+ 
+ 
+
+00:22:34.350 --> 00:22:34.360 align:start position:0%
+ 
+ 
+
+00:22:34.360 --> 00:22:41.530 align:start position:0%
+ 
+
+
+00:22:41.530 --> 00:22:44.980 align:start position:0%
+ 
+ 
+
+00:22:44.980 --> 00:22:46.690 align:start position:0%
+ 
+ 
+
+00:22:46.690 --> 00:22:48.820 align:start position:0%
+ 
+ 
+
+00:22:48.820 --> 00:22:51.550 align:start position:0%
+ 
+ 
+
+00:22:51.550 --> 00:22:53.650 align:start position:0%
+ 
+ 
+
+00:22:53.650 --> 00:22:57.070 align:start position:0%
+ 
+ 
+
+00:22:57.070 --> 00:23:00.310 align:start position:0%
+ 
+ 
+
+00:23:00.310 --> 00:23:02.500 align:start position:0%
+ 
+ 
+
+00:23:02.500 --> 00:23:06.640 align:start position:0%
+ 
+ 
+
+00:23:06.640 --> 00:23:08.260 align:start position:0%
+ 
+ 
+
+00:23:08.260 --> 00:23:12.490 align:start position:0%
+ 
+ 
+
+00:23:12.490 --> 00:23:15.160 align:start position:0%
+ 
+ 
+
+00:23:15.160 --> 00:23:16.930 align:start position:0%
+ 
+ 
+
+00:23:16.930 --> 00:23:28.070 align:start position:0%
+ 
+ 
+
+00:23:28.070 --> 00:23:32.750 align:start position:0%
+ 
+ 
+
+00:23:32.750 --> 00:23:34.820 align:start position:0%
+ 
+ 
+
+00:23:34.820 --> 00:23:38.149 align:start position:0%
+ 
+ 
+
+00:23:38.149 --> 00:23:40.549 align:start position:0%
+ 
+ 
+
+00:23:40.549 --> 00:23:43.730 align:start position:0%
+ 
+ 
+
+00:23:43.730 --> 00:23:47.899 align:start position:0%
+ 
+ 
+
+00:23:47.899 --> 00:23:49.850 align:start position:0%
+ 
+ 
+
+00:23:49.850 --> 00:23:53.659 align:start position:0%
+ 
+ 
+
+00:23:53.659 --> 00:23:56.960 align:start position:0%
+ 
+ 
+
+00:23:56.960 --> 00:23:59.930 align:start position:0%
+ 
+ 
+
+00:23:59.930 --> 00:24:02.960 align:start position:0%
+ 
+ 
+
+00:24:02.960 --> 00:24:05.169 align:start position:0%
+ 
+ 
+
+00:24:05.169 --> 00:24:09.769 align:start position:0%
+ 
+ 
+
+00:24:09.769 --> 00:24:13.039 align:start position:0%
+ 
+ 
+
+00:24:13.039 --> 00:24:15.799 align:start position:0%
+ 
+ 
+
+00:24:15.799 --> 00:24:18.049 align:start position:0%
+ 
+ 
+
+00:24:18.049 --> 00:24:19.620 align:start position:0%
+ 
+ 
+
+00:24:19.620 --> 00:24:19.630 align:start position:0%
+ 
+ 
+
+00:24:19.630 --> 00:24:41.310 align:start position:0%
+ 
+
+

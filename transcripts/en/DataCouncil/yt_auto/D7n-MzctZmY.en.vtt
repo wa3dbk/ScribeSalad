@@ -1,0 +1,3848 @@
+WEBVTT
+Kind: captions
+Language: en
+
+00:00:23.850 --> 00:00:26.610 align:start position:0%
+ 
+so my name is Alex as Wes mentioned I  work at cockroach labs which is a New  York city-based startup so very local  that is trying to build a cloud native  sequel database our overarching mission  is to make data easy and we think that  this is one of the best ways that we can  do so so today I'm just gonna talk a  little bit about what it means to be a  cloud native database you know why it's  important to have a database like this  and most importantly some of the  techniques that we use to build this  database and give it the properties that  we want in it so before we get started  it's useful to have a general  understanding of what cloud native means  so I know cloud native is a word that  gets thrown around a lot and sometimes  in different ways depending on what  circles you run in before working at  cockroach labs I spent a couple years  working on the Cooper Nettie's project  at Google where I was neck deep in  containers and cloud native and all that  jargon all the time so I have some idea  of what it means and hopefully we can  get to a general agreement on that  before we move forward into the actual  engineering so a cloud native system has  a number of properties of which these  are some of the key ones in my opinion a  cloud native system is something where  you aren't too reliant on any individual  machine or any individual process you  can scale it out horizontally when you  need to add more capacity it's built to  handle and automatically recover from  failures and it doesn't need a lot of  operator overhead in the process of  doing this so when you think about you  know how Netflix runs their compute they  have a bunch of short-lived ephemeral  VMs that they don't get too attached to  they treat them as if they're a bunch of  cattle they don't they don't treat them  as if they're their pets that need to be  individually cared for and if something  fails it doesn't matter they discrete  spin up a few new ones and everything or  covers and that's really the ideal of a  cloud native system these systems tend  to be things that work really well in  orchestration frameworks so they can be  packaged up into containers very often  stuck on the top of kubernetes or swarm  or maze hose  and to run well in those kinds of  environments on the other hand just for  understanding something that isn't cloud  native is something that lacks one or  more of those properties now it can't  scale out it might rely on a single  point of failure maybe it's even just a  single monolithic application maybe it's  a manual failover process so it can't  automatically recover from problems or  tied to a particular piece of hardware  and so these properties aren't anything  totally new they're not mind-blowing ly  unique they sound like a lot of  databases out there on the market today  there's a lot of no sequel databases  that offer these scale out automatically  recoverable properties that you want a  number of big companies built on them  but these systems typically lack things  like strong consistency and generalized  transactions that the developers of your  got when they used traditional  relational databases and so nowadays  when you pick a database you kind of  have to choose your poison do you want a  traditional sequel database that has  great consistency gives you transactions  to make developing your application  easier but you give up things like  horizontal scaling and fault tolerance  or you choose a no sequel database and  have to work around the lack of strong  consistency in your application a lack  of generalized transactions and this is  a tough choice there are good things  about each of course at this point some  people might say you know great great  businesses great services great  companies have been built on top of note  sequel databases without consistency  without transactions maybe they're not  important but I think if you've ever  worked with one of these systems you can  remember having to spend time upfront  when you're designing a new a new  service thinking about how to work  around your database you know thinking  about the edge cases whether your  application will handle reading stale  data occasionally how you can update  multiple pieces of your database in a  way such that if one of the updates  fails you can recover even though you  don't have those transactions and even  if you do this perfectly up front and  you build a perfect system that doesn't  need consistency or transactions what  happens a year later when you've left  the team a few junior developers have  taken over and have to implement some  new business features they don't know  exactly everything that you did when you  built the system and they're very likely  to accidentally hit an edge case where  in production a customer will have a bug  and you won't be able to easily  reproduce it because it's it's a  Heisenberg it only comes up when a  system is overloaded or has networking  problems  there's really a lot of business cost to  having to work around a database it  doesn't give you proper proper  consistency in transactions and you know  and transactions you know the same  reasoning applies is for consistency  this is a quote from the Google spanner  paper spanner was a project at Google  effectively trying to do the same thing  it was an inspiration for the cockroach  labs company spanner is a scale out  sequel database that's meant to span  very broad geographic areas even around  the entire world with strong consistency  and general transactions and Google as a  company thinks it is worth it to to deal  with the cost of building the system up  front and then with any latency problems  that might arise as a result of using it  rather than having all of their  developers have to reason about eventual  consistency and the lack of transactions  it's just a better business case for  them to take the burden off their  developers and occasionally have to deal  with a performance issue then it would  be to always have to deal with with a  lack of consistency and we think the  same sort of reasoning in the same  cost-benefit trade-off applies to a  large number of projects if you had a  database that could do this even if it  performed a little bit worse yet  slightly more latency it would be an  easy choice for most for most services  so since this is so useful you know you  might ask why has nobody done this other  than Google why is they no open source  product that does this why don't we have  tens of these different databases  available today and the question of  course is the answer of course is just  that it's really hard it's not as if  when people came came to the drawing  board to design a new database 10 years  ago when they were building dynamo or  big table or Cassandra they didn't sit  down and think transactions are too  confusing we don't want to include them  it was just a matter of prioritizing a  scale and fault tolerance more highly  and not being able to squeeze in  transactions and consistency as well  building a database is hard building a  distributed system is hard dealing with  time and ordering in a distributed  system is even harder and there is also  a performance penalty if you have to do  multiple round trips or even one round  trip between different nodes in a  database to commit data  so there are trade-offs and it's not  easy but we think that if it existed in  a good package everyone would want to  use it and so if we can agree that these  properties are useful if you can agree  that you want a distributed system to  have some notion of truth to be reliably  consistent then let's get into some of  the details of how you do that so we're  gonna focus on just a few properties of  cockroach TV a few layers of how that  it's built cockroach TV being the  database the cockroach Labs is working  on we're gonna focus on how it  distributes its data and replicates that  data amongst all the nodes in the  cluster we're gonna talk a little bit  about how it keeps that data in sync  using consensus and then how we build  truly distributed transactions on top of  those foundational layers so before we  get into too many details it's useful to  have just a brief background on how the  system is layered so it's it's  structured as a system of light as a set  of layers where each layer only has to  care about the black box right beneath  it so even though we're a sequel  database the the sequel part of our  system isn't actually the most  interesting part most of the guarantees  about the distributed system provides  are packed into that transactional key  value layer that provides consistent  operations on keys and values and  arbitrary transactions across those keys  and values in our sequel layer on top  just relies on those guarantees to map  sequel operations into a series of key  value operations like gits puts  conditional puts scans and deletes so  I'm not going to talk too much about  that mapping of sequel to key value  operations today but I'm happy to talk  about it on office hours afterwards if  anyone has questions what we are going  to focus on is how that transactional  key value layer distributes data  replicates the data and keeps it  consistent so we'll start out by looking  at how we distribute the data across the  cluster which is a very key property  when building a system that has to be  able to recover from failures and scale  out arbitrarily and the two key  questions you have to first answer when  you're thinking about building us  like this is how do you divide the data  up into chunks and then once you've  distributed those chunks how do you know  where they're all located there are two  main approaches to solving this problem  that have been used a lot in past  systems  the first is hashing the second is order  preserving the the hashing approach is  sort of what you would expect given a  key to a piece of data you hash the key  and then that hash maps on to one of the  nodes in the cluster so this is great  because you don't need any kind of  lookup table to figure out where data  lives given the key that you want to  find you just hash it and you know  exactly what node to look at and that's  awesome the problem is that because  hashing doesn't respect ordering they  makes it really hard to do ordered scans  over your data and for a sequel database  that's absolutely critical you can't  build a sequel database without an  ordered system underneath it imagine  trying to build an index on an unordered  system you can't do it  so in cockroach TB we've had to go the  order preserving approach and this this  satisfies our need for efficient scans  linearly over data but it requires some  additional indexing metadata that we  have to keep track of so that given a  key we can look up where it's located  because otherwise we wouldn't know what  machine it's on so our data looks  something like this we break up the key  space into a series of ranges from the  beginning of the key space to the end  and each range lives on one or more  nodes additionally we have to have an  indexing structure that just indicates  where each range lives in the cluster  and this looks basically like you would  expect and so when you need to look up a  key first you have to look in this this  indexing range this this shard index  find the range that your key is in and  then that will have the information on  what nodes that data is on and so we  have to keep this shard index available  so that all the nodes know about it  because our system has you know  symetrical nodes there is no master that  you go look up this index on every node  knows how to access this index  and so if you want to do a scan it works  effectively as you would expect you look  up the start key find the range that's  in lookup the end key find the range  that it is in and then scan all the  ranges in between and a nice benefit of  this order preserving approach is that  when a shard gets too large we can just  split it in half and update the index in  some hashing schemes if you end up with  too much data hash to a particular node  you have to actually modify your hashing  algorithm in some way in order to spread  that data off the note that it's ended  up on so all we have to do is split it  and then update the index and if you  kind of squint at it a little bit this  looks a little bit like a b-tree you  have the data structure that's at the  heart of most relational database  systems where you have an ordered tree  pointing downward where the actual data  is held in the leaves so it's kind of  like a funny funny coincidence that we  ended up at a similar data structure the  other key part of how we distribute the  data is where we put it  so we try to keep the data separated so  that we don't have you know all of it on  one node obviously we want to balance it  but most importantly we have to  replicate it because if we only kept one  copy of the data as soon as the node  dives you have you have unavailability  that data's not there and if the disk  dies you know the disk fails you might  have lost the data so we have to keep  the data stored on multiple machines and  we have a scheduling algorithm allocates  these ranges to these nodes and it's  very dynamic as nodes are added where we  rebalance constantly to get data spread  out on to the new nodes which improves  performance improves availability it  limits the damage that one node dying  can do and then as a node dies we also  have to make sure that we don't lose  data in those cases so let's look at  adding a new node now we add a new node  here it starts out empty and one of the  nodes that has data that recognizes  there's a new note it has a lot of space  and I'd like to to take some burden off  of myself so  we're gonna move range three onto this  new note once we copy the data over we  can kill one of the old ranges so note  three is able to save some space and  this isn't just disk space this is also  memory for caching it's compute for  handling queries that are reading that  data so it helps balance all the  resources of the cluster when we move  the ranges around and so we can do this  until we have a reasonably good balance  of data amongst the nodes in the cluster  and again there isn't some master node  coordinating all this it's it's a fairly  dynamic process that's that's  organically happening within a cluster  as nodes notice that they have too much  load on them and other nodes don't have  much load on them that they no node  three will ask a node for hey will you  take this range off my hands and node  four will have to respond yes I'll take  that the other interesting case here in  the balancing of data is when a node  fails so if we lose a node we're down to  fewer copies of our data than we want so  we want to keep a minimum of three  copies of art of each range at all times  for availability purposes  so once node two dies we only have two  copies of a couple of our ranges so  again the nodes recognize this and  create a new replica and the node that  has some space so the the ranges that do  have that data are going to have to work  extra hard to copy the data to a new  node to ensure that the data isn't lost  and yeah once once all the data is  replicated away we can forget about the  old ones so in order to facilitate this  dynamic movement of data we need to  ensure that our ranges aren't too big so  we found 64 megabytes experimentally  it's a fairly good size for this so such  the ranges are small enough that we can  move them reasonably quickly when a node  fails but they're not so big or over  there that sounds small that we have  tons and tons of indexing overhead and  tracking where all these ranges are oh  yeah there's nothing incredibly novel  about what we're doing here in the data  distribution part but but it really  provides the foundation of the system  for how we how we track where data is  how we keep it alive how we keep it  available that's really necessary to  provide a reliable cloud native system  you know if we didn't have the data  spread across multiple nodes we couldn't  scale out and we couldn't recover from  failures in the like of course once you  have data spread across a number of  places the the the huge question becomes  how do you keep it in sync  in a sequel database you expect your  results to be consistent acid that a  traditional acronym is key to a sequel  database your data has to be kept  consistent and so you don't want  different copies of data to be giving  you different results because that's not  providing true consistency I might even  just be downright incorrect in most  cases so we have to use some sort of  system to keep the data in sync across  nodes again there are there are two  fairly common alternatives here the  first being primary secondary  replication which many people here are  probably familiar with if you've used  you know a traditional sequel database  before and consensus which you again  might might have heard it before it  might have used primary secondary  replication has been used for quite a  while and in theory sounds awesome so  you have a primary node that receives  all your rights and then when it  receives a write it replicates that that  right on to a secondary one or more  secondary nodes and then that secondary  also has the data and so reads can  happen on either node if the primary  fails you can promote one of the  secondaries to primary and everything's  great of course there are there are  complications here there there are extra  questions you have to deal with if you  do this primary secondary replication  asynchronously  meaning that the primary gets a right  the primary persists that right and then  acknowledges the right before sending  the data along to the secondary it's  possible that the secondary is out of  date so anyone reading from the  secondary could be missing new data and  similarly if the master fails the the  secondary might not have all the data  that the master had when at the time  that it failed if you opt for  synchronous replication meaning that the  secondary has to get the data before the  primary will acknowledge any rights to  users then all of a sudden you're  bringing your availability way down  because if the secondary fails your  primary can't accept rights anymore so  you've taken what already is a single  point of failure and almost turned it  into two points of failure because if  the secondary can't can't act writes in  the primary  I can't hack them either so you're  hurting your availability there and also  your latency as well so there's also  this problem of ensuring that when you  do a failover your clients know which  which replica to connect to so this is a  fairly complicated approach with a lot  of edge cases it works really well in  the happy case but when things fail it's  it's likely you're gonna lose some data  or be reading stale data for a while  their consensus approach to ensuring  that your data is in sync is a little  different so you have an odd number of  nodes and the idea is that when a  majority of them agree on something then  that then that thing is the truth so  when a Wright comes in once a majority  of the nodes in this case two out of  three because we we default to three  replicas of things once two out of three  nodes have written it then that day that  is written so there's there's been a lot  of research on consensus but here's sort  of a drill a simplified version of what  it looks like in practice you have a  leader and a couple of followers and  this is because in a number of consensus  systems it works by electing a leader  that receives all rights and forwards  those along to the followers so we have  a leader here that's received a right  for cherry it writes it to its own disc  and sends it along to its followers as  soon as either of them writes that key  as well the data is committed even  before it's actually acknowledged the  data is committed as soon as it's  written not a majority of the nodes but  in most cases things won't be failing  and so the second you know the follower  will act that data back and the leader  will acknowledge it to the user so this  does add an extra round trip to your  rights because the leader has to get an  acknowledgment from a follower in order  to tell the user that the data is  written of course as always the  interesting question is what happens  when things are failing and so let's  look at that case a little bit remember  that data is written as soon as a  majority of the nodes have written it so  in this case the leader receives a write  for cherry and it writes it but before  it's able to pass that right along it  dies and wallets gone a new leader is  elected so we have this first leader  over here it still has the data that I  wrote but the new leader doesn't the  other follower doesn't so according to  the rule this data is not committed and  when the new leader receives a read for  that key it will see that it's not on a  majority of the nodes that data is not  committed so it will return that the key  was not found to the user and the  follower will be told to remove cherry  from its data that data is not not part  of the database so we in particular use  the raft because it's consensus protocol  as was mentioned by will a couple talks  ago this is as you said it's sorry it's  meant to be a simplification previous  consensus protocols like paxos paxos was  conceived of in the 90s and kind of  languished for a long time because it  was so complicated that nobody could  really implement it in a practical way  and there still were not really good  open-source implementations of it graft  was come up with by a PhD student a few  years ago purely to be more  understandable and at this point there  are an incredible number of solid  implementations that you can get out  there if you look for them out in open  source so using consensus in your  service is now a practical thing to do  because there are implementations out  there that you can rely on in particular  we we share an implementation with the  sed team at CD being another database  practically in our database we run one  consensus group per each range of data  so we have a lot of ranges replicated  across the nodes each range gets its own  consensus group so it all writes to that  range are kept consistent across all the  replicas of it there are a number of  engineering complications here around  how we handle raft around handling  adding new members removing members  splitting ranges dealing with a large  number of ranges and consensus groups  that we have in our system but these are  all engineering problems that can be  worked around once you have that  foundation  you know and so yeah they're really  really the key point here is the  consensus provides atomic replication  each right that comes in is either  written or it isn't there is no sense of  like OneNote having it in another node  not having it because you know when  reads are served they will ensure that  it's only returned if the majority of  notes have it and that's really useful  to have having any kind of guarantee  that you can rely on in a distributed  system is incredibly useful and so the  next question that comes up of course is  you have this great consistency per  range but your database doesn't fit in a  64 megabyte range that'd be a tiny  database that'd be silly so we have to  worry about operations that hit multiple  ranges and that's where distributed  transactions come in so you can't have a  sequel database without having  transactions and if we have a  distributed database our transactions  have to be distributed as well because  the data will often not all be on the  same node and we want to be a full  database we want to achieve full  Postgres compatibility so we have to  have the traditional asset semantics  where your your commit is all or nothing  it's consistent each each transaction is  isolated from all others and we default  to the the strong isolation level known  as serializable where if every every  transaction that commits the the in  state of your system is equivalent to as  if each transaction had been executed in  some serial order so there is no  interference at all between transactions  in the out ending data in your database  but to understand how we do distributed  transactions it's useful to first take a  look at how transactions work in a  single node database so you know in a  traditional relational database that  runs on one machine atomicity and  durability are provided by the  underlying filesystem by a log write to  that file system so when a transaction  comes in  it reads some data it writes some data  and each of those rights is only  provisional it's not guaranteed to stick  around so these rights are tagged with  the transaction ID  and those rights aren't considered  committed until there is a commit  message in the log for that transaction  ID so if the transaction comes in rights  a couple entries and then aborts those  things are not considered committed and  any read should not return those at that  point but once the commit is written to  the log that single operation commits  all the data and so that's how they  provide an Amissah T of course in a  distributed transaction we don't have a  single log that we can write to we don't  have a single disk that we can write  this transaction log to so we bootstrap  it off of raft so we use raft the  consensus protocol to store a  transaction record that we can then  switch to committed the anatomic write  and because that consensus group is  replicated and the rights to it are  atomic we achieved the atomicity and  durability the same as in a log right to  local disk so a transaction can come in  we can write a bunch of things across  the database that all are tagged with  the transaction ID and when the  transaction is done we write that that  transaction ID is committed and that  switches all those provisional rights  from not committed to committed in one  single step so let's take a little look  at how that works a user starts a new  transaction and so we create a  transaction record for it in this case  transaction 1 and it's in the pending  state because it hasn't committed it  hasn't been rolled back it hasn't been  aborted  it's just ongoing so then the user puts  a key they write a key they write  another key and these keys are in  different ranges  you might notice so we can't just use a  single consensus group here and then  they decide to commit the transaction as  soon as they do that the transaction is  committed any read that comes along and  sees our write with a transaction ID  attached to it has to go look up whether  that transaction is committed yet before  they can reliably return that data and  then in the background we can then go  clean up those  provisional rights that background  cleanup doesn't change the semantics of  anything as soon as the commit record is  written that data is persisted but  cleaning up those intents prevent reads  from having to go do that lookup so it's  a performance optimization and again  this is the happy case this is when  nothing's failing when there are no  conflicts so of course we have to take a  quick look at how we deal with some  kinds of conflicts because in databases  a lot of the complexity comes from  trying to prevent different transactions  from interfering with each other in some  way you don't want to ongoing  transactions to see each other's data  before it's been committed so in this  case begins start off the transaction  writing a key and then we have another  transaction come in and try to read that  key so transaction one has not committed  yet at this point so transaction 2 sees  this this key here with transaction ID  tagged to it because it has a tag on it  it has to go look at the transaction  record for that transaction so it checks  the status of it and in this case sees  that it's pending so there's some  funniness here with timestamps depending  on which times transactions timestamp is  first it might do different things here  but we're going to assume that  transaction two has an earlier timestamp  than transaction one just for simplicity  and in this case it sees that  transaction 1 as a later time stamp it  hasn't committed yet transaction 1 can  return without returning that value  it'll say that it wasn't found  if transaction 2 had a later time stamp  than transaction 1 we may have had to  push transaction ones timestamp back but  that's getting pretty far into some of  the details of how we do distributed  transactions so so transaction 1 might  have had to commit at a later time span  and look at one other conflict here a  write conflict or two to two  transactions they're trying to write the  same data so we have two transaction  records here the second transaction  wants to write to a key the transaction  one is written to but not yet committed  now this would not be allowed we could  not let both of these transactions go  forward that would be a right anomaly so  one of the transactions has to lose  notably here we don't use locks if you  look at how something like my sequel  works they use locks that get held on  keys while a transaction is ongoing so  in this case transaction two would try  to write to Chery but it wouldn't be  able to get the lock because transaction  one held it we use what's known as an  optimistic concurrency protocol where we  don't use locks but we detect conflicts  as they occur  so normally things can just proceed  along happily without needing to worry  about locks but once we notice that two  transactions are overlapping in some way  that's not allowed we have to abort one  of them or at least push one of them  back so in this case transaction two  aborts transaction one says I'm gonna  take over I'm gonna use this key you're  gonna have to restart if you want to use  it that prevents them from from having  an anomaly so once transaction two has  done that it can go forward right the  key and commit if transaction one what  still wants to write that key it's gonna  have to restart from scratch and reput  that key  so that's that's a couple quick examples  of how we deal with conflicts there is  more detail more more more to it than  just that but that's really the  foundation and its really all keyed on  unwrapped so if we have to didn't  provide us atomicity and durability we  wouldn't be able to provide anything we  couldn't provide consistency or  isolation and so yeah there's a lot more  to talk about if you want to go check  out more read our blog we have a bunch  of great posts detailing exactly how we  do this without locks how we map sequel  unto Kb etc and I definitely recommend  you check it out if you're curious to  learn more so just to summarize we're  trying to build a sequel database that  works really well in modern cloud  environments you can bring together the  best of sequel databases with their  strong print guarantees that help  developers and no sequel databases with  their great operational attributes that  keeps them up keep them up keep them  available keep them serving  it's not easy to build this but but it  once it's built it's much easier people  to use is the goal when we do this using  some few techniques we have to  distribute data carefully keep it  consistent provide transactions on top  of it so thanks a lot for listening to  the talk check out more info on our  website you can read the code read the  design Doc's on our github repository  feel free to ask any questions  both afterwards or via email if you'd  like are there any questions right now  are you doing how you maintain ensuring  that there's no phantoms your read-write  set based on that ranges are the  individual keys it's both so we have a  timestamp cache as well where we track  which keys and which ranges have been  written or read to so if someone's read  arranged you know use a predicate to  read some sort of range we do track that  and we need to prevent the intents we  have you know a bunch of Jepson testing  set up that it provides it verifies our  serial ID facility can you talk about  how the range indexes are stored and  distributed do you have to keep a  complete copy of the range index on  every node and if so how does that  effects scale so we don't keep a copy of  the range index on every node what we do  is they're treated as any other range so  we keep three replicas of them in most  deployments their location is gossiped  so we use a gossip protocol to ensure  that all the nodes know the locations of  those three replicas of that first range  and once you do that that's gossiped  everywhere so nodes can go and look up  data if they need it  we also cache it to avoid the  performance overhead of doing those  lookups every time and it's if we have a  cache miss if some data has changed and  we still use a cache version of it it's  okay because we'll just try to talk to a  node that doesn't have a range and be  told that we're wrong and then we can go  do the lookup so we effectively we  gossiped the location of those ranges  update them normally as if they're a  normal rap group and then cache it and I  guess that can exceed 60 for mega bytes  in size so we have a two layer index  that's a good point so the first index  points to the location of the other  index box and with the two layer index  we can get up to exabytes of data great  thanks  I have a question on the Concord right  scenario that you have it looks like I  don't know too much about data it looks  a lot like software transactional memory  with MVCC we do use a BCC and that's not  too much about software transactional  very similar I guess so you restart the  transaction if there was a class right  so how does this perform in a lot of  right yeah it's a great question so the  database works best when there's not  high contention no we do ensure that  long transactions can finish using some  priorities so if you get aborted a bunch  your priority will jump up and you'll be  less likely to abort it again so we do  ensure forward progress for very right  heavy workloads they have a lot of  contention on individual keys we offer a  lower level of isolation snapshot  isolation which is actually the default  level of isolation in many sequel  databases that allows for rights to  proceed a little better but the only  problem is if your rights are hitting  the same keys if your rights are going  to different keys there's not a problem  and there won't be isolation issues so  sorry I made misses but the so when when  engine transaction starts it needs to to  check to see if there's a completing  transaction that's currently kinda  pending right like how does it know like  where's that data stored so so you said  that it's is it's handled by RAF but you  have a rough instance per range yeah so  when a transaction starts we don't  actually create a transaction record  until the first operation for that  transaction happens but say I write  comes in for the transaction and that  goes to a particular range as a  performance optimization we put the  transaction record in that same range as  the data that we just wrote and then in  the provisional writes that point to the  transaction record they should say where  it is so that's a little a little much  to explain in words rather than a  diagram but the provisional writes point  to the transaction record so that they  readers know where to look for it and  typically we put it in the same range as  the first right  and what happens if the transaction  spans multiple ranges that's okay  because the in the second range the  provisional right will point back to the  first range where the transaction record  lives what happens when one of the nodes  go down dude anytime so if the node  remember we're using raft for all of  this  so each raft group is Rupp going to be  replicated to three different nodes  typically and so if one node goes down  if it was a follower of a given raft  group it was part of the transaction  nothing really happens it doesn't matter  because the leader will still be able to  get an AK from the other follower if a  node goes down that had a leader for one  of those graft groups there will be a  short delay around the second or so  maybe two seconds  I forget what our current timeout is  before a new leader gets elected and can  continue that transaction but the new  leader will have all the data and so the  transaction won't have to abort or  anything it's just we has to wait for a  new leader to be elected that can  continue taking on the operations
+
+00:00:26.610 --> 00:00:29.010 align:start position:0%
+so my name is Alex as Wes mentioned I  work at cockroach labs which is a New  York city-based startup so very local  that is trying to build a cloud native  sequel database our overarching mission  is to make data easy and we think that  this is one of the best ways that we can  do so so today I'm just gonna talk a  little bit about what it means to be a  cloud native database you know why it's  important to have a database like this  and most importantly some of the  techniques that we use to build this  database and give it the properties that  we want in it so before we get started  it's useful to have a general  understanding of what cloud native means  so I know cloud native is a word that  gets thrown around a lot and sometimes  in different ways depending on what  circles you run in before working at  cockroach labs I spent a couple years  working on the Cooper Nettie's project  at Google where I was neck deep in  containers and cloud native and all that  jargon all the time so I have some idea  of what it means and hopefully we can  get to a general agreement on that  before we move forward into the actual  engineering so a cloud native system has  a number of properties of which these  are some of the key ones in my opinion a  cloud native system is something where  you aren't too reliant on any individual  machine or any individual process you  can scale it out horizontally when you  need to add more capacity it's built to  handle and automatically recover from  failures and it doesn't need a lot of  operator overhead in the process of  doing this so when you think about you  know how Netflix runs their compute they  have a bunch of short-lived ephemeral  VMs that they don't get too attached to  they treat them as if they're a bunch of  cattle they don't they don't treat them  as if they're their pets that need to be  individually cared for and if something  fails it doesn't matter they discrete  spin up a few new ones and everything or  covers and that's really the ideal of a  cloud native system these systems tend  to be things that work really well in  orchestration frameworks so they can be  packaged up into containers very often  stuck on the top of kubernetes or swarm  or maze hose  and to run well in those kinds of  environments on the other hand just for  understanding something that isn't cloud  native is something that lacks one or  more of those properties now it can't  scale out it might rely on a single  point of failure maybe it's even just a  single monolithic application maybe it's  a manual failover process so it can't  automatically recover from problems or  tied to a particular piece of hardware  and so these properties aren't anything  totally new they're not mind-blowing ly  unique they sound like a lot of  databases out there on the market today  there's a lot of no sequel databases  that offer these scale out automatically  recoverable properties that you want a  number of big companies built on them  but these systems typically lack things  like strong consistency and generalized  transactions that the developers of your  got when they used traditional  relational databases and so nowadays  when you pick a database you kind of  have to choose your poison do you want a  traditional sequel database that has  great consistency gives you transactions  to make developing your application  easier but you give up things like  horizontal scaling and fault tolerance  or you choose a no sequel database and  have to work around the lack of strong  consistency in your application a lack  of generalized transactions and this is  a tough choice there are good things  about each of course at this point some  people might say you know great great  businesses great services great  companies have been built on top of note  sequel databases without consistency  without transactions maybe they're not  important but I think if you've ever  worked with one of these systems you can  remember having to spend time upfront  when you're designing a new a new  service thinking about how to work  around your database you know thinking  about the edge cases whether your  application will handle reading stale  data occasionally how you can update  multiple pieces of your database in a  way such that if one of the updates  fails you can recover even though you  don't have those transactions and even  if you do this perfectly up front and  you build a perfect system that doesn't  need consistency or transactions what  happens a year later when you've left  the team a few junior developers have  taken over and have to implement some  new business features they don't know  exactly everything that you did when you  built the system and they're very likely  to accidentally hit an edge case where  in production a customer will have a bug  and you won't be able to easily  reproduce it because it's it's a  Heisenberg it only comes up when a  system is overloaded or has networking  problems  there's really a lot of business cost to  having to work around a database it  doesn't give you proper proper  consistency in transactions and you know  and transactions you know the same  reasoning applies is for consistency  this is a quote from the Google spanner  paper spanner was a project at Google  effectively trying to do the same thing  it was an inspiration for the cockroach  labs company spanner is a scale out  sequel database that's meant to span  very broad geographic areas even around  the entire world with strong consistency  and general transactions and Google as a  company thinks it is worth it to to deal  with the cost of building the system up  front and then with any latency problems  that might arise as a result of using it  rather than having all of their  developers have to reason about eventual  consistency and the lack of transactions  it's just a better business case for  them to take the burden off their  developers and occasionally have to deal  with a performance issue then it would  be to always have to deal with with a  lack of consistency and we think the  same sort of reasoning in the same  cost-benefit trade-off applies to a  large number of projects if you had a  database that could do this even if it  performed a little bit worse yet  slightly more latency it would be an  easy choice for most for most services  so since this is so useful you know you  might ask why has nobody done this other  than Google why is they no open source  product that does this why don't we have  tens of these different databases  available today and the question of  course is the answer of course is just  that it's really hard it's not as if  when people came came to the drawing  board to design a new database 10 years  ago when they were building dynamo or  big table or Cassandra they didn't sit  down and think transactions are too  confusing we don't want to include them  it was just a matter of prioritizing a  scale and fault tolerance more highly  and not being able to squeeze in  transactions and consistency as well  building a database is hard building a  distributed system is hard dealing with  time and ordering in a distributed  system is even harder and there is also  a performance penalty if you have to do  multiple round trips or even one round  trip between different nodes in a  database to commit data  so there are trade-offs and it's not  easy but we think that if it existed in  a good package everyone would want to  use it and so if we can agree that these  properties are useful if you can agree  that you want a distributed system to  have some notion of truth to be reliably  consistent then let's get into some of  the details of how you do that so we're  gonna focus on just a few properties of  cockroach TV a few layers of how that  it's built cockroach TV being the  database the cockroach Labs is working  on we're gonna focus on how it  distributes its data and replicates that  data amongst all the nodes in the  cluster we're gonna talk a little bit  about how it keeps that data in sync  using consensus and then how we build  truly distributed transactions on top of  those foundational layers so before we  get into too many details it's useful to  have just a brief background on how the  system is layered so it's it's  structured as a system of light as a set  of layers where each layer only has to  care about the black box right beneath  it so even though we're a sequel  database the the sequel part of our  system isn't actually the most  interesting part most of the guarantees  about the distributed system provides  are packed into that transactional key  value layer that provides consistent  operations on keys and values and  arbitrary transactions across those keys  and values in our sequel layer on top  just relies on those guarantees to map  sequel operations into a series of key  value operations like gits puts  conditional puts scans and deletes so  I'm not going to talk too much about  that mapping of sequel to key value  operations today but I'm happy to talk  about it on office hours afterwards if  anyone has questions what we are going  to focus on is how that transactional  key value layer distributes data  replicates the data and keeps it  consistent so we'll start out by looking  at how we distribute the data across the  cluster which is a very key property  when building a system that has to be  able to recover from failures and scale  out arbitrarily and the two key  questions you have to first answer when  you're thinking about building us  like this is how do you divide the data  up into chunks and then once you've  distributed those chunks how do you know  where they're all located there are two  main approaches to solving this problem  that have been used a lot in past  systems  the first is hashing the second is order  preserving the the hashing approach is  sort of what you would expect given a  key to a piece of data you hash the key  and then that hash maps on to one of the  nodes in the cluster so this is great  because you don't need any kind of  lookup table to figure out where data  lives given the key that you want to  find you just hash it and you know  exactly what node to look at and that's  awesome the problem is that because  hashing doesn't respect ordering they  makes it really hard to do ordered scans  over your data and for a sequel database  that's absolutely critical you can't  build a sequel database without an  ordered system underneath it imagine  trying to build an index on an unordered  system you can't do it  so in cockroach TB we've had to go the  order preserving approach and this this  satisfies our need for efficient scans  linearly over data but it requires some  additional indexing metadata that we  have to keep track of so that given a  key we can look up where it's located  because otherwise we wouldn't know what  machine it's on so our data looks  something like this we break up the key  space into a series of ranges from the  beginning of the key space to the end  and each range lives on one or more  nodes additionally we have to have an  indexing structure that just indicates  where each range lives in the cluster  and this looks basically like you would  expect and so when you need to look up a  key first you have to look in this this  indexing range this this shard index  find the range that your key is in and  then that will have the information on  what nodes that data is on and so we  have to keep this shard index available  so that all the nodes know about it  because our system has you know  symetrical nodes there is no master that  you go look up this index on every node  knows how to access this index  and so if you want to do a scan it works  effectively as you would expect you look  up the start key find the range that's  in lookup the end key find the range  that it is in and then scan all the  ranges in between and a nice benefit of  this order preserving approach is that  when a shard gets too large we can just  split it in half and update the index in  some hashing schemes if you end up with  too much data hash to a particular node  you have to actually modify your hashing  algorithm in some way in order to spread  that data off the note that it's ended  up on so all we have to do is split it  and then update the index and if you  kind of squint at it a little bit this  looks a little bit like a b-tree you  have the data structure that's at the  heart of most relational database  systems where you have an ordered tree  pointing downward where the actual data  is held in the leaves so it's kind of  like a funny funny coincidence that we  ended up at a similar data structure the  other key part of how we distribute the  data is where we put it  so we try to keep the data separated so  that we don't have you know all of it on  one node obviously we want to balance it  but most importantly we have to  replicate it because if we only kept one  copy of the data as soon as the node  dives you have you have unavailability  that data's not there and if the disk  dies you know the disk fails you might  have lost the data so we have to keep  the data stored on multiple machines and  we have a scheduling algorithm allocates  these ranges to these nodes and it's  very dynamic as nodes are added where we  rebalance constantly to get data spread  out on to the new nodes which improves  performance improves availability it  limits the damage that one node dying  can do and then as a node dies we also  have to make sure that we don't lose  data in those cases so let's look at  adding a new node now we add a new node  here it starts out empty and one of the  nodes that has data that recognizes  there's a new note it has a lot of space  and I'd like to to take some burden off  of myself so  we're gonna move range three onto this  new note once we copy the data over we  can kill one of the old ranges so note  three is able to save some space and  this isn't just disk space this is also  memory for caching it's compute for  handling queries that are reading that  data so it helps balance all the  resources of the cluster when we move  the ranges around and so we can do this  until we have a reasonably good balance  of data amongst the nodes in the cluster  and again there isn't some master node  coordinating all this it's it's a fairly  dynamic process that's that's  organically happening within a cluster  as nodes notice that they have too much  load on them and other nodes don't have  much load on them that they no node  three will ask a node for hey will you  take this range off my hands and node  four will have to respond yes I'll take  that the other interesting case here in  the balancing of data is when a node  fails so if we lose a node we're down to  fewer copies of our data than we want so  we want to keep a minimum of three  copies of art of each range at all times  for availability purposes  so once node two dies we only have two  copies of a couple of our ranges so  again the nodes recognize this and  create a new replica and the node that  has some space so the the ranges that do  have that data are going to have to work  extra hard to copy the data to a new  node to ensure that the data isn't lost  and yeah once once all the data is  replicated away we can forget about the  old ones so in order to facilitate this  dynamic movement of data we need to  ensure that our ranges aren't too big so  we found 64 megabytes experimentally  it's a fairly good size for this so such  the ranges are small enough that we can  move them reasonably quickly when a node  fails but they're not so big or over  there that sounds small that we have  tons and tons of indexing overhead and  tracking where all these ranges are oh  yeah there's nothing incredibly novel  about what we're doing here in the data  distribution part but but it really  provides the foundation of the system  for how we how we track where data is  how we keep it alive how we keep it  available that's really necessary to  provide a reliable cloud native system  you know if we didn't have the data  spread across multiple nodes we couldn't  scale out and we couldn't recover from  failures in the like of course once you  have data spread across a number of  places the the the huge question becomes  how do you keep it in sync  in a sequel database you expect your  results to be consistent acid that a  traditional acronym is key to a sequel  database your data has to be kept  consistent and so you don't want  different copies of data to be giving  you different results because that's not  providing true consistency I might even  just be downright incorrect in most  cases so we have to use some sort of  system to keep the data in sync across  nodes again there are there are two  fairly common alternatives here the  first being primary secondary  replication which many people here are  probably familiar with if you've used  you know a traditional sequel database  before and consensus which you again  might might have heard it before it  might have used primary secondary  replication has been used for quite a  while and in theory sounds awesome so  you have a primary node that receives  all your rights and then when it  receives a write it replicates that that  right on to a secondary one or more  secondary nodes and then that secondary  also has the data and so reads can  happen on either node if the primary  fails you can promote one of the  secondaries to primary and everything's  great of course there are there are  complications here there there are extra  questions you have to deal with if you  do this primary secondary replication  asynchronously  meaning that the primary gets a right  the primary persists that right and then  acknowledges the right before sending  the data along to the secondary it's  possible that the secondary is out of  date so anyone reading from the  secondary could be missing new data and  similarly if the master fails the the  secondary might not have all the data  that the master had when at the time  that it failed if you opt for  synchronous replication meaning that the  secondary has to get the data before the  primary will acknowledge any rights to  users then all of a sudden you're  bringing your availability way down  because if the secondary fails your  primary can't accept rights anymore so  you've taken what already is a single  point of failure and almost turned it  into two points of failure because if  the secondary can't can't act writes in  the primary  I can't hack them either so you're  hurting your availability there and also  your latency as well so there's also  this problem of ensuring that when you  do a failover your clients know which  which replica to connect to so this is a  fairly complicated approach with a lot  of edge cases it works really well in  the happy case but when things fail it's  it's likely you're gonna lose some data  or be reading stale data for a while  their consensus approach to ensuring  that your data is in sync is a little  different so you have an odd number of  nodes and the idea is that when a  majority of them agree on something then  that then that thing is the truth so  when a Wright comes in once a majority  of the nodes in this case two out of  three because we we default to three  replicas of things once two out of three  nodes have written it then that day that  is written so there's there's been a lot  of research on consensus but here's sort  of a drill a simplified version of what  it looks like in practice you have a  leader and a couple of followers and  this is because in a number of consensus  systems it works by electing a leader  that receives all rights and forwards  those along to the followers so we have  a leader here that's received a right  for cherry it writes it to its own disc  and sends it along to its followers as  soon as either of them writes that key  as well the data is committed even  before it's actually acknowledged the  data is committed as soon as it's  written not a majority of the nodes but  in most cases things won't be failing  and so the second you know the follower  will act that data back and the leader  will acknowledge it to the user so this  does add an extra round trip to your  rights because the leader has to get an  acknowledgment from a follower in order  to tell the user that the data is  written of course as always the  interesting question is what happens  when things are failing and so let's  look at that case a little bit remember  that data is written as soon as a  majority of the nodes have written it so  in this case the leader receives a write  for cherry and it writes it but before  it's able to pass that right along it  dies and wallets gone a new leader is  elected so we have this first leader  over here it still has the data that I  wrote but the new leader doesn't the  other follower doesn't so according to  the rule this data is not committed and  when the new leader receives a read for  that key it will see that it's not on a  majority of the nodes that data is not  committed so it will return that the key  was not found to the user and the  follower will be told to remove cherry  from its data that data is not not part  of the database so we in particular use  the raft because it's consensus protocol  as was mentioned by will a couple talks  ago this is as you said it's sorry it's  meant to be a simplification previous  consensus protocols like paxos paxos was  conceived of in the 90s and kind of  languished for a long time because it  was so complicated that nobody could  really implement it in a practical way  and there still were not really good  open-source implementations of it graft  was come up with by a PhD student a few  years ago purely to be more  understandable and at this point there  are an incredible number of solid  implementations that you can get out  there if you look for them out in open  source so using consensus in your  service is now a practical thing to do  because there are implementations out  there that you can rely on in particular  we we share an implementation with the  sed team at CD being another database  practically in our database we run one  consensus group per each range of data  so we have a lot of ranges replicated  across the nodes each range gets its own  consensus group so it all writes to that  range are kept consistent across all the  replicas of it there are a number of  engineering complications here around  how we handle raft around handling  adding new members removing members  splitting ranges dealing with a large  number of ranges and consensus groups  that we have in our system but these are  all engineering problems that can be  worked around once you have that  foundation  you know and so yeah they're really  really the key point here is the  consensus provides atomic replication  each right that comes in is either  written or it isn't there is no sense of  like OneNote having it in another node  not having it because you know when  reads are served they will ensure that  it's only returned if the majority of  notes have it and that's really useful  to have having any kind of guarantee  that you can rely on in a distributed  system is incredibly useful and so the  next question that comes up of course is  you have this great consistency per  range but your database doesn't fit in a  64 megabyte range that'd be a tiny  database that'd be silly so we have to  worry about operations that hit multiple  ranges and that's where distributed  transactions come in so you can't have a  sequel database without having  transactions and if we have a  distributed database our transactions  have to be distributed as well because  the data will often not all be on the  same node and we want to be a full  database we want to achieve full  Postgres compatibility so we have to  have the traditional asset semantics  where your your commit is all or nothing  it's consistent each each transaction is  isolated from all others and we default  to the the strong isolation level known  as serializable where if every every  transaction that commits the the in  state of your system is equivalent to as  if each transaction had been executed in  some serial order so there is no  interference at all between transactions  in the out ending data in your database  but to understand how we do distributed  transactions it's useful to first take a  look at how transactions work in a  single node database so you know in a  traditional relational database that  runs on one machine atomicity and  durability are provided by the  underlying filesystem by a log write to  that file system so when a transaction  comes in  it reads some data it writes some data  and each of those rights is only  provisional it's not guaranteed to stick  around so these rights are tagged with  the transaction ID  and those rights aren't considered  committed until there is a commit  message in the log for that transaction  ID so if the transaction comes in rights  a couple entries and then aborts those  things are not considered committed and  any read should not return those at that  point but once the commit is written to  the log that single operation commits  all the data and so that's how they  provide an Amissah T of course in a  distributed transaction we don't have a  single log that we can write to we don't  have a single disk that we can write  this transaction log to so we bootstrap  it off of raft so we use raft the  consensus protocol to store a  transaction record that we can then  switch to committed the anatomic write  and because that consensus group is  replicated and the rights to it are  atomic we achieved the atomicity and  durability the same as in a log right to  local disk so a transaction can come in  we can write a bunch of things across  the database that all are tagged with  the transaction ID and when the  transaction is done we write that that  transaction ID is committed and that  switches all those provisional rights  from not committed to committed in one  single step so let's take a little look  at how that works a user starts a new  transaction and so we create a  transaction record for it in this case  transaction 1 and it's in the pending  state because it hasn't committed it  hasn't been rolled back it hasn't been  aborted  it's just ongoing so then the user puts  a key they write a key they write  another key and these keys are in  different ranges  you might notice so we can't just use a  single consensus group here and then  they decide to commit the transaction as  soon as they do that the transaction is  committed any read that comes along and  sees our write with a transaction ID  attached to it has to go look up whether  that transaction is committed yet before  they can reliably return that data and  then in the background we can then go  clean up those  provisional rights that background  cleanup doesn't change the semantics of  anything as soon as the commit record is  written that data is persisted but  cleaning up those intents prevent reads  from having to go do that lookup so it's  a performance optimization and again  this is the happy case this is when  nothing's failing when there are no  conflicts so of course we have to take a  quick look at how we deal with some  kinds of conflicts because in databases  a lot of the complexity comes from  trying to prevent different transactions  from interfering with each other in some  way you don't want to ongoing  transactions to see each other's data  before it's been committed so in this  case begins start off the transaction  writing a key and then we have another  transaction come in and try to read that  key so transaction one has not committed  yet at this point so transaction 2 sees  this this key here with transaction ID  tagged to it because it has a tag on it  it has to go look at the transaction  record for that transaction so it checks  the status of it and in this case sees  that it's pending so there's some  funniness here with timestamps depending  on which times transactions timestamp is  first it might do different things here  but we're going to assume that  transaction two has an earlier timestamp  than transaction one just for simplicity  and in this case it sees that  transaction 1 as a later time stamp it  hasn't committed yet transaction 1 can  return without returning that value  it'll say that it wasn't found  if transaction 2 had a later time stamp  than transaction 1 we may have had to  push transaction ones timestamp back but  that's getting pretty far into some of  the details of how we do distributed  transactions so so transaction 1 might  have had to commit at a later time span  and look at one other conflict here a  write conflict or two to two  transactions they're trying to write the  same data so we have two transaction  records here the second transaction  wants to write to a key the transaction  one is written to but not yet committed  now this would not be allowed we could  not let both of these transactions go  forward that would be a right anomaly so  one of the transactions has to lose  notably here we don't use locks if you  look at how something like my sequel  works they use locks that get held on  keys while a transaction is ongoing so  in this case transaction two would try  to write to Chery but it wouldn't be  able to get the lock because transaction  one held it we use what's known as an  optimistic concurrency protocol where we  don't use locks but we detect conflicts  as they occur  so normally things can just proceed  along happily without needing to worry  about locks but once we notice that two  transactions are overlapping in some way  that's not allowed we have to abort one  of them or at least push one of them  back so in this case transaction two  aborts transaction one says I'm gonna  take over I'm gonna use this key you're  gonna have to restart if you want to use  it that prevents them from from having  an anomaly so once transaction two has  done that it can go forward right the  key and commit if transaction one what  still wants to write that key it's gonna  have to restart from scratch and reput  that key  so that's that's a couple quick examples  of how we deal with conflicts there is  more detail more more more to it than  just that but that's really the  foundation and its really all keyed on  unwrapped so if we have to didn't  provide us atomicity and durability we  wouldn't be able to provide anything we  couldn't provide consistency or  isolation and so yeah there's a lot more  to talk about if you want to go check  out more read our blog we have a bunch  of great posts detailing exactly how we  do this without locks how we map sequel  unto Kb etc and I definitely recommend  you check it out if you're curious to  learn more so just to summarize we're  trying to build a sequel database that  works really well in modern cloud  environments you can bring together the  best of sequel databases with their  strong print guarantees that help  developers and no sequel databases with  their great operational attributes that  keeps them up keep them up keep them  available keep them serving  it's not easy to build this but but it  once it's built it's much easier people  to use is the goal when we do this using  some few techniques we have to  distribute data carefully keep it  consistent provide transactions on top  of it so thanks a lot for listening to  the talk check out more info on our  website you can read the code read the  design Doc's on our github repository  feel free to ask any questions  both afterwards or via email if you'd  like are there any questions right now  are you doing how you maintain ensuring  that there's no phantoms your read-write  set based on that ranges are the  individual keys it's both so we have a  timestamp cache as well where we track  which keys and which ranges have been  written or read to so if someone's read  arranged you know use a predicate to  read some sort of range we do track that  and we need to prevent the intents we  have you know a bunch of Jepson testing  set up that it provides it verifies our  serial ID facility can you talk about  how the range indexes are stored and  distributed do you have to keep a  complete copy of the range index on  every node and if so how does that  effects scale so we don't keep a copy of  the range index on every node what we do  is they're treated as any other range so  we keep three replicas of them in most  deployments their location is gossiped  so we use a gossip protocol to ensure  that all the nodes know the locations of  those three replicas of that first range  and once you do that that's gossiped  everywhere so nodes can go and look up  data if they need it  we also cache it to avoid the  performance overhead of doing those  lookups every time and it's if we have a  cache miss if some data has changed and  we still use a cache version of it it's  okay because we'll just try to talk to a  node that doesn't have a range and be  told that we're wrong and then we can go  do the lookup so we effectively we  gossiped the location of those ranges  update them normally as if they're a  normal rap group and then cache it and I  guess that can exceed 60 for mega bytes  in size so we have a two layer index  that's a good point so the first index  points to the location of the other  index box and with the two layer index  we can get up to exabytes of data great  thanks  I have a question on the Concord right  scenario that you have it looks like I  don't know too much about data it looks  a lot like software transactional memory  with MVCC we do use a BCC and that's not  too much about software transactional  very similar I guess so you restart the  transaction if there was a class right  so how does this perform in a lot of  right yeah it's a great question so the  database works best when there's not  high contention no we do ensure that  long transactions can finish using some  priorities so if you get aborted a bunch  your priority will jump up and you'll be  less likely to abort it again so we do  ensure forward progress for very right  heavy workloads they have a lot of  contention on individual keys we offer a  lower level of isolation snapshot  isolation which is actually the default  level of isolation in many sequel  databases that allows for rights to  proceed a little better but the only  problem is if your rights are hitting  the same keys if your rights are going  to different keys there's not a problem  and there won't be isolation issues so  sorry I made misses but the so when when  engine transaction starts it needs to to  check to see if there's a completing  transaction that's currently kinda  pending right like how does it know like  where's that data stored so so you said  that it's is it's handled by RAF but you  have a rough instance per range yeah so  when a transaction starts we don't  actually create a transaction record  until the first operation for that  transaction happens but say I write  comes in for the transaction and that  goes to a particular range as a  performance optimization we put the  transaction record in that same range as  the data that we just wrote and then in  the provisional writes that point to the  transaction record they should say where  it is so that's a little a little much  to explain in words rather than a  diagram but the provisional writes point  to the transaction record so that they  readers know where to look for it and  typically we put it in the same range as  the first right  and what happens if the transaction  spans multiple ranges that's okay  because the in the second range the  provisional right will point back to the  first range where the transaction record  lives what happens when one of the nodes  go down dude anytime so if the node  remember we're using raft for all of  this  so each raft group is Rupp going to be  replicated to three different nodes  typically and so if one node goes down  if it was a follower of a given raft  group it was part of the transaction  nothing really happens it doesn't matter  because the leader will still be able to  get an AK from the other follower if a  node goes down that had a leader for one  of those graft groups there will be a  short delay around the second or so  maybe two seconds  I forget what our current timeout is  before a new leader gets elected and can  continue that transaction but the new  leader will have all the data and so the  transaction won't have to abort or  anything it's just we has to wait for a  new leader to be elected that can  continue taking on the operations
+ 
+
+00:00:29.010 --> 00:00:30.750 align:start position:0%
+ 
+ 
+
+00:00:30.750 --> 00:00:32.820 align:start position:0%
+ 
+ 
+
+00:00:32.820 --> 00:00:34.980 align:start position:0%
+ 
+ 
+
+00:00:34.980 --> 00:00:37.230 align:start position:0%
+ 
+ 
+
+00:00:37.230 --> 00:00:38.580 align:start position:0%
+ 
+ 
+
+00:00:38.580 --> 00:00:40.740 align:start position:0%
+ 
+ 
+
+00:00:40.740 --> 00:00:42.570 align:start position:0%
+ 
+ 
+
+00:00:42.570 --> 00:00:44.190 align:start position:0%
+ 
+ 
+
+00:00:44.190 --> 00:00:45.720 align:start position:0%
+ 
+ 
+
+00:00:45.720 --> 00:00:47.580 align:start position:0%
+ 
+ 
+
+00:00:47.580 --> 00:00:49.620 align:start position:0%
+ 
+ 
+
+00:00:49.620 --> 00:00:50.940 align:start position:0%
+ 
+ 
+
+00:00:50.940 --> 00:00:54.990 align:start position:0%
+ 
+ 
+
+00:00:54.990 --> 00:00:56.850 align:start position:0%
+ 
+ 
+
+00:00:56.850 --> 00:00:58.410 align:start position:0%
+ 
+ 
+
+00:00:58.410 --> 00:01:00.210 align:start position:0%
+ 
+ 
+
+00:01:00.210 --> 00:01:01.920 align:start position:0%
+ 
+ 
+
+00:01:01.920 --> 00:01:03.060 align:start position:0%
+ 
+ 
+
+00:01:03.060 --> 00:01:05.189 align:start position:0%
+ 
+ 
+
+00:01:05.189 --> 00:01:07.710 align:start position:0%
+ 
+ 
+
+00:01:07.710 --> 00:01:09.090 align:start position:0%
+ 
+ 
+
+00:01:09.090 --> 00:01:10.469 align:start position:0%
+ 
+ 
+
+00:01:10.469 --> 00:01:12.390 align:start position:0%
+ 
+ 
+
+00:01:12.390 --> 00:01:15.060 align:start position:0%
+ 
+ 
+
+00:01:15.060 --> 00:01:17.160 align:start position:0%
+ 
+ 
+
+00:01:17.160 --> 00:01:18.300 align:start position:0%
+ 
+ 
+
+00:01:18.300 --> 00:01:20.219 align:start position:0%
+ 
+ 
+
+00:01:20.219 --> 00:01:24.450 align:start position:0%
+ 
+ 
+
+00:01:24.450 --> 00:01:25.830 align:start position:0%
+ 
+ 
+
+00:01:25.830 --> 00:01:27.840 align:start position:0%
+ 
+ 
+
+00:01:27.840 --> 00:01:29.430 align:start position:0%
+ 
+ 
+
+00:01:29.430 --> 00:01:31.740 align:start position:0%
+ 
+ 
+
+00:01:31.740 --> 00:01:33.990 align:start position:0%
+ 
+ 
+
+00:01:33.990 --> 00:01:35.370 align:start position:0%
+ 
+ 
+
+00:01:35.370 --> 00:01:37.529 align:start position:0%
+ 
+ 
+
+00:01:37.529 --> 00:01:39.330 align:start position:0%
+ 
+ 
+
+00:01:39.330 --> 00:01:41.609 align:start position:0%
+ 
+ 
+
+00:01:41.609 --> 00:01:43.050 align:start position:0%
+ 
+ 
+
+00:01:43.050 --> 00:01:45.389 align:start position:0%
+ 
+ 
+
+00:01:45.389 --> 00:01:47.309 align:start position:0%
+ 
+ 
+
+00:01:47.309 --> 00:01:48.630 align:start position:0%
+ 
+ 
+
+00:01:48.630 --> 00:01:50.100 align:start position:0%
+ 
+ 
+
+00:01:50.100 --> 00:01:51.359 align:start position:0%
+ 
+ 
+
+00:01:51.359 --> 00:01:53.340 align:start position:0%
+ 
+ 
+
+00:01:53.340 --> 00:01:54.600 align:start position:0%
+ 
+ 
+
+00:01:54.600 --> 00:01:56.490 align:start position:0%
+ 
+ 
+
+00:01:56.490 --> 00:01:57.870 align:start position:0%
+ 
+ 
+
+00:01:57.870 --> 00:01:59.160 align:start position:0%
+ 
+ 
+
+00:01:59.160 --> 00:02:01.830 align:start position:0%
+ 
+ 
+
+00:02:01.830 --> 00:02:05.010 align:start position:0%
+ 
+ 
+
+00:02:05.010 --> 00:02:07.109 align:start position:0%
+ 
+ 
+
+00:02:07.109 --> 00:02:08.940 align:start position:0%
+ 
+ 
+
+00:02:08.940 --> 00:02:10.410 align:start position:0%
+ 
+ 
+
+00:02:10.410 --> 00:02:12.809 align:start position:0%
+ 
+ 
+
+00:02:12.809 --> 00:02:14.220 align:start position:0%
+ 
+ 
+
+00:02:14.220 --> 00:02:15.990 align:start position:0%
+ 
+ 
+
+00:02:15.990 --> 00:02:19.920 align:start position:0%
+ 
+ 
+
+00:02:19.920 --> 00:02:21.480 align:start position:0%
+ 
+ 
+
+00:02:21.480 --> 00:02:23.160 align:start position:0%
+ 
+ 
+
+00:02:23.160 --> 00:02:24.660 align:start position:0%
+ 
+ 
+
+00:02:24.660 --> 00:02:26.250 align:start position:0%
+ 
+ 
+
+00:02:26.250 --> 00:02:28.020 align:start position:0%
+ 
+ 
+
+00:02:28.020 --> 00:02:31.380 align:start position:0%
+ 
+ 
+
+00:02:31.380 --> 00:02:33.089 align:start position:0%
+ 
+ 
+
+00:02:33.089 --> 00:02:35.470 align:start position:0%
+ 
+ 
+
+00:02:35.470 --> 00:02:36.850 align:start position:0%
+ 
+ 
+
+00:02:36.850 --> 00:02:39.699 align:start position:0%
+ 
+ 
+
+00:02:39.699 --> 00:02:41.830 align:start position:0%
+ 
+ 
+
+00:02:41.830 --> 00:02:43.570 align:start position:0%
+ 
+ 
+
+00:02:43.570 --> 00:02:45.030 align:start position:0%
+ 
+ 
+
+00:02:45.030 --> 00:02:47.050 align:start position:0%
+ 
+ 
+
+00:02:47.050 --> 00:02:49.570 align:start position:0%
+ 
+ 
+
+00:02:49.570 --> 00:02:52.330 align:start position:0%
+ 
+ 
+
+00:02:52.330 --> 00:02:54.839 align:start position:0%
+ 
+ 
+
+00:02:54.839 --> 00:02:58.119 align:start position:0%
+ 
+ 
+
+00:02:58.119 --> 00:03:00.220 align:start position:0%
+ 
+ 
+
+00:03:00.220 --> 00:03:02.680 align:start position:0%
+ 
+ 
+
+00:03:02.680 --> 00:03:04.720 align:start position:0%
+ 
+ 
+
+00:03:04.720 --> 00:03:07.869 align:start position:0%
+ 
+ 
+
+00:03:07.869 --> 00:03:09.789 align:start position:0%
+ 
+ 
+
+00:03:09.789 --> 00:03:11.890 align:start position:0%
+ 
+ 
+
+00:03:11.890 --> 00:03:14.650 align:start position:0%
+ 
+ 
+
+00:03:14.650 --> 00:03:16.509 align:start position:0%
+ 
+ 
+
+00:03:16.509 --> 00:03:17.440 align:start position:0%
+ 
+ 
+
+00:03:17.440 --> 00:03:19.660 align:start position:0%
+ 
+ 
+
+00:03:19.660 --> 00:03:22.059 align:start position:0%
+ 
+ 
+
+00:03:22.059 --> 00:03:25.119 align:start position:0%
+ 
+ 
+
+00:03:25.119 --> 00:03:27.250 align:start position:0%
+ 
+ 
+
+00:03:27.250 --> 00:03:29.259 align:start position:0%
+ 
+ 
+
+00:03:29.259 --> 00:03:32.470 align:start position:0%
+ 
+ 
+
+00:03:32.470 --> 00:03:34.059 align:start position:0%
+ 
+ 
+
+00:03:34.059 --> 00:03:38.589 align:start position:0%
+ 
+ 
+
+00:03:38.589 --> 00:03:40.750 align:start position:0%
+ 
+ 
+
+00:03:40.750 --> 00:03:42.460 align:start position:0%
+ 
+ 
+
+00:03:42.460 --> 00:03:44.020 align:start position:0%
+ 
+ 
+
+00:03:44.020 --> 00:03:46.629 align:start position:0%
+ 
+ 
+
+00:03:46.629 --> 00:03:48.129 align:start position:0%
+ 
+ 
+
+00:03:48.129 --> 00:03:51.159 align:start position:0%
+ 
+ 
+
+00:03:51.159 --> 00:03:53.050 align:start position:0%
+ 
+ 
+
+00:03:53.050 --> 00:03:55.030 align:start position:0%
+ 
+ 
+
+00:03:55.030 --> 00:03:56.170 align:start position:0%
+ 
+ 
+
+00:03:56.170 --> 00:03:59.140 align:start position:0%
+ 
+ 
+
+00:03:59.140 --> 00:04:01.360 align:start position:0%
+ 
+ 
+
+00:04:01.360 --> 00:04:02.860 align:start position:0%
+ 
+ 
+
+00:04:02.860 --> 00:04:05.110 align:start position:0%
+ 
+ 
+
+00:04:05.110 --> 00:04:07.539 align:start position:0%
+ 
+ 
+
+00:04:07.539 --> 00:04:10.509 align:start position:0%
+ 
+ 
+
+00:04:10.509 --> 00:04:11.740 align:start position:0%
+ 
+ 
+
+00:04:11.740 --> 00:04:13.839 align:start position:0%
+ 
+ 
+
+00:04:13.839 --> 00:04:16.390 align:start position:0%
+ 
+ 
+
+00:04:16.390 --> 00:04:17.770 align:start position:0%
+ 
+ 
+
+00:04:17.770 --> 00:04:19.330 align:start position:0%
+ 
+ 
+
+00:04:19.330 --> 00:04:21.670 align:start position:0%
+ 
+ 
+
+00:04:21.670 --> 00:04:23.110 align:start position:0%
+ 
+ 
+
+00:04:23.110 --> 00:04:25.300 align:start position:0%
+ 
+ 
+
+00:04:25.300 --> 00:04:27.190 align:start position:0%
+ 
+ 
+
+00:04:27.190 --> 00:04:29.409 align:start position:0%
+ 
+ 
+
+00:04:29.409 --> 00:04:30.730 align:start position:0%
+ 
+ 
+
+00:04:30.730 --> 00:04:32.350 align:start position:0%
+ 
+ 
+
+00:04:32.350 --> 00:04:35.320 align:start position:0%
+ 
+ 
+
+00:04:35.320 --> 00:04:36.969 align:start position:0%
+ 
+ 
+
+00:04:36.969 --> 00:04:38.379 align:start position:0%
+ 
+ 
+
+00:04:38.379 --> 00:04:39.879 align:start position:0%
+ 
+ 
+
+00:04:39.879 --> 00:04:41.710 align:start position:0%
+ 
+ 
+
+00:04:41.710 --> 00:04:43.240 align:start position:0%
+ 
+ 
+
+00:04:43.240 --> 00:04:43.250 align:start position:0%
+ 
+ 
+
+00:04:43.250 --> 00:04:44.460 align:start position:0%
+ 
+
+
+00:04:44.460 --> 00:04:47.700 align:start position:0%
+ 
+ 
+
+00:04:47.700 --> 00:04:49.560 align:start position:0%
+ 
+ 
+
+00:04:49.560 --> 00:04:52.860 align:start position:0%
+ 
+ 
+
+00:04:52.860 --> 00:04:56.580 align:start position:0%
+ 
+ 
+
+00:04:56.580 --> 00:04:58.440 align:start position:0%
+ 
+ 
+
+00:04:58.440 --> 00:04:59.910 align:start position:0%
+ 
+ 
+
+00:04:59.910 --> 00:05:02.010 align:start position:0%
+ 
+ 
+
+00:05:02.010 --> 00:05:04.400 align:start position:0%
+ 
+ 
+
+00:05:04.400 --> 00:05:06.300 align:start position:0%
+ 
+ 
+
+00:05:06.300 --> 00:05:07.920 align:start position:0%
+ 
+ 
+
+00:05:07.920 --> 00:05:10.890 align:start position:0%
+ 
+ 
+
+00:05:10.890 --> 00:05:13.740 align:start position:0%
+ 
+ 
+
+00:05:13.740 --> 00:05:15.750 align:start position:0%
+ 
+ 
+
+00:05:15.750 --> 00:05:17.850 align:start position:0%
+ 
+ 
+
+00:05:17.850 --> 00:05:21.600 align:start position:0%
+ 
+ 
+
+00:05:21.600 --> 00:05:24.960 align:start position:0%
+ 
+ 
+
+00:05:24.960 --> 00:05:26.430 align:start position:0%
+ 
+ 
+
+00:05:26.430 --> 00:05:28.320 align:start position:0%
+ 
+ 
+
+00:05:28.320 --> 00:05:30.120 align:start position:0%
+ 
+ 
+
+00:05:30.120 --> 00:05:31.920 align:start position:0%
+ 
+ 
+
+00:05:31.920 --> 00:05:34.500 align:start position:0%
+ 
+ 
+
+00:05:34.500 --> 00:05:36.630 align:start position:0%
+ 
+ 
+
+00:05:36.630 --> 00:05:38.700 align:start position:0%
+ 
+ 
+
+00:05:38.700 --> 00:05:41.190 align:start position:0%
+ 
+ 
+
+00:05:41.190 --> 00:05:43.080 align:start position:0%
+ 
+ 
+
+00:05:43.080 --> 00:05:44.730 align:start position:0%
+ 
+ 
+
+00:05:44.730 --> 00:05:46.290 align:start position:0%
+ 
+ 
+
+00:05:46.290 --> 00:05:48.840 align:start position:0%
+ 
+ 
+
+00:05:48.840 --> 00:05:50.640 align:start position:0%
+ 
+ 
+
+00:05:50.640 --> 00:05:52.920 align:start position:0%
+ 
+ 
+
+00:05:52.920 --> 00:05:55.590 align:start position:0%
+ 
+ 
+
+00:05:55.590 --> 00:05:57.000 align:start position:0%
+ 
+ 
+
+00:05:57.000 --> 00:05:58.770 align:start position:0%
+ 
+ 
+
+00:05:58.770 --> 00:06:00.780 align:start position:0%
+ 
+ 
+
+00:06:00.780 --> 00:06:04.010 align:start position:0%
+ 
+ 
+
+00:06:04.010 --> 00:06:06.810 align:start position:0%
+ 
+ 
+
+00:06:06.810 --> 00:06:08.670 align:start position:0%
+ 
+ 
+
+00:06:08.670 --> 00:06:10.260 align:start position:0%
+ 
+ 
+
+00:06:10.260 --> 00:06:12.900 align:start position:0%
+ 
+ 
+
+00:06:12.900 --> 00:06:14.490 align:start position:0%
+ 
+ 
+
+00:06:14.490 --> 00:06:16.980 align:start position:0%
+ 
+ 
+
+00:06:16.980 --> 00:06:18.480 align:start position:0%
+ 
+ 
+
+00:06:18.480 --> 00:06:21.630 align:start position:0%
+ 
+ 
+
+00:06:21.630 --> 00:06:23.820 align:start position:0%
+ 
+ 
+
+00:06:23.820 --> 00:06:25.440 align:start position:0%
+ 
+ 
+
+00:06:25.440 --> 00:06:27.060 align:start position:0%
+ 
+ 
+
+00:06:27.060 --> 00:06:29.520 align:start position:0%
+ 
+ 
+
+00:06:29.520 --> 00:06:31.140 align:start position:0%
+ 
+ 
+
+00:06:31.140 --> 00:06:32.550 align:start position:0%
+ 
+ 
+
+00:06:32.550 --> 00:06:35.580 align:start position:0%
+ 
+ 
+
+00:06:35.580 --> 00:06:37.080 align:start position:0%
+ 
+ 
+
+00:06:37.080 --> 00:06:39.080 align:start position:0%
+ 
+ 
+
+00:06:39.080 --> 00:06:41.900 align:start position:0%
+ 
+ 
+
+00:06:41.900 --> 00:06:44.310 align:start position:0%
+ 
+ 
+
+00:06:44.310 --> 00:06:46.200 align:start position:0%
+ 
+ 
+
+00:06:46.200 --> 00:06:48.090 align:start position:0%
+ 
+ 
+
+00:06:48.090 --> 00:06:50.850 align:start position:0%
+ 
+ 
+
+00:06:50.850 --> 00:06:53.100 align:start position:0%
+ 
+ 
+
+00:06:53.100 --> 00:06:54.750 align:start position:0%
+ 
+ 
+
+00:06:54.750 --> 00:06:56.340 align:start position:0%
+ 
+ 
+
+00:06:56.340 --> 00:06:57.870 align:start position:0%
+ 
+ 
+
+00:06:57.870 --> 00:06:59.610 align:start position:0%
+ 
+ 
+
+00:06:59.610 --> 00:07:01.680 align:start position:0%
+ 
+ 
+
+00:07:01.680 --> 00:07:03.060 align:start position:0%
+ 
+ 
+
+00:07:03.060 --> 00:07:08.250 align:start position:0%
+ 
+ 
+
+00:07:08.250 --> 00:07:10.530 align:start position:0%
+ 
+ 
+
+00:07:10.530 --> 00:07:12.300 align:start position:0%
+ 
+ 
+
+00:07:12.300 --> 00:07:15.210 align:start position:0%
+ 
+ 
+
+00:07:15.210 --> 00:07:18.840 align:start position:0%
+ 
+ 
+
+00:07:18.840 --> 00:07:23.160 align:start position:0%
+ 
+ 
+
+00:07:23.160 --> 00:07:24.840 align:start position:0%
+ 
+ 
+
+00:07:24.840 --> 00:07:26.220 align:start position:0%
+ 
+ 
+
+00:07:26.220 --> 00:07:28.920 align:start position:0%
+ 
+ 
+
+00:07:28.920 --> 00:07:30.420 align:start position:0%
+ 
+ 
+
+00:07:30.420 --> 00:07:32.700 align:start position:0%
+ 
+ 
+
+00:07:32.700 --> 00:07:34.830 align:start position:0%
+ 
+ 
+
+00:07:34.830 --> 00:07:36.240 align:start position:0%
+ 
+ 
+
+00:07:36.240 --> 00:07:38.760 align:start position:0%
+ 
+ 
+
+00:07:38.760 --> 00:07:40.050 align:start position:0%
+ 
+ 
+
+00:07:40.050 --> 00:07:42.990 align:start position:0%
+ 
+ 
+
+00:07:42.990 --> 00:07:45.900 align:start position:0%
+ 
+ 
+
+00:07:45.900 --> 00:07:49.830 align:start position:0%
+ 
+ 
+
+00:07:49.830 --> 00:07:51.870 align:start position:0%
+ 
+ 
+
+00:07:51.870 --> 00:07:53.820 align:start position:0%
+ 
+ 
+
+00:07:53.820 --> 00:07:55.680 align:start position:0%
+ 
+ 
+
+00:07:55.680 --> 00:07:57.780 align:start position:0%
+ 
+ 
+
+00:07:57.780 --> 00:07:59.400 align:start position:0%
+ 
+ 
+
+00:07:59.400 --> 00:08:01.530 align:start position:0%
+ 
+ 
+
+00:08:01.530 --> 00:08:04.410 align:start position:0%
+ 
+ 
+
+00:08:04.410 --> 00:08:06.480 align:start position:0%
+ 
+ 
+
+00:08:06.480 --> 00:08:07.500 align:start position:0%
+ 
+ 
+
+00:08:07.500 --> 00:08:10.520 align:start position:0%
+ 
+ 
+
+00:08:10.520 --> 00:08:12.690 align:start position:0%
+ 
+ 
+
+00:08:12.690 --> 00:08:14.550 align:start position:0%
+ 
+ 
+
+00:08:14.550 --> 00:08:17.550 align:start position:0%
+ 
+ 
+
+00:08:17.550 --> 00:08:19.280 align:start position:0%
+ 
+ 
+
+00:08:19.280 --> 00:08:21.570 align:start position:0%
+ 
+ 
+
+00:08:21.570 --> 00:08:24.080 align:start position:0%
+ 
+ 
+
+00:08:24.080 --> 00:08:27.060 align:start position:0%
+ 
+ 
+
+00:08:27.060 --> 00:08:29.040 align:start position:0%
+ 
+ 
+
+00:08:29.040 --> 00:08:31.140 align:start position:0%
+ 
+ 
+
+00:08:31.140 --> 00:08:34.110 align:start position:0%
+ 
+ 
+
+00:08:34.110 --> 00:08:35.159 align:start position:0%
+ 
+ 
+
+00:08:35.159 --> 00:08:37.140 align:start position:0%
+ 
+ 
+
+00:08:37.140 --> 00:08:39.420 align:start position:0%
+ 
+ 
+
+00:08:39.420 --> 00:08:41.130 align:start position:0%
+ 
+ 
+
+00:08:41.130 --> 00:08:43.230 align:start position:0%
+ 
+ 
+
+00:08:43.230 --> 00:08:45.210 align:start position:0%
+ 
+ 
+
+00:08:45.210 --> 00:08:47.460 align:start position:0%
+ 
+ 
+
+00:08:47.460 --> 00:08:49.800 align:start position:0%
+ 
+ 
+
+00:08:49.800 --> 00:08:54.660 align:start position:0%
+ 
+ 
+
+00:08:54.660 --> 00:08:56.370 align:start position:0%
+ 
+ 
+
+00:08:56.370 --> 00:08:59.100 align:start position:0%
+ 
+ 
+
+00:08:59.100 --> 00:09:00.840 align:start position:0%
+ 
+ 
+
+00:09:00.840 --> 00:09:04.260 align:start position:0%
+ 
+ 
+
+00:09:04.260 --> 00:09:07.170 align:start position:0%
+ 
+ 
+
+00:09:07.170 --> 00:09:09.540 align:start position:0%
+ 
+ 
+
+00:09:09.540 --> 00:09:11.030 align:start position:0%
+ 
+ 
+
+00:09:11.030 --> 00:09:13.790 align:start position:0%
+ 
+ 
+
+00:09:13.790 --> 00:09:15.829 align:start position:0%
+ 
+ 
+
+00:09:15.829 --> 00:09:17.150 align:start position:0%
+ 
+ 
+
+00:09:17.150 --> 00:09:19.460 align:start position:0%
+ 
+ 
+
+00:09:19.460 --> 00:09:21.290 align:start position:0%
+ 
+ 
+
+00:09:21.290 --> 00:09:22.939 align:start position:0%
+ 
+ 
+
+00:09:22.939 --> 00:09:22.949 align:start position:0%
+ 
+ 
+
+00:09:22.949 --> 00:09:23.990 align:start position:0%
+ 
+
+
+00:09:23.990 --> 00:09:26.389 align:start position:0%
+ 
+ 
+
+00:09:26.389 --> 00:09:28.759 align:start position:0%
+ 
+ 
+
+00:09:28.759 --> 00:09:30.829 align:start position:0%
+ 
+ 
+
+00:09:30.829 --> 00:09:33.019 align:start position:0%
+ 
+ 
+
+00:09:33.019 --> 00:09:36.800 align:start position:0%
+ 
+ 
+
+00:09:36.800 --> 00:09:38.840 align:start position:0%
+ 
+ 
+
+00:09:38.840 --> 00:09:40.309 align:start position:0%
+ 
+ 
+
+00:09:40.309 --> 00:09:42.410 align:start position:0%
+ 
+ 
+
+00:09:42.410 --> 00:09:44.210 align:start position:0%
+ 
+ 
+
+00:09:44.210 --> 00:09:45.710 align:start position:0%
+ 
+ 
+
+00:09:45.710 --> 00:09:48.199 align:start position:0%
+ 
+ 
+
+00:09:48.199 --> 00:09:50.059 align:start position:0%
+ 
+ 
+
+00:09:50.059 --> 00:09:52.069 align:start position:0%
+ 
+ 
+
+00:09:52.069 --> 00:09:53.569 align:start position:0%
+ 
+ 
+
+00:09:53.569 --> 00:09:55.639 align:start position:0%
+ 
+ 
+
+00:09:55.639 --> 00:09:57.079 align:start position:0%
+ 
+ 
+
+00:09:57.079 --> 00:09:59.150 align:start position:0%
+ 
+ 
+
+00:09:59.150 --> 00:10:01.189 align:start position:0%
+ 
+ 
+
+00:10:01.189 --> 00:10:03.079 align:start position:0%
+ 
+ 
+
+00:10:03.079 --> 00:10:04.870 align:start position:0%
+ 
+ 
+
+00:10:04.870 --> 00:10:07.550 align:start position:0%
+ 
+ 
+
+00:10:07.550 --> 00:10:09.879 align:start position:0%
+ 
+ 
+
+00:10:09.879 --> 00:10:13.309 align:start position:0%
+ 
+ 
+
+00:10:13.309 --> 00:10:15.980 align:start position:0%
+ 
+ 
+
+00:10:15.980 --> 00:10:17.269 align:start position:0%
+ 
+ 
+
+00:10:17.269 --> 00:10:19.340 align:start position:0%
+ 
+ 
+
+00:10:19.340 --> 00:10:21.259 align:start position:0%
+ 
+ 
+
+00:10:21.259 --> 00:10:22.850 align:start position:0%
+ 
+ 
+
+00:10:22.850 --> 00:10:26.750 align:start position:0%
+ 
+ 
+
+00:10:26.750 --> 00:10:28.819 align:start position:0%
+ 
+ 
+
+00:10:28.819 --> 00:10:30.650 align:start position:0%
+ 
+ 
+
+00:10:30.650 --> 00:10:32.540 align:start position:0%
+ 
+ 
+
+00:10:32.540 --> 00:10:35.180 align:start position:0%
+ 
+ 
+
+00:10:35.180 --> 00:10:38.360 align:start position:0%
+ 
+ 
+
+00:10:38.360 --> 00:10:40.250 align:start position:0%
+ 
+ 
+
+00:10:40.250 --> 00:10:42.879 align:start position:0%
+ 
+ 
+
+00:10:42.879 --> 00:10:45.079 align:start position:0%
+ 
+ 
+
+00:10:45.079 --> 00:10:47.569 align:start position:0%
+ 
+ 
+
+00:10:47.569 --> 00:10:49.790 align:start position:0%
+ 
+ 
+
+00:10:49.790 --> 00:10:52.269 align:start position:0%
+ 
+ 
+
+00:10:52.269 --> 00:10:54.620 align:start position:0%
+ 
+ 
+
+00:10:54.620 --> 00:10:56.720 align:start position:0%
+ 
+ 
+
+00:10:56.720 --> 00:11:00.199 align:start position:0%
+ 
+ 
+
+00:11:00.199 --> 00:11:02.509 align:start position:0%
+ 
+ 
+
+00:11:02.509 --> 00:11:03.860 align:start position:0%
+ 
+ 
+
+00:11:03.860 --> 00:11:06.470 align:start position:0%
+ 
+ 
+
+00:11:06.470 --> 00:11:08.540 align:start position:0%
+ 
+ 
+
+00:11:08.540 --> 00:11:10.870 align:start position:0%
+ 
+ 
+
+00:11:10.870 --> 00:11:15.670 align:start position:0%
+ 
+ 
+
+00:11:15.670 --> 00:11:18.579 align:start position:0%
+ 
+ 
+
+00:11:18.579 --> 00:11:20.530 align:start position:0%
+ 
+ 
+
+00:11:20.530 --> 00:11:22.689 align:start position:0%
+ 
+ 
+
+00:11:22.689 --> 00:11:24.939 align:start position:0%
+ 
+ 
+
+00:11:24.939 --> 00:11:27.129 align:start position:0%
+ 
+ 
+
+00:11:27.129 --> 00:11:33.069 align:start position:0%
+ 
+ 
+
+00:11:33.069 --> 00:11:34.509 align:start position:0%
+ 
+ 
+
+00:11:34.509 --> 00:11:36.939 align:start position:0%
+ 
+ 
+
+00:11:36.939 --> 00:11:39.699 align:start position:0%
+ 
+ 
+
+00:11:39.699 --> 00:11:41.559 align:start position:0%
+ 
+ 
+
+00:11:41.559 --> 00:11:43.179 align:start position:0%
+ 
+ 
+
+00:11:43.179 --> 00:11:45.220 align:start position:0%
+ 
+ 
+
+00:11:45.220 --> 00:11:46.600 align:start position:0%
+ 
+ 
+
+00:11:46.600 --> 00:11:48.040 align:start position:0%
+ 
+ 
+
+00:11:48.040 --> 00:11:50.139 align:start position:0%
+ 
+ 
+
+00:11:50.139 --> 00:11:53.019 align:start position:0%
+ 
+ 
+
+00:11:53.019 --> 00:11:54.759 align:start position:0%
+ 
+ 
+
+00:11:54.759 --> 00:11:56.499 align:start position:0%
+ 
+ 
+
+00:11:56.499 --> 00:11:57.910 align:start position:0%
+ 
+ 
+
+00:11:57.910 --> 00:11:59.139 align:start position:0%
+ 
+ 
+
+00:11:59.139 --> 00:12:00.999 align:start position:0%
+ 
+ 
+
+00:12:00.999 --> 00:12:03.100 align:start position:0%
+ 
+ 
+
+00:12:03.100 --> 00:12:05.410 align:start position:0%
+ 
+ 
+
+00:12:05.410 --> 00:12:06.850 align:start position:0%
+ 
+ 
+
+00:12:06.850 --> 00:12:10.989 align:start position:0%
+ 
+ 
+
+00:12:10.989 --> 00:12:12.579 align:start position:0%
+ 
+ 
+
+00:12:12.579 --> 00:12:13.720 align:start position:0%
+ 
+ 
+
+00:12:13.720 --> 00:12:17.169 align:start position:0%
+ 
+ 
+
+00:12:17.169 --> 00:12:19.239 align:start position:0%
+ 
+ 
+
+00:12:19.239 --> 00:12:20.739 align:start position:0%
+ 
+ 
+
+00:12:20.739 --> 00:12:22.360 align:start position:0%
+ 
+ 
+
+00:12:22.360 --> 00:12:24.100 align:start position:0%
+ 
+ 
+
+00:12:24.100 --> 00:12:26.019 align:start position:0%
+ 
+ 
+
+00:12:26.019 --> 00:12:28.419 align:start position:0%
+ 
+ 
+
+00:12:28.419 --> 00:12:30.489 align:start position:0%
+ 
+ 
+
+00:12:30.489 --> 00:12:32.319 align:start position:0%
+ 
+ 
+
+00:12:32.319 --> 00:12:33.939 align:start position:0%
+ 
+ 
+
+00:12:33.939 --> 00:12:37.150 align:start position:0%
+ 
+ 
+
+00:12:37.150 --> 00:12:39.549 align:start position:0%
+ 
+ 
+
+00:12:39.549 --> 00:12:43.059 align:start position:0%
+ 
+ 
+
+00:12:43.059 --> 00:12:45.669 align:start position:0%
+ 
+ 
+
+00:12:45.669 --> 00:12:48.100 align:start position:0%
+ 
+ 
+
+00:12:48.100 --> 00:12:49.419 align:start position:0%
+ 
+ 
+
+00:12:49.419 --> 00:12:52.210 align:start position:0%
+ 
+ 
+
+00:12:52.210 --> 00:12:53.919 align:start position:0%
+ 
+ 
+
+00:12:53.919 --> 00:12:56.290 align:start position:0%
+ 
+ 
+
+00:12:56.290 --> 00:12:59.439 align:start position:0%
+ 
+ 
+
+00:12:59.439 --> 00:13:01.689 align:start position:0%
+ 
+ 
+
+00:13:01.689 --> 00:13:04.600 align:start position:0%
+ 
+ 
+
+00:13:04.600 --> 00:13:07.720 align:start position:0%
+ 
+ 
+
+00:13:07.720 --> 00:13:09.850 align:start position:0%
+ 
+ 
+
+00:13:09.850 --> 00:13:11.139 align:start position:0%
+ 
+ 
+
+00:13:11.139 --> 00:13:13.780 align:start position:0%
+ 
+ 
+
+00:13:13.780 --> 00:13:15.980 align:start position:0%
+ 
+ 
+
+00:13:15.980 --> 00:13:18.230 align:start position:0%
+ 
+ 
+
+00:13:18.230 --> 00:13:22.160 align:start position:0%
+ 
+ 
+
+00:13:22.160 --> 00:13:24.860 align:start position:0%
+ 
+ 
+
+00:13:24.860 --> 00:13:28.760 align:start position:0%
+ 
+ 
+
+00:13:28.760 --> 00:13:30.200 align:start position:0%
+ 
+ 
+
+00:13:30.200 --> 00:13:33.320 align:start position:0%
+ 
+ 
+
+00:13:33.320 --> 00:13:34.670 align:start position:0%
+ 
+ 
+
+00:13:34.670 --> 00:13:37.130 align:start position:0%
+ 
+ 
+
+00:13:37.130 --> 00:13:38.840 align:start position:0%
+ 
+ 
+
+00:13:38.840 --> 00:13:41.480 align:start position:0%
+ 
+ 
+
+00:13:41.480 --> 00:13:42.950 align:start position:0%
+ 
+ 
+
+00:13:42.950 --> 00:13:44.150 align:start position:0%
+ 
+ 
+
+00:13:44.150 --> 00:13:46.850 align:start position:0%
+ 
+ 
+
+00:13:46.850 --> 00:13:48.980 align:start position:0%
+ 
+ 
+
+00:13:48.980 --> 00:13:50.720 align:start position:0%
+ 
+ 
+
+00:13:50.720 --> 00:13:52.010 align:start position:0%
+ 
+ 
+
+00:13:52.010 --> 00:13:54.290 align:start position:0%
+ 
+ 
+
+00:13:54.290 --> 00:13:55.910 align:start position:0%
+ 
+ 
+
+00:13:55.910 --> 00:13:58.250 align:start position:0%
+ 
+ 
+
+00:13:58.250 --> 00:13:59.930 align:start position:0%
+ 
+ 
+
+00:13:59.930 --> 00:14:01.610 align:start position:0%
+ 
+ 
+
+00:14:01.610 --> 00:14:03.019 align:start position:0%
+ 
+ 
+
+00:14:03.019 --> 00:14:06.670 align:start position:0%
+ 
+ 
+
+00:14:06.670 --> 00:14:08.900 align:start position:0%
+ 
+ 
+
+00:14:08.900 --> 00:14:13.250 align:start position:0%
+ 
+ 
+
+00:14:13.250 --> 00:14:15.350 align:start position:0%
+ 
+ 
+
+00:14:15.350 --> 00:14:16.760 align:start position:0%
+ 
+ 
+
+00:14:16.760 --> 00:14:18.790 align:start position:0%
+ 
+ 
+
+00:14:18.790 --> 00:14:21.250 align:start position:0%
+ 
+ 
+
+00:14:21.250 --> 00:14:24.140 align:start position:0%
+ 
+ 
+
+00:14:24.140 --> 00:14:26.570 align:start position:0%
+ 
+ 
+
+00:14:26.570 --> 00:14:28.430 align:start position:0%
+ 
+ 
+
+00:14:28.430 --> 00:14:31.100 align:start position:0%
+ 
+ 
+
+00:14:31.100 --> 00:14:34.250 align:start position:0%
+ 
+ 
+
+00:14:34.250 --> 00:14:35.900 align:start position:0%
+ 
+ 
+
+00:14:35.900 --> 00:14:38.030 align:start position:0%
+ 
+ 
+
+00:14:38.030 --> 00:14:42.190 align:start position:0%
+ 
+ 
+
+00:14:42.190 --> 00:14:44.480 align:start position:0%
+ 
+ 
+
+00:14:44.480 --> 00:14:46.190 align:start position:0%
+ 
+ 
+
+00:14:46.190 --> 00:14:49.880 align:start position:0%
+ 
+ 
+
+00:14:49.880 --> 00:14:51.920 align:start position:0%
+ 
+ 
+
+00:14:51.920 --> 00:14:53.750 align:start position:0%
+ 
+ 
+
+00:14:53.750 --> 00:14:56.090 align:start position:0%
+ 
+ 
+
+00:14:56.090 --> 00:14:58.910 align:start position:0%
+ 
+ 
+
+00:14:58.910 --> 00:15:00.560 align:start position:0%
+ 
+ 
+
+00:15:00.560 --> 00:15:02.600 align:start position:0%
+ 
+ 
+
+00:15:02.600 --> 00:15:05.900 align:start position:0%
+ 
+ 
+
+00:15:05.900 --> 00:15:07.370 align:start position:0%
+ 
+ 
+
+00:15:07.370 --> 00:15:09.199 align:start position:0%
+ 
+ 
+
+00:15:09.199 --> 00:15:11.890 align:start position:0%
+ 
+ 
+
+00:15:11.890 --> 00:15:14.750 align:start position:0%
+ 
+ 
+
+00:15:14.750 --> 00:15:15.829 align:start position:0%
+ 
+ 
+
+00:15:15.829 --> 00:15:17.180 align:start position:0%
+ 
+ 
+
+00:15:17.180 --> 00:15:19.640 align:start position:0%
+ 
+ 
+
+00:15:19.640 --> 00:15:21.410 align:start position:0%
+ 
+ 
+
+00:15:21.410 --> 00:15:23.750 align:start position:0%
+ 
+ 
+
+00:15:23.750 --> 00:15:26.210 align:start position:0%
+ 
+ 
+
+00:15:26.210 --> 00:15:28.690 align:start position:0%
+ 
+ 
+
+00:15:28.690 --> 00:15:30.810 align:start position:0%
+ 
+ 
+
+00:15:30.810 --> 00:15:33.010 align:start position:0%
+ 
+ 
+
+00:15:33.010 --> 00:15:34.240 align:start position:0%
+ 
+ 
+
+00:15:34.240 --> 00:15:37.210 align:start position:0%
+ 
+ 
+
+00:15:37.210 --> 00:15:38.620 align:start position:0%
+ 
+ 
+
+00:15:38.620 --> 00:15:41.290 align:start position:0%
+ 
+ 
+
+00:15:41.290 --> 00:15:43.030 align:start position:0%
+ 
+ 
+
+00:15:43.030 --> 00:15:45.280 align:start position:0%
+ 
+ 
+
+00:15:45.280 --> 00:15:47.800 align:start position:0%
+ 
+ 
+
+00:15:47.800 --> 00:15:49.990 align:start position:0%
+ 
+ 
+
+00:15:49.990 --> 00:15:51.280 align:start position:0%
+ 
+ 
+
+00:15:51.280 --> 00:15:53.260 align:start position:0%
+ 
+ 
+
+00:15:53.260 --> 00:15:54.670 align:start position:0%
+ 
+ 
+
+00:15:54.670 --> 00:15:57.160 align:start position:0%
+ 
+ 
+
+00:15:57.160 --> 00:15:59.350 align:start position:0%
+ 
+ 
+
+00:15:59.350 --> 00:16:00.700 align:start position:0%
+ 
+ 
+
+00:16:00.700 --> 00:16:03.970 align:start position:0%
+ 
+ 
+
+00:16:03.970 --> 00:16:05.680 align:start position:0%
+ 
+ 
+
+00:16:05.680 --> 00:16:09.450 align:start position:0%
+ 
+ 
+
+00:16:09.450 --> 00:16:12.760 align:start position:0%
+ 
+ 
+
+00:16:12.760 --> 00:16:13.810 align:start position:0%
+ 
+ 
+
+00:16:13.810 --> 00:16:16.120 align:start position:0%
+ 
+ 
+
+00:16:16.120 --> 00:16:17.320 align:start position:0%
+ 
+ 
+
+00:16:17.320 --> 00:16:19.060 align:start position:0%
+ 
+ 
+
+00:16:19.060 --> 00:16:21.250 align:start position:0%
+ 
+ 
+
+00:16:21.250 --> 00:16:22.330 align:start position:0%
+ 
+ 
+
+00:16:22.330 --> 00:16:24.700 align:start position:0%
+ 
+ 
+
+00:16:24.700 --> 00:16:27.790 align:start position:0%
+ 
+ 
+
+00:16:27.790 --> 00:16:30.820 align:start position:0%
+ 
+ 
+
+00:16:30.820 --> 00:16:32.350 align:start position:0%
+ 
+ 
+
+00:16:32.350 --> 00:16:34.750 align:start position:0%
+ 
+ 
+
+00:16:34.750 --> 00:16:37.330 align:start position:0%
+ 
+ 
+
+00:16:37.330 --> 00:16:39.040 align:start position:0%
+ 
+ 
+
+00:16:39.040 --> 00:16:41.350 align:start position:0%
+ 
+ 
+
+00:16:41.350 --> 00:16:43.090 align:start position:0%
+ 
+ 
+
+00:16:43.090 --> 00:16:44.860 align:start position:0%
+ 
+ 
+
+00:16:44.860 --> 00:16:46.870 align:start position:0%
+ 
+ 
+
+00:16:46.870 --> 00:16:48.490 align:start position:0%
+ 
+ 
+
+00:16:48.490 --> 00:16:51.280 align:start position:0%
+ 
+ 
+
+00:16:51.280 --> 00:16:52.840 align:start position:0%
+ 
+ 
+
+00:16:52.840 --> 00:16:54.880 align:start position:0%
+ 
+ 
+
+00:16:54.880 --> 00:16:56.860 align:start position:0%
+ 
+ 
+
+00:16:56.860 --> 00:16:56.870 align:start position:0%
+ 
+ 
+
+00:16:56.870 --> 00:16:57.940 align:start position:0%
+ 
+
+
+00:16:57.940 --> 00:16:59.560 align:start position:0%
+ 
+ 
+
+00:16:59.560 --> 00:17:01.660 align:start position:0%
+ 
+ 
+
+00:17:01.660 --> 00:17:03.400 align:start position:0%
+ 
+ 
+
+00:17:03.400 --> 00:17:05.260 align:start position:0%
+ 
+ 
+
+00:17:05.260 --> 00:17:07.210 align:start position:0%
+ 
+ 
+
+00:17:07.210 --> 00:17:08.500 align:start position:0%
+ 
+ 
+
+00:17:08.500 --> 00:17:12.160 align:start position:0%
+ 
+ 
+
+00:17:12.160 --> 00:17:14.530 align:start position:0%
+ 
+ 
+
+00:17:14.530 --> 00:17:16.689 align:start position:0%
+ 
+ 
+
+00:17:16.689 --> 00:17:18.069 align:start position:0%
+ 
+ 
+
+00:17:18.069 --> 00:17:20.770 align:start position:0%
+ 
+ 
+
+00:17:20.770 --> 00:17:23.079 align:start position:0%
+ 
+ 
+
+00:17:23.079 --> 00:17:25.030 align:start position:0%
+ 
+ 
+
+00:17:25.030 --> 00:17:26.530 align:start position:0%
+ 
+ 
+
+00:17:26.530 --> 00:17:28.870 align:start position:0%
+ 
+ 
+
+00:17:28.870 --> 00:17:30.100 align:start position:0%
+ 
+ 
+
+00:17:30.100 --> 00:17:32.890 align:start position:0%
+ 
+ 
+
+00:17:32.890 --> 00:17:34.900 align:start position:0%
+ 
+ 
+
+00:17:34.900 --> 00:17:36.880 align:start position:0%
+ 
+ 
+
+00:17:36.880 --> 00:17:38.170 align:start position:0%
+ 
+ 
+
+00:17:38.170 --> 00:17:40.630 align:start position:0%
+ 
+ 
+
+00:17:40.630 --> 00:17:42.580 align:start position:0%
+ 
+ 
+
+00:17:42.580 --> 00:17:42.950 align:start position:0%
+ 
+ 
+
+00:17:42.950 --> 00:17:45.500 align:start position:0%
+ 
+ 
+
+00:17:45.500 --> 00:17:46.970 align:start position:0%
+ 
+ 
+
+00:17:46.970 --> 00:17:50.510 align:start position:0%
+ 
+ 
+
+00:17:50.510 --> 00:17:52.190 align:start position:0%
+ 
+ 
+
+00:17:52.190 --> 00:17:54.500 align:start position:0%
+ 
+ 
+
+00:17:54.500 --> 00:17:56.899 align:start position:0%
+ 
+ 
+
+00:17:56.899 --> 00:17:58.970 align:start position:0%
+ 
+ 
+
+00:17:58.970 --> 00:18:00.710 align:start position:0%
+ 
+ 
+
+00:18:00.710 --> 00:18:03.350 align:start position:0%
+ 
+ 
+
+00:18:03.350 --> 00:18:04.820 align:start position:0%
+ 
+ 
+
+00:18:04.820 --> 00:18:08.889 align:start position:0%
+ 
+ 
+
+00:18:08.889 --> 00:18:11.389 align:start position:0%
+ 
+ 
+
+00:18:11.389 --> 00:18:13.460 align:start position:0%
+ 
+ 
+
+00:18:13.460 --> 00:18:16.490 align:start position:0%
+ 
+ 
+
+00:18:16.490 --> 00:18:18.470 align:start position:0%
+ 
+ 
+
+00:18:18.470 --> 00:18:21.110 align:start position:0%
+ 
+ 
+
+00:18:21.110 --> 00:18:23.620 align:start position:0%
+ 
+ 
+
+00:18:23.620 --> 00:18:26.480 align:start position:0%
+ 
+ 
+
+00:18:26.480 --> 00:18:28.100 align:start position:0%
+ 
+ 
+
+00:18:28.100 --> 00:18:30.919 align:start position:0%
+ 
+ 
+
+00:18:30.919 --> 00:18:33.080 align:start position:0%
+ 
+ 
+
+00:18:33.080 --> 00:18:34.519 align:start position:0%
+ 
+ 
+
+00:18:34.519 --> 00:18:38.240 align:start position:0%
+ 
+ 
+
+00:18:38.240 --> 00:18:40.310 align:start position:0%
+ 
+ 
+
+00:18:40.310 --> 00:18:43.310 align:start position:0%
+ 
+ 
+
+00:18:43.310 --> 00:18:47.000 align:start position:0%
+ 
+ 
+
+00:18:47.000 --> 00:18:48.769 align:start position:0%
+ 
+ 
+
+00:18:48.769 --> 00:18:51.260 align:start position:0%
+ 
+ 
+
+00:18:51.260 --> 00:18:53.779 align:start position:0%
+ 
+ 
+
+00:18:53.779 --> 00:18:56.360 align:start position:0%
+ 
+ 
+
+00:18:56.360 --> 00:18:58.610 align:start position:0%
+ 
+ 
+
+00:18:58.610 --> 00:19:00.620 align:start position:0%
+ 
+ 
+
+00:19:00.620 --> 00:19:03.320 align:start position:0%
+ 
+ 
+
+00:19:03.320 --> 00:19:06.320 align:start position:0%
+ 
+ 
+
+00:19:06.320 --> 00:19:08.930 align:start position:0%
+ 
+ 
+
+00:19:08.930 --> 00:19:11.659 align:start position:0%
+ 
+ 
+
+00:19:11.659 --> 00:19:12.889 align:start position:0%
+ 
+ 
+
+00:19:12.889 --> 00:19:14.060 align:start position:0%
+ 
+ 
+
+00:19:14.060 --> 00:19:16.580 align:start position:0%
+ 
+ 
+
+00:19:16.580 --> 00:19:18.409 align:start position:0%
+ 
+ 
+
+00:19:18.409 --> 00:19:20.389 align:start position:0%
+ 
+ 
+
+00:19:20.389 --> 00:19:22.130 align:start position:0%
+ 
+ 
+
+00:19:22.130 --> 00:19:24.649 align:start position:0%
+ 
+ 
+
+00:19:24.649 --> 00:19:26.810 align:start position:0%
+ 
+ 
+
+00:19:26.810 --> 00:19:28.490 align:start position:0%
+ 
+ 
+
+00:19:28.490 --> 00:19:30.470 align:start position:0%
+ 
+ 
+
+00:19:30.470 --> 00:19:31.669 align:start position:0%
+ 
+ 
+
+00:19:31.669 --> 00:19:35.269 align:start position:0%
+ 
+ 
+
+00:19:35.269 --> 00:19:36.440 align:start position:0%
+ 
+ 
+
+00:19:36.440 --> 00:19:39.260 align:start position:0%
+ 
+ 
+
+00:19:39.260 --> 00:19:40.700 align:start position:0%
+ 
+ 
+
+00:19:40.700 --> 00:19:42.799 align:start position:0%
+ 
+ 
+
+00:19:42.799 --> 00:19:45.370 align:start position:0%
+ 
+ 
+
+00:19:45.370 --> 00:19:47.570 align:start position:0%
+ 
+ 
+
+00:19:47.570 --> 00:19:49.909 align:start position:0%
+ 
+ 
+
+00:19:49.909 --> 00:19:53.600 align:start position:0%
+ 
+ 
+
+00:19:53.600 --> 00:19:56.779 align:start position:0%
+ 
+ 
+
+00:19:56.779 --> 00:19:58.760 align:start position:0%
+ 
+ 
+
+00:19:58.760 --> 00:20:00.169 align:start position:0%
+ 
+ 
+
+00:20:00.169 --> 00:20:02.960 align:start position:0%
+ 
+ 
+
+00:20:02.960 --> 00:20:05.510 align:start position:0%
+ 
+ 
+
+00:20:05.510 --> 00:20:08.600 align:start position:0%
+ 
+ 
+
+00:20:08.600 --> 00:20:10.639 align:start position:0%
+ 
+ 
+
+00:20:10.639 --> 00:20:12.889 align:start position:0%
+ 
+ 
+
+00:20:12.889 --> 00:20:15.019 align:start position:0%
+ 
+ 
+
+00:20:15.019 --> 00:20:16.820 align:start position:0%
+ 
+ 
+
+00:20:16.820 --> 00:20:18.560 align:start position:0%
+ 
+ 
+
+00:20:18.560 --> 00:20:20.480 align:start position:0%
+ 
+ 
+
+00:20:20.480 --> 00:20:23.600 align:start position:0%
+ 
+ 
+
+00:20:23.600 --> 00:20:28.220 align:start position:0%
+ 
+ 
+
+00:20:28.220 --> 00:20:29.779 align:start position:0%
+ 
+ 
+
+00:20:29.779 --> 00:20:31.610 align:start position:0%
+ 
+ 
+
+00:20:31.610 --> 00:20:36.889 align:start position:0%
+ 
+ 
+
+00:20:36.889 --> 00:20:39.409 align:start position:0%
+ 
+ 
+
+00:20:39.409 --> 00:20:42.379 align:start position:0%
+ 
+ 
+
+00:20:42.379 --> 00:20:44.419 align:start position:0%
+ 
+ 
+
+00:20:44.419 --> 00:20:45.680 align:start position:0%
+ 
+ 
+
+00:20:45.680 --> 00:20:47.450 align:start position:0%
+ 
+ 
+
+00:20:47.450 --> 00:20:48.940 align:start position:0%
+ 
+ 
+
+00:20:48.940 --> 00:20:51.320 align:start position:0%
+ 
+ 
+
+00:20:51.320 --> 00:20:54.049 align:start position:0%
+ 
+ 
+
+00:20:54.049 --> 00:20:56.090 align:start position:0%
+ 
+ 
+
+00:20:56.090 --> 00:20:57.529 align:start position:0%
+ 
+ 
+
+00:20:57.529 --> 00:20:59.240 align:start position:0%
+ 
+ 
+
+00:20:59.240 --> 00:21:01.129 align:start position:0%
+ 
+ 
+
+00:21:01.129 --> 00:21:02.240 align:start position:0%
+ 
+ 
+
+00:21:02.240 --> 00:21:03.799 align:start position:0%
+ 
+ 
+
+00:21:03.799 --> 00:21:05.899 align:start position:0%
+ 
+ 
+
+00:21:05.899 --> 00:21:07.460 align:start position:0%
+ 
+ 
+
+00:21:07.460 --> 00:21:09.680 align:start position:0%
+ 
+ 
+
+00:21:09.680 --> 00:21:11.419 align:start position:0%
+ 
+ 
+
+00:21:11.419 --> 00:21:13.340 align:start position:0%
+ 
+ 
+
+00:21:13.340 --> 00:21:18.549 align:start position:0%
+ 
+ 
+
+00:21:18.549 --> 00:21:20.750 align:start position:0%
+ 
+ 
+
+00:21:20.750 --> 00:21:22.760 align:start position:0%
+ 
+ 
+
+00:21:22.760 --> 00:21:25.100 align:start position:0%
+ 
+ 
+
+00:21:25.100 --> 00:21:27.110 align:start position:0%
+ 
+ 
+
+00:21:27.110 --> 00:21:29.060 align:start position:0%
+ 
+ 
+
+00:21:29.060 --> 00:21:31.129 align:start position:0%
+ 
+ 
+
+00:21:31.129 --> 00:21:33.710 align:start position:0%
+ 
+ 
+
+00:21:33.710 --> 00:21:35.210 align:start position:0%
+ 
+ 
+
+00:21:35.210 --> 00:21:36.950 align:start position:0%
+ 
+ 
+
+00:21:36.950 --> 00:21:39.049 align:start position:0%
+ 
+ 
+
+00:21:39.049 --> 00:21:41.750 align:start position:0%
+ 
+ 
+
+00:21:41.750 --> 00:21:43.340 align:start position:0%
+ 
+ 
+
+00:21:43.340 --> 00:21:45.169 align:start position:0%
+ 
+ 
+
+00:21:45.169 --> 00:21:46.399 align:start position:0%
+ 
+ 
+
+00:21:46.399 --> 00:21:48.320 align:start position:0%
+ 
+ 
+
+00:21:48.320 --> 00:21:48.330 align:start position:0%
+ 
+ 
+
+00:21:48.330 --> 00:21:51.490 align:start position:0%
+ 
+
+
+00:21:51.490 --> 00:21:53.230 align:start position:0%
+ 
+ 
+
+00:21:53.230 --> 00:21:54.340 align:start position:0%
+ 
+ 
+
+00:21:54.340 --> 00:21:59.040 align:start position:0%
+ 
+ 
+
+00:21:59.040 --> 00:22:01.510 align:start position:0%
+ 
+ 
+
+00:22:01.510 --> 00:22:03.160 align:start position:0%
+ 
+ 
+
+00:22:03.160 --> 00:22:04.630 align:start position:0%
+ 
+ 
+
+00:22:04.630 --> 00:22:07.240 align:start position:0%
+ 
+ 
+
+00:22:07.240 --> 00:22:08.800 align:start position:0%
+ 
+ 
+
+00:22:08.800 --> 00:22:10.300 align:start position:0%
+ 
+ 
+
+00:22:10.300 --> 00:22:13.600 align:start position:0%
+ 
+ 
+
+00:22:13.600 --> 00:22:15.190 align:start position:0%
+ 
+ 
+
+00:22:15.190 --> 00:22:16.480 align:start position:0%
+ 
+ 
+
+00:22:16.480 --> 00:22:19.900 align:start position:0%
+ 
+ 
+
+00:22:19.900 --> 00:22:21.460 align:start position:0%
+ 
+ 
+
+00:22:21.460 --> 00:22:22.930 align:start position:0%
+ 
+ 
+
+00:22:22.930 --> 00:22:25.060 align:start position:0%
+ 
+ 
+
+00:22:25.060 --> 00:22:26.950 align:start position:0%
+ 
+ 
+
+00:22:26.950 --> 00:22:29.260 align:start position:0%
+ 
+ 
+
+00:22:29.260 --> 00:22:31.000 align:start position:0%
+ 
+ 
+
+00:22:31.000 --> 00:22:33.280 align:start position:0%
+ 
+ 
+
+00:22:33.280 --> 00:22:38.230 align:start position:0%
+ 
+ 
+
+00:22:38.230 --> 00:22:39.520 align:start position:0%
+ 
+ 
+
+00:22:39.520 --> 00:22:40.600 align:start position:0%
+ 
+ 
+
+00:22:40.600 --> 00:22:42.160 align:start position:0%
+ 
+ 
+
+00:22:42.160 --> 00:22:43.810 align:start position:0%
+ 
+ 
+
+00:22:43.810 --> 00:22:45.430 align:start position:0%
+ 
+ 
+
+00:22:45.430 --> 00:22:48.130 align:start position:0%
+ 
+ 
+
+00:22:48.130 --> 00:22:50.080 align:start position:0%
+ 
+ 
+
+00:22:50.080 --> 00:22:53.260 align:start position:0%
+ 
+ 
+
+00:22:53.260 --> 00:22:54.880 align:start position:0%
+ 
+ 
+
+00:22:54.880 --> 00:22:56.920 align:start position:0%
+ 
+ 
+
+00:22:56.920 --> 00:23:00.190 align:start position:0%
+ 
+ 
+
+00:23:00.190 --> 00:23:02.440 align:start position:0%
+ 
+ 
+
+00:23:02.440 --> 00:23:05.170 align:start position:0%
+ 
+ 
+
+00:23:05.170 --> 00:23:08.170 align:start position:0%
+ 
+ 
+
+00:23:08.170 --> 00:23:11.500 align:start position:0%
+ 
+ 
+
+00:23:11.500 --> 00:23:12.940 align:start position:0%
+ 
+ 
+
+00:23:12.940 --> 00:23:15.280 align:start position:0%
+ 
+ 
+
+00:23:15.280 --> 00:23:17.290 align:start position:0%
+ 
+ 
+
+00:23:17.290 --> 00:23:19.120 align:start position:0%
+ 
+ 
+
+00:23:19.120 --> 00:23:22.770 align:start position:0%
+ 
+ 
+
+00:23:22.770 --> 00:23:25.390 align:start position:0%
+ 
+ 
+
+00:23:25.390 --> 00:23:28.030 align:start position:0%
+ 
+ 
+
+00:23:28.030 --> 00:23:31.030 align:start position:0%
+ 
+ 
+
+00:23:31.030 --> 00:23:35.380 align:start position:0%
+ 
+ 
+
+00:23:35.380 --> 00:23:36.820 align:start position:0%
+ 
+ 
+
+00:23:36.820 --> 00:23:39.460 align:start position:0%
+ 
+ 
+
+00:23:39.460 --> 00:23:41.170 align:start position:0%
+ 
+ 
+
+00:23:41.170 --> 00:23:44.680 align:start position:0%
+ 
+ 
+
+00:23:44.680 --> 00:23:47.770 align:start position:0%
+ 
+ 
+
+00:23:47.770 --> 00:23:48.310 align:start position:0%
+ 
+ 
+
+00:23:48.310 --> 00:23:50.410 align:start position:0%
+ 
+ 
+
+00:23:50.410 --> 00:23:53.110 align:start position:0%
+ 
+ 
+
+00:23:53.110 --> 00:23:54.640 align:start position:0%
+ 
+ 
+
+00:23:54.640 --> 00:23:57.580 align:start position:0%
+ 
+ 
+
+00:23:57.580 --> 00:23:59.799 align:start position:0%
+ 
+ 
+
+00:23:59.799 --> 00:24:01.760 align:start position:0%
+ 
+ 
+
+00:24:01.760 --> 00:24:03.530 align:start position:0%
+ 
+ 
+
+00:24:03.530 --> 00:24:05.840 align:start position:0%
+ 
+ 
+
+00:24:05.840 --> 00:24:08.720 align:start position:0%
+ 
+ 
+
+00:24:08.720 --> 00:24:11.570 align:start position:0%
+ 
+ 
+
+00:24:11.570 --> 00:24:12.920 align:start position:0%
+ 
+ 
+
+00:24:12.920 --> 00:24:14.780 align:start position:0%
+ 
+ 
+
+00:24:14.780 --> 00:24:18.770 align:start position:0%
+ 
+ 
+
+00:24:18.770 --> 00:24:21.170 align:start position:0%
+ 
+ 
+
+00:24:21.170 --> 00:24:23.810 align:start position:0%
+ 
+ 
+
+00:24:23.810 --> 00:24:26.570 align:start position:0%
+ 
+ 
+
+00:24:26.570 --> 00:24:29.210 align:start position:0%
+ 
+ 
+
+00:24:29.210 --> 00:24:31.490 align:start position:0%
+ 
+ 
+
+00:24:31.490 --> 00:24:33.230 align:start position:0%
+ 
+ 
+
+00:24:33.230 --> 00:24:36.380 align:start position:0%
+ 
+ 
+
+00:24:36.380 --> 00:24:39.650 align:start position:0%
+ 
+ 
+
+00:24:39.650 --> 00:24:42.230 align:start position:0%
+ 
+ 
+
+00:24:42.230 --> 00:24:45.230 align:start position:0%
+ 
+ 
+
+00:24:45.230 --> 00:24:48.850 align:start position:0%
+ 
+ 
+
+00:24:48.850 --> 00:24:51.110 align:start position:0%
+ 
+ 
+
+00:24:51.110 --> 00:24:52.430 align:start position:0%
+ 
+ 
+
+00:24:52.430 --> 00:24:54.919 align:start position:0%
+ 
+ 
+
+00:24:54.919 --> 00:24:57.799 align:start position:0%
+ 
+ 
+
+00:24:57.799 --> 00:25:01.460 align:start position:0%
+ 
+ 
+
+00:25:01.460 --> 00:25:03.500 align:start position:0%
+ 
+ 
+
+00:25:03.500 --> 00:25:05.780 align:start position:0%
+ 
+ 
+
+00:25:05.780 --> 00:25:07.640 align:start position:0%
+ 
+ 
+
+00:25:07.640 --> 00:25:09.950 align:start position:0%
+ 
+ 
+
+00:25:09.950 --> 00:25:11.620 align:start position:0%
+ 
+ 
+
+00:25:11.620 --> 00:25:13.820 align:start position:0%
+ 
+ 
+
+00:25:13.820 --> 00:25:15.860 align:start position:0%
+ 
+ 
+
+00:25:15.860 --> 00:25:19.130 align:start position:0%
+ 
+ 
+
+00:25:19.130 --> 00:25:24.140 align:start position:0%
+ 
+ 
+
+00:25:24.140 --> 00:25:25.460 align:start position:0%
+ 
+ 
+
+00:25:25.460 --> 00:25:27.590 align:start position:0%
+ 
+ 
+
+00:25:27.590 --> 00:25:29.480 align:start position:0%
+ 
+ 
+
+00:25:29.480 --> 00:25:30.980 align:start position:0%
+ 
+ 
+
+00:25:30.980 --> 00:25:32.090 align:start position:0%
+ 
+ 
+
+00:25:32.090 --> 00:25:32.100 align:start position:0%
+ 
+ 
+
+00:25:32.100 --> 00:25:32.570 align:start position:0%
+ 
+
+
+00:25:32.570 --> 00:25:37.430 align:start position:0%
+ 
+ 
+
+00:25:37.430 --> 00:25:43.130 align:start position:0%
+ 
+ 
+
+00:25:43.130 --> 00:25:45.290 align:start position:0%
+ 
+ 
+
+00:25:45.290 --> 00:25:46.070 align:start position:0%
+ 
+ 
+
+00:25:46.070 --> 00:25:48.110 align:start position:0%
+ 
+ 
+
+00:25:48.110 --> 00:25:51.410 align:start position:0%
+ 
+ 
+
+00:25:51.410 --> 00:25:53.630 align:start position:0%
+ 
+ 
+
+00:25:53.630 --> 00:25:55.190 align:start position:0%
+ 
+ 
+
+00:25:55.190 --> 00:25:57.560 align:start position:0%
+ 
+ 
+
+00:25:57.560 --> 00:26:00.290 align:start position:0%
+ 
+ 
+
+00:26:00.290 --> 00:26:02.660 align:start position:0%
+ 
+ 
+
+00:26:02.660 --> 00:26:04.160 align:start position:0%
+ 
+ 
+
+00:26:04.160 --> 00:26:07.490 align:start position:0%
+ 
+ 
+
+00:26:07.490 --> 00:26:10.880 align:start position:0%
+ 
+ 
+
+00:26:10.880 --> 00:26:11.960 align:start position:0%
+ 
+ 
+
+00:26:11.960 --> 00:26:16.129 align:start position:0%
+ 
+ 
+
+00:26:16.129 --> 00:26:17.840 align:start position:0%
+ 
+ 
+
+00:26:17.840 --> 00:26:20.419 align:start position:0%
+ 
+ 
+
+00:26:20.419 --> 00:26:23.060 align:start position:0%
+ 
+ 
+
+00:26:23.060 --> 00:26:24.590 align:start position:0%
+ 
+ 
+
+00:26:24.590 --> 00:26:26.149 align:start position:0%
+ 
+ 
+
+00:26:26.149 --> 00:26:30.499 align:start position:0%
+ 
+ 
+
+00:26:30.499 --> 00:26:32.389 align:start position:0%
+ 
+ 
+
+00:26:32.389 --> 00:26:33.919 align:start position:0%
+ 
+ 
+
+00:26:33.919 --> 00:26:36.110 align:start position:0%
+ 
+ 
+
+00:26:36.110 --> 00:26:38.180 align:start position:0%
+ 
+ 
+
+00:26:38.180 --> 00:26:43.669 align:start position:0%
+ 
+ 
+
+00:26:43.669 --> 00:26:46.100 align:start position:0%
+ 
+ 
+
+00:26:46.100 --> 00:26:48.440 align:start position:0%
+ 
+ 
+
+00:26:48.440 --> 00:26:50.509 align:start position:0%
+ 
+ 
+
+00:26:50.509 --> 00:26:52.249 align:start position:0%
+ 
+ 
+
+00:26:52.249 --> 00:26:56.710 align:start position:0%
+ 
+ 
+
+00:26:56.710 --> 00:26:59.899 align:start position:0%
+ 
+ 
+
+00:26:59.899 --> 00:27:01.610 align:start position:0%
+ 
+ 
+
+00:27:01.610 --> 00:27:03.619 align:start position:0%
+ 
+ 
+
+00:27:03.619 --> 00:27:05.269 align:start position:0%
+ 
+ 
+
+00:27:05.269 --> 00:27:09.019 align:start position:0%
+ 
+ 
+
+00:27:09.019 --> 00:27:12.740 align:start position:0%
+ 
+ 
+
+00:27:12.740 --> 00:27:15.049 align:start position:0%
+ 
+ 
+
+00:27:15.049 --> 00:27:18.110 align:start position:0%
+ 
+ 
+
+00:27:18.110 --> 00:27:19.519 align:start position:0%
+ 
+ 
+
+00:27:19.519 --> 00:27:22.159 align:start position:0%
+ 
+ 
+
+00:27:22.159 --> 00:27:24.440 align:start position:0%
+ 
+ 
+
+00:27:24.440 --> 00:27:27.499 align:start position:0%
+ 
+ 
+
+00:27:27.499 --> 00:27:30.139 align:start position:0%
+ 
+ 
+
+00:27:30.139 --> 00:27:31.970 align:start position:0%
+ 
+ 
+
+00:27:31.970 --> 00:27:33.499 align:start position:0%
+ 
+ 
+
+00:27:33.499 --> 00:27:34.999 align:start position:0%
+ 
+ 
+
+00:27:34.999 --> 00:27:36.830 align:start position:0%
+ 
+ 
+
+00:27:36.830 --> 00:27:39.289 align:start position:0%
+ 
+ 
+
+00:27:39.289 --> 00:27:41.389 align:start position:0%
+ 
+ 
+
+00:27:41.389 --> 00:27:43.879 align:start position:0%
+ 
+ 
+
+00:27:43.879 --> 00:27:46.369 align:start position:0%
+ 
+ 
+
+00:27:46.369 --> 00:27:48.980 align:start position:0%
+ 
+ 
+
+00:27:48.980 --> 00:27:52.369 align:start position:0%
+ 
+ 
+
+00:27:52.369 --> 00:27:54.320 align:start position:0%
+ 
+ 
+
+00:27:54.320 --> 00:27:56.299 align:start position:0%
+ 
+ 
+
+00:27:56.299 --> 00:27:58.879 align:start position:0%
+ 
+ 
+
+00:27:58.879 --> 00:28:00.529 align:start position:0%
+ 
+ 
+
+00:28:00.529 --> 00:28:02.659 align:start position:0%
+ 
+ 
+
+00:28:02.659 --> 00:28:06.289 align:start position:0%
+ 
+ 
+
+00:28:06.289 --> 00:28:08.860 align:start position:0%
+ 
+ 
+
+00:28:08.860 --> 00:28:11.210 align:start position:0%
+ 
+ 
+
+00:28:11.210 --> 00:28:13.159 align:start position:0%
+ 
+ 
+
+00:28:13.159 --> 00:28:14.539 align:start position:0%
+ 
+ 
+
+00:28:14.539 --> 00:28:17.389 align:start position:0%
+ 
+ 
+
+00:28:17.389 --> 00:28:19.190 align:start position:0%
+ 
+ 
+
+00:28:19.190 --> 00:28:21.259 align:start position:0%
+ 
+ 
+
+00:28:21.259 --> 00:28:23.220 align:start position:0%
+ 
+ 
+
+00:28:23.220 --> 00:28:25.139 align:start position:0%
+ 
+ 
+
+00:28:25.139 --> 00:28:26.580 align:start position:0%
+ 
+ 
+
+00:28:26.580 --> 00:28:31.649 align:start position:0%
+ 
+ 
+
+00:28:31.649 --> 00:28:33.139 align:start position:0%
+ 
+ 
+
+00:28:33.139 --> 00:28:36.539 align:start position:0%
+ 
+ 
+
+00:28:36.539 --> 00:28:37.889 align:start position:0%
+ 
+ 
+
+00:28:37.889 --> 00:28:40.710 align:start position:0%
+ 
+ 
+
+00:28:40.710 --> 00:28:43.320 align:start position:0%
+ 
+ 
+
+00:28:43.320 --> 00:28:45.480 align:start position:0%
+ 
+ 
+
+00:28:45.480 --> 00:28:47.399 align:start position:0%
+ 
+ 
+
+00:28:47.399 --> 00:28:48.659 align:start position:0%
+ 
+ 
+
+00:28:48.659 --> 00:28:52.440 align:start position:0%
+ 
+ 
+
+00:28:52.440 --> 00:28:56.789 align:start position:0%
+ 
+ 
+
+00:28:56.789 --> 00:28:59.399 align:start position:0%
+ 
+ 
+
+00:28:59.399 --> 00:29:00.210 align:start position:0%
+ 
+ 
+
+00:29:00.210 --> 00:29:02.700 align:start position:0%
+ 
+ 
+
+00:29:02.700 --> 00:29:04.019 align:start position:0%
+ 
+ 
+
+00:29:04.019 --> 00:29:06.149 align:start position:0%
+ 
+ 
+
+00:29:06.149 --> 00:29:07.799 align:start position:0%
+ 
+ 
+
+00:29:07.799 --> 00:29:09.570 align:start position:0%
+ 
+ 
+
+00:29:09.570 --> 00:29:11.250 align:start position:0%
+ 
+ 
+
+00:29:11.250 --> 00:29:13.769 align:start position:0%
+ 
+ 
+
+00:29:13.769 --> 00:29:15.600 align:start position:0%
+ 
+ 
+
+00:29:15.600 --> 00:29:17.700 align:start position:0%
+ 
+ 
+
+00:29:17.700 --> 00:29:18.960 align:start position:0%
+ 
+ 
+
+00:29:18.960 --> 00:29:21.060 align:start position:0%
+ 
+ 
+
+00:29:21.060 --> 00:29:24.539 align:start position:0%
+ 
+ 
+
+00:29:24.539 --> 00:29:26.519 align:start position:0%
+ 
+ 
+
+00:29:26.519 --> 00:29:30.750 align:start position:0%
+ 
+ 
+
+00:29:30.750 --> 00:29:32.009 align:start position:0%
+ 
+ 
+
+00:29:32.009 --> 00:29:34.049 align:start position:0%
+ 
+ 
+
+00:29:34.049 --> 00:29:37.399 align:start position:0%
+ 
+ 
+
+00:29:37.399 --> 00:29:41.220 align:start position:0%
+ 
+ 
+
+00:29:41.220 --> 00:29:43.649 align:start position:0%
+ 
+ 
+
+00:29:43.649 --> 00:29:47.070 align:start position:0%
+ 
+ 
+
+00:29:47.070 --> 00:29:48.870 align:start position:0%
+ 
+ 
+
+00:29:48.870 --> 00:29:52.379 align:start position:0%
+ 
+ 
+
+00:29:52.379 --> 00:29:54.570 align:start position:0%
+ 
+ 
+
+00:29:54.570 --> 00:29:56.190 align:start position:0%
+ 
+ 
+
+00:29:56.190 --> 00:29:58.409 align:start position:0%
+ 
+ 
+
+00:29:58.409 --> 00:29:59.850 align:start position:0%
+ 
+ 
+
+00:29:59.850 --> 00:30:04.080 align:start position:0%
+ 
+ 
+
+00:30:04.080 --> 00:30:05.940 align:start position:0%
+ 
+ 
+
+00:30:05.940 --> 00:30:07.440 align:start position:0%
+ 
+ 
+
+00:30:07.440 --> 00:30:09.120 align:start position:0%
+ 
+ 
+
+00:30:09.120 --> 00:30:11.789 align:start position:0%
+ 
+ 
+
+00:30:11.789 --> 00:30:14.399 align:start position:0%
+ 
+ 
+
+00:30:14.399 --> 00:30:15.480 align:start position:0%
+ 
+ 
+
+00:30:15.480 --> 00:30:19.769 align:start position:0%
+ 
+ 
+
+00:30:19.769 --> 00:30:21.149 align:start position:0%
+ 
+ 
+
+00:30:21.149 --> 00:30:22.620 align:start position:0%
+ 
+ 
+
+00:30:22.620 --> 00:30:24.870 align:start position:0%
+ 
+ 
+
+00:30:24.870 --> 00:30:27.299 align:start position:0%
+ 
+ 
+
+00:30:27.299 --> 00:30:29.310 align:start position:0%
+ 
+ 
+
+00:30:29.310 --> 00:30:31.710 align:start position:0%
+ 
+ 
+
+00:30:31.710 --> 00:30:34.049 align:start position:0%
+ 
+ 
+
+00:30:34.049 --> 00:30:35.250 align:start position:0%
+ 
+ 
+
+00:30:35.250 --> 00:30:37.580 align:start position:0%
+ 
+ 
+
+00:30:37.580 --> 00:30:39.930 align:start position:0%
+ 
+ 
+
+00:30:39.930 --> 00:30:42.030 align:start position:0%
+ 
+ 
+
+00:30:42.030 --> 00:30:45.360 align:start position:0%
+ 
+ 
+
+00:30:45.360 --> 00:30:47.160 align:start position:0%
+ 
+ 
+
+00:30:47.160 --> 00:30:48.630 align:start position:0%
+ 
+ 
+
+00:30:48.630 --> 00:30:50.730 align:start position:0%
+ 
+ 
+
+00:30:50.730 --> 00:30:54.360 align:start position:0%
+ 
+ 
+
+00:30:54.360 --> 00:30:56.520 align:start position:0%
+ 
+ 
+
+00:30:56.520 --> 00:30:58.470 align:start position:0%
+ 
+ 
+
+00:30:58.470 --> 00:30:59.690 align:start position:0%
+ 
+ 
+
+00:30:59.690 --> 00:31:01.800 align:start position:0%
+ 
+ 
+
+00:31:01.800 --> 00:31:03.300 align:start position:0%
+ 
+ 
+
+00:31:03.300 --> 00:31:19.379 align:start position:0%
+ 
+ 
+
+00:31:19.379 --> 00:31:22.829 align:start position:0%
+ 
+ 
+
+00:31:22.829 --> 00:31:24.690 align:start position:0%
+ 
+ 
+
+00:31:24.690 --> 00:31:25.919 align:start position:0%
+ 
+ 
+
+00:31:25.919 --> 00:31:28.799 align:start position:0%
+ 
+ 
+
+00:31:28.799 --> 00:31:31.289 align:start position:0%
+ 
+ 
+
+00:31:31.289 --> 00:31:32.969 align:start position:0%
+ 
+ 
+
+00:31:32.969 --> 00:31:35.489 align:start position:0%
+ 
+ 
+
+00:31:35.489 --> 00:31:37.199 align:start position:0%
+ 
+ 
+
+00:31:37.199 --> 00:31:39.479 align:start position:0%
+ 
+ 
+
+00:31:39.479 --> 00:31:41.819 align:start position:0%
+ 
+ 
+
+00:31:41.819 --> 00:31:43.379 align:start position:0%
+ 
+ 
+
+00:31:43.379 --> 00:31:45.930 align:start position:0%
+ 
+ 
+
+00:31:45.930 --> 00:31:49.919 align:start position:0%
+ 
+ 
+
+00:31:49.919 --> 00:31:52.469 align:start position:0%
+ 
+ 
+
+00:31:52.469 --> 00:31:54.659 align:start position:0%
+ 
+ 
+
+00:31:54.659 --> 00:31:56.669 align:start position:0%
+ 
+ 
+
+00:31:56.669 --> 00:31:58.109 align:start position:0%
+ 
+ 
+
+00:31:58.109 --> 00:32:00.599 align:start position:0%
+ 
+ 
+
+00:32:00.599 --> 00:32:02.249 align:start position:0%
+ 
+ 
+
+00:32:02.249 --> 00:32:04.379 align:start position:0%
+ 
+ 
+
+00:32:04.379 --> 00:32:05.940 align:start position:0%
+ 
+ 
+
+00:32:05.940 --> 00:32:08.699 align:start position:0%
+ 
+ 
+
+00:32:08.699 --> 00:32:10.649 align:start position:0%
+ 
+ 
+
+00:32:10.649 --> 00:32:12.539 align:start position:0%
+ 
+ 
+
+00:32:12.539 --> 00:32:15.619 align:start position:0%
+ 
+ 
+
+00:32:15.619 --> 00:32:18.779 align:start position:0%
+ 
+ 
+
+00:32:18.779 --> 00:32:21.299 align:start position:0%
+ 
+ 
+
+00:32:21.299 --> 00:32:21.989 align:start position:0%
+ 
+ 
+
+00:32:21.989 --> 00:32:23.729 align:start position:0%
+ 
+ 
+
+00:32:23.729 --> 00:32:24.839 align:start position:0%
+ 
+ 
+
+00:32:24.839 --> 00:32:28.259 align:start position:0%
+ 
+ 
+
+00:32:28.259 --> 00:32:30.049 align:start position:0%
+ 
+ 
+
+00:32:30.049 --> 00:32:32.609 align:start position:0%
+ 
+ 
+
+00:32:32.609 --> 00:32:34.560 align:start position:0%
+ 
+ 
+
+00:32:34.560 --> 00:32:35.819 align:start position:0%
+ 
+ 
+
+00:32:35.819 --> 00:32:37.440 align:start position:0%
+ 
+ 
+
+00:32:37.440 --> 00:32:40.019 align:start position:0%
+ 
+ 
+
+00:32:40.019 --> 00:32:41.629 align:start position:0%
+ 
+ 
+
+00:32:41.629 --> 00:32:43.649 align:start position:0%
+ 
+ 
+
+00:32:43.649 --> 00:32:49.409 align:start position:0%
+ 
+ 
+
+00:32:49.409 --> 00:32:51.719 align:start position:0%
+ 
+ 
+
+00:32:51.719 --> 00:32:53.849 align:start position:0%
+ 
+ 
+
+00:32:53.849 --> 00:32:55.819 align:start position:0%
+ 
+ 
+
+00:32:55.819 --> 00:32:57.810 align:start position:0%
+ 
+ 
+
+00:32:57.810 --> 00:32:59.729 align:start position:0%
+ 
+ 
+
+00:32:59.729 --> 00:33:01.769 align:start position:0%
+ 
+ 
+
+00:33:01.769 --> 00:33:01.779 align:start position:0%
+ 
+ 
+
+00:33:01.779 --> 00:33:04.770 align:start position:0%
+ 
+
+
+00:33:04.770 --> 00:33:09.720 align:start position:0%
+ 
+ 
+
+00:33:09.720 --> 00:33:12.780 align:start position:0%
+ 
+ 
+
+00:33:12.780 --> 00:33:16.560 align:start position:0%
+ 
+ 
+
+00:33:16.560 --> 00:33:18.660 align:start position:0%
+ 
+ 
+
+00:33:18.660 --> 00:33:22.260 align:start position:0%
+ 
+ 
+
+00:33:22.260 --> 00:33:23.310 align:start position:0%
+ 
+ 
+
+00:33:23.310 --> 00:33:28.050 align:start position:0%
+ 
+ 
+
+00:33:28.050 --> 00:33:29.580 align:start position:0%
+ 
+ 
+
+00:33:29.580 --> 00:33:33.180 align:start position:0%
+ 
+ 
+
+00:33:33.180 --> 00:33:36.900 align:start position:0%
+ 
+ 
+
+00:33:36.900 --> 00:33:38.430 align:start position:0%
+ 
+ 
+
+00:33:38.430 --> 00:33:42.360 align:start position:0%
+ 
+ 
+
+00:33:42.360 --> 00:33:44.460 align:start position:0%
+ 
+ 
+
+00:33:44.460 --> 00:33:45.900 align:start position:0%
+ 
+ 
+
+00:33:45.900 --> 00:33:47.100 align:start position:0%
+ 
+ 
+
+00:33:47.100 --> 00:33:49.170 align:start position:0%
+ 
+ 
+
+00:33:49.170 --> 00:33:53.340 align:start position:0%
+ 
+ 
+
+00:33:53.340 --> 00:33:54.360 align:start position:0%
+ 
+ 
+
+00:33:54.360 --> 00:33:57.090 align:start position:0%
+ 
+ 
+
+00:33:57.090 --> 00:33:58.740 align:start position:0%
+ 
+ 
+
+00:33:58.740 --> 00:34:00.030 align:start position:0%
+ 
+ 
+
+00:34:00.030 --> 00:34:01.560 align:start position:0%
+ 
+ 
+
+00:34:01.560 --> 00:34:03.810 align:start position:0%
+ 
+ 
+
+00:34:03.810 --> 00:34:06.420 align:start position:0%
+ 
+ 
+
+00:34:06.420 --> 00:34:07.800 align:start position:0%
+ 
+ 
+
+00:34:07.800 --> 00:34:09.149 align:start position:0%
+ 
+ 
+
+00:34:09.149 --> 00:34:10.440 align:start position:0%
+ 
+ 
+
+00:34:10.440 --> 00:34:18.750 align:start position:0%
+ 
+ 
+
+00:34:18.750 --> 00:34:23.070 align:start position:0%
+ 
+ 
+
+00:34:23.070 --> 00:34:25.590 align:start position:0%
+ 
+ 
+
+00:34:25.590 --> 00:34:26.850 align:start position:0%
+ 
+ 
+
+00:34:26.850 --> 00:34:28.169 align:start position:0%
+ 
+ 
+
+00:34:28.169 --> 00:34:30.540 align:start position:0%
+ 
+ 
+
+00:34:30.540 --> 00:34:32.760 align:start position:0%
+ 
+ 
+
+00:34:32.760 --> 00:34:34.710 align:start position:0%
+ 
+ 
+
+00:34:34.710 --> 00:34:36.960 align:start position:0%
+ 
+ 
+
+00:34:36.960 --> 00:34:39.060 align:start position:0%
+ 
+ 
+
+00:34:39.060 --> 00:34:40.200 align:start position:0%
+ 
+ 
+
+00:34:40.200 --> 00:34:42.180 align:start position:0%
+ 
+ 
+
+00:34:42.180 --> 00:34:44.460 align:start position:0%
+ 
+ 
+
+00:34:44.460 --> 00:34:46.320 align:start position:0%
+ 
+ 
+
+00:34:46.320 --> 00:34:47.970 align:start position:0%
+ 
+ 
+
+00:34:47.970 --> 00:34:49.470 align:start position:0%
+ 
+ 
+
+00:34:49.470 --> 00:34:51.510 align:start position:0%
+ 
+ 
+
+00:34:51.510 --> 00:34:54.720 align:start position:0%
+ 
+ 
+
+00:34:54.720 --> 00:34:56.580 align:start position:0%
+ 
+ 
+
+00:34:56.580 --> 00:34:58.470 align:start position:0%
+ 
+ 
+
+00:34:58.470 --> 00:35:02.940 align:start position:0%
+ 
+ 
+
+00:35:02.940 --> 00:35:04.500 align:start position:0%
+ 
+ 
+
+00:35:04.500 --> 00:35:07.860 align:start position:0%
+ 
+ 
+
+00:35:07.860 --> 00:35:10.470 align:start position:0%
+ 
+ 
+
+00:35:10.470 --> 00:35:11.970 align:start position:0%
+ 
+ 
+
+00:35:11.970 --> 00:35:13.860 align:start position:0%
+ 
+ 
+
+00:35:13.860 --> 00:35:14.960 align:start position:0%
+ 
+ 
+
+00:35:14.960 --> 00:35:16.730 align:start position:0%
+ 
+ 
+
+00:35:16.730 --> 00:35:19.760 align:start position:0%
+ 
+ 
+
+00:35:19.760 --> 00:35:21.890 align:start position:0%
+ 
+ 
+
+00:35:21.890 --> 00:35:24.620 align:start position:0%
+ 
+ 
+
+00:35:24.620 --> 00:35:26.000 align:start position:0%
+ 
+ 
+
+00:35:26.000 --> 00:35:33.200 align:start position:0%
+ 
+ 
+
+00:35:33.200 --> 00:35:38.920 align:start position:0%
+ 
+ 
+
+00:35:38.920 --> 00:35:40.910 align:start position:0%
+ 
+ 
+
+00:35:40.910 --> 00:35:40.920 align:start position:0%
+ 
+ 
+
+00:35:40.920 --> 00:35:41.270 align:start position:0%
+ 
+
+
+00:35:41.270 --> 00:35:44.300 align:start position:0%
+ 
+ 
+
+00:35:44.300 --> 00:35:45.410 align:start position:0%
+ 
+ 
+
+00:35:45.410 --> 00:35:47.930 align:start position:0%
+ 
+ 
+
+00:35:47.930 --> 00:35:50.750 align:start position:0%
+ 
+ 
+
+00:35:50.750 --> 00:35:52.069 align:start position:0%
+ 
+ 
+
+00:35:52.069 --> 00:35:54.020 align:start position:0%
+ 
+ 
+
+00:35:54.020 --> 00:35:55.190 align:start position:0%
+ 
+ 
+
+00:35:55.190 --> 00:35:57.740 align:start position:0%
+ 
+ 
+
+00:35:57.740 --> 00:36:00.319 align:start position:0%
+ 
+ 
+
+00:36:00.319 --> 00:36:01.760 align:start position:0%
+ 
+ 
+
+00:36:01.760 --> 00:36:04.010 align:start position:0%
+ 
+ 
+
+00:36:04.010 --> 00:36:05.000 align:start position:0%
+ 
+ 
+
+00:36:05.000 --> 00:36:06.260 align:start position:0%
+ 
+ 
+
+00:36:06.260 --> 00:36:08.329 align:start position:0%
+ 
+ 
+
+00:36:08.329 --> 00:36:10.040 align:start position:0%
+ 
+ 
+
+00:36:10.040 --> 00:36:11.720 align:start position:0%
+ 
+ 
+
+00:36:11.720 --> 00:36:13.040 align:start position:0%
+ 
+ 
+
+00:36:13.040 --> 00:36:15.530 align:start position:0%
+ 
+ 
+
+00:36:15.530 --> 00:36:16.520 align:start position:0%
+ 
+ 
+
+00:36:16.520 --> 00:36:19.790 align:start position:0%
+ 
+ 
+
