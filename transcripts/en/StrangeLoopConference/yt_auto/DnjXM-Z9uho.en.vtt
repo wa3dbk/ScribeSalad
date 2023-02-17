@@ -1,0 +1,3280 @@
+WEBVTT
+Kind: captions
+Language: en
+
+00:00:04.910 --> 00:00:07.360 align:start position:0%
+ 
+thank you all for coming today it's  Saturday it's before noon so really  appreciate the audience  my name is maja shock and I'm a software  architect at Riot Games and I'm today to  talk about dry out messaging service or  RMS in short so before we kick off just  for my observation how many of you have  ever heard or played League of Legends  holy crap okay that's amazing  cool and so Riot Games is a developer  and publisher of League of Legends more  about the game for those who never heard  of it in a second but as a company our  main focus is really on the player  experience we use it as a razor for  making any decisions regardless of they  are product or technology oriented it  helps us tremendously that we are all  gamers here like we really play games  and join em and we can empathize with  with other players our mission is that  we aspire to be the most player focused  game company in the world so what is  League of Legends League of Legends we  we launched the game in 2009 and since  then we grown the player base to some  pretty big numbers and more about the  numbers in a second League of Legends is  a team based game called in a genre  called MOBA which is a multiplayer  online battle arena where two teams  compete to control and map and achieve  objectives  each player of these teams can control  Swan champion and typically teams  consists of five players the entire game  is is placed in the modern fantasy world  and to give you some more context around  the scale and types of problems we were  trying to solve when architecting write  messaging service here are some numbers  we really  in September 2016 regarding popularity  of league of legends so we are super  lucky to have over hundred million  players enjoying the game monthly and  out of which 27 over 27 million players  play league daily if you check our  systems at any given time of a day we  can see it at least seven and a half  million players connected to our servers  so all of these numbers heavily  influenced decisions we've made when  building RMS so not now let's jump to a  quick overview of what we're going to  cover today I would like to start with a  very high level design of riot messaging  service then I would like to follow up  with the implementation how we got there  and what word architectural decisions  behind RMS as well as what were the key  lessons learned for us when we created  it and also what are the plans for the  future for the service ok let's start  so let's before we before we jump  directly into design of RMS let's let's  kick off with describing why we even  wanted to build RMS in in the first  place in the old way when we started  building League the old way of handling  player to server communication for the  out of game events used persistent TCP  connections using LCDs RTMP protocol  that's a proprietary binary protocol  introduced by Adobe overall it's it was  designed to handle media but we decided  that is a great fit for game traffic or  not viewing game but out of the game  traffic as well and it turned out that  the protocol really was having really  big issues with security the way we  built the platform as a monolith  prevented us from growing it fast  deploying and like transitioning into  the micro service world with very fast  iteration loops and we also suffered  from pretty significant scalability  issues a single instance a single server  holding a player connections could only  handle around 30,000 players given the  scale we were operating it building out  the platform for you know hundreds of  millions of players was a huge challenge  and as we were building more and more  features for League and also other  products in R&amp;D we realized we can't  really replicate the same pattern and we  needed something better and that's how  we created RMS RMS or riot messaging  service is is a back-end service  something we deploy on the server side  it provides asynchronous messages  capabilities notifications that are sent  using the fire-and-forget semantics to  from services from back-end services to  connected players so that's the way for  the backend micro services to somehow  deliver either notifications or payloads  to clients for example leaf client and  today RMS has been adopted by over 20  different products and features riot and  is used every day by all big players  around the world to give you an example  of what features use RMS it's clubs  which are player organized and  controlled social groups its missions  which are challenges for the players  with with rewards and honor which is a  system that encourages positive behavior  among the community to better illustrate  how our mess works let's let's use push  Mobile push notification analogy in the  beginning let's imagine that we have  someone sending us an email the email  hits our email server and email server  stores it in some sort of the database  the interesting thing is that the email  server because everyone now uses smart  phones figures out that ok that  recipient probably has a phone and would  like to be notified that he has an  incoming email  in that case that email server sends a  request to the push notification service  informing it that hey you've got an  email but because your incoming email  might be pretty big  it might also have attachments you don't  necessarily want to receive them as push  notifications as a matter of fact the  push notification servers have very  strict limits when it comes to size so  what happens is that push notification  service actually receives only a very  high level digest of of what the email  is which is the subject of the email  sender and maybe few first paragraphs of  text it sends a push notification to  your phone your phone buzzes and  displays a toast on your home screen  and then some time later you're gonna go  into your email app open it up and  download the original email including  attachments all the text and call the  context around the email but instead of  going to the push notification service  you're going to go to your original  email server and RMS works in a very  similar way but instead of the mobile  phones we have desktop clients or League  of Legends clients and instead of the  push notification service we have RMS  let's let's see how it works with League  of Legends example as clubs as mentioned  earlier clubs are player created  organized controlled social groups each  Club can be described using several  properties for example the club name  club roster which is a list of members  with a ranks message of the day and so  on first of all whenever you start  League of Legends you launch and  authenticate with with our servers as a  result you're gonna get a signed GWT  token claiming who you are so that you  can prove with other servers that you  are in fact you as soon as  authentication is done  RMS requires clients to establish a  persistent TCP connection using  WebSocket protocol as a transport  in order to receive any incoming  notifications this is an example of  WebSocket URI the aforementioned token  we got from the authentication service  is highlighted in in red here so we pass  that to RMS and RMS is essentially  authenticating validating the token and  letting you N and as one of the claims  encoded inside of the token there is a  field called subject which is which we  interpret as player ID player ID is a  standard way to have to identify players  in our ecosystem and is used by all  internal services at riot it's also  globally unique and immutable internally  we called this player ID poet as player  universal unique ID as soon as the  connection is established League client  will go to the club service to fetch the  latest state and by state  I mean list of clubs that this player is  a member of and for each of those clubs  all the details about the clubs and then  clubs are ready to go you have Chad you  have a list of members and you can start  using them what happens when there is an  invite incoming to the club in this case  clubs service will update their internal  state and then issue a rest request a  post request to RMS the with the  notification the notification itself is  a simple JSON blob that informs RMS what  to do with the message there are few  required fields in that blob one of them  is called resource which is a rest like  string denoting which component of the  client should handle this internal  notification you can think of the  resource as a routing key that is used  by the client to dispatch the  notification to the corresponding  or subsystem the next one is variant a  which is a string that allows us to  guard against duplicate so if the the  sender service fires few notifications  which carried the same version it is  safe to assume for the client that he  can ignore it it also helps with  notification reordering because we use  HTTP requests can actually get reordered  on the way to RMS and the next one is a  list of player IDs a list of poets and  that's the list of all players that  should receive this notification in case  of batch notifications for example  whenever the club changes the message of  the day instead of notifying 50 players  one by one club service can actually  issue a one notification with 50 player  IDs on this recipients list and lastly  we have a short optional payload to  deliver and more about it in a second so  as soon as RMS receives this  notification it will use apply internal  routing rules and forwarded notification  to connected client as a result client  will then go to the club service to  fetch the entire state to figure out  what actually happened why did they  receive that notification and then  display a proper toast to the player  I've mentioned earlier RMS can also  carry short payloads in the  notifications and they are completely  oblivious to RMS it's just a binary data  that is transported from point A to  point B and it can be anything from JSON  basic c4 blob XML or even plain string  okay let's let's dive deep into aromatic  fermentation as mentioned earlier rms is  a server-side application under the hood  it consists is built by two different  tiers routing an edge functionally  routing is responsible for accepting and  handling published notifications from  external services like clubs as well as  maintaining a list of all connected  players to the platform on the other  hand edge is responsible for handling  player connections those WebSocket  connections I was talking about and  forwarding incoming messages directly to  the clients both ears are completely  decoupled we can scale and deploy them  independently for example in one of our  RMS clusters we have four servers that  run in routing tier and around ten  servers depending on the scale and time  of the day  in the edge here their code has their  own repository and we release in version  them as completely two separate products  each tier is a collection of independent  servers that do not share anything with  each other each of the servers is  responsible for accepting incoming  player connections authenticating the  players by validating the sign 3wt  tokens holding the sessions so holding a  persistent TCP connection between player  and edge and also registering them with  the routing tier by registering I mean  going to issuing a rest request to their  routing tier telling routing tier hey  player with player ID equals X is  connected to me forward me any incoming  messages and incoming notifications that  are addressed to that player this tier  is typically memory bound because it  holds all the player connections in  memory and even though we load tested it  pretty extensively we were able to  achieve around 10 million connections on  a single server we decided that we  didn't want to put too many eggs in one  basket because losing that one load with  ten million players will result in a  disaster  so we decided to cap the number of  connections to around 350,000 per box  this year is also really linearly  scalable and we can increase this this  year capacity by simply throwing more  servers at it on the other hand we have  routing here this year is is completely  different from edge is it's a cluster of  very tightly coupled servers sharing a  global routing table mapping player IDs  to the edge nodes that hold that session  it's also responsible for monitoring  health of each of the hopper of the edge  servers and also accepting  authenticating publishers accepting  internal notifications and forwarding  them to the edge tier this year is CPU  bound and it's typically much much  smaller than the edge tier the routing  tier I mentioned a little bit earlier is  a simple translation table between  player IDs that's the column on the left  and the edge nodes that's the column on  the right this table is globally  replicated within and the routing  cluster and is used whenever there is  any incoming notification addressed to  the player we simply perform a look up  in the table and figure out what the  edge node is and forwarded forward that  message to the edge node let's follow  the flow of the published message in the  system first of all we have a back-end  service like clubs trying to communicate  with the players it sends a rest request  publish request to RMS we have a load  balancer sitting in the front of the  routing servers this load balancer  forwards of notification to any of the  existing routing nodes it can select any  because we have the global routing table  that is shared across all the servers  one of the routing routing servers will  look up into the routing table select  the edge node that halts player  collection forwarded to that edge server  which then delivers that you to the  player using players WebSocket  connection  the entire RMS stack is built using  Arirang Arirang is a functional  programming language which comes with a  great support for building highly  concurrent and distributed systems  certain language constructs or  philosophies like the one around actor  model or the concept of lightweight  processes or even like an excellent  standard OTP framework that comes with  the language they allowed us to focus  primarily on the core logic of RMS  instead of trying to solve scalability  issues the team behind RMS has already  built chat and few other services  internally at riot using this technology  so building RMS was really really easy  considering we had a lot of other  libraries that we used in other projects  if you would like to know more about our  rank I would highly recommend you  reading learners from around book by  Fred Hobart as mentioned earlier each of  the tiers routing and edge are  completely separate and we release them  independently even though they are two  different airline releases we we package  them in docker containers which gives us  great service isolation we can relocate  the servers without with ease and also  it gives us independence from the  underlying OS we don't have to make any  assumptions about availability of the  local libraries or installed packages we  have the golden image we can drop on any  server any cloud provider and we will be  sure it's gonna work and whenever we  build a new docker image we upload them  to AWS container registry so as you can  guess RMS runs on AWS however the code  itself does not have any dependencies on  the underlying infrastructure it is  completely possible to run RMS on better  metal your local Mac or any other cloud  provider for infrastructure automation  we  hashey corpse terraform which is a tool  to treat the infrastructure as a code we  store our infrastructure descriptions in  a git repository we version it we have  history of our infrastructure with all  the mutations and also we can express it  in a very declarative state the way this  approach allows us to reduce the risk of  running into very costly human mistakes  whenever someone clicks on the wrong  button in the UI but also gives us as a  bonus gives us an ability to create  ephemeral environments for load testing  or for QA within a matter of minutes we  can stand up the entire functional or MS  environment with one click of a button  and because our ms is is a core piece of  royal infrastructure as mentioned  earlier used by over 20 different teams  one of our girls when building our ms  was that we would like to be the first  to know  whenever there is any disruption of the  service to do that we build a battery of  automated health checks for simulating  publishers and clients and they run  every 30 seconds against our  infrastructure and the only measure  correctness of the service but also  verify that the latency is not affected  whenever we detect any anomalies in the  behavior we have an SNS queue that  notifies pager duty or Gmail okay let me  now try to distill some points that you  can use on on your own when building  similar services  and when building and testing  distributed systems locally on on my Mac  at least I'm I'm really I tend to ignore  and forget about the fallacies of  distributed computing those are the set  of false assumptions we typically make  about our applications as an example  that the network is reliable we assume  that with the net the split brain  syndromes will never happen to us or  that the latency is zero because I  tested it locally using my loopback  interface or that the network is  homogeneous and we will not see request  reordering to combat that to fight this  behavior in very early in the  development process we we started using  a tool called Jepsen Jepsen is a tool  for verification of distributed systems  which allowed us to inject failures and  faults into our system we were able to  simulate different types of problems for  example splitting our routing cluster  into two different house and then after  running some additional tests and  merging them back we were able to verify  that everything went back to normal and  we have consistency in our system one of  the problems that hit us very hard early  when we forgot about their butt Network  and the infrastructure does necessarily  have to be super reliable was the  example of having too many connections  on a single edge server so whenever one  of the instances in iws failed which  happens from time to time we lost around  500 thousand connections in a single  second all of those players because of  the logic in the client attempted to  reconnect to our MS immediately so we  essentially did ask ourselves which  which is fine I mean that's we would  like players to be able to to connect to  our mess at any given time but the  problem was that the load balancer that  was sitting between edge and routing  tier that was used for registering new  sessions was called  so what happened is 500,000 players were  trying to reconnect in the same second  we're hammering and that ELB that lb was  trying very hard to warm up I was  failing and for five to ten minutes we  had half a million of players were  completely dark they were not able to  receive any notifications and could not  understand what's going on like they  they were not able to see in game  notifications or other things we  essentially added at the end of the day  we removed the Glo balancer entirely  from from our infrastructure replaced it  with service discovery and also reduce  the number of connections we can have on  a single edge server but that's one of  the examples that actually demonstrate  how important it is to think about  failures when building your systems  another thing that is really important  and dear to my heart is visibility into  our systems we probably collect more  statistics that we realistically should  and we try to measure pretty much  everything things like not only messages  published by back-end service but also  distribution of different publish sizes  the latency within the system the number  of concurrently connected users  publish errors and so on it is even more  important that with ephemeral containers  with auto-scaling groups that we used  centralized logging and centralized  monitoring because nodes go up and down  all the time  and if we only keep the logs and metrics  locally in every box it is more than  guaranteed that are gonna be done within  the matter of hours and we will have no  history and no way to really triage  understand what really happened after  the fact we also learned that even  though detailed metrics and and  monitoring is super cool for developers  and maintainer of the system customers  don't really give a [ __ ] about it  right what they care about is is our  mess up or down do I like do my players  actually can receive notifications and  to do that we decided we need to like  take a step back  abstract few things and really present  them of a dashboard that only has two  states is it green or red and this  dashboard is actually built using those  health checks we we talked about few  minutes earlier but run against a live  system every 30 seconds another  important thing is a support for dynamic  configuration with a such an large  number of customers coming in we had to  find a way to fine-tune the system  effectively without having to restart  the service or go to every single  instance around the globe changing the  configs by hand  our configurations live in a git  repository and we have a Jenkins job  transformer that moves them from that  grid repo and publishes them to the  centralized configuration server we call  it configure Asst RMS poles that server  for changes every 30 seconds as well and  converges dynamically without any need  of restart on the new stage that out  it's a perfect thing for us for things  like feature toggles pretty much every  major change we introduced to the system  sits behind the feature toggle which we  can turn on and off with a single git  commit globally and see the change to a  plot being applied on all the servers  around the world in 30 seconds also with  a very small team behind RMS we only  have four engineers and many internal  customers we had to find a way to avoid  becoming a blocker for four teams to  really tree our day problems and adopt  our service we essentially had to build  Cyril  self-service capabilities  we invested a lot in client and  publisher SDKs in documentation examples  and easy to use triage tools as an  example here we have a real time  dashboard that allows publishers to take  a sneak peek into what's actually being  routed right now  in the system the dashboard allows us to  sample the traffic that's enroute and  display it to the publishers so ever  they see a problem they can immediately  go and see oh is there anything that's  actually being processed is there  anything that is maybe parsed  incorrectly and that way they can at  least help themselves first before they  come to us for a physical help we  intentionally block teams only on  creating new accounts and that's  primarily to understand our publisher  use cases needs and also to establish  the relationship between the RMS owners  and the customers another thing I'm  really passionate about is capacity  planning we load test the entire system  to understand its limits to establish  the baseline and also identify all the  bottlenecks for first global centralized  service like RMS we also had to make  sure that we have no downtime of great  capabilities and we can do it even  during the peak hours during the load  test it was really important for us that  we also were able to shut the entire  system down and bring it up even though  we had over 10 million players trying to  hammer and get back in that allowed us  to simulate and be prepared for any sort  of massive failures of our  infrastructure and giving us that  assurance that we can bring the back the  system online even if it's it's peak  hours and we have so many players trying  to reconnect  a question to you so this is a graph of  our concurrent connections to the  service and around the third of May we  experienced some warrior behavior as  anyone of you have any idea what it  might be so what happened is all of a  sudden within few hours we essentially  doubled our connection counts the team  was like super excited that was like  [ __ ] yeah we just doubled the CCU we we  established new records chillin  champagne no need to party super cool  ride big numbers it turned out that  actually that was a patch day and the  client got patched and we ended up with  actually instead of one concurrent  connection we had two concurrent  connections going to RMS yeah pretty bad  so we had two options here you could  either release a hotfix to the client  which would trigger the full rebuild  process  retros and everything else player pain  because players will have to patch the  client log out and log back in do  everything like that or we just use the  capabilities of our Altos gaming groups  and resize the system to handle the  double of the load it turned out that  not a single page was issued within  those two weeks and because we load  tested the system to probably 10x of its  current capacity we didn't have to act  at all we just waited for two more weeks  that's the date of May 15 when the new  client was released after two two weeks  and the connection count dropped back to  the original number  okay cool um so what's next just to wrap  up I want to share few road map plans  for RMS first thing is obviously  widening the adoption of the service we  would like to have more teams internally  to to use our ms pushing even more data  for the service next thing we are  considering about is support for topic  based routing so instead of addressing  individual players we would be able to  say okay deliver this message to all  players Germany or deliver this message  to all players using Mac or Windows and  finally we would like to introduce  persistence into the system which would  allow publishers to to tell us that this  message should be delivered even though  player might be offline right now so we  could persist it somewhere and then  deliver it next time the player shows up  if you are interested about more details  on RMS we have a tech blog Engineering  we have games come there is a blog post  on it and now I can probably take few  questions but we can probably do it off  stage as well if is that fine  the question was which button do we use  for the global routing table we use mini  Jie it's a built-in Erlang distributed  key-value store we patched it heavily to  support the concurrency and dynamic  cluster topology but essentially the 95%  of the code is the standard error on  library code  how do you maintain WebSocket  collections sorry what was the second  part of the question Oh  how do we rotate edge servers with  persistent TCP connections so to do that  we we have an internal protocol that  whenever the server the edge server is  about to shut down we receive an SMS  notification from auto scaling group and  we drain the connections that are  established to that specific edge server  by before shutting the damn the  connection we send a message using  internal RMS protocol to the connected  client telling the client to hey I'm  about to shut down please open either a  connection to to the service that allows  us to drain I think 300 thousand  connections in like two minutes or so so  it's pretty fast process  and what we use for our load balancer  it's a standard ELB from AWS because  it's WebSockets and we use the classic  load balancers it's actually tcp-based  so we cannot use all the goodness coming  with a lbs or like HTTP our load  balancers but it's still pretty good  okay how do we how do we keep the  routing table up-to-date with the  connections coming in and going out so  essentially each each edge server is  aware of all the connections established  to that particular node and whenever  there is a new connection which is  authenticated and established to the  server we issue a rest call to the  routing tier to up to notify about that  change the same happens whenever the  connection is terminated so edge server  will inform the routing tier that the  connection is down and it should remove  that player ID from the table itself  yeah so when the edge node crashes I was  so the routing tier also maintains  health check logic for every edge server  so it has some sort of garbage  collection mechanism that allows it to  eventually clean up the mess in the  routing table we also have if the  unregister collection called fails so we  like timeout or whatever  next time routing tries to deliver the  message to that ghost session to the  orphan session it will receive 404 error  from the edge server that is suppose  that was supposed to halt that session  and will clean itself up as well  so what the question is what's the  protocol used for communication between  edge and routing tears  that's pure rest over HTTP we use  distributed airline protocol for  internal cluster communication within  routing tier those are normal the test  normal airline cluster for communication  between peers is pure rest which also  gives us a possibility to potentially  replace technology is used on both sides  so we don't have to use airline  necessarily on both ends  sorry I couldn't hear a question  [Music]  sure so the question is about out the  scaling of the edge tear how concerned  we are about the cost and how do we  manage our policies for going like  growing the cluster or shrinking it down  we use two metrics for that we use CPU  utilization and also we use the  connection count metric  I think CPU comes out of the box for AWS  for connection count we have to run a  daemon that essentially publishes that  metric to cloud watch every minute or so  telling auto scaling group what's the  current number of established sessions  to that server we are not super  concerned I mean we are concerned we are  a customer but we are not trying to  optimize it to its limits we we prefer  to play safe on the reliability side and  make sure that players have a good  experience instead of like trying to  save every dollar but the the scaling  actions happen probably to three times  within a day so it's not that infrequent  how did we get and long distribution  working in a doctor every single  container we have has its own IP address  we also limit the actual range of  distribution ports to only I think five  or six there are VM settings to specify  the upper and lower range and we also  run the containers in the host network  mode so that specifically for the Aged  here is important because with the proxy  default default proxy mode the proxies  will will simply get overloaded with  like 10 million connections going  through them ok and I think we are  running slowly other time but I would  love to take any questions offstage  thank you so much  [Applause]
+
+00:00:07.360 --> 00:00:11.770 align:start position:0%
+thank you all for coming today it's  Saturday it's before noon so really  appreciate the audience  my name is maja shock and I'm a software  architect at Riot Games and I'm today to  talk about dry out messaging service or  RMS in short so before we kick off just  for my observation how many of you have  ever heard or played League of Legends  holy crap okay that's amazing  cool and so Riot Games is a developer  and publisher of League of Legends more  about the game for those who never heard  of it in a second but as a company our  main focus is really on the player  experience we use it as a razor for  making any decisions regardless of they  are product or technology oriented it  helps us tremendously that we are all  gamers here like we really play games  and join em and we can empathize with  with other players our mission is that  we aspire to be the most player focused  game company in the world so what is  League of Legends League of Legends we  we launched the game in 2009 and since  then we grown the player base to some  pretty big numbers and more about the  numbers in a second League of Legends is  a team based game called in a genre  called MOBA which is a multiplayer  online battle arena where two teams  compete to control and map and achieve  objectives  each player of these teams can control  Swan champion and typically teams  consists of five players the entire game  is is placed in the modern fantasy world  and to give you some more context around  the scale and types of problems we were  trying to solve when architecting write  messaging service here are some numbers  we really  in September 2016 regarding popularity  of league of legends so we are super  lucky to have over hundred million  players enjoying the game monthly and  out of which 27 over 27 million players  play league daily if you check our  systems at any given time of a day we  can see it at least seven and a half  million players connected to our servers  so all of these numbers heavily  influenced decisions we've made when  building RMS so not now let's jump to a  quick overview of what we're going to  cover today I would like to start with a  very high level design of riot messaging  service then I would like to follow up  with the implementation how we got there  and what word architectural decisions  behind RMS as well as what were the key  lessons learned for us when we created  it and also what are the plans for the  future for the service ok let's start  so let's before we before we jump  directly into design of RMS let's let's  kick off with describing why we even  wanted to build RMS in in the first  place in the old way when we started  building League the old way of handling  player to server communication for the  out of game events used persistent TCP  connections using LCDs RTMP protocol  that's a proprietary binary protocol  introduced by Adobe overall it's it was  designed to handle media but we decided  that is a great fit for game traffic or  not viewing game but out of the game  traffic as well and it turned out that  the protocol really was having really  big issues with security the way we  built the platform as a monolith  prevented us from growing it fast  deploying and like transitioning into  the micro service world with very fast  iteration loops and we also suffered  from pretty significant scalability  issues a single instance a single server  holding a player connections could only  handle around 30,000 players given the  scale we were operating it building out  the platform for you know hundreds of  millions of players was a huge challenge  and as we were building more and more  features for League and also other  products in R&amp;D we realized we can't  really replicate the same pattern and we  needed something better and that's how  we created RMS RMS or riot messaging  service is is a back-end service  something we deploy on the server side  it provides asynchronous messages  capabilities notifications that are sent  using the fire-and-forget semantics to  from services from back-end services to  connected players so that's the way for  the backend micro services to somehow  deliver either notifications or payloads  to clients for example leaf client and  today RMS has been adopted by over 20  different products and features riot and  is used every day by all big players  around the world to give you an example  of what features use RMS it's clubs  which are player organized and  controlled social groups its missions  which are challenges for the players  with with rewards and honor which is a  system that encourages positive behavior  among the community to better illustrate  how our mess works let's let's use push  Mobile push notification analogy in the  beginning let's imagine that we have  someone sending us an email the email  hits our email server and email server  stores it in some sort of the database  the interesting thing is that the email  server because everyone now uses smart  phones figures out that ok that  recipient probably has a phone and would  like to be notified that he has an  incoming email  in that case that email server sends a  request to the push notification service  informing it that hey you've got an  email but because your incoming email  might be pretty big  it might also have attachments you don't  necessarily want to receive them as push  notifications as a matter of fact the  push notification servers have very  strict limits when it comes to size so  what happens is that push notification  service actually receives only a very  high level digest of of what the email  is which is the subject of the email  sender and maybe few first paragraphs of  text it sends a push notification to  your phone your phone buzzes and  displays a toast on your home screen  and then some time later you're gonna go  into your email app open it up and  download the original email including  attachments all the text and call the  context around the email but instead of  going to the push notification service  you're going to go to your original  email server and RMS works in a very  similar way but instead of the mobile  phones we have desktop clients or League  of Legends clients and instead of the  push notification service we have RMS  let's let's see how it works with League  of Legends example as clubs as mentioned  earlier clubs are player created  organized controlled social groups each  Club can be described using several  properties for example the club name  club roster which is a list of members  with a ranks message of the day and so  on first of all whenever you start  League of Legends you launch and  authenticate with with our servers as a  result you're gonna get a signed GWT  token claiming who you are so that you  can prove with other servers that you  are in fact you as soon as  authentication is done  RMS requires clients to establish a  persistent TCP connection using  WebSocket protocol as a transport  in order to receive any incoming  notifications this is an example of  WebSocket URI the aforementioned token  we got from the authentication service  is highlighted in in red here so we pass  that to RMS and RMS is essentially  authenticating validating the token and  letting you N and as one of the claims  encoded inside of the token there is a  field called subject which is which we  interpret as player ID player ID is a  standard way to have to identify players  in our ecosystem and is used by all  internal services at riot it's also  globally unique and immutable internally  we called this player ID poet as player  universal unique ID as soon as the  connection is established League client  will go to the club service to fetch the  latest state and by state  I mean list of clubs that this player is  a member of and for each of those clubs  all the details about the clubs and then  clubs are ready to go you have Chad you  have a list of members and you can start  using them what happens when there is an  invite incoming to the club in this case  clubs service will update their internal  state and then issue a rest request a  post request to RMS the with the  notification the notification itself is  a simple JSON blob that informs RMS what  to do with the message there are few  required fields in that blob one of them  is called resource which is a rest like  string denoting which component of the  client should handle this internal  notification you can think of the  resource as a routing key that is used  by the client to dispatch the  notification to the corresponding  or subsystem the next one is variant a  which is a string that allows us to  guard against duplicate so if the the  sender service fires few notifications  which carried the same version it is  safe to assume for the client that he  can ignore it it also helps with  notification reordering because we use  HTTP requests can actually get reordered  on the way to RMS and the next one is a  list of player IDs a list of poets and  that's the list of all players that  should receive this notification in case  of batch notifications for example  whenever the club changes the message of  the day instead of notifying 50 players  one by one club service can actually  issue a one notification with 50 player  IDs on this recipients list and lastly  we have a short optional payload to  deliver and more about it in a second so  as soon as RMS receives this  notification it will use apply internal  routing rules and forwarded notification  to connected client as a result client  will then go to the club service to  fetch the entire state to figure out  what actually happened why did they  receive that notification and then  display a proper toast to the player  I've mentioned earlier RMS can also  carry short payloads in the  notifications and they are completely  oblivious to RMS it's just a binary data  that is transported from point A to  point B and it can be anything from JSON  basic c4 blob XML or even plain string  okay let's let's dive deep into aromatic  fermentation as mentioned earlier rms is  a server-side application under the hood  it consists is built by two different  tiers routing an edge functionally  routing is responsible for accepting and  handling published notifications from  external services like clubs as well as  maintaining a list of all connected  players to the platform on the other  hand edge is responsible for handling  player connections those WebSocket  connections I was talking about and  forwarding incoming messages directly to  the clients both ears are completely  decoupled we can scale and deploy them  independently for example in one of our  RMS clusters we have four servers that  run in routing tier and around ten  servers depending on the scale and time  of the day  in the edge here their code has their  own repository and we release in version  them as completely two separate products  each tier is a collection of independent  servers that do not share anything with  each other each of the servers is  responsible for accepting incoming  player connections authenticating the  players by validating the sign 3wt  tokens holding the sessions so holding a  persistent TCP connection between player  and edge and also registering them with  the routing tier by registering I mean  going to issuing a rest request to their  routing tier telling routing tier hey  player with player ID equals X is  connected to me forward me any incoming  messages and incoming notifications that  are addressed to that player this tier  is typically memory bound because it  holds all the player connections in  memory and even though we load tested it  pretty extensively we were able to  achieve around 10 million connections on  a single server we decided that we  didn't want to put too many eggs in one  basket because losing that one load with  ten million players will result in a  disaster  so we decided to cap the number of  connections to around 350,000 per box  this year is also really linearly  scalable and we can increase this this  year capacity by simply throwing more  servers at it on the other hand we have  routing here this year is is completely  different from edge is it's a cluster of  very tightly coupled servers sharing a  global routing table mapping player IDs  to the edge nodes that hold that session  it's also responsible for monitoring  health of each of the hopper of the edge  servers and also accepting  authenticating publishers accepting  internal notifications and forwarding  them to the edge tier this year is CPU  bound and it's typically much much  smaller than the edge tier the routing  tier I mentioned a little bit earlier is  a simple translation table between  player IDs that's the column on the left  and the edge nodes that's the column on  the right this table is globally  replicated within and the routing  cluster and is used whenever there is  any incoming notification addressed to  the player we simply perform a look up  in the table and figure out what the  edge node is and forwarded forward that  message to the edge node let's follow  the flow of the published message in the  system first of all we have a back-end  service like clubs trying to communicate  with the players it sends a rest request  publish request to RMS we have a load  balancer sitting in the front of the  routing servers this load balancer  forwards of notification to any of the  existing routing nodes it can select any  because we have the global routing table  that is shared across all the servers  one of the routing routing servers will  look up into the routing table select  the edge node that halts player  collection forwarded to that edge server  which then delivers that you to the  player using players WebSocket  connection  the entire RMS stack is built using  Arirang Arirang is a functional  programming language which comes with a  great support for building highly  concurrent and distributed systems  certain language constructs or  philosophies like the one around actor  model or the concept of lightweight  processes or even like an excellent  standard OTP framework that comes with  the language they allowed us to focus  primarily on the core logic of RMS  instead of trying to solve scalability  issues the team behind RMS has already  built chat and few other services  internally at riot using this technology  so building RMS was really really easy  considering we had a lot of other  libraries that we used in other projects  if you would like to know more about our  rank I would highly recommend you  reading learners from around book by  Fred Hobart as mentioned earlier each of  the tiers routing and edge are  completely separate and we release them  independently even though they are two  different airline releases we we package  them in docker containers which gives us  great service isolation we can relocate  the servers without with ease and also  it gives us independence from the  underlying OS we don't have to make any  assumptions about availability of the  local libraries or installed packages we  have the golden image we can drop on any  server any cloud provider and we will be  sure it's gonna work and whenever we  build a new docker image we upload them  to AWS container registry so as you can  guess RMS runs on AWS however the code  itself does not have any dependencies on  the underlying infrastructure it is  completely possible to run RMS on better  metal your local Mac or any other cloud  provider for infrastructure automation  we  hashey corpse terraform which is a tool  to treat the infrastructure as a code we  store our infrastructure descriptions in  a git repository we version it we have  history of our infrastructure with all  the mutations and also we can express it  in a very declarative state the way this  approach allows us to reduce the risk of  running into very costly human mistakes  whenever someone clicks on the wrong  button in the UI but also gives us as a  bonus gives us an ability to create  ephemeral environments for load testing  or for QA within a matter of minutes we  can stand up the entire functional or MS  environment with one click of a button  and because our ms is is a core piece of  royal infrastructure as mentioned  earlier used by over 20 different teams  one of our girls when building our ms  was that we would like to be the first  to know  whenever there is any disruption of the  service to do that we build a battery of  automated health checks for simulating  publishers and clients and they run  every 30 seconds against our  infrastructure and the only measure  correctness of the service but also  verify that the latency is not affected  whenever we detect any anomalies in the  behavior we have an SNS queue that  notifies pager duty or Gmail okay let me  now try to distill some points that you  can use on on your own when building  similar services  and when building and testing  distributed systems locally on on my Mac  at least I'm I'm really I tend to ignore  and forget about the fallacies of  distributed computing those are the set  of false assumptions we typically make  about our applications as an example  that the network is reliable we assume  that with the net the split brain  syndromes will never happen to us or  that the latency is zero because I  tested it locally using my loopback  interface or that the network is  homogeneous and we will not see request  reordering to combat that to fight this  behavior in very early in the  development process we we started using  a tool called Jepsen Jepsen is a tool  for verification of distributed systems  which allowed us to inject failures and  faults into our system we were able to  simulate different types of problems for  example splitting our routing cluster  into two different house and then after  running some additional tests and  merging them back we were able to verify  that everything went back to normal and  we have consistency in our system one of  the problems that hit us very hard early  when we forgot about their butt Network  and the infrastructure does necessarily  have to be super reliable was the  example of having too many connections  on a single edge server so whenever one  of the instances in iws failed which  happens from time to time we lost around  500 thousand connections in a single  second all of those players because of  the logic in the client attempted to  reconnect to our MS immediately so we  essentially did ask ourselves which  which is fine I mean that's we would  like players to be able to to connect to  our mess at any given time but the  problem was that the load balancer that  was sitting between edge and routing  tier that was used for registering new  sessions was called  so what happened is 500,000 players were  trying to reconnect in the same second  we're hammering and that ELB that lb was  trying very hard to warm up I was  failing and for five to ten minutes we  had half a million of players were  completely dark they were not able to  receive any notifications and could not  understand what's going on like they  they were not able to see in game  notifications or other things we  essentially added at the end of the day  we removed the Glo balancer entirely  from from our infrastructure replaced it  with service discovery and also reduce  the number of connections we can have on  a single edge server but that's one of  the examples that actually demonstrate  how important it is to think about  failures when building your systems  another thing that is really important  and dear to my heart is visibility into  our systems we probably collect more  statistics that we realistically should  and we try to measure pretty much  everything things like not only messages  published by back-end service but also  distribution of different publish sizes  the latency within the system the number  of concurrently connected users  publish errors and so on it is even more  important that with ephemeral containers  with auto-scaling groups that we used  centralized logging and centralized  monitoring because nodes go up and down  all the time  and if we only keep the logs and metrics  locally in every box it is more than  guaranteed that are gonna be done within  the matter of hours and we will have no  history and no way to really triage  understand what really happened after  the fact we also learned that even  though detailed metrics and and  monitoring is super cool for developers  and maintainer of the system customers  don't really give a [ __ ] about it  right what they care about is is our  mess up or down do I like do my players  actually can receive notifications and  to do that we decided we need to like  take a step back  abstract few things and really present  them of a dashboard that only has two  states is it green or red and this  dashboard is actually built using those  health checks we we talked about few  minutes earlier but run against a live  system every 30 seconds another  important thing is a support for dynamic  configuration with a such an large  number of customers coming in we had to  find a way to fine-tune the system  effectively without having to restart  the service or go to every single  instance around the globe changing the  configs by hand  our configurations live in a git  repository and we have a Jenkins job  transformer that moves them from that  grid repo and publishes them to the  centralized configuration server we call  it configure Asst RMS poles that server  for changes every 30 seconds as well and  converges dynamically without any need  of restart on the new stage that out  it's a perfect thing for us for things  like feature toggles pretty much every  major change we introduced to the system  sits behind the feature toggle which we  can turn on and off with a single git  commit globally and see the change to a  plot being applied on all the servers  around the world in 30 seconds also with  a very small team behind RMS we only  have four engineers and many internal  customers we had to find a way to avoid  becoming a blocker for four teams to  really tree our day problems and adopt  our service we essentially had to build  Cyril  self-service capabilities  we invested a lot in client and  publisher SDKs in documentation examples  and easy to use triage tools as an  example here we have a real time  dashboard that allows publishers to take  a sneak peek into what's actually being  routed right now  in the system the dashboard allows us to  sample the traffic that's enroute and  display it to the publishers so ever  they see a problem they can immediately  go and see oh is there anything that's  actually being processed is there  anything that is maybe parsed  incorrectly and that way they can at  least help themselves first before they  come to us for a physical help we  intentionally block teams only on  creating new accounts and that's  primarily to understand our publisher  use cases needs and also to establish  the relationship between the RMS owners  and the customers another thing I'm  really passionate about is capacity  planning we load test the entire system  to understand its limits to establish  the baseline and also identify all the  bottlenecks for first global centralized  service like RMS we also had to make  sure that we have no downtime of great  capabilities and we can do it even  during the peak hours during the load  test it was really important for us that  we also were able to shut the entire  system down and bring it up even though  we had over 10 million players trying to  hammer and get back in that allowed us  to simulate and be prepared for any sort  of massive failures of our  infrastructure and giving us that  assurance that we can bring the back the  system online even if it's it's peak  hours and we have so many players trying  to reconnect  a question to you so this is a graph of  our concurrent connections to the  service and around the third of May we  experienced some warrior behavior as  anyone of you have any idea what it  might be so what happened is all of a  sudden within few hours we essentially  doubled our connection counts the team  was like super excited that was like  [ __ ] yeah we just doubled the CCU we we  established new records chillin  champagne no need to party super cool  ride big numbers it turned out that  actually that was a patch day and the  client got patched and we ended up with  actually instead of one concurrent  connection we had two concurrent  connections going to RMS yeah pretty bad  so we had two options here you could  either release a hotfix to the client  which would trigger the full rebuild  process  retros and everything else player pain  because players will have to patch the  client log out and log back in do  everything like that or we just use the  capabilities of our Altos gaming groups  and resize the system to handle the  double of the load it turned out that  not a single page was issued within  those two weeks and because we load  tested the system to probably 10x of its  current capacity we didn't have to act  at all we just waited for two more weeks  that's the date of May 15 when the new  client was released after two two weeks  and the connection count dropped back to  the original number  okay cool um so what's next just to wrap  up I want to share few road map plans  for RMS first thing is obviously  widening the adoption of the service we  would like to have more teams internally  to to use our ms pushing even more data  for the service next thing we are  considering about is support for topic  based routing so instead of addressing  individual players we would be able to  say okay deliver this message to all  players Germany or deliver this message  to all players using Mac or Windows and  finally we would like to introduce  persistence into the system which would  allow publishers to to tell us that this  message should be delivered even though  player might be offline right now so we  could persist it somewhere and then  deliver it next time the player shows up  if you are interested about more details  on RMS we have a tech blog Engineering  we have games come there is a blog post  on it and now I can probably take few  questions but we can probably do it off  stage as well if is that fine  the question was which button do we use  for the global routing table we use mini  Jie it's a built-in Erlang distributed  key-value store we patched it heavily to  support the concurrency and dynamic  cluster topology but essentially the 95%  of the code is the standard error on  library code  how do you maintain WebSocket  collections sorry what was the second  part of the question Oh  how do we rotate edge servers with  persistent TCP connections so to do that  we we have an internal protocol that  whenever the server the edge server is  about to shut down we receive an SMS  notification from auto scaling group and  we drain the connections that are  established to that specific edge server  by before shutting the damn the  connection we send a message using  internal RMS protocol to the connected  client telling the client to hey I'm  about to shut down please open either a  connection to to the service that allows  us to drain I think 300 thousand  connections in like two minutes or so so  it's pretty fast process  and what we use for our load balancer  it's a standard ELB from AWS because  it's WebSockets and we use the classic  load balancers it's actually tcp-based  so we cannot use all the goodness coming  with a lbs or like HTTP our load  balancers but it's still pretty good  okay how do we how do we keep the  routing table up-to-date with the  connections coming in and going out so  essentially each each edge server is  aware of all the connections established  to that particular node and whenever  there is a new connection which is  authenticated and established to the  server we issue a rest call to the  routing tier to up to notify about that  change the same happens whenever the  connection is terminated so edge server  will inform the routing tier that the  connection is down and it should remove  that player ID from the table itself  yeah so when the edge node crashes I was  so the routing tier also maintains  health check logic for every edge server  so it has some sort of garbage  collection mechanism that allows it to  eventually clean up the mess in the  routing table we also have if the  unregister collection called fails so we  like timeout or whatever  next time routing tries to deliver the  message to that ghost session to the  orphan session it will receive 404 error  from the edge server that is suppose  that was supposed to halt that session  and will clean itself up as well  so what the question is what's the  protocol used for communication between  edge and routing tears  that's pure rest over HTTP we use  distributed airline protocol for  internal cluster communication within  routing tier those are normal the test  normal airline cluster for communication  between peers is pure rest which also  gives us a possibility to potentially  replace technology is used on both sides  so we don't have to use airline  necessarily on both ends  sorry I couldn't hear a question  [Music]  sure so the question is about out the  scaling of the edge tear how concerned  we are about the cost and how do we  manage our policies for going like  growing the cluster or shrinking it down  we use two metrics for that we use CPU  utilization and also we use the  connection count metric  I think CPU comes out of the box for AWS  for connection count we have to run a  daemon that essentially publishes that  metric to cloud watch every minute or so  telling auto scaling group what's the  current number of established sessions  to that server we are not super  concerned I mean we are concerned we are  a customer but we are not trying to  optimize it to its limits we we prefer  to play safe on the reliability side and  make sure that players have a good  experience instead of like trying to  save every dollar but the the scaling  actions happen probably to three times  within a day so it's not that infrequent  how did we get and long distribution  working in a doctor every single  container we have has its own IP address  we also limit the actual range of  distribution ports to only I think five  or six there are VM settings to specify  the upper and lower range and we also  run the containers in the host network  mode so that specifically for the Aged  here is important because with the proxy  default default proxy mode the proxies  will will simply get overloaded with  like 10 million connections going  through them ok and I think we are  running slowly other time but I would  love to take any questions offstage  thank you so much  [Applause]
+ 
+
+00:00:11.770 --> 00:00:13.470 align:start position:0%
+ 
+ 
+
+00:00:13.470 --> 00:00:17.260 align:start position:0%
+ 
+ 
+
+00:00:17.260 --> 00:00:20.109 align:start position:0%
+ 
+ 
+
+00:00:20.109 --> 00:00:22.740 align:start position:0%
+ 
+ 
+
+00:00:22.740 --> 00:00:33.940 align:start position:0%
+ 
+ 
+
+00:00:33.940 --> 00:00:36.310 align:start position:0%
+ 
+ 
+
+00:00:36.310 --> 00:00:38.850 align:start position:0%
+ 
+ 
+
+00:00:38.850 --> 00:00:42.790 align:start position:0%
+ 
+ 
+
+00:00:42.790 --> 00:00:47.200 align:start position:0%
+ 
+ 
+
+00:00:47.200 --> 00:00:49.570 align:start position:0%
+ 
+ 
+
+00:00:49.570 --> 00:00:51.670 align:start position:0%
+ 
+ 
+
+00:00:51.670 --> 00:00:56.050 align:start position:0%
+ 
+ 
+
+00:00:56.050 --> 00:00:58.210 align:start position:0%
+ 
+ 
+
+00:00:58.210 --> 00:01:01.270 align:start position:0%
+ 
+ 
+
+00:01:01.270 --> 00:01:03.790 align:start position:0%
+ 
+ 
+
+00:01:03.790 --> 00:01:06.910 align:start position:0%
+ 
+ 
+
+00:01:06.910 --> 00:01:08.859 align:start position:0%
+ 
+ 
+
+00:01:08.859 --> 00:01:11.380 align:start position:0%
+ 
+ 
+
+00:01:11.380 --> 00:01:13.469 align:start position:0%
+ 
+ 
+
+00:01:13.469 --> 00:01:17.380 align:start position:0%
+ 
+ 
+
+00:01:17.380 --> 00:01:20.109 align:start position:0%
+ 
+ 
+
+00:01:20.109 --> 00:01:24.399 align:start position:0%
+ 
+ 
+
+00:01:24.399 --> 00:01:27.459 align:start position:0%
+ 
+ 
+
+00:01:27.459 --> 00:01:31.809 align:start position:0%
+ 
+ 
+
+00:01:31.809 --> 00:01:34.510 align:start position:0%
+ 
+ 
+
+00:01:34.510 --> 00:01:36.429 align:start position:0%
+ 
+ 
+
+00:01:36.429 --> 00:01:40.120 align:start position:0%
+ 
+ 
+
+00:01:40.120 --> 00:01:43.389 align:start position:0%
+ 
+ 
+
+00:01:43.389 --> 00:01:45.520 align:start position:0%
+ 
+ 
+
+00:01:45.520 --> 00:01:48.429 align:start position:0%
+ 
+ 
+
+00:01:48.429 --> 00:01:50.709 align:start position:0%
+ 
+ 
+
+00:01:50.709 --> 00:01:50.719 align:start position:0%
+ 
+ 
+
+00:01:50.719 --> 00:01:51.459 align:start position:0%
+ 
+
+
+00:01:51.459 --> 00:01:55.629 align:start position:0%
+ 
+ 
+
+00:01:55.629 --> 00:01:57.730 align:start position:0%
+ 
+ 
+
+00:01:57.730 --> 00:02:01.660 align:start position:0%
+ 
+ 
+
+00:02:01.660 --> 00:02:05.559 align:start position:0%
+ 
+ 
+
+00:02:05.559 --> 00:02:08.980 align:start position:0%
+ 
+ 
+
+00:02:08.980 --> 00:02:11.830 align:start position:0%
+ 
+ 
+
+00:02:11.830 --> 00:02:14.050 align:start position:0%
+ 
+ 
+
+00:02:14.050 --> 00:02:16.420 align:start position:0%
+ 
+ 
+
+00:02:16.420 --> 00:02:17.770 align:start position:0%
+ 
+ 
+
+00:02:17.770 --> 00:02:21.190 align:start position:0%
+ 
+ 
+
+00:02:21.190 --> 00:02:23.710 align:start position:0%
+ 
+ 
+
+00:02:23.710 --> 00:02:25.360 align:start position:0%
+ 
+ 
+
+00:02:25.360 --> 00:02:28.120 align:start position:0%
+ 
+ 
+
+00:02:28.120 --> 00:02:31.680 align:start position:0%
+ 
+ 
+
+00:02:31.680 --> 00:02:35.710 align:start position:0%
+ 
+ 
+
+00:02:35.710 --> 00:02:38.320 align:start position:0%
+ 
+ 
+
+00:02:38.320 --> 00:02:40.570 align:start position:0%
+ 
+ 
+
+00:02:40.570 --> 00:02:43.020 align:start position:0%
+ 
+ 
+
+00:02:43.020 --> 00:02:46.330 align:start position:0%
+ 
+ 
+
+00:02:46.330 --> 00:02:48.580 align:start position:0%
+ 
+ 
+
+00:02:48.580 --> 00:02:53.800 align:start position:0%
+ 
+ 
+
+00:02:53.800 --> 00:02:55.420 align:start position:0%
+ 
+ 
+
+00:02:55.420 --> 00:02:57.729 align:start position:0%
+ 
+ 
+
+00:02:57.729 --> 00:03:00.160 align:start position:0%
+ 
+ 
+
+00:03:00.160 --> 00:03:02.260 align:start position:0%
+ 
+ 
+
+00:03:02.260 --> 00:03:05.229 align:start position:0%
+ 
+ 
+
+00:03:05.229 --> 00:03:07.330 align:start position:0%
+ 
+ 
+
+00:03:07.330 --> 00:03:11.560 align:start position:0%
+ 
+ 
+
+00:03:11.560 --> 00:03:15.880 align:start position:0%
+ 
+ 
+
+00:03:15.880 --> 00:03:17.920 align:start position:0%
+ 
+ 
+
+00:03:17.920 --> 00:03:21.660 align:start position:0%
+ 
+ 
+
+00:03:21.660 --> 00:03:24.160 align:start position:0%
+ 
+ 
+
+00:03:24.160 --> 00:03:28.180 align:start position:0%
+ 
+ 
+
+00:03:28.180 --> 00:03:29.800 align:start position:0%
+ 
+ 
+
+00:03:29.800 --> 00:03:32.560 align:start position:0%
+ 
+ 
+
+00:03:32.560 --> 00:03:35.680 align:start position:0%
+ 
+ 
+
+00:03:35.680 --> 00:03:38.009 align:start position:0%
+ 
+ 
+
+00:03:38.009 --> 00:03:41.170 align:start position:0%
+ 
+ 
+
+00:03:41.170 --> 00:03:47.410 align:start position:0%
+ 
+ 
+
+00:03:47.410 --> 00:03:50.199 align:start position:0%
+ 
+ 
+
+00:03:50.199 --> 00:03:52.690 align:start position:0%
+ 
+ 
+
+00:03:52.690 --> 00:03:56.289 align:start position:0%
+ 
+ 
+
+00:03:56.289 --> 00:03:59.080 align:start position:0%
+ 
+ 
+
+00:03:59.080 --> 00:04:01.509 align:start position:0%
+ 
+ 
+
+00:04:01.509 --> 00:04:03.160 align:start position:0%
+ 
+ 
+
+00:04:03.160 --> 00:04:06.580 align:start position:0%
+ 
+ 
+
+00:04:06.580 --> 00:04:10.420 align:start position:0%
+ 
+ 
+
+00:04:10.420 --> 00:04:14.140 align:start position:0%
+ 
+ 
+
+00:04:14.140 --> 00:04:17.250 align:start position:0%
+ 
+ 
+
+00:04:17.250 --> 00:04:20.409 align:start position:0%
+ 
+ 
+
+00:04:20.409 --> 00:04:22.690 align:start position:0%
+ 
+ 
+
+00:04:22.690 --> 00:04:25.450 align:start position:0%
+ 
+ 
+
+00:04:25.450 --> 00:04:28.690 align:start position:0%
+ 
+ 
+
+00:04:28.690 --> 00:04:30.830 align:start position:0%
+ 
+ 
+
+00:04:30.830 --> 00:04:33.980 align:start position:0%
+ 
+ 
+
+00:04:33.980 --> 00:04:36.560 align:start position:0%
+ 
+ 
+
+00:04:36.560 --> 00:04:39.980 align:start position:0%
+ 
+ 
+
+00:04:39.980 --> 00:04:42.650 align:start position:0%
+ 
+ 
+
+00:04:42.650 --> 00:04:45.140 align:start position:0%
+ 
+ 
+
+00:04:45.140 --> 00:04:47.210 align:start position:0%
+ 
+ 
+
+00:04:47.210 --> 00:04:50.000 align:start position:0%
+ 
+ 
+
+00:04:50.000 --> 00:04:51.650 align:start position:0%
+ 
+ 
+
+00:04:51.650 --> 00:04:54.950 align:start position:0%
+ 
+ 
+
+00:04:54.950 --> 00:04:57.439 align:start position:0%
+ 
+ 
+
+00:04:57.439 --> 00:05:00.680 align:start position:0%
+ 
+ 
+
+00:05:00.680 --> 00:05:04.490 align:start position:0%
+ 
+ 
+
+00:05:04.490 --> 00:05:06.560 align:start position:0%
+ 
+ 
+
+00:05:06.560 --> 00:05:09.400 align:start position:0%
+ 
+ 
+
+00:05:09.400 --> 00:05:12.590 align:start position:0%
+ 
+ 
+
+00:05:12.590 --> 00:05:15.290 align:start position:0%
+ 
+ 
+
+00:05:15.290 --> 00:05:20.150 align:start position:0%
+ 
+ 
+
+00:05:20.150 --> 00:05:23.360 align:start position:0%
+ 
+ 
+
+00:05:23.360 --> 00:05:25.550 align:start position:0%
+ 
+ 
+
+00:05:25.550 --> 00:05:27.890 align:start position:0%
+ 
+ 
+
+00:05:27.890 --> 00:05:30.830 align:start position:0%
+ 
+ 
+
+00:05:30.830 --> 00:05:35.409 align:start position:0%
+ 
+ 
+
+00:05:35.409 --> 00:05:39.170 align:start position:0%
+ 
+ 
+
+00:05:39.170 --> 00:05:41.469 align:start position:0%
+ 
+ 
+
+00:05:41.469 --> 00:05:45.290 align:start position:0%
+ 
+ 
+
+00:05:45.290 --> 00:05:47.210 align:start position:0%
+ 
+ 
+
+00:05:47.210 --> 00:05:50.450 align:start position:0%
+ 
+ 
+
+00:05:50.450 --> 00:05:53.420 align:start position:0%
+ 
+ 
+
+00:05:53.420 --> 00:05:55.879 align:start position:0%
+ 
+ 
+
+00:05:55.879 --> 00:05:58.690 align:start position:0%
+ 
+ 
+
+00:05:58.690 --> 00:06:01.820 align:start position:0%
+ 
+ 
+
+00:06:01.820 --> 00:06:04.940 align:start position:0%
+ 
+ 
+
+00:06:04.940 --> 00:06:08.779 align:start position:0%
+ 
+ 
+
+00:06:08.779 --> 00:06:12.469 align:start position:0%
+ 
+ 
+
+00:06:12.469 --> 00:06:16.700 align:start position:0%
+ 
+ 
+
+00:06:16.700 --> 00:06:18.550 align:start position:0%
+ 
+ 
+
+00:06:18.550 --> 00:06:21.800 align:start position:0%
+ 
+ 
+
+00:06:21.800 --> 00:06:27.140 align:start position:0%
+ 
+ 
+
+00:06:27.140 --> 00:06:29.210 align:start position:0%
+ 
+ 
+
+00:06:29.210 --> 00:06:33.620 align:start position:0%
+ 
+ 
+
+00:06:33.620 --> 00:06:35.810 align:start position:0%
+ 
+ 
+
+00:06:35.810 --> 00:06:38.140 align:start position:0%
+ 
+ 
+
+00:06:38.140 --> 00:06:41.240 align:start position:0%
+ 
+ 
+
+00:06:41.240 --> 00:06:43.430 align:start position:0%
+ 
+ 
+
+00:06:43.430 --> 00:06:44.589 align:start position:0%
+ 
+ 
+
+00:06:44.589 --> 00:06:48.429 align:start position:0%
+ 
+ 
+
+00:06:48.429 --> 00:06:51.059 align:start position:0%
+ 
+ 
+
+00:06:51.059 --> 00:06:53.619 align:start position:0%
+ 
+ 
+
+00:06:53.619 --> 00:06:56.919 align:start position:0%
+ 
+ 
+
+00:06:56.919 --> 00:06:58.510 align:start position:0%
+ 
+ 
+
+00:06:58.510 --> 00:07:01.029 align:start position:0%
+ 
+ 
+
+00:07:01.029 --> 00:07:03.010 align:start position:0%
+ 
+ 
+
+00:07:03.010 --> 00:07:06.519 align:start position:0%
+ 
+ 
+
+00:07:06.519 --> 00:07:08.409 align:start position:0%
+ 
+ 
+
+00:07:08.409 --> 00:07:10.719 align:start position:0%
+ 
+ 
+
+00:07:10.719 --> 00:07:12.639 align:start position:0%
+ 
+ 
+
+00:07:12.639 --> 00:07:15.100 align:start position:0%
+ 
+ 
+
+00:07:15.100 --> 00:07:19.179 align:start position:0%
+ 
+ 
+
+00:07:19.179 --> 00:07:21.119 align:start position:0%
+ 
+ 
+
+00:07:21.119 --> 00:07:24.309 align:start position:0%
+ 
+ 
+
+00:07:24.309 --> 00:07:27.999 align:start position:0%
+ 
+ 
+
+00:07:27.999 --> 00:07:30.129 align:start position:0%
+ 
+ 
+
+00:07:30.129 --> 00:07:33.329 align:start position:0%
+ 
+ 
+
+00:07:33.329 --> 00:07:38.139 align:start position:0%
+ 
+ 
+
+00:07:38.139 --> 00:07:40.299 align:start position:0%
+ 
+ 
+
+00:07:40.299 --> 00:07:42.279 align:start position:0%
+ 
+ 
+
+00:07:42.279 --> 00:07:44.199 align:start position:0%
+ 
+ 
+
+00:07:44.199 --> 00:07:46.570 align:start position:0%
+ 
+ 
+
+00:07:46.570 --> 00:07:47.859 align:start position:0%
+ 
+ 
+
+00:07:47.859 --> 00:07:50.079 align:start position:0%
+ 
+ 
+
+00:07:50.079 --> 00:07:53.019 align:start position:0%
+ 
+ 
+
+00:07:53.019 --> 00:07:55.389 align:start position:0%
+ 
+ 
+
+00:07:55.389 --> 00:07:57.879 align:start position:0%
+ 
+ 
+
+00:07:57.879 --> 00:07:59.980 align:start position:0%
+ 
+ 
+
+00:07:59.980 --> 00:08:04.469 align:start position:0%
+ 
+ 
+
+00:08:04.469 --> 00:08:08.319 align:start position:0%
+ 
+ 
+
+00:08:08.319 --> 00:08:11.499 align:start position:0%
+ 
+ 
+
+00:08:11.499 --> 00:08:13.179 align:start position:0%
+ 
+ 
+
+00:08:13.179 --> 00:08:15.519 align:start position:0%
+ 
+ 
+
+00:08:15.519 --> 00:08:17.589 align:start position:0%
+ 
+ 
+
+00:08:17.589 --> 00:08:21.480 align:start position:0%
+ 
+ 
+
+00:08:21.480 --> 00:08:24.819 align:start position:0%
+ 
+ 
+
+00:08:24.819 --> 00:08:27.759 align:start position:0%
+ 
+ 
+
+00:08:27.759 --> 00:08:31.029 align:start position:0%
+ 
+ 
+
+00:08:31.029 --> 00:08:32.589 align:start position:0%
+ 
+ 
+
+00:08:32.589 --> 00:08:35.529 align:start position:0%
+ 
+ 
+
+00:08:35.529 --> 00:08:38.050 align:start position:0%
+ 
+ 
+
+00:08:38.050 --> 00:08:41.110 align:start position:0%
+ 
+ 
+
+00:08:41.110 --> 00:08:43.540 align:start position:0%
+ 
+ 
+
+00:08:43.540 --> 00:08:46.749 align:start position:0%
+ 
+ 
+
+00:08:46.749 --> 00:08:48.420 align:start position:0%
+ 
+ 
+
+00:08:48.420 --> 00:08:51.790 align:start position:0%
+ 
+ 
+
+00:08:51.790 --> 00:08:54.069 align:start position:0%
+ 
+ 
+
+00:08:54.069 --> 00:08:57.170 align:start position:0%
+ 
+ 
+
+00:08:57.170 --> 00:08:58.700 align:start position:0%
+ 
+ 
+
+00:08:58.700 --> 00:09:01.990 align:start position:0%
+ 
+ 
+
+00:09:01.990 --> 00:09:06.370 align:start position:0%
+ 
+ 
+
+00:09:06.370 --> 00:09:09.590 align:start position:0%
+ 
+ 
+
+00:09:09.590 --> 00:09:13.490 align:start position:0%
+ 
+ 
+
+00:09:13.490 --> 00:09:17.180 align:start position:0%
+ 
+ 
+
+00:09:17.180 --> 00:09:18.980 align:start position:0%
+ 
+ 
+
+00:09:18.980 --> 00:09:22.090 align:start position:0%
+ 
+ 
+
+00:09:22.090 --> 00:09:24.970 align:start position:0%
+ 
+ 
+
+00:09:24.970 --> 00:09:28.760 align:start position:0%
+ 
+ 
+
+00:09:28.760 --> 00:09:32.060 align:start position:0%
+ 
+ 
+
+00:09:32.060 --> 00:09:36.140 align:start position:0%
+ 
+ 
+
+00:09:36.140 --> 00:09:39.080 align:start position:0%
+ 
+ 
+
+00:09:39.080 --> 00:09:42.080 align:start position:0%
+ 
+ 
+
+00:09:42.080 --> 00:09:45.020 align:start position:0%
+ 
+ 
+
+00:09:45.020 --> 00:09:49.100 align:start position:0%
+ 
+ 
+
+00:09:49.100 --> 00:09:54.260 align:start position:0%
+ 
+ 
+
+00:09:54.260 --> 00:09:57.350 align:start position:0%
+ 
+ 
+
+00:09:57.350 --> 00:09:59.900 align:start position:0%
+ 
+ 
+
+00:09:59.900 --> 00:10:01.970 align:start position:0%
+ 
+ 
+
+00:10:01.970 --> 00:10:05.180 align:start position:0%
+ 
+ 
+
+00:10:05.180 --> 00:10:08.660 align:start position:0%
+ 
+ 
+
+00:10:08.660 --> 00:10:13.970 align:start position:0%
+ 
+ 
+
+00:10:13.970 --> 00:10:15.860 align:start position:0%
+ 
+ 
+
+00:10:15.860 --> 00:10:18.200 align:start position:0%
+ 
+ 
+
+00:10:18.200 --> 00:10:22.760 align:start position:0%
+ 
+ 
+
+00:10:22.760 --> 00:10:25.840 align:start position:0%
+ 
+ 
+
+00:10:25.840 --> 00:10:28.760 align:start position:0%
+ 
+ 
+
+00:10:28.760 --> 00:10:32.960 align:start position:0%
+ 
+ 
+
+00:10:32.960 --> 00:10:38.000 align:start position:0%
+ 
+ 
+
+00:10:38.000 --> 00:10:40.220 align:start position:0%
+ 
+ 
+
+00:10:40.220 --> 00:10:44.330 align:start position:0%
+ 
+ 
+
+00:10:44.330 --> 00:10:48.260 align:start position:0%
+ 
+ 
+
+00:10:48.260 --> 00:10:51.380 align:start position:0%
+ 
+ 
+
+00:10:51.380 --> 00:10:53.950 align:start position:0%
+ 
+ 
+
+00:10:53.950 --> 00:11:00.050 align:start position:0%
+ 
+ 
+
+00:11:00.050 --> 00:11:02.870 align:start position:0%
+ 
+ 
+
+00:11:02.870 --> 00:11:04.490 align:start position:0%
+ 
+ 
+
+00:11:04.490 --> 00:11:07.040 align:start position:0%
+ 
+ 
+
+00:11:07.040 --> 00:11:08.750 align:start position:0%
+ 
+ 
+
+00:11:08.750 --> 00:11:10.670 align:start position:0%
+ 
+ 
+
+00:11:10.670 --> 00:11:14.780 align:start position:0%
+ 
+ 
+
+00:11:14.780 --> 00:11:17.030 align:start position:0%
+ 
+ 
+
+00:11:17.030 --> 00:11:19.939 align:start position:0%
+ 
+ 
+
+00:11:19.939 --> 00:11:22.910 align:start position:0%
+ 
+ 
+
+00:11:22.910 --> 00:11:25.100 align:start position:0%
+ 
+ 
+
+00:11:25.100 --> 00:11:26.869 align:start position:0%
+ 
+ 
+
+00:11:26.869 --> 00:11:29.150 align:start position:0%
+ 
+ 
+
+00:11:29.150 --> 00:11:31.249 align:start position:0%
+ 
+ 
+
+00:11:31.249 --> 00:11:34.309 align:start position:0%
+ 
+ 
+
+00:11:34.309 --> 00:11:37.790 align:start position:0%
+ 
+ 
+
+00:11:37.790 --> 00:11:40.850 align:start position:0%
+ 
+ 
+
+00:11:40.850 --> 00:11:43.869 align:start position:0%
+ 
+ 
+
+00:11:43.869 --> 00:11:47.179 align:start position:0%
+ 
+ 
+
+00:11:47.179 --> 00:11:49.189 align:start position:0%
+ 
+ 
+
+00:11:49.189 --> 00:11:51.499 align:start position:0%
+ 
+ 
+
+00:11:51.499 --> 00:11:53.929 align:start position:0%
+ 
+ 
+
+00:11:53.929 --> 00:11:56.900 align:start position:0%
+ 
+ 
+
+00:11:56.900 --> 00:11:59.090 align:start position:0%
+ 
+ 
+
+00:11:59.090 --> 00:12:02.660 align:start position:0%
+ 
+ 
+
+00:12:02.660 --> 00:12:04.999 align:start position:0%
+ 
+ 
+
+00:12:04.999 --> 00:12:10.309 align:start position:0%
+ 
+ 
+
+00:12:10.309 --> 00:12:12.290 align:start position:0%
+ 
+ 
+
+00:12:12.290 --> 00:12:15.650 align:start position:0%
+ 
+ 
+
+00:12:15.650 --> 00:12:18.169 align:start position:0%
+ 
+ 
+
+00:12:18.169 --> 00:12:22.160 align:start position:0%
+ 
+ 
+
+00:12:22.160 --> 00:12:24.860 align:start position:0%
+ 
+ 
+
+00:12:24.860 --> 00:12:26.689 align:start position:0%
+ 
+ 
+
+00:12:26.689 --> 00:12:30.319 align:start position:0%
+ 
+ 
+
+00:12:30.319 --> 00:12:32.749 align:start position:0%
+ 
+ 
+
+00:12:32.749 --> 00:12:36.280 align:start position:0%
+ 
+ 
+
+00:12:36.280 --> 00:12:38.929 align:start position:0%
+ 
+ 
+
+00:12:38.929 --> 00:12:42.889 align:start position:0%
+ 
+ 
+
+00:12:42.889 --> 00:12:46.419 align:start position:0%
+ 
+ 
+
+00:12:46.419 --> 00:12:50.960 align:start position:0%
+ 
+ 
+
+00:12:50.960 --> 00:12:52.669 align:start position:0%
+ 
+ 
+
+00:12:52.669 --> 00:12:55.999 align:start position:0%
+ 
+ 
+
+00:12:55.999 --> 00:13:01.300 align:start position:0%
+ 
+ 
+
+00:13:01.300 --> 00:13:05.210 align:start position:0%
+ 
+ 
+
+00:13:05.210 --> 00:13:08.780 align:start position:0%
+ 
+ 
+
+00:13:08.780 --> 00:13:11.510 align:start position:0%
+ 
+ 
+
+00:13:11.510 --> 00:13:14.150 align:start position:0%
+ 
+ 
+
+00:13:14.150 --> 00:13:17.480 align:start position:0%
+ 
+ 
+
+00:13:17.480 --> 00:13:20.420 align:start position:0%
+ 
+ 
+
+00:13:20.420 --> 00:13:22.370 align:start position:0%
+ 
+ 
+
+00:13:22.370 --> 00:13:26.060 align:start position:0%
+ 
+ 
+
+00:13:26.060 --> 00:13:27.710 align:start position:0%
+ 
+ 
+
+00:13:27.710 --> 00:13:29.810 align:start position:0%
+ 
+ 
+
+00:13:29.810 --> 00:13:33.380 align:start position:0%
+ 
+ 
+
+00:13:33.380 --> 00:13:35.330 align:start position:0%
+ 
+ 
+
+00:13:35.330 --> 00:13:36.820 align:start position:0%
+ 
+ 
+
+00:13:36.820 --> 00:13:39.620 align:start position:0%
+ 
+ 
+
+00:13:39.620 --> 00:13:42.860 align:start position:0%
+ 
+ 
+
+00:13:42.860 --> 00:13:45.170 align:start position:0%
+ 
+ 
+
+00:13:45.170 --> 00:13:48.110 align:start position:0%
+ 
+ 
+
+00:13:48.110 --> 00:13:51.080 align:start position:0%
+ 
+ 
+
+00:13:51.080 --> 00:13:53.780 align:start position:0%
+ 
+ 
+
+00:13:53.780 --> 00:13:56.120 align:start position:0%
+ 
+ 
+
+00:13:56.120 --> 00:13:56.690 align:start position:0%
+ 
+ 
+
+00:13:56.690 --> 00:14:01.340 align:start position:0%
+ 
+ 
+
+00:14:01.340 --> 00:14:03.890 align:start position:0%
+ 
+ 
+
+00:14:03.890 --> 00:14:06.820 align:start position:0%
+ 
+ 
+
+00:14:06.820 --> 00:14:09.680 align:start position:0%
+ 
+ 
+
+00:14:09.680 --> 00:14:11.930 align:start position:0%
+ 
+ 
+
+00:14:11.930 --> 00:14:14.740 align:start position:0%
+ 
+ 
+
+00:14:14.740 --> 00:14:17.120 align:start position:0%
+ 
+ 
+
+00:14:17.120 --> 00:14:19.430 align:start position:0%
+ 
+ 
+
+00:14:19.430 --> 00:14:21.980 align:start position:0%
+ 
+ 
+
+00:14:21.980 --> 00:14:24.920 align:start position:0%
+ 
+ 
+
+00:14:24.920 --> 00:14:26.870 align:start position:0%
+ 
+ 
+
+00:14:26.870 --> 00:14:30.740 align:start position:0%
+ 
+ 
+
+00:14:30.740 --> 00:14:33.850 align:start position:0%
+ 
+ 
+
+00:14:33.850 --> 00:14:37.880 align:start position:0%
+ 
+ 
+
+00:14:37.880 --> 00:14:40.880 align:start position:0%
+ 
+ 
+
+00:14:40.880 --> 00:14:44.000 align:start position:0%
+ 
+ 
+
+00:14:44.000 --> 00:14:46.490 align:start position:0%
+ 
+ 
+
+00:14:46.490 --> 00:14:48.950 align:start position:0%
+ 
+ 
+
+00:14:48.950 --> 00:14:51.920 align:start position:0%
+ 
+ 
+
+00:14:51.920 --> 00:14:54.170 align:start position:0%
+ 
+ 
+
+00:14:54.170 --> 00:14:55.850 align:start position:0%
+ 
+ 
+
+00:14:55.850 --> 00:14:58.370 align:start position:0%
+ 
+ 
+
+00:14:58.370 --> 00:15:00.320 align:start position:0%
+ 
+ 
+
+00:15:00.320 --> 00:15:02.600 align:start position:0%
+ 
+ 
+
+00:15:02.600 --> 00:15:05.120 align:start position:0%
+ 
+ 
+
+00:15:05.120 --> 00:15:07.400 align:start position:0%
+ 
+ 
+
+00:15:07.400 --> 00:15:10.070 align:start position:0%
+ 
+ 
+
+00:15:10.070 --> 00:15:12.470 align:start position:0%
+ 
+ 
+
+00:15:12.470 --> 00:15:12.480 align:start position:0%
+ 
+ 
+
+00:15:12.480 --> 00:15:13.310 align:start position:0%
+ 
+
+
+00:15:13.310 --> 00:15:15.740 align:start position:0%
+ 
+ 
+
+00:15:15.740 --> 00:15:18.970 align:start position:0%
+ 
+ 
+
+00:15:18.970 --> 00:15:22.100 align:start position:0%
+ 
+ 
+
+00:15:22.100 --> 00:15:24.470 align:start position:0%
+ 
+ 
+
+00:15:24.470 --> 00:15:26.629 align:start position:0%
+ 
+ 
+
+00:15:26.629 --> 00:15:31.180 align:start position:0%
+ 
+ 
+
+00:15:31.180 --> 00:15:35.150 align:start position:0%
+ 
+ 
+
+00:15:35.150 --> 00:15:37.430 align:start position:0%
+ 
+ 
+
+00:15:37.430 --> 00:15:40.699 align:start position:0%
+ 
+ 
+
+00:15:40.699 --> 00:15:43.309 align:start position:0%
+ 
+ 
+
+00:15:43.309 --> 00:15:46.180 align:start position:0%
+ 
+ 
+
+00:15:46.180 --> 00:15:48.769 align:start position:0%
+ 
+ 
+
+00:15:48.769 --> 00:15:50.720 align:start position:0%
+ 
+ 
+
+00:15:50.720 --> 00:15:52.910 align:start position:0%
+ 
+ 
+
+00:15:52.910 --> 00:15:54.920 align:start position:0%
+ 
+ 
+
+00:15:54.920 --> 00:15:57.230 align:start position:0%
+ 
+ 
+
+00:15:57.230 --> 00:16:00.439 align:start position:0%
+ 
+ 
+
+00:16:00.439 --> 00:16:03.199 align:start position:0%
+ 
+ 
+
+00:16:03.199 --> 00:16:07.069 align:start position:0%
+ 
+ 
+
+00:16:07.069 --> 00:16:09.590 align:start position:0%
+ 
+ 
+
+00:16:09.590 --> 00:16:11.900 align:start position:0%
+ 
+ 
+
+00:16:11.900 --> 00:16:14.150 align:start position:0%
+ 
+ 
+
+00:16:14.150 --> 00:16:17.030 align:start position:0%
+ 
+ 
+
+00:16:17.030 --> 00:16:19.069 align:start position:0%
+ 
+ 
+
+00:16:19.069 --> 00:16:21.139 align:start position:0%
+ 
+ 
+
+00:16:21.139 --> 00:16:23.600 align:start position:0%
+ 
+ 
+
+00:16:23.600 --> 00:16:25.910 align:start position:0%
+ 
+ 
+
+00:16:25.910 --> 00:16:28.340 align:start position:0%
+ 
+ 
+
+00:16:28.340 --> 00:16:30.290 align:start position:0%
+ 
+ 
+
+00:16:30.290 --> 00:16:33.019 align:start position:0%
+ 
+ 
+
+00:16:33.019 --> 00:16:36.829 align:start position:0%
+ 
+ 
+
+00:16:36.829 --> 00:16:38.449 align:start position:0%
+ 
+ 
+
+00:16:38.449 --> 00:16:40.550 align:start position:0%
+ 
+ 
+
+00:16:40.550 --> 00:16:43.430 align:start position:0%
+ 
+ 
+
+00:16:43.430 --> 00:16:46.840 align:start position:0%
+ 
+ 
+
+00:16:46.840 --> 00:16:50.389 align:start position:0%
+ 
+ 
+
+00:16:50.389 --> 00:16:52.280 align:start position:0%
+ 
+ 
+
+00:16:52.280 --> 00:16:55.639 align:start position:0%
+ 
+ 
+
+00:16:55.639 --> 00:16:57.769 align:start position:0%
+ 
+ 
+
+00:16:57.769 --> 00:17:00.949 align:start position:0%
+ 
+ 
+
+00:17:00.949 --> 00:17:03.230 align:start position:0%
+ 
+ 
+
+00:17:03.230 --> 00:17:05.380 align:start position:0%
+ 
+ 
+
+00:17:05.380 --> 00:17:08.929 align:start position:0%
+ 
+ 
+
+00:17:08.929 --> 00:17:11.449 align:start position:0%
+ 
+ 
+
+00:17:11.449 --> 00:17:12.919 align:start position:0%
+ 
+ 
+
+00:17:12.919 --> 00:17:15.590 align:start position:0%
+ 
+ 
+
+00:17:15.590 --> 00:17:18.710 align:start position:0%
+ 
+ 
+
+00:17:18.710 --> 00:17:21.439 align:start position:0%
+ 
+ 
+
+00:17:21.439 --> 00:17:21.449 align:start position:0%
+ 
+ 
+
+00:17:21.449 --> 00:17:23.720 align:start position:0%
+ 
+
+
+00:17:23.720 --> 00:17:27.139 align:start position:0%
+ 
+ 
+
+00:17:27.139 --> 00:17:29.810 align:start position:0%
+ 
+ 
+
+00:17:29.810 --> 00:17:32.029 align:start position:0%
+ 
+ 
+
+00:17:32.029 --> 00:17:34.970 align:start position:0%
+ 
+ 
+
+00:17:34.970 --> 00:17:37.419 align:start position:0%
+ 
+ 
+
+00:17:37.419 --> 00:17:40.120 align:start position:0%
+ 
+ 
+
+00:17:40.120 --> 00:17:43.159 align:start position:0%
+ 
+ 
+
+00:17:43.159 --> 00:17:46.850 align:start position:0%
+ 
+ 
+
+00:17:46.850 --> 00:17:50.269 align:start position:0%
+ 
+ 
+
+00:17:50.269 --> 00:17:52.639 align:start position:0%
+ 
+ 
+
+00:17:52.639 --> 00:17:55.100 align:start position:0%
+ 
+ 
+
+00:17:55.100 --> 00:17:57.950 align:start position:0%
+ 
+ 
+
+00:17:57.950 --> 00:18:00.409 align:start position:0%
+ 
+ 
+
+00:18:00.409 --> 00:18:03.379 align:start position:0%
+ 
+ 
+
+00:18:03.379 --> 00:18:05.779 align:start position:0%
+ 
+ 
+
+00:18:05.779 --> 00:18:07.700 align:start position:0%
+ 
+ 
+
+00:18:07.700 --> 00:18:11.169 align:start position:0%
+ 
+ 
+
+00:18:11.169 --> 00:18:13.340 align:start position:0%
+ 
+ 
+
+00:18:13.340 --> 00:18:15.440 align:start position:0%
+ 
+ 
+
+00:18:15.440 --> 00:18:17.570 align:start position:0%
+ 
+ 
+
+00:18:17.570 --> 00:18:19.330 align:start position:0%
+ 
+ 
+
+00:18:19.330 --> 00:18:22.190 align:start position:0%
+ 
+ 
+
+00:18:22.190 --> 00:18:27.980 align:start position:0%
+ 
+ 
+
+00:18:27.980 --> 00:18:30.230 align:start position:0%
+ 
+ 
+
+00:18:30.230 --> 00:18:32.750 align:start position:0%
+ 
+ 
+
+00:18:32.750 --> 00:18:36.500 align:start position:0%
+ 
+ 
+
+00:18:36.500 --> 00:18:39.049 align:start position:0%
+ 
+ 
+
+00:18:39.049 --> 00:18:41.539 align:start position:0%
+ 
+ 
+
+00:18:41.539 --> 00:18:44.750 align:start position:0%
+ 
+ 
+
+00:18:44.750 --> 00:18:47.600 align:start position:0%
+ 
+ 
+
+00:18:47.600 --> 00:18:49.700 align:start position:0%
+ 
+ 
+
+00:18:49.700 --> 00:18:52.399 align:start position:0%
+ 
+ 
+
+00:18:52.399 --> 00:18:54.889 align:start position:0%
+ 
+ 
+
+00:18:54.889 --> 00:18:58.759 align:start position:0%
+ 
+ 
+
+00:18:58.759 --> 00:19:00.740 align:start position:0%
+ 
+ 
+
+00:19:00.740 --> 00:19:04.129 align:start position:0%
+ 
+ 
+
+00:19:04.129 --> 00:19:07.519 align:start position:0%
+ 
+ 
+
+00:19:07.519 --> 00:19:10.549 align:start position:0%
+ 
+ 
+
+00:19:10.549 --> 00:19:14.810 align:start position:0%
+ 
+ 
+
+00:19:14.810 --> 00:19:20.180 align:start position:0%
+ 
+ 
+
+00:19:20.180 --> 00:19:23.659 align:start position:0%
+ 
+ 
+
+00:19:23.659 --> 00:19:26.149 align:start position:0%
+ 
+ 
+
+00:19:26.149 --> 00:19:28.159 align:start position:0%
+ 
+ 
+
+00:19:28.159 --> 00:19:31.879 align:start position:0%
+ 
+ 
+
+00:19:31.879 --> 00:19:34.759 align:start position:0%
+ 
+ 
+
+00:19:34.759 --> 00:19:34.769 align:start position:0%
+ 
+ 
+
+00:19:34.769 --> 00:19:35.869 align:start position:0%
+ 
+
+
+00:19:35.869 --> 00:19:40.129 align:start position:0%
+ 
+ 
+
+00:19:40.129 --> 00:19:43.669 align:start position:0%
+ 
+ 
+
+00:19:43.669 --> 00:19:46.069 align:start position:0%
+ 
+ 
+
+00:19:46.069 --> 00:19:49.219 align:start position:0%
+ 
+ 
+
+00:19:49.219 --> 00:19:50.930 align:start position:0%
+ 
+ 
+
+00:19:50.930 --> 00:19:54.829 align:start position:0%
+ 
+ 
+
+00:19:54.829 --> 00:19:58.909 align:start position:0%
+ 
+ 
+
+00:19:58.909 --> 00:20:01.939 align:start position:0%
+ 
+ 
+
+00:20:01.939 --> 00:20:04.759 align:start position:0%
+ 
+ 
+
+00:20:04.759 --> 00:20:07.249 align:start position:0%
+ 
+ 
+
+00:20:07.249 --> 00:20:10.039 align:start position:0%
+ 
+ 
+
+00:20:10.039 --> 00:20:12.529 align:start position:0%
+ 
+ 
+
+00:20:12.529 --> 00:20:14.479 align:start position:0%
+ 
+ 
+
+00:20:14.479 --> 00:20:17.839 align:start position:0%
+ 
+ 
+
+00:20:17.839 --> 00:20:20.449 align:start position:0%
+ 
+ 
+
+00:20:20.449 --> 00:20:23.709 align:start position:0%
+ 
+ 
+
+00:20:23.709 --> 00:20:26.809 align:start position:0%
+ 
+ 
+
+00:20:26.809 --> 00:20:28.519 align:start position:0%
+ 
+ 
+
+00:20:28.519 --> 00:20:32.019 align:start position:0%
+ 
+ 
+
+00:20:32.019 --> 00:20:34.759 align:start position:0%
+ 
+ 
+
+00:20:34.759 --> 00:20:36.529 align:start position:0%
+ 
+ 
+
+00:20:36.529 --> 00:20:37.279 align:start position:0%
+ 
+ 
+
+00:20:37.279 --> 00:20:40.309 align:start position:0%
+ 
+ 
+
+00:20:40.309 --> 00:20:44.589 align:start position:0%
+ 
+ 
+
+00:20:44.589 --> 00:20:47.329 align:start position:0%
+ 
+ 
+
+00:20:47.329 --> 00:20:50.779 align:start position:0%
+ 
+ 
+
+00:20:50.779 --> 00:20:53.409 align:start position:0%
+ 
+ 
+
+00:20:53.409 --> 00:20:57.439 align:start position:0%
+ 
+ 
+
+00:20:57.439 --> 00:20:59.239 align:start position:0%
+ 
+ 
+
+00:20:59.239 --> 00:21:02.029 align:start position:0%
+ 
+ 
+
+00:21:02.029 --> 00:21:04.729 align:start position:0%
+ 
+ 
+
+00:21:04.729 --> 00:21:07.069 align:start position:0%
+ 
+ 
+
+00:21:07.069 --> 00:21:12.409 align:start position:0%
+ 
+ 
+
+00:21:12.409 --> 00:21:14.599 align:start position:0%
+ 
+ 
+
+00:21:14.599 --> 00:21:16.579 align:start position:0%
+ 
+ 
+
+00:21:16.579 --> 00:21:19.480 align:start position:0%
+ 
+ 
+
+00:21:19.480 --> 00:21:21.580 align:start position:0%
+ 
+ 
+
+00:21:21.580 --> 00:21:25.330 align:start position:0%
+ 
+ 
+
+00:21:25.330 --> 00:21:29.139 align:start position:0%
+ 
+ 
+
+00:21:29.139 --> 00:21:30.970 align:start position:0%
+ 
+ 
+
+00:21:30.970 --> 00:21:33.760 align:start position:0%
+ 
+ 
+
+00:21:33.760 --> 00:21:35.680 align:start position:0%
+ 
+ 
+
+00:21:35.680 --> 00:21:39.690 align:start position:0%
+ 
+ 
+
+00:21:39.690 --> 00:21:42.580 align:start position:0%
+ 
+ 
+
+00:21:42.580 --> 00:21:44.380 align:start position:0%
+ 
+ 
+
+00:21:44.380 --> 00:21:46.480 align:start position:0%
+ 
+ 
+
+00:21:46.480 --> 00:21:48.610 align:start position:0%
+ 
+ 
+
+00:21:48.610 --> 00:21:50.139 align:start position:0%
+ 
+ 
+
+00:21:50.139 --> 00:21:52.240 align:start position:0%
+ 
+ 
+
+00:21:52.240 --> 00:21:55.120 align:start position:0%
+ 
+ 
+
+00:21:55.120 --> 00:21:58.870 align:start position:0%
+ 
+ 
+
+00:21:58.870 --> 00:22:01.240 align:start position:0%
+ 
+ 
+
+00:22:01.240 --> 00:22:03.610 align:start position:0%
+ 
+ 
+
+00:22:03.610 --> 00:22:07.240 align:start position:0%
+ 
+ 
+
+00:22:07.240 --> 00:22:09.310 align:start position:0%
+ 
+ 
+
+00:22:09.310 --> 00:22:12.310 align:start position:0%
+ 
+ 
+
+00:22:12.310 --> 00:22:15.190 align:start position:0%
+ 
+ 
+
+00:22:15.190 --> 00:22:18.340 align:start position:0%
+ 
+ 
+
+00:22:18.340 --> 00:22:20.590 align:start position:0%
+ 
+ 
+
+00:22:20.590 --> 00:22:23.590 align:start position:0%
+ 
+ 
+
+00:22:23.590 --> 00:22:25.899 align:start position:0%
+ 
+ 
+
+00:22:25.899 --> 00:22:28.090 align:start position:0%
+ 
+ 
+
+00:22:28.090 --> 00:22:30.010 align:start position:0%
+ 
+ 
+
+00:22:30.010 --> 00:22:34.269 align:start position:0%
+ 
+ 
+
+00:22:34.269 --> 00:22:38.019 align:start position:0%
+ 
+ 
+
+00:22:38.019 --> 00:22:40.029 align:start position:0%
+ 
+ 
+
+00:22:40.029 --> 00:22:42.399 align:start position:0%
+ 
+ 
+
+00:22:42.399 --> 00:22:45.580 align:start position:0%
+ 
+ 
+
+00:22:45.580 --> 00:22:48.610 align:start position:0%
+ 
+ 
+
+00:22:48.610 --> 00:22:52.180 align:start position:0%
+ 
+ 
+
+00:22:52.180 --> 00:22:54.850 align:start position:0%
+ 
+ 
+
+00:22:54.850 --> 00:22:58.210 align:start position:0%
+ 
+ 
+
+00:22:58.210 --> 00:23:00.519 align:start position:0%
+ 
+ 
+
+00:23:00.519 --> 00:23:03.130 align:start position:0%
+ 
+ 
+
+00:23:03.130 --> 00:23:05.830 align:start position:0%
+ 
+ 
+
+00:23:05.830 --> 00:23:08.560 align:start position:0%
+ 
+ 
+
+00:23:08.560 --> 00:23:12.519 align:start position:0%
+ 
+ 
+
+00:23:12.519 --> 00:23:15.100 align:start position:0%
+ 
+ 
+
+00:23:15.100 --> 00:23:17.740 align:start position:0%
+ 
+ 
+
+00:23:17.740 --> 00:23:20.080 align:start position:0%
+ 
+ 
+
+00:23:20.080 --> 00:23:22.779 align:start position:0%
+ 
+ 
+
+00:23:22.779 --> 00:23:25.630 align:start position:0%
+ 
+ 
+
+00:23:25.630 --> 00:23:27.669 align:start position:0%
+ 
+ 
+
+00:23:27.669 --> 00:23:29.799 align:start position:0%
+ 
+ 
+
+00:23:29.799 --> 00:23:33.399 align:start position:0%
+ 
+ 
+
+00:23:33.399 --> 00:23:35.379 align:start position:0%
+ 
+ 
+
+00:23:35.379 --> 00:23:38.379 align:start position:0%
+ 
+ 
+
+00:23:38.379 --> 00:23:41.109 align:start position:0%
+ 
+ 
+
+00:23:41.109 --> 00:23:44.080 align:start position:0%
+ 
+ 
+
+00:23:44.080 --> 00:23:45.940 align:start position:0%
+ 
+ 
+
+00:23:45.940 --> 00:23:47.830 align:start position:0%
+ 
+ 
+
+00:23:47.830 --> 00:23:51.519 align:start position:0%
+ 
+ 
+
+00:23:51.519 --> 00:23:53.830 align:start position:0%
+ 
+ 
+
+00:23:53.830 --> 00:23:55.239 align:start position:0%
+ 
+ 
+
+00:23:55.239 --> 00:23:58.989 align:start position:0%
+ 
+ 
+
+00:23:58.989 --> 00:24:00.759 align:start position:0%
+ 
+ 
+
+00:24:00.759 --> 00:24:04.089 align:start position:0%
+ 
+ 
+
+00:24:04.089 --> 00:24:07.239 align:start position:0%
+ 
+ 
+
+00:24:07.239 --> 00:24:11.320 align:start position:0%
+ 
+ 
+
+00:24:11.320 --> 00:24:13.629 align:start position:0%
+ 
+ 
+
+00:24:13.629 --> 00:24:16.029 align:start position:0%
+ 
+ 
+
+00:24:16.029 --> 00:24:19.959 align:start position:0%
+ 
+ 
+
+00:24:19.959 --> 00:24:21.609 align:start position:0%
+ 
+ 
+
+00:24:21.609 --> 00:24:24.539 align:start position:0%
+ 
+ 
+
+00:24:24.539 --> 00:24:28.060 align:start position:0%
+ 
+ 
+
+00:24:28.060 --> 00:24:30.519 align:start position:0%
+ 
+ 
+
+00:24:30.519 --> 00:24:34.629 align:start position:0%
+ 
+ 
+
+00:24:34.629 --> 00:24:36.969 align:start position:0%
+ 
+ 
+
+00:24:36.969 --> 00:24:39.039 align:start position:0%
+ 
+ 
+
+00:24:39.039 --> 00:24:41.950 align:start position:0%
+ 
+ 
+
+00:24:41.950 --> 00:24:44.469 align:start position:0%
+ 
+ 
+
+00:24:44.469 --> 00:24:46.779 align:start position:0%
+ 
+ 
+
+00:24:46.779 --> 00:24:49.239 align:start position:0%
+ 
+ 
+
+00:24:49.239 --> 00:24:51.190 align:start position:0%
+ 
+ 
+
+00:24:51.190 --> 00:24:54.039 align:start position:0%
+ 
+ 
+
+00:24:54.039 --> 00:24:58.029 align:start position:0%
+ 
+ 
+
+00:24:58.029 --> 00:25:01.149 align:start position:0%
+ 
+ 
+
+00:25:01.149 --> 00:25:03.669 align:start position:0%
+ 
+ 
+
+00:25:03.669 --> 00:25:06.909 align:start position:0%
+ 
+ 
+
+00:25:06.909 --> 00:25:07.539 align:start position:0%
+ 
+ 
+
+00:25:07.539 --> 00:25:10.599 align:start position:0%
+ 
+ 
+
+00:25:10.599 --> 00:25:14.200 align:start position:0%
+ 
+ 
+
+00:25:14.200 --> 00:25:16.209 align:start position:0%
+ 
+ 
+
+00:25:16.209 --> 00:25:18.310 align:start position:0%
+ 
+ 
+
+00:25:18.310 --> 00:25:20.169 align:start position:0%
+ 
+ 
+
+00:25:20.169 --> 00:25:23.259 align:start position:0%
+ 
+ 
+
+00:25:23.259 --> 00:25:26.859 align:start position:0%
+ 
+ 
+
+00:25:26.859 --> 00:25:29.109 align:start position:0%
+ 
+ 
+
+00:25:29.109 --> 00:25:32.229 align:start position:0%
+ 
+ 
+
+00:25:32.229 --> 00:25:36.190 align:start position:0%
+ 
+ 
+
+00:25:36.190 --> 00:25:39.290 align:start position:0%
+ 
+ 
+
+00:25:39.290 --> 00:25:43.010 align:start position:0%
+ 
+ 
+
+00:25:43.010 --> 00:25:47.120 align:start position:0%
+ 
+ 
+
+00:25:47.120 --> 00:25:50.870 align:start position:0%
+ 
+ 
+
+00:25:50.870 --> 00:25:53.390 align:start position:0%
+ 
+ 
+
+00:25:53.390 --> 00:25:54.650 align:start position:0%
+ 
+ 
+
+00:25:54.650 --> 00:25:58.130 align:start position:0%
+ 
+ 
+
+00:25:58.130 --> 00:26:00.560 align:start position:0%
+ 
+ 
+
+00:26:00.560 --> 00:26:03.890 align:start position:0%
+ 
+ 
+
+00:26:03.890 --> 00:26:05.810 align:start position:0%
+ 
+ 
+
+00:26:05.810 --> 00:26:09.350 align:start position:0%
+ 
+ 
+
+00:26:09.350 --> 00:26:11.240 align:start position:0%
+ 
+ 
+
+00:26:11.240 --> 00:26:15.380 align:start position:0%
+ 
+ 
+
+00:26:15.380 --> 00:26:18.010 align:start position:0%
+ 
+ 
+
+00:26:18.010 --> 00:26:21.380 align:start position:0%
+ 
+ 
+
+00:26:21.380 --> 00:26:23.840 align:start position:0%
+ 
+ 
+
+00:26:23.840 --> 00:26:26.090 align:start position:0%
+ 
+ 
+
+00:26:26.090 --> 00:26:28.610 align:start position:0%
+ 
+ 
+
+00:26:28.610 --> 00:26:30.590 align:start position:0%
+ 
+ 
+
+00:26:30.590 --> 00:26:34.190 align:start position:0%
+ 
+ 
+
+00:26:34.190 --> 00:26:35.360 align:start position:0%
+ 
+ 
+
+00:26:35.360 --> 00:26:38.120 align:start position:0%
+ 
+ 
+
+00:26:38.120 --> 00:26:41.150 align:start position:0%
+ 
+ 
+
+00:26:41.150 --> 00:26:44.000 align:start position:0%
+ 
+ 
+
+00:26:44.000 --> 00:26:46.670 align:start position:0%
+ 
+ 
+
+00:26:46.670 --> 00:26:49.310 align:start position:0%
+ 
+ 
+
+00:26:49.310 --> 00:26:52.760 align:start position:0%
+ 
+ 
+
+00:26:52.760 --> 00:26:55.990 align:start position:0%
+ 
+ 
+
+00:26:55.990 --> 00:26:58.700 align:start position:0%
+ 
+ 
+
+00:26:58.700 --> 00:27:02.840 align:start position:0%
+ 
+ 
+
+00:27:02.840 --> 00:27:05.750 align:start position:0%
+ 
+ 
+
+00:27:05.750 --> 00:27:07.820 align:start position:0%
+ 
+ 
+
+00:27:07.820 --> 00:27:10.180 align:start position:0%
+ 
+ 
+
+00:27:10.180 --> 00:27:13.160 align:start position:0%
+ 
+ 
+
+00:27:13.160 --> 00:27:16.070 align:start position:0%
+ 
+ 
+
+00:27:16.070 --> 00:27:20.000 align:start position:0%
+ 
+ 
+
+00:27:20.000 --> 00:27:21.830 align:start position:0%
+ 
+ 
+
+00:27:21.830 --> 00:27:26.720 align:start position:0%
+ 
+ 
+
+00:27:26.720 --> 00:27:29.930 align:start position:0%
+ 
+ 
+
+00:27:29.930 --> 00:27:32.870 align:start position:0%
+ 
+ 
+
+00:27:32.870 --> 00:27:36.290 align:start position:0%
+ 
+ 
+
+00:27:36.290 --> 00:27:39.350 align:start position:0%
+ 
+ 
+
+00:27:39.350 --> 00:27:42.830 align:start position:0%
+ 
+ 
+
+00:27:42.830 --> 00:27:45.800 align:start position:0%
+ 
+ 
+
+00:27:45.800 --> 00:27:45.810 align:start position:0%
+ 
+ 
+
+00:27:45.810 --> 00:27:46.430 align:start position:0%
+ 
+
+
+00:27:46.430 --> 00:27:49.409 align:start position:0%
+ 
+ 
+
+00:27:49.409 --> 00:27:52.649 align:start position:0%
+ 
+ 
+
+00:27:52.649 --> 00:27:55.709 align:start position:0%
+ 
+ 
+
+00:27:55.709 --> 00:27:58.919 align:start position:0%
+ 
+ 
+
+00:27:58.919 --> 00:28:01.560 align:start position:0%
+ 
+ 
+
+00:28:01.560 --> 00:28:04.560 align:start position:0%
+ 
+ 
+
+00:28:04.560 --> 00:28:06.690 align:start position:0%
+ 
+ 
+
+00:28:06.690 --> 00:28:07.979 align:start position:0%
+ 
+ 
+
+00:28:07.979 --> 00:28:10.799 align:start position:0%
+ 
+ 
+
+00:28:10.799 --> 00:28:13.199 align:start position:0%
+ 
+ 
+
+00:28:13.199 --> 00:28:15.629 align:start position:0%
+ 
+ 
+
+00:28:15.629 --> 00:28:17.190 align:start position:0%
+ 
+ 
+
+00:28:17.190 --> 00:28:19.469 align:start position:0%
+ 
+ 
+
+00:28:19.469 --> 00:28:21.599 align:start position:0%
+ 
+ 
+
+00:28:21.599 --> 00:28:23.549 align:start position:0%
+ 
+ 
+
+00:28:23.549 --> 00:28:26.099 align:start position:0%
+ 
+ 
+
+00:28:26.099 --> 00:28:29.249 align:start position:0%
+ 
+ 
+
+00:28:29.249 --> 00:28:32.609 align:start position:0%
+ 
+ 
+
+00:28:32.609 --> 00:28:34.499 align:start position:0%
+ 
+ 
+
+00:28:34.499 --> 00:28:36.779 align:start position:0%
+ 
+ 
+
+00:28:36.779 --> 00:28:41.099 align:start position:0%
+ 
+ 
+
+00:28:41.099 --> 00:28:43.589 align:start position:0%
+ 
+ 
+
+00:28:43.589 --> 00:28:46.259 align:start position:0%
+ 
+ 
+
+00:28:46.259 --> 00:28:50.909 align:start position:0%
+ 
+ 
+
+00:28:50.909 --> 00:28:53.159 align:start position:0%
+ 
+ 
+
+00:28:53.159 --> 00:28:57.109 align:start position:0%
+ 
+ 
+
+00:28:57.109 --> 00:29:00.899 align:start position:0%
+ 
+ 
+
+00:29:00.899 --> 00:29:03.239 align:start position:0%
+ 
+ 
+
+00:29:03.239 --> 00:29:06.719 align:start position:0%
+ 
+ 
+
+00:29:06.719 --> 00:29:09.209 align:start position:0%
+ 
+ 
+
+00:29:09.209 --> 00:29:11.940 align:start position:0%
+ 
+ 
+
+00:29:11.940 --> 00:29:14.190 align:start position:0%
+ 
+ 
+
+00:29:14.190 --> 00:29:16.979 align:start position:0%
+ 
+ 
+
+00:29:16.979 --> 00:29:18.599 align:start position:0%
+ 
+ 
+
+00:29:18.599 --> 00:29:22.289 align:start position:0%
+ 
+ 
+
+00:29:22.289 --> 00:29:24.869 align:start position:0%
+ 
+ 
+
+00:29:24.869 --> 00:29:27.299 align:start position:0%
+ 
+ 
+
+00:29:27.299 --> 00:29:31.409 align:start position:0%
+ 
+ 
+
+00:29:31.409 --> 00:29:33.419 align:start position:0%
+ 
+ 
+
+00:29:33.419 --> 00:29:35.639 align:start position:0%
+ 
+ 
+
+00:29:35.639 --> 00:29:38.310 align:start position:0%
+ 
+ 
+
+00:29:38.310 --> 00:29:40.169 align:start position:0%
+ 
+ 
+
+00:29:40.169 --> 00:29:45.119 align:start position:0%
+ 
+ 
+
+00:29:45.119 --> 00:29:47.310 align:start position:0%
+ 
+ 
+
+00:29:47.310 --> 00:29:49.769 align:start position:0%
+ 
+ 
+
+00:29:49.769 --> 00:29:52.499 align:start position:0%
+ 
+ 
+
+00:29:52.499 --> 00:29:55.979 align:start position:0%
+ 
+ 
+
+00:29:55.979 --> 00:29:59.669 align:start position:0%
+ 
+ 
+
+00:29:59.669 --> 00:30:01.619 align:start position:0%
+ 
+ 
+
+00:30:01.619 --> 00:30:03.659 align:start position:0%
+ 
+ 
+
+00:30:03.659 --> 00:30:09.509 align:start position:0%
+ 
+ 
+
+00:30:09.509 --> 00:30:12.029 align:start position:0%
+ 
+ 
+
+00:30:12.029 --> 00:30:14.519 align:start position:0%
+ 
+ 
+
+00:30:14.519 --> 00:30:16.499 align:start position:0%
+ 
+ 
+
+00:30:16.499 --> 00:30:19.769 align:start position:0%
+ 
+ 
+
+00:30:19.769 --> 00:30:21.599 align:start position:0%
+ 
+ 
+
+00:30:21.599 --> 00:30:23.820 align:start position:0%
+ 
+ 
+
+00:30:23.820 --> 00:30:27.419 align:start position:0%
+ 
+ 
+
+00:30:27.419 --> 00:30:30.149 align:start position:0%
+ 
+ 
+
+00:30:30.149 --> 00:30:32.459 align:start position:0%
+ 
+ 
+
+00:30:32.459 --> 00:30:34.019 align:start position:0%
+ 
+ 
+
+00:30:34.019 --> 00:30:35.999 align:start position:0%
+ 
+ 
+
+00:30:35.999 --> 00:30:43.310 align:start position:0%
+ 
+ 
+
+00:30:43.310 --> 00:30:46.379 align:start position:0%
+ 
+ 
+
+00:30:46.379 --> 00:30:48.599 align:start position:0%
+ 
+ 
+
+00:30:48.599 --> 00:30:51.769 align:start position:0%
+ 
+ 
+
+00:30:51.769 --> 00:30:51.779 align:start position:0%
+ 
+ 
+
+00:30:51.779 --> 00:30:53.450 align:start position:0%
+ 
+
+
+00:30:53.450 --> 00:30:56.099 align:start position:0%
+ 
+ 
+
+00:30:56.099 --> 00:30:57.690 align:start position:0%
+ 
+ 
+
+00:30:57.690 --> 00:31:00.119 align:start position:0%
+ 
+ 
+
+00:31:00.119 --> 00:31:03.149 align:start position:0%
+ 
+ 
+
+00:31:03.149 --> 00:31:05.099 align:start position:0%
+ 
+ 
+
+00:31:05.099 --> 00:31:07.289 align:start position:0%
+ 
+ 
+
+00:31:07.289 --> 00:31:09.329 align:start position:0%
+ 
+ 
+
+00:31:09.329 --> 00:31:11.489 align:start position:0%
+ 
+ 
+
+00:31:11.489 --> 00:31:14.339 align:start position:0%
+ 
+ 
+
+00:31:14.339 --> 00:31:17.459 align:start position:0%
+ 
+ 
+
+00:31:17.459 --> 00:31:20.549 align:start position:0%
+ 
+ 
+
+00:31:20.549 --> 00:31:23.099 align:start position:0%
+ 
+ 
+
+00:31:23.099 --> 00:31:27.269 align:start position:0%
+ 
+ 
+
+00:31:27.269 --> 00:31:29.159 align:start position:0%
+ 
+ 
+
+00:31:29.159 --> 00:31:32.399 align:start position:0%
+ 
+ 
+
+00:31:32.399 --> 00:31:36.280 align:start position:0%
+ 
+ 
+
+00:31:36.280 --> 00:31:40.240 align:start position:0%
+ 
+ 
+
+00:31:40.240 --> 00:31:43.060 align:start position:0%
+ 
+ 
+
+00:31:43.060 --> 00:31:47.310 align:start position:0%
+ 
+ 
+
+00:31:47.310 --> 00:31:50.440 align:start position:0%
+ 
+ 
+
+00:31:50.440 --> 00:31:52.600 align:start position:0%
+ 
+ 
+
+00:31:52.600 --> 00:31:55.480 align:start position:0%
+ 
+ 
+
+00:31:55.480 --> 00:31:58.360 align:start position:0%
+ 
+ 
+
+00:31:58.360 --> 00:32:02.710 align:start position:0%
+ 
+ 
+
+00:32:02.710 --> 00:32:04.960 align:start position:0%
+ 
+ 
+
+00:32:04.960 --> 00:32:07.240 align:start position:0%
+ 
+ 
+
+00:32:07.240 --> 00:32:08.950 align:start position:0%
+ 
+ 
+
+00:32:08.950 --> 00:32:11.920 align:start position:0%
+ 
+ 
+
+00:32:11.920 --> 00:32:15.600 align:start position:0%
+ 
+ 
+
+00:32:15.600 --> 00:32:17.890 align:start position:0%
+ 
+ 
+
+00:32:17.890 --> 00:32:20.620 align:start position:0%
+ 
+ 
+
+00:32:20.620 --> 00:32:24.910 align:start position:0%
+ 
+ 
+
+00:32:24.910 --> 00:32:26.950 align:start position:0%
+ 
+ 
+
+00:32:26.950 --> 00:32:29.380 align:start position:0%
+ 
+ 
+
+00:32:29.380 --> 00:32:31.960 align:start position:0%
+ 
+ 
+
+00:32:31.960 --> 00:32:35.730 align:start position:0%
+ 
+ 
+
+00:32:35.730 --> 00:32:40.900 align:start position:0%
+ 
+ 
+
+00:32:40.900 --> 00:32:44.260 align:start position:0%
+ 
+ 
+
+00:32:44.260 --> 00:32:45.910 align:start position:0%
+ 
+ 
+
+00:32:45.910 --> 00:32:50.680 align:start position:0%
+ 
+ 
+
+00:32:50.680 --> 00:32:52.840 align:start position:0%
+ 
+ 
+
+00:32:52.840 --> 00:32:58.570 align:start position:0%
+ 
+ 
+
+00:32:58.570 --> 00:33:01.100 align:start position:0%
+ 
+ 
+
+00:33:01.100 --> 00:33:04.160 align:start position:0%
+ 
+ 
+
+00:33:04.160 --> 00:33:07.490 align:start position:0%
+ 
+ 
+
+00:33:07.490 --> 00:33:10.550 align:start position:0%
+ 
+ 
+
+00:33:10.550 --> 00:33:12.530 align:start position:0%
+ 
+ 
+
+00:33:12.530 --> 00:33:16.280 align:start position:0%
+ 
+ 
+
+00:33:16.280 --> 00:33:18.320 align:start position:0%
+ 
+ 
+
+00:33:18.320 --> 00:33:26.779 align:start position:0%
+ 
+ 
+
+00:33:26.779 --> 00:33:29.039 align:start position:0%
+ 
+ 
+
+00:33:29.039 --> 00:33:31.019 align:start position:0%
+ 
+ 
+
+00:33:31.019 --> 00:33:35.009 align:start position:0%
+ 
+ 
+
+00:33:35.009 --> 00:33:37.470 align:start position:0%
+ 
+ 
+
+00:33:37.470 --> 00:33:39.899 align:start position:0%
+ 
+ 
+
+00:33:39.899 --> 00:33:42.779 align:start position:0%
+ 
+ 
+
+00:33:42.779 --> 00:33:45.480 align:start position:0%
+ 
+ 
+
+00:33:45.480 --> 00:33:48.470 align:start position:0%
+ 
+ 
+
+00:33:48.470 --> 00:33:51.299 align:start position:0%
+ 
+ 
+
+00:33:51.299 --> 00:33:53.009 align:start position:0%
+ 
+ 
+
+00:33:53.009 --> 00:33:55.499 align:start position:0%
+ 
+ 
+
+00:33:55.499 --> 00:33:57.720 align:start position:0%
+ 
+ 
+
+00:33:57.720 --> 00:33:59.820 align:start position:0%
+ 
+ 
+
+00:33:59.820 --> 00:34:01.830 align:start position:0%
+ 
+ 
+
+00:34:01.830 --> 00:34:04.379 align:start position:0%
+ 
+ 
+
+00:34:04.379 --> 00:34:06.119 align:start position:0%
+ 
+ 
+
+00:34:06.119 --> 00:34:09.000 align:start position:0%
+ 
+ 
+
+00:34:09.000 --> 00:34:11.879 align:start position:0%
+ 
+ 
+
+00:34:11.879 --> 00:34:13.589 align:start position:0%
+ 
+ 
+
+00:34:13.589 --> 00:34:18.770 align:start position:0%
+ 
+ 
+
+00:34:18.770 --> 00:34:21.240 align:start position:0%
+ 
+ 
+
+00:34:21.240 --> 00:34:24.569 align:start position:0%
+ 
+ 
+
+00:34:24.569 --> 00:34:26.399 align:start position:0%
+ 
+ 
+
+00:34:26.399 --> 00:34:28.399 align:start position:0%
+ 
+ 
+
+00:34:28.399 --> 00:34:31.379 align:start position:0%
+ 
+ 
+
+00:34:31.379 --> 00:34:34.649 align:start position:0%
+ 
+ 
+
+00:34:34.649 --> 00:34:49.930 align:start position:0%
+ 
+ 
+
+00:34:49.930 --> 00:34:52.079 align:start position:0%
+ 
+ 
+
+00:34:52.079 --> 00:34:55.149 align:start position:0%
+ 
+ 
+
+00:34:55.149 --> 00:34:57.970 align:start position:0%
+ 
+ 
+
+00:34:57.970 --> 00:35:01.359 align:start position:0%
+ 
+ 
+
+00:35:01.359 --> 00:35:02.740 align:start position:0%
+ 
+ 
+
+00:35:02.740 --> 00:35:05.049 align:start position:0%
+ 
+ 
+
+00:35:05.049 --> 00:35:06.789 align:start position:0%
+ 
+ 
+
+00:35:06.789 --> 00:35:08.589 align:start position:0%
+ 
+ 
+
+00:35:08.589 --> 00:35:11.650 align:start position:0%
+ 
+ 
+
+00:35:11.650 --> 00:35:15.880 align:start position:0%
+ 
+ 
+
+00:35:15.880 --> 00:35:17.680 align:start position:0%
+ 
+ 
+
+00:35:17.680 --> 00:35:20.109 align:start position:0%
+ 
+ 
+
+00:35:20.109 --> 00:35:23.230 align:start position:0%
+ 
+ 
+
+00:35:23.230 --> 00:35:26.020 align:start position:0%
+ 
+ 
+
+00:35:26.020 --> 00:35:32.880 align:start position:0%
+ 
+ 
+
+00:35:32.880 --> 00:35:37.210 align:start position:0%
+ 
+ 
+
+00:35:37.210 --> 00:35:39.849 align:start position:0%
+ 
+ 
+
+00:35:39.849 --> 00:35:41.770 align:start position:0%
+ 
+ 
+
+00:35:41.770 --> 00:35:43.630 align:start position:0%
+ 
+ 
+
+00:35:43.630 --> 00:35:45.460 align:start position:0%
+ 
+ 
+
+00:35:45.460 --> 00:35:47.589 align:start position:0%
+ 
+ 
+
+00:35:47.589 --> 00:35:50.109 align:start position:0%
+ 
+ 
+
+00:35:50.109 --> 00:35:53.410 align:start position:0%
+ 
+ 
+
+00:35:53.410 --> 00:35:56.109 align:start position:0%
+ 
+ 
+
+00:35:56.109 --> 00:35:59.140 align:start position:0%
+ 
+ 
+
+00:35:59.140 --> 00:36:01.809 align:start position:0%
+ 
+ 
+
+00:36:01.809 --> 00:36:04.690 align:start position:0%
+ 
+ 
+
+00:36:04.690 --> 00:36:06.640 align:start position:0%
+ 
+ 
+
+00:36:06.640 --> 00:36:08.170 align:start position:0%
+ 
+ 
+
+00:36:08.170 --> 00:36:18.380 align:start position:0%
+ 
+ 
+
+00:36:18.380 --> 00:36:20.820 align:start position:0%
+ 
+ 
+
+00:36:20.820 --> 00:36:22.620 align:start position:0%
+ 
+ 
+
+00:36:22.620 --> 00:36:25.380 align:start position:0%
+ 
+ 
+
+00:36:25.380 --> 00:36:29.790 align:start position:0%
+ 
+ 
+
+00:36:29.790 --> 00:36:31.650 align:start position:0%
+ 
+ 
+
+00:36:31.650 --> 00:36:33.980 align:start position:0%
+ 
+ 
+
+00:36:33.980 --> 00:36:37.530 align:start position:0%
+ 
+ 
+
+00:36:37.530 --> 00:36:40.380 align:start position:0%
+ 
+ 
+
+00:36:40.380 --> 00:36:42.630 align:start position:0%
+ 
+ 
+
+00:36:42.630 --> 00:36:44.460 align:start position:0%
+ 
+ 
+
+00:36:44.460 --> 00:36:46.920 align:start position:0%
+ 
+ 
+
+00:36:46.920 --> 00:36:48.660 align:start position:0%
+ 
+ 
+
+00:36:48.660 --> 00:37:07.980 align:start position:0%
+ 
+ 
+
+00:37:07.980 --> 00:37:15.360 align:start position:0%
+ 
+ 
+
+00:37:15.360 --> 00:37:15.370 align:start position:0%
+ 
+ 
+
+00:37:15.370 --> 00:37:21.730 align:start position:0%
+ 
+
+
+00:37:21.730 --> 00:37:24.050 align:start position:0%
+ 
+ 
+
+00:37:24.050 --> 00:37:26.120 align:start position:0%
+ 
+ 
+
+00:37:26.120 --> 00:37:28.849 align:start position:0%
+ 
+ 
+
+00:37:28.849 --> 00:37:31.069 align:start position:0%
+ 
+ 
+
+00:37:31.069 --> 00:37:34.300 align:start position:0%
+ 
+ 
+
+00:37:34.300 --> 00:37:38.809 align:start position:0%
+ 
+ 
+
+00:37:38.809 --> 00:37:41.990 align:start position:0%
+ 
+ 
+
+00:37:41.990 --> 00:37:44.240 align:start position:0%
+ 
+ 
+
+00:37:44.240 --> 00:37:48.140 align:start position:0%
+ 
+ 
+
+00:37:48.140 --> 00:37:50.240 align:start position:0%
+ 
+ 
+
+00:37:50.240 --> 00:37:52.010 align:start position:0%
+ 
+ 
+
+00:37:52.010 --> 00:37:56.180 align:start position:0%
+ 
+ 
+
+00:37:56.180 --> 00:37:59.329 align:start position:0%
+ 
+ 
+
+00:37:59.329 --> 00:38:01.339 align:start position:0%
+ 
+ 
+
+00:38:01.339 --> 00:38:03.800 align:start position:0%
+ 
+ 
+
+00:38:03.800 --> 00:38:05.540 align:start position:0%
+ 
+ 
+
+00:38:05.540 --> 00:38:07.400 align:start position:0%
+ 
+ 
+
+00:38:07.400 --> 00:38:10.370 align:start position:0%
+ 
+ 
+
+00:38:10.370 --> 00:38:12.950 align:start position:0%
+ 
+ 
+
+00:38:12.950 --> 00:38:14.390 align:start position:0%
+ 
+ 
+
+00:38:14.390 --> 00:38:16.010 align:start position:0%
+ 
+ 
+
+00:38:16.010 --> 00:38:19.670 align:start position:0%
+ 
+ 
+
+00:38:19.670 --> 00:38:22.130 align:start position:0%
+ 
+ 
+
+00:38:22.130 --> 00:38:33.860 align:start position:0%
+ 
+ 
+
+00:38:33.860 --> 00:38:36.420 align:start position:0%
+ 
+ 
+
+00:38:36.420 --> 00:38:41.040 align:start position:0%
+ 
+ 
+
+00:38:41.040 --> 00:38:43.550 align:start position:0%
+ 
+ 
+
+00:38:43.550 --> 00:38:47.490 align:start position:0%
+ 
+ 
+
+00:38:47.490 --> 00:38:50.220 align:start position:0%
+ 
+ 
+
+00:38:50.220 --> 00:38:53.310 align:start position:0%
+ 
+ 
+
+00:38:53.310 --> 00:38:57.510 align:start position:0%
+ 
+ 
+
+00:38:57.510 --> 00:38:59.910 align:start position:0%
+ 
+ 
+
+00:38:59.910 --> 00:39:03.210 align:start position:0%
+ 
+ 
+
+00:39:03.210 --> 00:39:05.640 align:start position:0%
+ 
+ 
+
+00:39:05.640 --> 00:39:08.400 align:start position:0%
+ 
+ 
+
+00:39:08.400 --> 00:39:10.530 align:start position:0%
+ 
+ 
+
+00:39:10.530 --> 00:39:11.760 align:start position:0%
+ 
+ 
+
+00:39:11.760 --> 00:39:16.140 align:start position:0%
+ 
+ 
+
+00:39:16.140 --> 00:39:17.580 align:start position:0%
+ 
+ 
+
+00:39:17.580 --> 00:39:19.410 align:start position:0%
+ 
+ 
+
+00:39:19.410 --> 00:39:20.960 align:start position:0%
+ 
+ 
+
+00:39:20.960 --> 00:39:20.970 align:start position:0%
+ 
+ 
+
+00:39:20.970 --> 00:39:24.400 align:start position:0%
+ 
+
+

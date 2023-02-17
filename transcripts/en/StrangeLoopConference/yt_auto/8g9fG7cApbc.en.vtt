@@ -1,0 +1,3596 @@
+WEBVTT
+Kind: captions
+Language: en
+
+00:00:04.900 --> 00:00:07.170 align:start position:0%
+ 
+all right hi everybody can everyone hear  me okay see hey I'm Evan this is my  first strange Luke it's amazing why are  we talking about scheduling well if you  read serious documentation by serious  people building high-performance systems  you can find a variety of statements  along these lines suggesting vaguely  disquieting way that scheduling overhead  can negatively impact the performance of  highly concurrent programs so you can  find this in engine X you can find this  in my sequel Docs and you can find  statements to the effect that thread  context switching is somehow  intrinsically expensive but these  statements are not quantified or  justified in this documentation which is  fine because that's not their job but as  a performance engineer this makes me  kind of uneasy so scheduling which for  the purposes of this talk means  multiplexing a lot of tasks on to a few  cores a few processors a priori is kind  of a black box like you can write a lot  of concurrent code without needing to  worry deeply about the internals of the  Linux kernel scheduler or the runtime  scheduler if you are using a language  that has its own concurrency primitives  so it's this black box and the claim is  that it can potentially negatively  affect our programs performance so this  is not good I don't like black boxes  that make things slower in mysterious  ways so there's a pretty natural set of  questions that we can ask about this the  scheduling business so how expensive is  a context switch intrinsically when the  go language authors say it's slow what  what do they mean can we measure it or  do we just have to take their word that  it's slow and how does the Linux kernel  scheduler work anyways when you switch  from one chrome tab to the next or spawn  a new thread what's going on under the  hood and what about user space  schedulers so languages like go and  Erlang in Haskell have their own  concurrency primitives that are sort of  like operating system threads but not  actually operating systems threads so  those are scheduled by the language  runtime how does that work is it somehow  fundamentally different are there common  design patterns that all these scheduler  implementations follow and do they make  different trade-offs do they target  different performance use cases and how  do they do so so that's what I like to  explore in this talk by doing a few like  pretty basic experiments and a little  bit of experimentation and source diving  so to start off let's talk about  scheduling in kernel-space  I'd like to start this discussion by  talking about how we can actually  estimate kernel context switch cost so  you have a processor it runs Linux I'm  only going to talk about Linux in this  presentation sorry but if you're  initially running task a on a core like  a chrome tab and then you switch to task  B which is something else I don't know  it's a slog whatever there's some  intrinsic costs to that operation and  measuring the duration of a context  switch is probably the first heuristic  we can establish for how much  concurrency can our system support if  the context switch takes 10 microseconds  we'll never be able to run more than a  hundred thousand threads on a core  because we will spend all of our time  context switching so maybe it's okay if  context switching accounts for some  reasonably significant part of our  effective workload and highly concurrent  scenarios but it's probably not okay if  that's all that we're doing so there's a  classical approach to estimating the  intrinsic direct cost of a context  switch it's playing ping-pong we'll set  up a scenario where we do a bunch of  context switches and as little other  work as we can so for example you start  a thread thread a you start a thread  thread B you connect them with two pipes  when you have thread a right to thread B  over one pipe thread B will wait and  read it then write back over the other  pipe thread a will wait and so on so  that so what has to happen is that you  end up switching back and forth between  these threads effectively as quickly as  the operating system can do it makes  sense so in C the implementation of such  a worker thread might look something  like this  now I can't really write see I try it  doesn't work fortunately I don't have to  this is actually a built-in benchmark in  the Linux kernel source tree you can run  it with perf bench Skype and you can  pass - T to say two threads now two  processes it doesn't really matter so  you can try that out on my laptop it  takes about four and a half seconds to  do a million pipe operations what does  that mean so it tells us four point four  nine microseconds per operation and that  gives us an upper bound on the direct  cost of a thread context switch that  upper bound is actually 2.25  microseconds because what the authors of  this benchmark are calling an op is a  read and done it right so there are two  context which is if you think about it  it makes sense promise cool so that's  pretty good heuristic is that our final  answer  no so you can't actually trust a  benchmark if you just run it and don't  undertake at least some minimal effort  to analyze it while it's running there  will be no more dead poetry in this talk  I promise but there's a serious point  here which is that we're running a bunch  sorry  oh I have no idea it's a two gigahertz  processor you can do the math great so  sorry the question was how many  instructions does that correspond to and  that's two microseconds divided by two  gigahertz I don't know a bunch so that's  ranking right so so we have this  benchmark that's that's doing thread  ping-pong and we have a mental model of  what it's doing it's running for it a  and then executing a context switch and  then running thread B and then running  thread a so how well does this map to  reality well we can find out with a tool  called perf sket what's perfect good  it's another purse of command perf is a  lot of sub commands what persica does is  it records scheduler events and then can  show you an output a timeline of context  switches wakeup latency etc seems like  something that might be applicable to a  discussion about scheduling so you're on  perf schedule cord over our benchmark  and get basically a dump of everything  that happens in the scheduler while we  were running this this is really dense  but we can highlight one thing we're  switching from something called skid  pipe okay that that sounds good  to something called the swapper up  what's the swapper it's basically what  the kernel runs when idling so that  doesn't really map to this mental model  very well what's going on so I ran this  on my laptop my laptop is recently  modern it has multiple cores the  scheduler sees thread a is doing a bunch  of work thread B is doing a bunch of  work okay I'm gonna put thread a on this  one core and thread B over on this other  core but that introduces a net slow down  into this benchmark because every single  write to a pipe and then read from it  introduces a cross core wake up and it  turns out that that actually adds some  overhead to this benchmark I'm partly  because waking up from the idle State  a little bit more expensive than the  direct contact switch and partly because  the cross-court communication degrades  cache performance so let's turn the  benchmark slightly differently I depend  all the tests to core zero it's twice as  fast all right  active benchmarking so you didn't just  go at the first result we saw we used a  tool to analyze the internals of the  benchmark verified that we were running  a benchmark which X for the  correspondent reasonably well to our  mental model of what it is suing and now  I have a more plausible number so we've  learned something the direct cost of a  thread context which is around one  microsecond on this machine with lots of  caveats sorry you have the question yes  these are two threads in the same  process numbers are slightly different  in this benchmark if you switch between  two processes and two threads the  question was about whether this is a  thread context switch or a process  context switch in this talk we will  mostly be talking about thread context  switches in a highly multi-threaded  single process program from the  perspective of the Linux kernel there's  not that much difference there are  slight variations in the numbers that  you get does that does that make sense  cool so so you're on perf bench that  pipe - t-that - team at run - threads  not run - processes but they get  different pits so so we have a number  and we have some metal lessons  benchmarking is tricky we can't just run  random experiments we need some level of  introspection into the scheduler and for  that it's helpful to have some idea of  how the scheduler actually works so  let's talk about the internals of the  Linux kernel scheduler so you know up  here it has to do two things  it has to preempt misbehaving tasks and  it has to prioritize important tasks  all right we can do this I so can't  write C but we'll try so keep a list of  running tasks and whenever we want to  schedule will iterate through that list  pick the task with the lowest count down  to run next and then for each other  runnable test test will decrement the  count down  counting down higher priority tasks  faster so over several iterations high  priority tasks will effectively move to  the front of the line then if there's an  X test that we should switch to well  switch to it this is actually how the  Linux kernel scheduler worked in 1995  all right it was 75 lines of code not 15  I cut out some stuff about timers but  still not that complicated  today it's a lot in our lair in addition  to preemption and prioritization the  Linux kernel is expected to support a  notion of fairness it's effective it's  expected to scale to multi-core machines  it's it should be power efficient it  should support resource constraints like  C groups so you can run your fancy-pants  docker containers or whatever and so on  and so forth and as a result it's a lot  bigger but there are a few salient  design principles that we can highlight  in the current implementation of the  Linux kernel scheduler it's called the  completely fair scheduler there are  other scheduling policies in the kernel  like real time and FIFO we're not going  to talk about those this is the default  probably what's happening if you're  running a concurrent program in the  Linux kernel so in general scheduling  happens on a curb port on a purikura  basis and we'll talk about inter CPU  load balancing later why is this it's  because a single global data structure  that's frequently read and updated tends  to introduce contention and severely  degrade cache performance so this allows  the kernel to scheduler to scale well to  64 128 core machines now on each core we  maintain a run queue of runnable tasks  which isn't actually a queue or it's  sort of a queue it's a red-black tree  the  ordered by task view runtime what the  runtime is virtual around time which is  effectively real task runtime / task  wait  so high priority tasks have their view  runtimes scaled down as tests run they  accumulate if you you're on time  whenever it's time to execute a task  switch the scheduler simply pulls the  leftmost task off the rank you and runs  it next concurrently preempted or new or  woken tasks go on to the run queue  before they can be rescheduled so the  run queue is effectively a timeline of  future tasks execution and tasks are  guaranteed a fair allocation of runtime  what do I mean by that  okay so if you look at this line here  the middle line we ran tests a which  started out with a low V runtime then  switch back to task C but we can see  that task a still has lower V runtimes  and task E so it will run before task E  and what this means is that over time  each task gets a fair share of processor  time which is not true if you apply a  simple scheduling policy like FIFO or  LIFO or you just round-robin through  through all the tasks so it's reasonable  to ask what actually prompts a task  switch to things pretty much the running  test blocks and explicitly calls into  the scheduler hey I'm going to have to  wait for something colonel you can  schedule a me off and run something else  or the running task is forcibly  preempted because it exhausted its  schedule in quantum this is sort of an  intricate and cooled answer I'd like to  talk a little bit about how preemption  works unsurprisingly it's driven by a  hardware timer every so many  milliseconds timer goes off interrupt  handler interrupt handler routes this  timer to schedule our code which checks  if it's time to reschedule the current  task  prompting directly from this handler  could cause funny stuff to happen if we  were in a nested kernel control path  where we were already handling some sort  of other interrupts so instead the  interrupt handler instead of directly  switching tasks sets a flag in the tasks  thread info struct signaling that  rescheduling is due to happen hey this  flag is set then when it's safe to  switch contexts on the irq exit path we  check that flag and if we need to we do  whatever cleanup work and then call  schedule schedule is unsurprisingly the  course scheduler function it DQ's the  next test to run in queues the  preemptory one swaps out their processor  processor state registers and what have  you does whatever clean up it needs to  and then starts running the next task a  little intricate generally works cool so  thus far we have a scheduler that  supports preemption prioritization and  fairness let's talk a bit about how its  scales to many core systems so like I  mentioned per process run queues limit  contention and and cache thrashing but  they can lead to a severely unbalanced  test distribution so in this picture  core zero has a bunch of tasks core one  only has one core one is underutilized  so each core periodically does a simple  load balancing procedure but fair  balancing is tricky say task C has  higher weight meaning higher priority  than tasks a B and D if we just looked  at the run queue length o thread core  has a bunch of tasks core one only has  one okay I'm going to move some tests  from core zero to core one then we would  unfairly deprive the high priority task  of its do run time we could try  balancing based on total task weight so  all right core zero has each each test  is weight time there are three of them  it has weight 30 core one has one really  high priority test with weight 100 but  if the high priority test frequently  sleeps this ends up being really  efficient because core one could idle  for long periods of time instead the  kernel does something or like  balancing uses a load metric based on a  combination of task weight and CPU  utilization to ensure that high priority  tasks get their fair share of time but  cores are efficiently utilized even in  the presence of processes that  frequently sleep wake up to wake up  so at this point you might be thinking  it's kind of complicated I have more  questions how am I going to answer them  like what about the power efficiency  stuff that you talked about and I'm  actually going to dive into in this talk  so you could listen to some bozo blather  on and believe what he says you could  stare really hard at the source code and  try and figure it out or and I recommend  this approach use F trace the function  tracer this is the coolest thing how  many people here have heard of F trace  alright so that's cool  so f trace is this amazing technology it  dynamically traces all almost all  function entry and return points in the  kernel so when disabled it has almost  zero overhead you turn it on it has  overhead obviously it has overhead but  you can see a call graph of every single  function that if the kernel is calling  that's amazing  it's a Linux tool it's kind of gnarly to  use you mount this debug filesystem and  then you put cat some stuff to it but  you can read about it on the internet  it's not too hard to figure out and you  can answer questions like what's the  code path through the scheduler look  like alright we call schedule and then  we do a bunch of stuff or what happens  when you call read on a pipe well you  could grep through the source code and  try and find pipe read or you could just  write a little program that reads from a  pipe run F trace all right it's it's  doing some stuff and eventually  scheduling makes sense so my  recommendation for diving deep into the  internals of the Linux kernel schedule  are really the Linux kernel at all is  use F trace to build a function call  graph and figure out what's actually  happening on your system way easier than  trying to do it in your head with the  northa source tree pretty cool so the  completely fair scheduler its performant  scalable robe  traceable and if story new let's switch  gears and talk about scheduling in  userspace  so there are good reasons why some  language runtimes don't simply have fall  back to native operating system threads  and instead offer you different  concurrency primitives these are  languages like go Erlang Haskell others  you might want to target different  performance characteristics let's say  you want concurrency constructs in your  program and you want 10 million FM you  can't have 10 million threads we already  saw that because the context switch  takes 1 microsecond you just be context  switching you might want to decouple  concurrency from memory usage once  severe limitation of operating system  threads is that stack size is fixed at  creation time and in practice this tends  to be the bottleneck to creating lots  and lots of threads before context  switching you have a million threads  each one has a megabyte of stack space  alright you need a terabyte of memory  that's expensive and you might want to  support manage memory runtimes by  integrating the scheduler with the  garbage collector but we won't really  talk about this in this talk but it is a  legitimate use case this is part of how  go achieves very low latency garbage  collection times so so language runtimes  implement their own schedulers on top of  the operating system baseline are these  schedulers fundamentally different from  the kernel scheduler do they share  significant design patterns let's take a  look I want to look at two languages  when is go the other is Erlang so let's  talk about go and go how many people  here of program dingo ok cool good  number so and go code runs and go  routines which are sort of like threads  ostensibly more lightweight and managed  by the language runtime they're supposed  to be very cheap to create and dispose  of go routines are multiplexed onto OS  threads in a process called m2n  scheduling so you  have relatively through relatively few  operating system threads at any point  and a whole lot of go routines and the  language runtime takes care of managing  it for you so the claim is that  rescheduling agar routine is much  cheaper than rescheduling a thread so  what you've done if an unkind again mean  by much cheaper  does anybody have a guess how you could  find out yeah ping pong so we can do  this and go go has a concurrency  primitives called a channel that lets  you send data between guru teams it's  kind of like a pipe so this is a crude  heuristic we're not going to deep dive  into this benchmark but we can write a  simple go program that spawns to worker  threads with channels between them and  plays ping pong back and forth run it  alright point to microseconds per switch  that's way faster they were right that's  not surprising there Donovan and  Kernighan so what's the go scheduler  doing let's take a look so you go  runtime state is basically described by  three data structures there's an M which  represents an operating system thread a  G and which represents a go routine and  a P which represents general context for  executing go code each P contains a  queue of runnable go routines so so far  this is not that different from Linux we  have some data structure per core and it  has a run queue if things are going to  run next in a context switch time the  next go routine is pulled off the run  queue and run so on an end core machine  we end up with up to n threads  concurrently executing go code still not  that different however there's no  regularly scheduled interpeduncular  balancing instead goo routines which  were preempted or blocked insist calls  go on to a special global run Q and a P  which becomes idle can steal work from  another P all right these go routines  are mine now  finally a separate system on thread  implements pee handoff if an M blocks an  assist call what do I mean by that all  right we're running go code the go code  is green and then it executes SAS this  call it's going to read a ginormous file  from disk and then it blocks in the SIS  call this disclosed yellow what happens  all the other and go routines that were  scheduled to run on that thread are now  blocked by this one go routine that's no  good  so this is mine thread periodically  checks if this bad situation is  occurring if it does it possibly  allocates a new thread with a new M  structure takes the P that was priorly  associated to m1 and says ok all these  go routines are now going to run on this  new thread pretty cool the system on  thread also checks for long running go  routines that need to be preempted  pretty plausible  however because preemption needs to play  nicely with the garbage collector  preemption can only happen at go  function entry so tight loops if you  just do a for loop forever can  potentially block arbitrarily this is a  bit hazardous swing go context switches  are fast by virtue of implementation  simplicity and not merely because  they're avoiding the round trip into  kernel space this is a design choice we  can support lots of concurrent go  routines like millions but we can't  assign them priorities we don't have  strong preemption guarantees and to  illustrate the practical effect of this  design decision I'd like to contrast  this implementation with Erlang Erlang  is also a language ostensibly designed  for highly concurrent programming in  early and concurrency primitives are  called processes but actually have  nothing to do with operating systems  processes except for the fact that they  do not share memory processors  communicate exclusively via asynchronous  message passing  so unlike go and see our link code is  actually compiled  by code and executed by a virtual  machine it's sort of like the JVM or C  Python or Ruby this architecture enables  a simple preemption mechanism which is  neither timer based like the Linux  kernel nor watcher based like go it uses  the notion of a reduction budget so  every Earling process when it is  scheduled gets a reduction count which  by default is about two thousand and  everything you do is going to cost you  reductions calling a function decrement  the reduction budget send a message to  another process same thing I Oh garbage  collection and once you use up your  reduction budget you get preempted this  is so simple that we can actually see it  in encode so the beam emulator source  code the Erlang virtual machine source  code is in C the core of emulator is  this gnarly 3700 line switch statement  it's got hella defines and go twos but  this is what matters if we want to call  a function the next byte code  instruction is going to say call a  function so we set the continuation  pointer advance the instruction pointer  to point to the next thing next byte  code instruction that we're going to  execute and then call a macro called  dispatch what does dispatch do it  dispatches if we still have reductions  in our budget we're going to decrement  the reduction counter and go through the  emulator loop for the next instruction  go back to the top of the switch  statement but if we're out of reductions  we're going to context switch so let's  take a moment to think through the  implications of this design so we knew  we have a reduction call a reduction  budget of about 2000 reductions and each  function call is going to cost us one of  those  how long do functions take not very long  normally this means we could be calling  into the scheduler at sub a millisecond  intervals scheduling is highly granular  what are the consequences the maximum  throughput of our program is going to be  affected if we just want to do lots and  lots of number crunching it's going to  be somewhat slower and  in a language like go but on the other  hands the preemption latency is highly  predictable it doesn't depend on the  scheduling of a separate operating  system thread or the prompt handling of  a timer  why does this matter let's try an  experiment this is a small go program  first we're going to spawn a bunch of  busy tight loops to saturate all the  cores on our machine I did this on my  laptop my laptop is four cars then we're  going to sleep for some predetermined  interval and measure how long we  actually slept versus how long we  expected to sleep this is a crude  estimate of the effective preemption  latency that our program is seeing when  the CPU is saturated by work does that  make sense so this is not a rigorous  benchmark I mean obviously you could  raise a lot of objections  yes I'm sorry thank you you should do  code review for me yes so so the jitter  is how long you actually slept versus  how long you expected to sleep and if  you run it you get a latency  distribution like this preemption  latency varies from sub millisecond to  up to 40 milliseconds it's compare this  with an implementation in Erlang it's  actually a lick sir  so elixir is a language that runs on the  Erlang VM its syntax is more Ruby like  so it doesn't make my brain hurt and if  you haven't read Erlang it probably  makes sense so we spawned a bunch of  busy tight loops to saturate the course  we sleep for some targeted amount and  then we measure how long we actually  slept for and use the difference between  that and our sleep target is an estimate  of preemption latency what does that  look like looks like this nearly  consistent sub-millisecond preemption  latency that's the difference  early trades some throughput for highly  predictable latency go does the opposite  yes  that's an excellent question the  question was whether it's significant  that the NGO functioning was calling  time that now and the elixir function  was bumping at counter you sir are an  amazing reader of code on slides yeah if  it's not significant the reason we're  calling time debt now and go is because  we need a Ingo in our tight loop we  actually need a function we actually  need to execute a function call because  if we just did for like increment the  counter we wouldn't call the scheduler  we totally dead lock it like like you  mentioned so it's it's not actually  significant I'm done I was like the  worst the first thing I thought of but  that's a great point so thank you for  bearing with me through this little  exercise maybe we've learned something I  certainly did scalable scheduling not  that mysterious all the implementations  that we saw saw us share some patterns  they use independent run queues with  periodic load balancing to scale well  across multiprocessor systems they  preempted safe points to prevent rogue  code from bringing things to a halt but  they make different design decisions the  Linux kernel scheduler gives you a very  granular priority system you can nice  your process to all sorts of different  things the go scheduler is very simple  no priorities at all and you can trade  latency predictability versus baseline  overhead coding go in general we'll run  a little bit faster than code in Erlang  because you are not paying this fairly  constant overhead costs for granular  scheduling but you may suffer greater  variance in latency in certain scenarios  and there are other trade-offs but these  are maybe the most salient that's all I  have thank you very much I would love to  take questions  yes  right that's a good question so the  question was what's the distinction  between context switching between native  threads and between green threads so it  depends a little bit on the language  runtime so when you in the linux kernel  and you switch between threads you do  need to save their registers in some  other thread State and switch that out  before for the next thing you're going  to execute because go code compiles to  native function calls the contact the  actual mechanics of the contacts which  are fairly similar use you save the  registers of the function you are in and  then switch to the next function in in  in a VM language like Erlang like the  actual registers on the machine are the  registers of the of the VM and and not  of the of your Erlang functions so so  that's sort of fundamentally different  but the actual mechanics are like quite  intrinsic and I can't really do justice  to them so I encourage you to use  something like F trace to you can sort  of pick apart the individual steps of  the context switch but it's it's like  quite hard to justify this  quantitatively but my opinion and it's  only an opinion is that the register  saving is a relatively small part of the  overall intrinsic cost of a context  switch and most of it is attributable to  the general complexity of of the  scheduler machinery  that is my opinion  but I don't have like don't don't take  that as truth because I can't really  give you a concise way that you could go  and prove this for yourself I mean a go  context which still takes 200  microseconds which is you know still  equivalent to a good a good chunk of  work yeah so the question was about  cache utilization which is you give in  general something that's quite difficult  to analyze convincingly but but my claim  is if your guru teens have a big working  set and you switch from go routine a to  go routine be like you're still going to  see cash penalties and if your threads  have a big working set and you switch  from thread a to switch thread B you'll  see big cash penalties like no matter  what the scheduler is doing but if the  working set is small that is not  necessarily the case so does that make  sense  go any other questions in the back  mhm  so the question was the reduction budget  is mm if you change that a number what  happens that's an excellent question so  what I would say to that is two things  so chain so changing the the reduction  budget changes the granularity obviously  if you double it you will see preemption  latencies on the order of two  milliseconds not one millisecond but it  doesn't change the predictability part  of the reason why there's a lot of  variance and go is because the  preemption is driven by a separate  operating system thread so preemption  latency is beholden to that operating  system thread being scheduled by the  operating system scheduled by the  operating system and there's hundreds of  milliseconds or not sorry not hundreds  of milliseconds but a few milliseconds  of latency variants there so it's  absolutely a like a sliding spectrum of  granularity versus preemption latency  does that make sense yes  yeah I'm honestly not entirely sure why  go light works like this but you can  call something like scheduled x' to  explicitly yield like pretty much every  runtime has a construct like that that  allows you to explicitly yields in a  tight loop yes  thank you very much so for I'm posterity  SiC the first comment was that in Erlang  if you basically call in to C extensions  the reduction count doesn't go down  unless you explicitly decrement it so it  is totally possible still to effectively  break the scheduler by calling C I mean  that sort of makes sense and the second  was about the paper that appeared a few  months ago called the Linux kernel  scheduler a decade of wasted cores that  paper was the catalysis for me proposing  this top to strangely but here's here's  what I think about it I'm not a systems  researcher so maybe I'm not really doing  it justice there are two parts to this  to that paper one is where they sort of  describe the general architecture of the  Linux CFS scheduler especially on  multi-core systems and I think it's a  fantastic exposition as for their claims  about wasted cores it seems to me like  the bugs that they found apply to  scheduling on Numa architectures with  lots of course like 64 core machines and  the the like regression cases that they  mentioned in that paper were things like  like running a ruby web server and also  compiling the Linux kernel or something  like that we're close that I personally  couldn't quite identify with real  workloads and I think I think like like  the paper is cool but if it had  represented a real improvement they  should have like posted it on the L KML  and like their patches should be in the  Linux kernel as far as I know like right  now they're not that could have changed  and like they they built some tools to  analyze scheduler performance but I  rather would have seen them leverage  more general purpose tools in the kernel  infrastructure like F tracer or perfs  good because like they they built their  own but you need a custom kernel and I'm  not hitting on the authors of the ad  paper but I think the like the things  that they found were relatively  special-purpose regressions and their  broader point that it's kind of a gnarly  piece of of code like obviously sans  it's like pretty complicated does that  seem reasonable cool I think we're out  of time but please come talk to me if  you think
+
+00:00:07.170 --> 00:00:12.900 align:start position:0%
+all right hi everybody can everyone hear  me okay see hey I'm Evan this is my  first strange Luke it's amazing why are  we talking about scheduling well if you  read serious documentation by serious  people building high-performance systems  you can find a variety of statements  along these lines suggesting vaguely  disquieting way that scheduling overhead  can negatively impact the performance of  highly concurrent programs so you can  find this in engine X you can find this  in my sequel Docs and you can find  statements to the effect that thread  context switching is somehow  intrinsically expensive but these  statements are not quantified or  justified in this documentation which is  fine because that's not their job but as  a performance engineer this makes me  kind of uneasy so scheduling which for  the purposes of this talk means  multiplexing a lot of tasks on to a few  cores a few processors a priori is kind  of a black box like you can write a lot  of concurrent code without needing to  worry deeply about the internals of the  Linux kernel scheduler or the runtime  scheduler if you are using a language  that has its own concurrency primitives  so it's this black box and the claim is  that it can potentially negatively  affect our programs performance so this  is not good I don't like black boxes  that make things slower in mysterious  ways so there's a pretty natural set of  questions that we can ask about this the  scheduling business so how expensive is  a context switch intrinsically when the  go language authors say it's slow what  what do they mean can we measure it or  do we just have to take their word that  it's slow and how does the Linux kernel  scheduler work anyways when you switch  from one chrome tab to the next or spawn  a new thread what's going on under the  hood and what about user space  schedulers so languages like go and  Erlang in Haskell have their own  concurrency primitives that are sort of  like operating system threads but not  actually operating systems threads so  those are scheduled by the language  runtime how does that work is it somehow  fundamentally different are there common  design patterns that all these scheduler  implementations follow and do they make  different trade-offs do they target  different performance use cases and how  do they do so so that's what I like to  explore in this talk by doing a few like  pretty basic experiments and a little  bit of experimentation and source diving  so to start off let's talk about  scheduling in kernel-space  I'd like to start this discussion by  talking about how we can actually  estimate kernel context switch cost so  you have a processor it runs Linux I'm  only going to talk about Linux in this  presentation sorry but if you're  initially running task a on a core like  a chrome tab and then you switch to task  B which is something else I don't know  it's a slog whatever there's some  intrinsic costs to that operation and  measuring the duration of a context  switch is probably the first heuristic  we can establish for how much  concurrency can our system support if  the context switch takes 10 microseconds  we'll never be able to run more than a  hundred thousand threads on a core  because we will spend all of our time  context switching so maybe it's okay if  context switching accounts for some  reasonably significant part of our  effective workload and highly concurrent  scenarios but it's probably not okay if  that's all that we're doing so there's a  classical approach to estimating the  intrinsic direct cost of a context  switch it's playing ping-pong we'll set  up a scenario where we do a bunch of  context switches and as little other  work as we can so for example you start  a thread thread a you start a thread  thread B you connect them with two pipes  when you have thread a right to thread B  over one pipe thread B will wait and  read it then write back over the other  pipe thread a will wait and so on so  that so what has to happen is that you  end up switching back and forth between  these threads effectively as quickly as  the operating system can do it makes  sense so in C the implementation of such  a worker thread might look something  like this  now I can't really write see I try it  doesn't work fortunately I don't have to  this is actually a built-in benchmark in  the Linux kernel source tree you can run  it with perf bench Skype and you can  pass - T to say two threads now two  processes it doesn't really matter so  you can try that out on my laptop it  takes about four and a half seconds to  do a million pipe operations what does  that mean so it tells us four point four  nine microseconds per operation and that  gives us an upper bound on the direct  cost of a thread context switch that  upper bound is actually 2.25  microseconds because what the authors of  this benchmark are calling an op is a  read and done it right so there are two  context which is if you think about it  it makes sense promise cool so that's  pretty good heuristic is that our final  answer  no so you can't actually trust a  benchmark if you just run it and don't  undertake at least some minimal effort  to analyze it while it's running there  will be no more dead poetry in this talk  I promise but there's a serious point  here which is that we're running a bunch  sorry  oh I have no idea it's a two gigahertz  processor you can do the math great so  sorry the question was how many  instructions does that correspond to and  that's two microseconds divided by two  gigahertz I don't know a bunch so that's  ranking right so so we have this  benchmark that's that's doing thread  ping-pong and we have a mental model of  what it's doing it's running for it a  and then executing a context switch and  then running thread B and then running  thread a so how well does this map to  reality well we can find out with a tool  called perf sket what's perfect good  it's another purse of command perf is a  lot of sub commands what persica does is  it records scheduler events and then can  show you an output a timeline of context  switches wakeup latency etc seems like  something that might be applicable to a  discussion about scheduling so you're on  perf schedule cord over our benchmark  and get basically a dump of everything  that happens in the scheduler while we  were running this this is really dense  but we can highlight one thing we're  switching from something called skid  pipe okay that that sounds good  to something called the swapper up  what's the swapper it's basically what  the kernel runs when idling so that  doesn't really map to this mental model  very well what's going on so I ran this  on my laptop my laptop is recently  modern it has multiple cores the  scheduler sees thread a is doing a bunch  of work thread B is doing a bunch of  work okay I'm gonna put thread a on this  one core and thread B over on this other  core but that introduces a net slow down  into this benchmark because every single  write to a pipe and then read from it  introduces a cross core wake up and it  turns out that that actually adds some  overhead to this benchmark I'm partly  because waking up from the idle State  a little bit more expensive than the  direct contact switch and partly because  the cross-court communication degrades  cache performance so let's turn the  benchmark slightly differently I depend  all the tests to core zero it's twice as  fast all right  active benchmarking so you didn't just  go at the first result we saw we used a  tool to analyze the internals of the  benchmark verified that we were running  a benchmark which X for the  correspondent reasonably well to our  mental model of what it is suing and now  I have a more plausible number so we've  learned something the direct cost of a  thread context which is around one  microsecond on this machine with lots of  caveats sorry you have the question yes  these are two threads in the same  process numbers are slightly different  in this benchmark if you switch between  two processes and two threads the  question was about whether this is a  thread context switch or a process  context switch in this talk we will  mostly be talking about thread context  switches in a highly multi-threaded  single process program from the  perspective of the Linux kernel there's  not that much difference there are  slight variations in the numbers that  you get does that does that make sense  cool so so you're on perf bench that  pipe - t-that - team at run - threads  not run - processes but they get  different pits so so we have a number  and we have some metal lessons  benchmarking is tricky we can't just run  random experiments we need some level of  introspection into the scheduler and for  that it's helpful to have some idea of  how the scheduler actually works so  let's talk about the internals of the  Linux kernel scheduler so you know up  here it has to do two things  it has to preempt misbehaving tasks and  it has to prioritize important tasks  all right we can do this I so can't  write C but we'll try so keep a list of  running tasks and whenever we want to  schedule will iterate through that list  pick the task with the lowest count down  to run next and then for each other  runnable test test will decrement the  count down  counting down higher priority tasks  faster so over several iterations high  priority tasks will effectively move to  the front of the line then if there's an  X test that we should switch to well  switch to it this is actually how the  Linux kernel scheduler worked in 1995  all right it was 75 lines of code not 15  I cut out some stuff about timers but  still not that complicated  today it's a lot in our lair in addition  to preemption and prioritization the  Linux kernel is expected to support a  notion of fairness it's effective it's  expected to scale to multi-core machines  it's it should be power efficient it  should support resource constraints like  C groups so you can run your fancy-pants  docker containers or whatever and so on  and so forth and as a result it's a lot  bigger but there are a few salient  design principles that we can highlight  in the current implementation of the  Linux kernel scheduler it's called the  completely fair scheduler there are  other scheduling policies in the kernel  like real time and FIFO we're not going  to talk about those this is the default  probably what's happening if you're  running a concurrent program in the  Linux kernel so in general scheduling  happens on a curb port on a purikura  basis and we'll talk about inter CPU  load balancing later why is this it's  because a single global data structure  that's frequently read and updated tends  to introduce contention and severely  degrade cache performance so this allows  the kernel to scheduler to scale well to  64 128 core machines now on each core we  maintain a run queue of runnable tasks  which isn't actually a queue or it's  sort of a queue it's a red-black tree  the  ordered by task view runtime what the  runtime is virtual around time which is  effectively real task runtime / task  wait  so high priority tasks have their view  runtimes scaled down as tests run they  accumulate if you you're on time  whenever it's time to execute a task  switch the scheduler simply pulls the  leftmost task off the rank you and runs  it next concurrently preempted or new or  woken tasks go on to the run queue  before they can be rescheduled so the  run queue is effectively a timeline of  future tasks execution and tasks are  guaranteed a fair allocation of runtime  what do I mean by that  okay so if you look at this line here  the middle line we ran tests a which  started out with a low V runtime then  switch back to task C but we can see  that task a still has lower V runtimes  and task E so it will run before task E  and what this means is that over time  each task gets a fair share of processor  time which is not true if you apply a  simple scheduling policy like FIFO or  LIFO or you just round-robin through  through all the tasks so it's reasonable  to ask what actually prompts a task  switch to things pretty much the running  test blocks and explicitly calls into  the scheduler hey I'm going to have to  wait for something colonel you can  schedule a me off and run something else  or the running task is forcibly  preempted because it exhausted its  schedule in quantum this is sort of an  intricate and cooled answer I'd like to  talk a little bit about how preemption  works unsurprisingly it's driven by a  hardware timer every so many  milliseconds timer goes off interrupt  handler interrupt handler routes this  timer to schedule our code which checks  if it's time to reschedule the current  task  prompting directly from this handler  could cause funny stuff to happen if we  were in a nested kernel control path  where we were already handling some sort  of other interrupts so instead the  interrupt handler instead of directly  switching tasks sets a flag in the tasks  thread info struct signaling that  rescheduling is due to happen hey this  flag is set then when it's safe to  switch contexts on the irq exit path we  check that flag and if we need to we do  whatever cleanup work and then call  schedule schedule is unsurprisingly the  course scheduler function it DQ's the  next test to run in queues the  preemptory one swaps out their processor  processor state registers and what have  you does whatever clean up it needs to  and then starts running the next task a  little intricate generally works cool so  thus far we have a scheduler that  supports preemption prioritization and  fairness let's talk a bit about how its  scales to many core systems so like I  mentioned per process run queues limit  contention and and cache thrashing but  they can lead to a severely unbalanced  test distribution so in this picture  core zero has a bunch of tasks core one  only has one core one is underutilized  so each core periodically does a simple  load balancing procedure but fair  balancing is tricky say task C has  higher weight meaning higher priority  than tasks a B and D if we just looked  at the run queue length o thread core  has a bunch of tasks core one only has  one okay I'm going to move some tests  from core zero to core one then we would  unfairly deprive the high priority task  of its do run time we could try  balancing based on total task weight so  all right core zero has each each test  is weight time there are three of them  it has weight 30 core one has one really  high priority test with weight 100 but  if the high priority test frequently  sleeps this ends up being really  efficient because core one could idle  for long periods of time instead the  kernel does something or like  balancing uses a load metric based on a  combination of task weight and CPU  utilization to ensure that high priority  tasks get their fair share of time but  cores are efficiently utilized even in  the presence of processes that  frequently sleep wake up to wake up  so at this point you might be thinking  it's kind of complicated I have more  questions how am I going to answer them  like what about the power efficiency  stuff that you talked about and I'm  actually going to dive into in this talk  so you could listen to some bozo blather  on and believe what he says you could  stare really hard at the source code and  try and figure it out or and I recommend  this approach use F trace the function  tracer this is the coolest thing how  many people here have heard of F trace  alright so that's cool  so f trace is this amazing technology it  dynamically traces all almost all  function entry and return points in the  kernel so when disabled it has almost  zero overhead you turn it on it has  overhead obviously it has overhead but  you can see a call graph of every single  function that if the kernel is calling  that's amazing  it's a Linux tool it's kind of gnarly to  use you mount this debug filesystem and  then you put cat some stuff to it but  you can read about it on the internet  it's not too hard to figure out and you  can answer questions like what's the  code path through the scheduler look  like alright we call schedule and then  we do a bunch of stuff or what happens  when you call read on a pipe well you  could grep through the source code and  try and find pipe read or you could just  write a little program that reads from a  pipe run F trace all right it's it's  doing some stuff and eventually  scheduling makes sense so my  recommendation for diving deep into the  internals of the Linux kernel schedule  are really the Linux kernel at all is  use F trace to build a function call  graph and figure out what's actually  happening on your system way easier than  trying to do it in your head with the  northa source tree pretty cool so the  completely fair scheduler its performant  scalable robe  traceable and if story new let's switch  gears and talk about scheduling in  userspace  so there are good reasons why some  language runtimes don't simply have fall  back to native operating system threads  and instead offer you different  concurrency primitives these are  languages like go Erlang Haskell others  you might want to target different  performance characteristics let's say  you want concurrency constructs in your  program and you want 10 million FM you  can't have 10 million threads we already  saw that because the context switch  takes 1 microsecond you just be context  switching you might want to decouple  concurrency from memory usage once  severe limitation of operating system  threads is that stack size is fixed at  creation time and in practice this tends  to be the bottleneck to creating lots  and lots of threads before context  switching you have a million threads  each one has a megabyte of stack space  alright you need a terabyte of memory  that's expensive and you might want to  support manage memory runtimes by  integrating the scheduler with the  garbage collector but we won't really  talk about this in this talk but it is a  legitimate use case this is part of how  go achieves very low latency garbage  collection times so so language runtimes  implement their own schedulers on top of  the operating system baseline are these  schedulers fundamentally different from  the kernel scheduler do they share  significant design patterns let's take a  look I want to look at two languages  when is go the other is Erlang so let's  talk about go and go how many people  here of program dingo ok cool good  number so and go code runs and go  routines which are sort of like threads  ostensibly more lightweight and managed  by the language runtime they're supposed  to be very cheap to create and dispose  of go routines are multiplexed onto OS  threads in a process called m2n  scheduling so you  have relatively through relatively few  operating system threads at any point  and a whole lot of go routines and the  language runtime takes care of managing  it for you so the claim is that  rescheduling agar routine is much  cheaper than rescheduling a thread so  what you've done if an unkind again mean  by much cheaper  does anybody have a guess how you could  find out yeah ping pong so we can do  this and go go has a concurrency  primitives called a channel that lets  you send data between guru teams it's  kind of like a pipe so this is a crude  heuristic we're not going to deep dive  into this benchmark but we can write a  simple go program that spawns to worker  threads with channels between them and  plays ping pong back and forth run it  alright point to microseconds per switch  that's way faster they were right that's  not surprising there Donovan and  Kernighan so what's the go scheduler  doing let's take a look so you go  runtime state is basically described by  three data structures there's an M which  represents an operating system thread a  G and which represents a go routine and  a P which represents general context for  executing go code each P contains a  queue of runnable go routines so so far  this is not that different from Linux we  have some data structure per core and it  has a run queue if things are going to  run next in a context switch time the  next go routine is pulled off the run  queue and run so on an end core machine  we end up with up to n threads  concurrently executing go code still not  that different however there's no  regularly scheduled interpeduncular  balancing instead goo routines which  were preempted or blocked insist calls  go on to a special global run Q and a P  which becomes idle can steal work from  another P all right these go routines  are mine now  finally a separate system on thread  implements pee handoff if an M blocks an  assist call what do I mean by that all  right we're running go code the go code  is green and then it executes SAS this  call it's going to read a ginormous file  from disk and then it blocks in the SIS  call this disclosed yellow what happens  all the other and go routines that were  scheduled to run on that thread are now  blocked by this one go routine that's no  good  so this is mine thread periodically  checks if this bad situation is  occurring if it does it possibly  allocates a new thread with a new M  structure takes the P that was priorly  associated to m1 and says ok all these  go routines are now going to run on this  new thread pretty cool the system on  thread also checks for long running go  routines that need to be preempted  pretty plausible  however because preemption needs to play  nicely with the garbage collector  preemption can only happen at go  function entry so tight loops if you  just do a for loop forever can  potentially block arbitrarily this is a  bit hazardous swing go context switches  are fast by virtue of implementation  simplicity and not merely because  they're avoiding the round trip into  kernel space this is a design choice we  can support lots of concurrent go  routines like millions but we can't  assign them priorities we don't have  strong preemption guarantees and to  illustrate the practical effect of this  design decision I'd like to contrast  this implementation with Erlang Erlang  is also a language ostensibly designed  for highly concurrent programming in  early and concurrency primitives are  called processes but actually have  nothing to do with operating systems  processes except for the fact that they  do not share memory processors  communicate exclusively via asynchronous  message passing  so unlike go and see our link code is  actually compiled  by code and executed by a virtual  machine it's sort of like the JVM or C  Python or Ruby this architecture enables  a simple preemption mechanism which is  neither timer based like the Linux  kernel nor watcher based like go it uses  the notion of a reduction budget so  every Earling process when it is  scheduled gets a reduction count which  by default is about two thousand and  everything you do is going to cost you  reductions calling a function decrement  the reduction budget send a message to  another process same thing I Oh garbage  collection and once you use up your  reduction budget you get preempted this  is so simple that we can actually see it  in encode so the beam emulator source  code the Erlang virtual machine source  code is in C the core of emulator is  this gnarly 3700 line switch statement  it's got hella defines and go twos but  this is what matters if we want to call  a function the next byte code  instruction is going to say call a  function so we set the continuation  pointer advance the instruction pointer  to point to the next thing next byte  code instruction that we're going to  execute and then call a macro called  dispatch what does dispatch do it  dispatches if we still have reductions  in our budget we're going to decrement  the reduction counter and go through the  emulator loop for the next instruction  go back to the top of the switch  statement but if we're out of reductions  we're going to context switch so let's  take a moment to think through the  implications of this design so we knew  we have a reduction call a reduction  budget of about 2000 reductions and each  function call is going to cost us one of  those  how long do functions take not very long  normally this means we could be calling  into the scheduler at sub a millisecond  intervals scheduling is highly granular  what are the consequences the maximum  throughput of our program is going to be  affected if we just want to do lots and  lots of number crunching it's going to  be somewhat slower and  in a language like go but on the other  hands the preemption latency is highly  predictable it doesn't depend on the  scheduling of a separate operating  system thread or the prompt handling of  a timer  why does this matter let's try an  experiment this is a small go program  first we're going to spawn a bunch of  busy tight loops to saturate all the  cores on our machine I did this on my  laptop my laptop is four cars then we're  going to sleep for some predetermined  interval and measure how long we  actually slept versus how long we  expected to sleep this is a crude  estimate of the effective preemption  latency that our program is seeing when  the CPU is saturated by work does that  make sense so this is not a rigorous  benchmark I mean obviously you could  raise a lot of objections  yes I'm sorry thank you you should do  code review for me yes so so the jitter  is how long you actually slept versus  how long you expected to sleep and if  you run it you get a latency  distribution like this preemption  latency varies from sub millisecond to  up to 40 milliseconds it's compare this  with an implementation in Erlang it's  actually a lick sir  so elixir is a language that runs on the  Erlang VM its syntax is more Ruby like  so it doesn't make my brain hurt and if  you haven't read Erlang it probably  makes sense so we spawned a bunch of  busy tight loops to saturate the course  we sleep for some targeted amount and  then we measure how long we actually  slept for and use the difference between  that and our sleep target is an estimate  of preemption latency what does that  look like looks like this nearly  consistent sub-millisecond preemption  latency that's the difference  early trades some throughput for highly  predictable latency go does the opposite  yes  that's an excellent question the  question was whether it's significant  that the NGO functioning was calling  time that now and the elixir function  was bumping at counter you sir are an  amazing reader of code on slides yeah if  it's not significant the reason we're  calling time debt now and go is because  we need a Ingo in our tight loop we  actually need a function we actually  need to execute a function call because  if we just did for like increment the  counter we wouldn't call the scheduler  we totally dead lock it like like you  mentioned so it's it's not actually  significant I'm done I was like the  worst the first thing I thought of but  that's a great point so thank you for  bearing with me through this little  exercise maybe we've learned something I  certainly did scalable scheduling not  that mysterious all the implementations  that we saw saw us share some patterns  they use independent run queues with  periodic load balancing to scale well  across multiprocessor systems they  preempted safe points to prevent rogue  code from bringing things to a halt but  they make different design decisions the  Linux kernel scheduler gives you a very  granular priority system you can nice  your process to all sorts of different  things the go scheduler is very simple  no priorities at all and you can trade  latency predictability versus baseline  overhead coding go in general we'll run  a little bit faster than code in Erlang  because you are not paying this fairly  constant overhead costs for granular  scheduling but you may suffer greater  variance in latency in certain scenarios  and there are other trade-offs but these  are maybe the most salient that's all I  have thank you very much I would love to  take questions  yes  right that's a good question so the  question was what's the distinction  between context switching between native  threads and between green threads so it  depends a little bit on the language  runtime so when you in the linux kernel  and you switch between threads you do  need to save their registers in some  other thread State and switch that out  before for the next thing you're going  to execute because go code compiles to  native function calls the contact the  actual mechanics of the contacts which  are fairly similar use you save the  registers of the function you are in and  then switch to the next function in in  in a VM language like Erlang like the  actual registers on the machine are the  registers of the of the VM and and not  of the of your Erlang functions so so  that's sort of fundamentally different  but the actual mechanics are like quite  intrinsic and I can't really do justice  to them so I encourage you to use  something like F trace to you can sort  of pick apart the individual steps of  the context switch but it's it's like  quite hard to justify this  quantitatively but my opinion and it's  only an opinion is that the register  saving is a relatively small part of the  overall intrinsic cost of a context  switch and most of it is attributable to  the general complexity of of the  scheduler machinery  that is my opinion  but I don't have like don't don't take  that as truth because I can't really  give you a concise way that you could go  and prove this for yourself I mean a go  context which still takes 200  microseconds which is you know still  equivalent to a good a good chunk of  work yeah so the question was about  cache utilization which is you give in  general something that's quite difficult  to analyze convincingly but but my claim  is if your guru teens have a big working  set and you switch from go routine a to  go routine be like you're still going to  see cash penalties and if your threads  have a big working set and you switch  from thread a to switch thread B you'll  see big cash penalties like no matter  what the scheduler is doing but if the  working set is small that is not  necessarily the case so does that make  sense  go any other questions in the back  mhm  so the question was the reduction budget  is mm if you change that a number what  happens that's an excellent question so  what I would say to that is two things  so chain so changing the the reduction  budget changes the granularity obviously  if you double it you will see preemption  latencies on the order of two  milliseconds not one millisecond but it  doesn't change the predictability part  of the reason why there's a lot of  variance and go is because the  preemption is driven by a separate  operating system thread so preemption  latency is beholden to that operating  system thread being scheduled by the  operating system scheduled by the  operating system and there's hundreds of  milliseconds or not sorry not hundreds  of milliseconds but a few milliseconds  of latency variants there so it's  absolutely a like a sliding spectrum of  granularity versus preemption latency  does that make sense yes  yeah I'm honestly not entirely sure why  go light works like this but you can  call something like scheduled x' to  explicitly yield like pretty much every  runtime has a construct like that that  allows you to explicitly yields in a  tight loop yes  thank you very much so for I'm posterity  SiC the first comment was that in Erlang  if you basically call in to C extensions  the reduction count doesn't go down  unless you explicitly decrement it so it  is totally possible still to effectively  break the scheduler by calling C I mean  that sort of makes sense and the second  was about the paper that appeared a few  months ago called the Linux kernel  scheduler a decade of wasted cores that  paper was the catalysis for me proposing  this top to strangely but here's here's  what I think about it I'm not a systems  researcher so maybe I'm not really doing  it justice there are two parts to this  to that paper one is where they sort of  describe the general architecture of the  Linux CFS scheduler especially on  multi-core systems and I think it's a  fantastic exposition as for their claims  about wasted cores it seems to me like  the bugs that they found apply to  scheduling on Numa architectures with  lots of course like 64 core machines and  the the like regression cases that they  mentioned in that paper were things like  like running a ruby web server and also  compiling the Linux kernel or something  like that we're close that I personally  couldn't quite identify with real  workloads and I think I think like like  the paper is cool but if it had  represented a real improvement they  should have like posted it on the L KML  and like their patches should be in the  Linux kernel as far as I know like right  now they're not that could have changed  and like they they built some tools to  analyze scheduler performance but I  rather would have seen them leverage  more general purpose tools in the kernel  infrastructure like F tracer or perfs  good because like they they built their  own but you need a custom kernel and I'm  not hitting on the authors of the ad  paper but I think the like the things  that they found were relatively  special-purpose regressions and their  broader point that it's kind of a gnarly  piece of of code like obviously sans  it's like pretty complicated does that  seem reasonable cool I think we're out  of time but please come talk to me if  you think
+ 
+
+00:00:12.900 --> 00:00:16.890 align:start position:0%
+ 
+ 
+
+00:00:16.890 --> 00:00:21.269 align:start position:0%
+ 
+ 
+
+00:00:21.269 --> 00:00:23.310 align:start position:0%
+ 
+ 
+
+00:00:23.310 --> 00:00:24.929 align:start position:0%
+ 
+ 
+
+00:00:24.929 --> 00:00:26.820 align:start position:0%
+ 
+ 
+
+00:00:26.820 --> 00:00:29.490 align:start position:0%
+ 
+ 
+
+00:00:29.490 --> 00:00:31.980 align:start position:0%
+ 
+ 
+
+00:00:31.980 --> 00:00:34.500 align:start position:0%
+ 
+ 
+
+00:00:34.500 --> 00:00:36.420 align:start position:0%
+ 
+ 
+
+00:00:36.420 --> 00:00:38.010 align:start position:0%
+ 
+ 
+
+00:00:38.010 --> 00:00:39.840 align:start position:0%
+ 
+ 
+
+00:00:39.840 --> 00:00:42.180 align:start position:0%
+ 
+ 
+
+00:00:42.180 --> 00:00:43.590 align:start position:0%
+ 
+ 
+
+00:00:43.590 --> 00:00:47.130 align:start position:0%
+ 
+ 
+
+00:00:47.130 --> 00:00:49.040 align:start position:0%
+ 
+ 
+
+00:00:49.040 --> 00:00:52.290 align:start position:0%
+ 
+ 
+
+00:00:52.290 --> 00:00:54.390 align:start position:0%
+ 
+ 
+
+00:00:54.390 --> 00:00:55.950 align:start position:0%
+ 
+ 
+
+00:00:55.950 --> 00:00:58.650 align:start position:0%
+ 
+ 
+
+00:00:58.650 --> 00:00:59.820 align:start position:0%
+ 
+ 
+
+00:00:59.820 --> 00:01:02.460 align:start position:0%
+ 
+ 
+
+00:01:02.460 --> 00:01:06.090 align:start position:0%
+ 
+ 
+
+00:01:06.090 --> 00:01:07.499 align:start position:0%
+ 
+ 
+
+00:01:07.499 --> 00:01:09.150 align:start position:0%
+ 
+ 
+
+00:01:09.150 --> 00:01:11.490 align:start position:0%
+ 
+ 
+
+00:01:11.490 --> 00:01:13.320 align:start position:0%
+ 
+ 
+
+00:01:13.320 --> 00:01:15.120 align:start position:0%
+ 
+ 
+
+00:01:15.120 --> 00:01:17.190 align:start position:0%
+ 
+ 
+
+00:01:17.190 --> 00:01:19.440 align:start position:0%
+ 
+ 
+
+00:01:19.440 --> 00:01:20.940 align:start position:0%
+ 
+ 
+
+00:01:20.940 --> 00:01:23.370 align:start position:0%
+ 
+ 
+
+00:01:23.370 --> 00:01:25.230 align:start position:0%
+ 
+ 
+
+00:01:25.230 --> 00:01:26.760 align:start position:0%
+ 
+ 
+
+00:01:26.760 --> 00:01:31.080 align:start position:0%
+ 
+ 
+
+00:01:31.080 --> 00:01:34.200 align:start position:0%
+ 
+ 
+
+00:01:34.200 --> 00:01:36.450 align:start position:0%
+ 
+ 
+
+00:01:36.450 --> 00:01:38.790 align:start position:0%
+ 
+ 
+
+00:01:38.790 --> 00:01:40.380 align:start position:0%
+ 
+ 
+
+00:01:40.380 --> 00:01:43.500 align:start position:0%
+ 
+ 
+
+00:01:43.500 --> 00:01:44.969 align:start position:0%
+ 
+ 
+
+00:01:44.969 --> 00:01:49.950 align:start position:0%
+ 
+ 
+
+00:01:49.950 --> 00:01:52.289 align:start position:0%
+ 
+ 
+
+00:01:52.289 --> 00:01:54.510 align:start position:0%
+ 
+ 
+
+00:01:54.510 --> 00:01:56.100 align:start position:0%
+ 
+ 
+
+00:01:56.100 --> 00:01:59.130 align:start position:0%
+ 
+ 
+
+00:01:59.130 --> 00:02:01.200 align:start position:0%
+ 
+ 
+
+00:02:01.200 --> 00:02:02.730 align:start position:0%
+ 
+ 
+
+00:02:02.730 --> 00:02:04.680 align:start position:0%
+ 
+ 
+
+00:02:04.680 --> 00:02:06.330 align:start position:0%
+ 
+ 
+
+00:02:06.330 --> 00:02:08.399 align:start position:0%
+ 
+ 
+
+00:02:08.399 --> 00:02:09.509 align:start position:0%
+ 
+ 
+
+00:02:09.509 --> 00:02:11.880 align:start position:0%
+ 
+ 
+
+00:02:11.880 --> 00:02:14.220 align:start position:0%
+ 
+ 
+
+00:02:14.220 --> 00:02:15.959 align:start position:0%
+ 
+ 
+
+00:02:15.959 --> 00:02:18.960 align:start position:0%
+ 
+ 
+
+00:02:18.960 --> 00:02:20.490 align:start position:0%
+ 
+ 
+
+00:02:20.490 --> 00:02:22.740 align:start position:0%
+ 
+ 
+
+00:02:22.740 --> 00:02:25.080 align:start position:0%
+ 
+ 
+
+00:02:25.080 --> 00:02:27.960 align:start position:0%
+ 
+ 
+
+00:02:27.960 --> 00:02:30.060 align:start position:0%
+ 
+ 
+
+00:02:30.060 --> 00:02:33.770 align:start position:0%
+ 
+ 
+
+00:02:33.770 --> 00:02:36.060 align:start position:0%
+ 
+ 
+
+00:02:36.060 --> 00:02:39.980 align:start position:0%
+ 
+ 
+
+00:02:39.980 --> 00:02:42.870 align:start position:0%
+ 
+ 
+
+00:02:42.870 --> 00:02:44.490 align:start position:0%
+ 
+ 
+
+00:02:44.490 --> 00:02:48.410 align:start position:0%
+ 
+ 
+
+00:02:48.410 --> 00:02:51.150 align:start position:0%
+ 
+ 
+
+00:02:51.150 --> 00:02:52.770 align:start position:0%
+ 
+ 
+
+00:02:52.770 --> 00:02:57.180 align:start position:0%
+ 
+ 
+
+00:02:57.180 --> 00:02:59.640 align:start position:0%
+ 
+ 
+
+00:02:59.640 --> 00:03:02.580 align:start position:0%
+ 
+ 
+
+00:03:02.580 --> 00:03:04.830 align:start position:0%
+ 
+ 
+
+00:03:04.830 --> 00:03:06.990 align:start position:0%
+ 
+ 
+
+00:03:06.990 --> 00:03:09.860 align:start position:0%
+ 
+ 
+
+00:03:09.860 --> 00:03:12.030 align:start position:0%
+ 
+ 
+
+00:03:12.030 --> 00:03:14.280 align:start position:0%
+ 
+ 
+
+00:03:14.280 --> 00:03:16.170 align:start position:0%
+ 
+ 
+
+00:03:16.170 --> 00:03:18.180 align:start position:0%
+ 
+ 
+
+00:03:18.180 --> 00:03:20.900 align:start position:0%
+ 
+ 
+
+00:03:20.900 --> 00:03:23.220 align:start position:0%
+ 
+ 
+
+00:03:23.220 --> 00:03:24.810 align:start position:0%
+ 
+ 
+
+00:03:24.810 --> 00:03:26.810 align:start position:0%
+ 
+ 
+
+00:03:26.810 --> 00:03:30.690 align:start position:0%
+ 
+ 
+
+00:03:30.690 --> 00:03:33.020 align:start position:0%
+ 
+ 
+
+00:03:33.020 --> 00:03:35.580 align:start position:0%
+ 
+ 
+
+00:03:35.580 --> 00:03:37.680 align:start position:0%
+ 
+ 
+
+00:03:37.680 --> 00:03:39.840 align:start position:0%
+ 
+ 
+
+00:03:39.840 --> 00:03:44.640 align:start position:0%
+ 
+ 
+
+00:03:44.640 --> 00:03:47.220 align:start position:0%
+ 
+ 
+
+00:03:47.220 --> 00:03:49.410 align:start position:0%
+ 
+ 
+
+00:03:49.410 --> 00:03:51.720 align:start position:0%
+ 
+ 
+
+00:03:51.720 --> 00:03:54.990 align:start position:0%
+ 
+ 
+
+00:03:54.990 --> 00:03:57.090 align:start position:0%
+ 
+ 
+
+00:03:57.090 --> 00:03:59.880 align:start position:0%
+ 
+ 
+
+00:03:59.880 --> 00:04:02.340 align:start position:0%
+ 
+ 
+
+00:04:02.340 --> 00:04:04.560 align:start position:0%
+ 
+ 
+
+00:04:04.560 --> 00:04:06.990 align:start position:0%
+ 
+ 
+
+00:04:06.990 --> 00:04:09.630 align:start position:0%
+ 
+ 
+
+00:04:09.630 --> 00:04:11.370 align:start position:0%
+ 
+ 
+
+00:04:11.370 --> 00:04:13.800 align:start position:0%
+ 
+ 
+
+00:04:13.800 --> 00:04:16.740 align:start position:0%
+ 
+ 
+
+00:04:16.740 --> 00:04:19.469 align:start position:0%
+ 
+ 
+
+00:04:19.469 --> 00:04:21.570 align:start position:0%
+ 
+ 
+
+00:04:21.570 --> 00:04:24.090 align:start position:0%
+ 
+ 
+
+00:04:24.090 --> 00:04:29.040 align:start position:0%
+ 
+ 
+
+00:04:29.040 --> 00:04:30.750 align:start position:0%
+ 
+ 
+
+00:04:30.750 --> 00:04:32.100 align:start position:0%
+ 
+ 
+
+00:04:32.100 --> 00:04:34.260 align:start position:0%
+ 
+ 
+
+00:04:34.260 --> 00:04:36.900 align:start position:0%
+ 
+ 
+
+00:04:36.900 --> 00:04:38.999 align:start position:0%
+ 
+ 
+
+00:04:38.999 --> 00:04:40.860 align:start position:0%
+ 
+ 
+
+00:04:40.860 --> 00:04:44.520 align:start position:0%
+ 
+ 
+
+00:04:44.520 --> 00:04:46.469 align:start position:0%
+ 
+ 
+
+00:04:46.469 --> 00:04:48.059 align:start position:0%
+ 
+ 
+
+00:04:48.059 --> 00:04:50.249 align:start position:0%
+ 
+ 
+
+00:04:50.249 --> 00:04:52.260 align:start position:0%
+ 
+ 
+
+00:04:52.260 --> 00:04:54.779 align:start position:0%
+ 
+ 
+
+00:04:54.779 --> 00:04:57.930 align:start position:0%
+ 
+ 
+
+00:04:57.930 --> 00:05:00.119 align:start position:0%
+ 
+ 
+
+00:05:00.119 --> 00:05:03.210 align:start position:0%
+ 
+ 
+
+00:05:03.210 --> 00:05:06.809 align:start position:0%
+ 
+ 
+
+00:05:06.809 --> 00:05:08.670 align:start position:0%
+ 
+ 
+
+00:05:08.670 --> 00:05:11.760 align:start position:0%
+ 
+ 
+
+00:05:11.760 --> 00:05:15.570 align:start position:0%
+ 
+ 
+
+00:05:15.570 --> 00:05:17.189 align:start position:0%
+ 
+ 
+
+00:05:17.189 --> 00:05:19.529 align:start position:0%
+ 
+ 
+
+00:05:19.529 --> 00:05:24.510 align:start position:0%
+ 
+ 
+
+00:05:24.510 --> 00:05:26.610 align:start position:0%
+ 
+ 
+
+00:05:26.610 --> 00:05:26.620 align:start position:0%
+ 
+ 
+
+00:05:26.620 --> 00:05:27.740 align:start position:0%
+ 
+
+
+00:05:27.740 --> 00:05:35.219 align:start position:0%
+ 
+ 
+
+00:05:35.219 --> 00:05:39.350 align:start position:0%
+ 
+ 
+
+00:05:39.350 --> 00:05:41.760 align:start position:0%
+ 
+ 
+
+00:05:41.760 --> 00:05:45.480 align:start position:0%
+ 
+ 
+
+00:05:45.480 --> 00:05:47.580 align:start position:0%
+ 
+ 
+
+00:05:47.580 --> 00:05:50.909 align:start position:0%
+ 
+ 
+
+00:05:50.909 --> 00:05:52.559 align:start position:0%
+ 
+ 
+
+00:05:52.559 --> 00:05:52.569 align:start position:0%
+ 
+ 
+
+00:05:52.569 --> 00:06:00.239 align:start position:0%
+ 
+
+
+00:06:00.239 --> 00:06:03.629 align:start position:0%
+ 
+ 
+
+00:06:03.629 --> 00:06:13.529 align:start position:0%
+ 
+ 
+
+00:06:13.529 --> 00:06:14.939 align:start position:0%
+ 
+ 
+
+00:06:14.939 --> 00:06:17.909 align:start position:0%
+ 
+ 
+
+00:06:17.909 --> 00:06:20.219 align:start position:0%
+ 
+ 
+
+00:06:20.219 --> 00:06:29.489 align:start position:0%
+ 
+ 
+
+00:06:29.489 --> 00:06:33.449 align:start position:0%
+ 
+ 
+
+00:06:33.449 --> 00:06:35.100 align:start position:0%
+ 
+ 
+
+00:06:35.100 --> 00:06:36.959 align:start position:0%
+ 
+ 
+
+00:06:36.959 --> 00:06:38.729 align:start position:0%
+ 
+ 
+
+00:06:38.729 --> 00:06:40.379 align:start position:0%
+ 
+ 
+
+00:06:40.379 --> 00:06:42.479 align:start position:0%
+ 
+ 
+
+00:06:42.479 --> 00:06:44.399 align:start position:0%
+ 
+ 
+
+00:06:44.399 --> 00:06:51.149 align:start position:0%
+ 
+ 
+
+00:06:51.149 --> 00:06:53.219 align:start position:0%
+ 
+ 
+
+00:06:53.219 --> 00:06:55.829 align:start position:0%
+ 
+ 
+
+00:06:55.829 --> 00:06:58.499 align:start position:0%
+ 
+ 
+
+00:06:58.499 --> 00:07:01.019 align:start position:0%
+ 
+ 
+
+00:07:01.019 --> 00:07:03.089 align:start position:0%
+ 
+ 
+
+00:07:03.089 --> 00:07:05.489 align:start position:0%
+ 
+ 
+
+00:07:05.489 --> 00:07:07.409 align:start position:0%
+ 
+ 
+
+00:07:07.409 --> 00:07:09.629 align:start position:0%
+ 
+ 
+
+00:07:09.629 --> 00:07:11.759 align:start position:0%
+ 
+ 
+
+00:07:11.759 --> 00:07:14.969 align:start position:0%
+ 
+ 
+
+00:07:14.969 --> 00:07:17.279 align:start position:0%
+ 
+ 
+
+00:07:17.279 --> 00:07:19.399 align:start position:0%
+ 
+ 
+
+00:07:19.399 --> 00:07:22.319 align:start position:0%
+ 
+ 
+
+00:07:22.319 --> 00:07:24.029 align:start position:0%
+ 
+ 
+
+00:07:24.029 --> 00:07:26.129 align:start position:0%
+ 
+ 
+
+00:07:26.129 --> 00:07:28.169 align:start position:0%
+ 
+ 
+
+00:07:28.169 --> 00:07:30.629 align:start position:0%
+ 
+ 
+
+00:07:30.629 --> 00:07:35.729 align:start position:0%
+ 
+ 
+
+00:07:35.729 --> 00:07:38.129 align:start position:0%
+ 
+ 
+
+00:07:38.129 --> 00:07:43.409 align:start position:0%
+ 
+ 
+
+00:07:43.409 --> 00:07:44.789 align:start position:0%
+ 
+ 
+
+00:07:44.789 --> 00:07:46.799 align:start position:0%
+ 
+ 
+
+00:07:46.799 --> 00:07:48.809 align:start position:0%
+ 
+ 
+
+00:07:48.809 --> 00:07:50.039 align:start position:0%
+ 
+ 
+
+00:07:50.039 --> 00:07:51.509 align:start position:0%
+ 
+ 
+
+00:07:51.509 --> 00:07:52.979 align:start position:0%
+ 
+ 
+
+00:07:52.979 --> 00:07:56.789 align:start position:0%
+ 
+ 
+
+00:07:56.789 --> 00:08:01.639 align:start position:0%
+ 
+ 
+
+00:08:01.639 --> 00:08:04.259 align:start position:0%
+ 
+ 
+
+00:08:04.259 --> 00:08:06.959 align:start position:0%
+ 
+ 
+
+00:08:06.959 --> 00:08:08.489 align:start position:0%
+ 
+ 
+
+00:08:08.489 --> 00:08:11.999 align:start position:0%
+ 
+ 
+
+00:08:11.999 --> 00:08:14.129 align:start position:0%
+ 
+ 
+
+00:08:14.129 --> 00:08:15.360 align:start position:0%
+ 
+ 
+
+00:08:15.360 --> 00:08:17.339 align:start position:0%
+ 
+ 
+
+00:08:17.339 --> 00:08:19.260 align:start position:0%
+ 
+ 
+
+00:08:19.260 --> 00:08:24.029 align:start position:0%
+ 
+ 
+
+00:08:24.029 --> 00:08:26.040 align:start position:0%
+ 
+ 
+
+00:08:26.040 --> 00:08:29.909 align:start position:0%
+ 
+ 
+
+00:08:29.909 --> 00:08:31.619 align:start position:0%
+ 
+ 
+
+00:08:31.619 --> 00:08:33.300 align:start position:0%
+ 
+ 
+
+00:08:33.300 --> 00:08:35.219 align:start position:0%
+ 
+ 
+
+00:08:35.219 --> 00:08:38.250 align:start position:0%
+ 
+ 
+
+00:08:38.250 --> 00:08:40.800 align:start position:0%
+ 
+ 
+
+00:08:40.800 --> 00:08:42.329 align:start position:0%
+ 
+ 
+
+00:08:42.329 --> 00:08:43.769 align:start position:0%
+ 
+ 
+
+00:08:43.769 --> 00:08:45.660 align:start position:0%
+ 
+ 
+
+00:08:45.660 --> 00:08:49.319 align:start position:0%
+ 
+ 
+
+00:08:49.319 --> 00:08:51.540 align:start position:0%
+ 
+ 
+
+00:08:51.540 --> 00:08:53.550 align:start position:0%
+ 
+ 
+
+00:08:53.550 --> 00:08:56.730 align:start position:0%
+ 
+ 
+
+00:08:56.730 --> 00:09:09.920 align:start position:0%
+ 
+ 
+
+00:09:09.920 --> 00:09:11.880 align:start position:0%
+ 
+ 
+
+00:09:11.880 --> 00:09:14.069 align:start position:0%
+ 
+ 
+
+00:09:14.069 --> 00:09:16.470 align:start position:0%
+ 
+ 
+
+00:09:16.470 --> 00:09:18.540 align:start position:0%
+ 
+ 
+
+00:09:18.540 --> 00:09:20.370 align:start position:0%
+ 
+ 
+
+00:09:20.370 --> 00:09:22.199 align:start position:0%
+ 
+ 
+
+00:09:22.199 --> 00:09:25.079 align:start position:0%
+ 
+ 
+
+00:09:25.079 --> 00:09:27.689 align:start position:0%
+ 
+ 
+
+00:09:27.689 --> 00:09:30.230 align:start position:0%
+ 
+ 
+
+00:09:30.230 --> 00:09:33.269 align:start position:0%
+ 
+ 
+
+00:09:33.269 --> 00:09:35.610 align:start position:0%
+ 
+ 
+
+00:09:35.610 --> 00:09:37.829 align:start position:0%
+ 
+ 
+
+00:09:37.829 --> 00:09:40.079 align:start position:0%
+ 
+ 
+
+00:09:40.079 --> 00:09:43.680 align:start position:0%
+ 
+ 
+
+00:09:43.680 --> 00:09:45.689 align:start position:0%
+ 
+ 
+
+00:09:45.689 --> 00:09:48.030 align:start position:0%
+ 
+ 
+
+00:09:48.030 --> 00:09:49.800 align:start position:0%
+ 
+ 
+
+00:09:49.800 --> 00:09:53.340 align:start position:0%
+ 
+ 
+
+00:09:53.340 --> 00:09:54.710 align:start position:0%
+ 
+ 
+
+00:09:54.710 --> 00:09:57.840 align:start position:0%
+ 
+ 
+
+00:09:57.840 --> 00:10:00.540 align:start position:0%
+ 
+ 
+
+00:10:00.540 --> 00:10:02.880 align:start position:0%
+ 
+ 
+
+00:10:02.880 --> 00:10:05.040 align:start position:0%
+ 
+ 
+
+00:10:05.040 --> 00:10:09.210 align:start position:0%
+ 
+ 
+
+00:10:09.210 --> 00:10:10.829 align:start position:0%
+ 
+ 
+
+00:10:10.829 --> 00:10:13.170 align:start position:0%
+ 
+ 
+
+00:10:13.170 --> 00:10:14.670 align:start position:0%
+ 
+ 
+
+00:10:14.670 --> 00:10:17.579 align:start position:0%
+ 
+ 
+
+00:10:17.579 --> 00:10:22.639 align:start position:0%
+ 
+ 
+
+00:10:22.639 --> 00:10:24.109 align:start position:0%
+ 
+ 
+
+00:10:24.109 --> 00:10:28.160 align:start position:0%
+ 
+ 
+
+00:10:28.160 --> 00:10:30.470 align:start position:0%
+ 
+ 
+
+00:10:30.470 --> 00:10:33.189 align:start position:0%
+ 
+ 
+
+00:10:33.189 --> 00:10:35.689 align:start position:0%
+ 
+ 
+
+00:10:35.689 --> 00:10:38.989 align:start position:0%
+ 
+ 
+
+00:10:38.989 --> 00:10:41.210 align:start position:0%
+ 
+ 
+
+00:10:41.210 --> 00:10:41.809 align:start position:0%
+ 
+ 
+
+00:10:41.809 --> 00:10:43.970 align:start position:0%
+ 
+ 
+
+00:10:43.970 --> 00:10:47.689 align:start position:0%
+ 
+ 
+
+00:10:47.689 --> 00:10:51.169 align:start position:0%
+ 
+ 
+
+00:10:51.169 --> 00:10:53.509 align:start position:0%
+ 
+ 
+
+00:10:53.509 --> 00:10:55.549 align:start position:0%
+ 
+ 
+
+00:10:55.549 --> 00:10:58.369 align:start position:0%
+ 
+ 
+
+00:10:58.369 --> 00:11:02.470 align:start position:0%
+ 
+ 
+
+00:11:02.470 --> 00:11:06.530 align:start position:0%
+ 
+ 
+
+00:11:06.530 --> 00:11:08.960 align:start position:0%
+ 
+ 
+
+00:11:08.960 --> 00:11:11.139 align:start position:0%
+ 
+ 
+
+00:11:11.139 --> 00:11:14.480 align:start position:0%
+ 
+ 
+
+00:11:14.480 --> 00:11:16.309 align:start position:0%
+ 
+ 
+
+00:11:16.309 --> 00:11:18.619 align:start position:0%
+ 
+ 
+
+00:11:18.619 --> 00:11:21.169 align:start position:0%
+ 
+ 
+
+00:11:21.169 --> 00:11:24.799 align:start position:0%
+ 
+ 
+
+00:11:24.799 --> 00:11:28.309 align:start position:0%
+ 
+ 
+
+00:11:28.309 --> 00:11:29.989 align:start position:0%
+ 
+ 
+
+00:11:29.989 --> 00:11:31.579 align:start position:0%
+ 
+ 
+
+00:11:31.579 --> 00:11:33.650 align:start position:0%
+ 
+ 
+
+00:11:33.650 --> 00:11:35.749 align:start position:0%
+ 
+ 
+
+00:11:35.749 --> 00:11:39.679 align:start position:0%
+ 
+ 
+
+00:11:39.679 --> 00:11:41.269 align:start position:0%
+ 
+ 
+
+00:11:41.269 --> 00:11:42.799 align:start position:0%
+ 
+ 
+
+00:11:42.799 --> 00:11:44.929 align:start position:0%
+ 
+ 
+
+00:11:44.929 --> 00:11:49.040 align:start position:0%
+ 
+ 
+
+00:11:49.040 --> 00:11:51.860 align:start position:0%
+ 
+ 
+
+00:11:51.860 --> 00:11:53.480 align:start position:0%
+ 
+ 
+
+00:11:53.480 --> 00:11:55.269 align:start position:0%
+ 
+ 
+
+00:11:55.269 --> 00:11:57.919 align:start position:0%
+ 
+ 
+
+00:11:57.919 --> 00:11:59.509 align:start position:0%
+ 
+ 
+
+00:11:59.509 --> 00:12:04.610 align:start position:0%
+ 
+ 
+
+00:12:04.610 --> 00:12:06.559 align:start position:0%
+ 
+ 
+
+00:12:06.559 --> 00:12:09.739 align:start position:0%
+ 
+ 
+
+00:12:09.739 --> 00:12:12.530 align:start position:0%
+ 
+ 
+
+00:12:12.530 --> 00:12:14.569 align:start position:0%
+ 
+ 
+
+00:12:14.569 --> 00:12:18.439 align:start position:0%
+ 
+ 
+
+00:12:18.439 --> 00:12:20.480 align:start position:0%
+ 
+ 
+
+00:12:20.480 --> 00:12:22.759 align:start position:0%
+ 
+ 
+
+00:12:22.759 --> 00:12:25.160 align:start position:0%
+ 
+ 
+
+00:12:25.160 --> 00:12:30.199 align:start position:0%
+ 
+ 
+
+00:12:30.199 --> 00:12:32.150 align:start position:0%
+ 
+ 
+
+00:12:32.150 --> 00:12:33.949 align:start position:0%
+ 
+ 
+
+00:12:33.949 --> 00:12:35.480 align:start position:0%
+ 
+ 
+
+00:12:35.480 --> 00:12:35.490 align:start position:0%
+ 
+ 
+
+00:12:35.490 --> 00:12:36.199 align:start position:0%
+ 
+
+
+00:12:36.199 --> 00:12:38.869 align:start position:0%
+ 
+ 
+
+00:12:38.869 --> 00:12:41.600 align:start position:0%
+ 
+ 
+
+00:12:41.600 --> 00:12:45.650 align:start position:0%
+ 
+ 
+
+00:12:45.650 --> 00:12:45.660 align:start position:0%
+ 
+ 
+
+00:12:45.660 --> 00:12:46.460 align:start position:0%
+ 
+
+
+00:12:46.460 --> 00:12:48.559 align:start position:0%
+ 
+ 
+
+00:12:48.559 --> 00:12:52.369 align:start position:0%
+ 
+ 
+
+00:12:52.369 --> 00:12:54.759 align:start position:0%
+ 
+ 
+
+00:12:54.759 --> 00:12:57.499 align:start position:0%
+ 
+ 
+
+00:12:57.499 --> 00:13:00.199 align:start position:0%
+ 
+ 
+
+00:13:00.199 --> 00:13:02.869 align:start position:0%
+ 
+ 
+
+00:13:02.869 --> 00:13:10.220 align:start position:0%
+ 
+ 
+
+00:13:10.220 --> 00:13:12.619 align:start position:0%
+ 
+ 
+
+00:13:12.619 --> 00:13:15.829 align:start position:0%
+ 
+ 
+
+00:13:15.829 --> 00:13:17.989 align:start position:0%
+ 
+ 
+
+00:13:17.989 --> 00:13:21.079 align:start position:0%
+ 
+ 
+
+00:13:21.079 --> 00:13:23.109 align:start position:0%
+ 
+ 
+
+00:13:23.109 --> 00:13:24.889 align:start position:0%
+ 
+ 
+
+00:13:24.889 --> 00:13:30.980 align:start position:0%
+ 
+ 
+
+00:13:30.980 --> 00:13:33.049 align:start position:0%
+ 
+ 
+
+00:13:33.049 --> 00:13:35.629 align:start position:0%
+ 
+ 
+
+00:13:35.629 --> 00:13:39.949 align:start position:0%
+ 
+ 
+
+00:13:39.949 --> 00:13:44.569 align:start position:0%
+ 
+ 
+
+00:13:44.569 --> 00:13:48.410 align:start position:0%
+ 
+ 
+
+00:13:48.410 --> 00:13:50.829 align:start position:0%
+ 
+ 
+
+00:13:50.829 --> 00:13:54.470 align:start position:0%
+ 
+ 
+
+00:13:54.470 --> 00:13:56.419 align:start position:0%
+ 
+ 
+
+00:13:56.419 --> 00:13:59.269 align:start position:0%
+ 
+ 
+
+00:13:59.269 --> 00:14:03.410 align:start position:0%
+ 
+ 
+
+00:14:03.410 --> 00:14:07.579 align:start position:0%
+ 
+ 
+
+00:14:07.579 --> 00:14:09.530 align:start position:0%
+ 
+ 
+
+00:14:09.530 --> 00:14:12.949 align:start position:0%
+ 
+ 
+
+00:14:12.949 --> 00:14:15.350 align:start position:0%
+ 
+ 
+
+00:14:15.350 --> 00:14:17.090 align:start position:0%
+ 
+ 
+
+00:14:17.090 --> 00:14:18.619 align:start position:0%
+ 
+ 
+
+00:14:18.619 --> 00:14:20.379 align:start position:0%
+ 
+ 
+
+00:14:20.379 --> 00:14:23.569 align:start position:0%
+ 
+ 
+
+00:14:23.569 --> 00:14:25.669 align:start position:0%
+ 
+ 
+
+00:14:25.669 --> 00:14:29.090 align:start position:0%
+ 
+ 
+
+00:14:29.090 --> 00:14:30.650 align:start position:0%
+ 
+ 
+
+00:14:30.650 --> 00:14:32.239 align:start position:0%
+ 
+ 
+
+00:14:32.239 --> 00:14:34.819 align:start position:0%
+ 
+ 
+
+00:14:34.819 --> 00:14:36.470 align:start position:0%
+ 
+ 
+
+00:14:36.470 --> 00:14:39.410 align:start position:0%
+ 
+ 
+
+00:14:39.410 --> 00:14:41.989 align:start position:0%
+ 
+ 
+
+00:14:41.989 --> 00:14:45.679 align:start position:0%
+ 
+ 
+
+00:14:45.679 --> 00:14:47.480 align:start position:0%
+ 
+ 
+
+00:14:47.480 --> 00:14:47.490 align:start position:0%
+ 
+ 
+
+00:14:47.490 --> 00:14:48.690 align:start position:0%
+ 
+
+
+00:14:48.690 --> 00:14:50.920 align:start position:0%
+ 
+ 
+
+00:14:50.920 --> 00:14:53.170 align:start position:0%
+ 
+ 
+
+00:14:53.170 --> 00:14:54.940 align:start position:0%
+ 
+ 
+
+00:14:54.940 --> 00:14:56.980 align:start position:0%
+ 
+ 
+
+00:14:56.980 --> 00:14:59.980 align:start position:0%
+ 
+ 
+
+00:14:59.980 --> 00:15:01.990 align:start position:0%
+ 
+ 
+
+00:15:01.990 --> 00:15:05.230 align:start position:0%
+ 
+ 
+
+00:15:05.230 --> 00:15:07.780 align:start position:0%
+ 
+ 
+
+00:15:07.780 --> 00:15:10.420 align:start position:0%
+ 
+ 
+
+00:15:10.420 --> 00:15:13.840 align:start position:0%
+ 
+ 
+
+00:15:13.840 --> 00:15:17.500 align:start position:0%
+ 
+ 
+
+00:15:17.500 --> 00:15:20.350 align:start position:0%
+ 
+ 
+
+00:15:20.350 --> 00:15:23.350 align:start position:0%
+ 
+ 
+
+00:15:23.350 --> 00:15:25.960 align:start position:0%
+ 
+ 
+
+00:15:25.960 --> 00:15:28.300 align:start position:0%
+ 
+ 
+
+00:15:28.300 --> 00:15:29.950 align:start position:0%
+ 
+ 
+
+00:15:29.950 --> 00:15:31.810 align:start position:0%
+ 
+ 
+
+00:15:31.810 --> 00:15:33.760 align:start position:0%
+ 
+ 
+
+00:15:33.760 --> 00:15:35.440 align:start position:0%
+ 
+ 
+
+00:15:35.440 --> 00:15:38.220 align:start position:0%
+ 
+ 
+
+00:15:38.220 --> 00:15:43.740 align:start position:0%
+ 
+ 
+
+00:15:43.740 --> 00:15:46.420 align:start position:0%
+ 
+ 
+
+00:15:46.420 --> 00:15:48.430 align:start position:0%
+ 
+ 
+
+00:15:48.430 --> 00:15:51.610 align:start position:0%
+ 
+ 
+
+00:15:51.610 --> 00:15:55.510 align:start position:0%
+ 
+ 
+
+00:15:55.510 --> 00:15:57.610 align:start position:0%
+ 
+ 
+
+00:15:57.610 --> 00:16:00.610 align:start position:0%
+ 
+ 
+
+00:16:00.610 --> 00:16:02.920 align:start position:0%
+ 
+ 
+
+00:16:02.920 --> 00:16:04.750 align:start position:0%
+ 
+ 
+
+00:16:04.750 --> 00:16:07.000 align:start position:0%
+ 
+ 
+
+00:16:07.000 --> 00:16:09.600 align:start position:0%
+ 
+ 
+
+00:16:09.600 --> 00:16:13.180 align:start position:0%
+ 
+ 
+
+00:16:13.180 --> 00:16:15.940 align:start position:0%
+ 
+ 
+
+00:16:15.940 --> 00:16:19.540 align:start position:0%
+ 
+ 
+
+00:16:19.540 --> 00:16:21.880 align:start position:0%
+ 
+ 
+
+00:16:21.880 --> 00:16:24.730 align:start position:0%
+ 
+ 
+
+00:16:24.730 --> 00:16:26.290 align:start position:0%
+ 
+ 
+
+00:16:26.290 --> 00:16:28.120 align:start position:0%
+ 
+ 
+
+00:16:28.120 --> 00:16:29.560 align:start position:0%
+ 
+ 
+
+00:16:29.560 --> 00:16:31.600 align:start position:0%
+ 
+ 
+
+00:16:31.600 --> 00:16:33.699 align:start position:0%
+ 
+ 
+
+00:16:33.699 --> 00:16:37.120 align:start position:0%
+ 
+ 
+
+00:16:37.120 --> 00:16:41.340 align:start position:0%
+ 
+ 
+
+00:16:41.340 --> 00:16:45.040 align:start position:0%
+ 
+ 
+
+00:16:45.040 --> 00:16:46.210 align:start position:0%
+ 
+ 
+
+00:16:46.210 --> 00:16:48.160 align:start position:0%
+ 
+ 
+
+00:16:48.160 --> 00:16:50.290 align:start position:0%
+ 
+ 
+
+00:16:50.290 --> 00:16:53.410 align:start position:0%
+ 
+ 
+
+00:16:53.410 --> 00:16:55.090 align:start position:0%
+ 
+ 
+
+00:16:55.090 --> 00:16:58.510 align:start position:0%
+ 
+ 
+
+00:16:58.510 --> 00:17:00.880 align:start position:0%
+ 
+ 
+
+00:17:00.880 --> 00:17:02.370 align:start position:0%
+ 
+ 
+
+00:17:02.370 --> 00:17:05.980 align:start position:0%
+ 
+ 
+
+00:17:05.980 --> 00:17:08.650 align:start position:0%
+ 
+ 
+
+00:17:08.650 --> 00:17:11.470 align:start position:0%
+ 
+ 
+
+00:17:11.470 --> 00:17:13.990 align:start position:0%
+ 
+ 
+
+00:17:13.990 --> 00:17:16.840 align:start position:0%
+ 
+ 
+
+00:17:16.840 --> 00:17:18.070 align:start position:0%
+ 
+ 
+
+00:17:18.070 --> 00:17:22.320 align:start position:0%
+ 
+ 
+
+00:17:22.320 --> 00:17:24.780 align:start position:0%
+ 
+ 
+
+00:17:24.780 --> 00:17:28.480 align:start position:0%
+ 
+ 
+
+00:17:28.480 --> 00:17:29.710 align:start position:0%
+ 
+ 
+
+00:17:29.710 --> 00:17:31.870 align:start position:0%
+ 
+ 
+
+00:17:31.870 --> 00:17:33.790 align:start position:0%
+ 
+ 
+
+00:17:33.790 --> 00:17:35.710 align:start position:0%
+ 
+ 
+
+00:17:35.710 --> 00:17:38.110 align:start position:0%
+ 
+ 
+
+00:17:38.110 --> 00:17:40.630 align:start position:0%
+ 
+ 
+
+00:17:40.630 --> 00:17:42.490 align:start position:0%
+ 
+ 
+
+00:17:42.490 --> 00:17:45.340 align:start position:0%
+ 
+ 
+
+00:17:45.340 --> 00:17:47.950 align:start position:0%
+ 
+ 
+
+00:17:47.950 --> 00:17:49.540 align:start position:0%
+ 
+ 
+
+00:17:49.540 --> 00:17:52.260 align:start position:0%
+ 
+ 
+
+00:17:52.260 --> 00:17:54.250 align:start position:0%
+ 
+ 
+
+00:17:54.250 --> 00:17:56.620 align:start position:0%
+ 
+ 
+
+00:17:56.620 --> 00:17:58.810 align:start position:0%
+ 
+ 
+
+00:17:58.810 --> 00:18:01.000 align:start position:0%
+ 
+ 
+
+00:18:01.000 --> 00:18:03.310 align:start position:0%
+ 
+ 
+
+00:18:03.310 --> 00:18:04.720 align:start position:0%
+ 
+ 
+
+00:18:04.720 --> 00:18:06.790 align:start position:0%
+ 
+ 
+
+00:18:06.790 --> 00:18:09.790 align:start position:0%
+ 
+ 
+
+00:18:09.790 --> 00:18:11.170 align:start position:0%
+ 
+ 
+
+00:18:11.170 --> 00:18:13.860 align:start position:0%
+ 
+ 
+
+00:18:13.860 --> 00:18:16.270 align:start position:0%
+ 
+ 
+
+00:18:16.270 --> 00:18:18.460 align:start position:0%
+ 
+ 
+
+00:18:18.460 --> 00:18:21.040 align:start position:0%
+ 
+ 
+
+00:18:21.040 --> 00:18:22.330 align:start position:0%
+ 
+ 
+
+00:18:22.330 --> 00:18:24.400 align:start position:0%
+ 
+ 
+
+00:18:24.400 --> 00:18:26.230 align:start position:0%
+ 
+ 
+
+00:18:26.230 --> 00:18:27.640 align:start position:0%
+ 
+ 
+
+00:18:27.640 --> 00:18:29.230 align:start position:0%
+ 
+ 
+
+00:18:29.230 --> 00:18:32.980 align:start position:0%
+ 
+ 
+
+00:18:32.980 --> 00:18:34.840 align:start position:0%
+ 
+ 
+
+00:18:34.840 --> 00:18:35.890 align:start position:0%
+ 
+ 
+
+00:18:35.890 --> 00:18:37.960 align:start position:0%
+ 
+ 
+
+00:18:37.960 --> 00:18:39.430 align:start position:0%
+ 
+ 
+
+00:18:39.430 --> 00:18:42.940 align:start position:0%
+ 
+ 
+
+00:18:42.940 --> 00:18:44.170 align:start position:0%
+ 
+ 
+
+00:18:44.170 --> 00:18:46.960 align:start position:0%
+ 
+ 
+
+00:18:46.960 --> 00:18:49.300 align:start position:0%
+ 
+ 
+
+00:18:49.300 --> 00:18:50.950 align:start position:0%
+ 
+ 
+
+00:18:50.950 --> 00:18:52.420 align:start position:0%
+ 
+ 
+
+00:18:52.420 --> 00:18:55.210 align:start position:0%
+ 
+ 
+
+00:18:55.210 --> 00:18:57.340 align:start position:0%
+ 
+ 
+
+00:18:57.340 --> 00:19:00.760 align:start position:0%
+ 
+ 
+
+00:19:00.760 --> 00:19:02.740 align:start position:0%
+ 
+ 
+
+00:19:02.740 --> 00:19:07.690 align:start position:0%
+ 
+ 
+
+00:19:07.690 --> 00:19:10.360 align:start position:0%
+ 
+ 
+
+00:19:10.360 --> 00:19:12.130 align:start position:0%
+ 
+ 
+
+00:19:12.130 --> 00:19:19.750 align:start position:0%
+ 
+ 
+
+00:19:19.750 --> 00:19:21.549 align:start position:0%
+ 
+ 
+
+00:19:21.549 --> 00:19:21.559 align:start position:0%
+ 
+ 
+
+00:19:21.559 --> 00:19:24.000 align:start position:0%
+ 
+
+
+00:19:24.000 --> 00:19:26.350 align:start position:0%
+ 
+ 
+
+00:19:26.350 --> 00:19:31.090 align:start position:0%
+ 
+ 
+
+00:19:31.090 --> 00:19:32.950 align:start position:0%
+ 
+ 
+
+00:19:32.950 --> 00:19:34.630 align:start position:0%
+ 
+ 
+
+00:19:34.630 --> 00:19:37.030 align:start position:0%
+ 
+ 
+
+00:19:37.030 --> 00:19:40.470 align:start position:0%
+ 
+ 
+
+00:19:40.470 --> 00:19:42.340 align:start position:0%
+ 
+ 
+
+00:19:42.340 --> 00:19:45.070 align:start position:0%
+ 
+ 
+
+00:19:45.070 --> 00:19:48.220 align:start position:0%
+ 
+ 
+
+00:19:48.220 --> 00:19:50.560 align:start position:0%
+ 
+ 
+
+00:19:50.560 --> 00:19:52.600 align:start position:0%
+ 
+ 
+
+00:19:52.600 --> 00:19:53.680 align:start position:0%
+ 
+ 
+
+00:19:53.680 --> 00:19:55.900 align:start position:0%
+ 
+ 
+
+00:19:55.900 --> 00:19:58.120 align:start position:0%
+ 
+ 
+
+00:19:58.120 --> 00:20:01.240 align:start position:0%
+ 
+ 
+
+00:20:01.240 --> 00:20:03.700 align:start position:0%
+ 
+ 
+
+00:20:03.700 --> 00:20:06.250 align:start position:0%
+ 
+ 
+
+00:20:06.250 --> 00:20:08.950 align:start position:0%
+ 
+ 
+
+00:20:08.950 --> 00:20:10.570 align:start position:0%
+ 
+ 
+
+00:20:10.570 --> 00:20:12.580 align:start position:0%
+ 
+ 
+
+00:20:12.580 --> 00:20:14.140 align:start position:0%
+ 
+ 
+
+00:20:14.140 --> 00:20:15.610 align:start position:0%
+ 
+ 
+
+00:20:15.610 --> 00:20:17.080 align:start position:0%
+ 
+ 
+
+00:20:17.080 --> 00:20:19.750 align:start position:0%
+ 
+ 
+
+00:20:19.750 --> 00:20:22.000 align:start position:0%
+ 
+ 
+
+00:20:22.000 --> 00:20:23.409 align:start position:0%
+ 
+ 
+
+00:20:23.409 --> 00:20:25.270 align:start position:0%
+ 
+ 
+
+00:20:25.270 --> 00:20:27.490 align:start position:0%
+ 
+ 
+
+00:20:27.490 --> 00:20:29.980 align:start position:0%
+ 
+ 
+
+00:20:29.980 --> 00:20:32.020 align:start position:0%
+ 
+ 
+
+00:20:32.020 --> 00:20:39.039 align:start position:0%
+ 
+ 
+
+00:20:39.039 --> 00:20:41.770 align:start position:0%
+ 
+ 
+
+00:20:41.770 --> 00:20:44.770 align:start position:0%
+ 
+ 
+
+00:20:44.770 --> 00:20:47.049 align:start position:0%
+ 
+ 
+
+00:20:47.049 --> 00:20:49.289 align:start position:0%
+ 
+ 
+
+00:20:49.289 --> 00:20:53.620 align:start position:0%
+ 
+ 
+
+00:20:53.620 --> 00:20:57.010 align:start position:0%
+ 
+ 
+
+00:20:57.010 --> 00:21:00.490 align:start position:0%
+ 
+ 
+
+00:21:00.490 --> 00:21:04.570 align:start position:0%
+ 
+ 
+
+00:21:04.570 --> 00:21:08.350 align:start position:0%
+ 
+ 
+
+00:21:08.350 --> 00:21:10.570 align:start position:0%
+ 
+ 
+
+00:21:10.570 --> 00:21:13.210 align:start position:0%
+ 
+ 
+
+00:21:13.210 --> 00:21:15.549 align:start position:0%
+ 
+ 
+
+00:21:15.549 --> 00:21:17.020 align:start position:0%
+ 
+ 
+
+00:21:17.020 --> 00:21:19.240 align:start position:0%
+ 
+ 
+
+00:21:19.240 --> 00:21:22.330 align:start position:0%
+ 
+ 
+
+00:21:22.330 --> 00:21:24.340 align:start position:0%
+ 
+ 
+
+00:21:24.340 --> 00:21:25.690 align:start position:0%
+ 
+ 
+
+00:21:25.690 --> 00:21:28.110 align:start position:0%
+ 
+ 
+
+00:21:28.110 --> 00:21:30.580 align:start position:0%
+ 
+ 
+
+00:21:30.580 --> 00:21:32.769 align:start position:0%
+ 
+ 
+
+00:21:32.769 --> 00:21:34.419 align:start position:0%
+ 
+ 
+
+00:21:34.419 --> 00:21:39.070 align:start position:0%
+ 
+ 
+
+00:21:39.070 --> 00:21:41.019 align:start position:0%
+ 
+ 
+
+00:21:41.019 --> 00:21:43.720 align:start position:0%
+ 
+ 
+
+00:21:43.720 --> 00:21:45.340 align:start position:0%
+ 
+ 
+
+00:21:45.340 --> 00:21:48.810 align:start position:0%
+ 
+ 
+
+00:21:48.810 --> 00:21:50.980 align:start position:0%
+ 
+ 
+
+00:21:50.980 --> 00:21:55.360 align:start position:0%
+ 
+ 
+
+00:21:55.360 --> 00:21:56.919 align:start position:0%
+ 
+ 
+
+00:21:56.919 --> 00:21:58.210 align:start position:0%
+ 
+ 
+
+00:21:58.210 --> 00:22:01.539 align:start position:0%
+ 
+ 
+
+00:22:01.539 --> 00:22:04.480 align:start position:0%
+ 
+ 
+
+00:22:04.480 --> 00:22:05.889 align:start position:0%
+ 
+ 
+
+00:22:05.889 --> 00:22:07.600 align:start position:0%
+ 
+ 
+
+00:22:07.600 --> 00:22:09.549 align:start position:0%
+ 
+ 
+
+00:22:09.549 --> 00:22:10.960 align:start position:0%
+ 
+ 
+
+00:22:10.960 --> 00:22:13.029 align:start position:0%
+ 
+ 
+
+00:22:13.029 --> 00:22:15.460 align:start position:0%
+ 
+ 
+
+00:22:15.460 --> 00:22:17.799 align:start position:0%
+ 
+ 
+
+00:22:17.799 --> 00:22:20.019 align:start position:0%
+ 
+ 
+
+00:22:20.019 --> 00:22:22.539 align:start position:0%
+ 
+ 
+
+00:22:22.539 --> 00:22:28.899 align:start position:0%
+ 
+ 
+
+00:22:28.899 --> 00:22:31.210 align:start position:0%
+ 
+ 
+
+00:22:31.210 --> 00:22:34.509 align:start position:0%
+ 
+ 
+
+00:22:34.509 --> 00:22:36.430 align:start position:0%
+ 
+ 
+
+00:22:36.430 --> 00:22:39.159 align:start position:0%
+ 
+ 
+
+00:22:39.159 --> 00:22:43.180 align:start position:0%
+ 
+ 
+
+00:22:43.180 --> 00:22:48.789 align:start position:0%
+ 
+ 
+
+00:22:48.789 --> 00:22:52.389 align:start position:0%
+ 
+ 
+
+00:22:52.389 --> 00:22:53.799 align:start position:0%
+ 
+ 
+
+00:22:53.799 --> 00:22:55.570 align:start position:0%
+ 
+ 
+
+00:22:55.570 --> 00:22:57.009 align:start position:0%
+ 
+ 
+
+00:22:57.009 --> 00:22:59.710 align:start position:0%
+ 
+ 
+
+00:22:59.710 --> 00:23:01.419 align:start position:0%
+ 
+ 
+
+00:23:01.419 --> 00:23:06.879 align:start position:0%
+ 
+ 
+
+00:23:06.879 --> 00:23:08.519 align:start position:0%
+ 
+ 
+
+00:23:08.519 --> 00:23:13.509 align:start position:0%
+ 
+ 
+
+00:23:13.509 --> 00:23:16.149 align:start position:0%
+ 
+ 
+
+00:23:16.149 --> 00:23:18.450 align:start position:0%
+ 
+ 
+
+00:23:18.450 --> 00:23:23.169 align:start position:0%
+ 
+ 
+
+00:23:23.169 --> 00:23:24.940 align:start position:0%
+ 
+ 
+
+00:23:24.940 --> 00:23:28.360 align:start position:0%
+ 
+ 
+
+00:23:28.360 --> 00:23:31.120 align:start position:0%
+ 
+ 
+
+00:23:31.120 --> 00:23:32.830 align:start position:0%
+ 
+ 
+
+00:23:32.830 --> 00:23:37.799 align:start position:0%
+ 
+ 
+
+00:23:37.799 --> 00:23:40.630 align:start position:0%
+ 
+ 
+
+00:23:40.630 --> 00:23:43.480 align:start position:0%
+ 
+ 
+
+00:23:43.480 --> 00:23:46.659 align:start position:0%
+ 
+ 
+
+00:23:46.659 --> 00:23:48.460 align:start position:0%
+ 
+ 
+
+00:23:48.460 --> 00:23:50.260 align:start position:0%
+ 
+ 
+
+00:23:50.260 --> 00:23:51.940 align:start position:0%
+ 
+ 
+
+00:23:51.940 --> 00:23:53.830 align:start position:0%
+ 
+ 
+
+00:23:53.830 --> 00:23:56.260 align:start position:0%
+ 
+ 
+
+00:23:56.260 --> 00:23:58.659 align:start position:0%
+ 
+ 
+
+00:23:58.659 --> 00:24:01.060 align:start position:0%
+ 
+ 
+
+00:24:01.060 --> 00:24:03.130 align:start position:0%
+ 
+ 
+
+00:24:03.130 --> 00:24:03.140 align:start position:0%
+ 
+ 
+
+00:24:03.140 --> 00:24:03.519 align:start position:0%
+ 
+
+
+00:24:03.519 --> 00:24:07.419 align:start position:0%
+ 
+ 
+
+00:24:07.419 --> 00:24:09.490 align:start position:0%
+ 
+ 
+
+00:24:09.490 --> 00:24:12.820 align:start position:0%
+ 
+ 
+
+00:24:12.820 --> 00:24:15.730 align:start position:0%
+ 
+ 
+
+00:24:15.730 --> 00:24:18.549 align:start position:0%
+ 
+ 
+
+00:24:18.549 --> 00:24:22.120 align:start position:0%
+ 
+ 
+
+00:24:22.120 --> 00:24:23.680 align:start position:0%
+ 
+ 
+
+00:24:23.680 --> 00:24:28.180 align:start position:0%
+ 
+ 
+
+00:24:28.180 --> 00:24:29.830 align:start position:0%
+ 
+ 
+
+00:24:29.830 --> 00:24:31.120 align:start position:0%
+ 
+ 
+
+00:24:31.120 --> 00:24:32.370 align:start position:0%
+ 
+ 
+
+00:24:32.370 --> 00:24:38.260 align:start position:0%
+ 
+ 
+
+00:24:38.260 --> 00:24:39.700 align:start position:0%
+ 
+ 
+
+00:24:39.700 --> 00:24:41.620 align:start position:0%
+ 
+ 
+
+00:24:41.620 --> 00:24:44.409 align:start position:0%
+ 
+ 
+
+00:24:44.409 --> 00:24:47.320 align:start position:0%
+ 
+ 
+
+00:24:47.320 --> 00:24:50.799 align:start position:0%
+ 
+ 
+
+00:24:50.799 --> 00:24:55.180 align:start position:0%
+ 
+ 
+
+00:24:55.180 --> 00:24:57.070 align:start position:0%
+ 
+ 
+
+00:24:57.070 --> 00:24:59.260 align:start position:0%
+ 
+ 
+
+00:24:59.260 --> 00:25:00.820 align:start position:0%
+ 
+ 
+
+00:25:00.820 --> 00:25:04.870 align:start position:0%
+ 
+ 
+
+00:25:04.870 --> 00:25:06.430 align:start position:0%
+ 
+ 
+
+00:25:06.430 --> 00:25:08.919 align:start position:0%
+ 
+ 
+
+00:25:08.919 --> 00:25:10.840 align:start position:0%
+ 
+ 
+
+00:25:10.840 --> 00:25:14.440 align:start position:0%
+ 
+ 
+
+00:25:14.440 --> 00:25:16.840 align:start position:0%
+ 
+ 
+
+00:25:16.840 --> 00:25:19.149 align:start position:0%
+ 
+ 
+
+00:25:19.149 --> 00:25:25.269 align:start position:0%
+ 
+ 
+
+00:25:25.269 --> 00:25:26.919 align:start position:0%
+ 
+ 
+
+00:25:26.919 --> 00:25:30.460 align:start position:0%
+ 
+ 
+
+00:25:30.460 --> 00:25:32.500 align:start position:0%
+ 
+ 
+
+00:25:32.500 --> 00:25:34.419 align:start position:0%
+ 
+ 
+
+00:25:34.419 --> 00:25:36.430 align:start position:0%
+ 
+ 
+
+00:25:36.430 --> 00:25:38.889 align:start position:0%
+ 
+ 
+
+00:25:38.889 --> 00:25:41.980 align:start position:0%
+ 
+ 
+
+00:25:41.980 --> 00:25:44.560 align:start position:0%
+ 
+ 
+
+00:25:44.560 --> 00:25:46.440 align:start position:0%
+ 
+ 
+
+00:25:46.440 --> 00:25:50.019 align:start position:0%
+ 
+ 
+
+00:25:50.019 --> 00:25:50.970 align:start position:0%
+ 
+ 
+
+00:25:50.970 --> 00:25:52.950 align:start position:0%
+ 
+ 
+
+00:25:52.950 --> 00:25:55.350 align:start position:0%
+ 
+ 
+
+00:25:55.350 --> 00:25:58.560 align:start position:0%
+ 
+ 
+
+00:25:58.560 --> 00:26:00.990 align:start position:0%
+ 
+ 
+
+00:26:00.990 --> 00:26:03.210 align:start position:0%
+ 
+ 
+
+00:26:03.210 --> 00:26:07.019 align:start position:0%
+ 
+ 
+
+00:26:07.019 --> 00:26:09.960 align:start position:0%
+ 
+ 
+
+00:26:09.960 --> 00:26:12.000 align:start position:0%
+ 
+ 
+
+00:26:12.000 --> 00:26:14.220 align:start position:0%
+ 
+ 
+
+00:26:14.220 --> 00:26:15.899 align:start position:0%
+ 
+ 
+
+00:26:15.899 --> 00:26:17.789 align:start position:0%
+ 
+ 
+
+00:26:17.789 --> 00:26:20.610 align:start position:0%
+ 
+ 
+
+00:26:20.610 --> 00:26:22.230 align:start position:0%
+ 
+ 
+
+00:26:22.230 --> 00:26:24.450 align:start position:0%
+ 
+ 
+
+00:26:24.450 --> 00:26:26.279 align:start position:0%
+ 
+ 
+
+00:26:26.279 --> 00:26:31.830 align:start position:0%
+ 
+ 
+
+00:26:31.830 --> 00:26:33.450 align:start position:0%
+ 
+ 
+
+00:26:33.450 --> 00:26:36.600 align:start position:0%
+ 
+ 
+
+00:26:36.600 --> 00:26:38.850 align:start position:0%
+ 
+ 
+
+00:26:38.850 --> 00:26:41.759 align:start position:0%
+ 
+ 
+
+00:26:41.759 --> 00:26:44.039 align:start position:0%
+ 
+ 
+
+00:26:44.039 --> 00:26:47.419 align:start position:0%
+ 
+ 
+
+00:26:47.419 --> 00:26:50.340 align:start position:0%
+ 
+ 
+
+00:26:50.340 --> 00:26:51.899 align:start position:0%
+ 
+ 
+
+00:26:51.899 --> 00:26:53.430 align:start position:0%
+ 
+ 
+
+00:26:53.430 --> 00:26:56.639 align:start position:0%
+ 
+ 
+
+00:26:56.639 --> 00:26:59.100 align:start position:0%
+ 
+ 
+
+00:26:59.100 --> 00:27:01.350 align:start position:0%
+ 
+ 
+
+00:27:01.350 --> 00:27:02.430 align:start position:0%
+ 
+ 
+
+00:27:02.430 --> 00:27:04.710 align:start position:0%
+ 
+ 
+
+00:27:04.710 --> 00:27:06.990 align:start position:0%
+ 
+ 
+
+00:27:06.990 --> 00:27:10.110 align:start position:0%
+ 
+ 
+
+00:27:10.110 --> 00:27:12.480 align:start position:0%
+ 
+ 
+
+00:27:12.480 --> 00:27:14.789 align:start position:0%
+ 
+ 
+
+00:27:14.789 --> 00:27:16.680 align:start position:0%
+ 
+ 
+
+00:27:16.680 --> 00:27:18.659 align:start position:0%
+ 
+ 
+
+00:27:18.659 --> 00:27:21.539 align:start position:0%
+ 
+ 
+
+00:27:21.539 --> 00:27:27.629 align:start position:0%
+ 
+ 
+
+00:27:27.629 --> 00:27:28.889 align:start position:0%
+ 
+ 
+
+00:27:28.889 --> 00:27:33.180 align:start position:0%
+ 
+ 
+
+00:27:33.180 --> 00:27:35.310 align:start position:0%
+ 
+ 
+
+00:27:35.310 --> 00:27:39.830 align:start position:0%
+ 
+ 
+
+00:27:39.830 --> 00:27:42.210 align:start position:0%
+ 
+ 
+
+00:27:42.210 --> 00:27:42.220 align:start position:0%
+ 
+ 
+
+00:27:42.220 --> 00:27:42.720 align:start position:0%
+ 
+
+
+00:27:42.720 --> 00:27:45.149 align:start position:0%
+ 
+ 
+
+00:27:45.149 --> 00:27:46.950 align:start position:0%
+ 
+ 
+
+00:27:46.950 --> 00:27:49.950 align:start position:0%
+ 
+ 
+
+00:27:49.950 --> 00:27:53.389 align:start position:0%
+ 
+ 
+
+00:27:53.389 --> 00:27:56.789 align:start position:0%
+ 
+ 
+
+00:27:56.789 --> 00:27:58.740 align:start position:0%
+ 
+ 
+
+00:27:58.740 --> 00:28:00.990 align:start position:0%
+ 
+ 
+
+00:28:00.990 --> 00:28:02.789 align:start position:0%
+ 
+ 
+
+00:28:02.789 --> 00:28:04.650 align:start position:0%
+ 
+ 
+
+00:28:04.650 --> 00:28:08.880 align:start position:0%
+ 
+ 
+
+00:28:08.880 --> 00:28:12.540 align:start position:0%
+ 
+ 
+
+00:28:12.540 --> 00:28:14.760 align:start position:0%
+ 
+ 
+
+00:28:14.760 --> 00:28:18.090 align:start position:0%
+ 
+ 
+
+00:28:18.090 --> 00:28:20.100 align:start position:0%
+ 
+ 
+
+00:28:20.100 --> 00:28:20.700 align:start position:0%
+ 
+ 
+
+00:28:20.700 --> 00:28:23.700 align:start position:0%
+ 
+ 
+
+00:28:23.700 --> 00:28:26.810 align:start position:0%
+ 
+ 
+
+00:28:26.810 --> 00:28:30.690 align:start position:0%
+ 
+ 
+
+00:28:30.690 --> 00:28:32.760 align:start position:0%
+ 
+ 
+
+00:28:32.760 --> 00:28:36.180 align:start position:0%
+ 
+ 
+
+00:28:36.180 --> 00:28:41.460 align:start position:0%
+ 
+ 
+
+00:28:41.460 --> 00:28:43.920 align:start position:0%
+ 
+ 
+
+00:28:43.920 --> 00:28:48.510 align:start position:0%
+ 
+ 
+
+00:28:48.510 --> 00:28:51.180 align:start position:0%
+ 
+ 
+
+00:28:51.180 --> 00:28:53.940 align:start position:0%
+ 
+ 
+
+00:28:53.940 --> 00:28:56.610 align:start position:0%
+ 
+ 
+
+00:28:56.610 --> 00:28:59.820 align:start position:0%
+ 
+ 
+
+00:28:59.820 --> 00:29:03.780 align:start position:0%
+ 
+ 
+
+00:29:03.780 --> 00:29:05.940 align:start position:0%
+ 
+ 
+
+00:29:05.940 --> 00:29:08.160 align:start position:0%
+ 
+ 
+
+00:29:08.160 --> 00:29:16.880 align:start position:0%
+ 
+ 
+
+00:29:16.880 --> 00:29:21.830 align:start position:0%
+ 
+ 
+
+00:29:21.830 --> 00:29:26.299 align:start position:0%
+ 
+ 
+
+00:29:26.299 --> 00:29:28.010 align:start position:0%
+ 
+ 
+
+00:29:28.010 --> 00:29:32.419 align:start position:0%
+ 
+ 
+
+00:29:32.419 --> 00:29:33.710 align:start position:0%
+ 
+ 
+
+00:29:33.710 --> 00:29:35.570 align:start position:0%
+ 
+ 
+
+00:29:35.570 --> 00:29:38.210 align:start position:0%
+ 
+ 
+
+00:29:38.210 --> 00:29:42.980 align:start position:0%
+ 
+ 
+
+00:29:42.980 --> 00:29:44.930 align:start position:0%
+ 
+ 
+
+00:29:44.930 --> 00:29:46.039 align:start position:0%
+ 
+ 
+
+00:29:46.039 --> 00:29:48.410 align:start position:0%
+ 
+ 
+
+00:29:48.410 --> 00:29:50.419 align:start position:0%
+ 
+ 
+
+00:29:50.419 --> 00:29:52.820 align:start position:0%
+ 
+ 
+
+00:29:52.820 --> 00:29:54.470 align:start position:0%
+ 
+ 
+
+00:29:54.470 --> 00:29:56.539 align:start position:0%
+ 
+ 
+
+00:29:56.539 --> 00:29:57.980 align:start position:0%
+ 
+ 
+
+00:29:57.980 --> 00:30:00.350 align:start position:0%
+ 
+ 
+
+00:30:00.350 --> 00:30:03.980 align:start position:0%
+ 
+ 
+
+00:30:03.980 --> 00:30:06.200 align:start position:0%
+ 
+ 
+
+00:30:06.200 --> 00:30:08.090 align:start position:0%
+ 
+ 
+
+00:30:08.090 --> 00:30:10.220 align:start position:0%
+ 
+ 
+
+00:30:10.220 --> 00:30:12.500 align:start position:0%
+ 
+ 
+
+00:30:12.500 --> 00:30:14.180 align:start position:0%
+ 
+ 
+
+00:30:14.180 --> 00:30:18.669 align:start position:0%
+ 
+ 
+
+00:30:18.669 --> 00:30:21.560 align:start position:0%
+ 
+ 
+
+00:30:21.560 --> 00:30:24.669 align:start position:0%
+ 
+ 
+
+00:30:24.669 --> 00:30:24.679 align:start position:0%
+ 
+ 
+
+00:30:24.679 --> 00:30:38.040 align:start position:0%
+ 
+
+
+00:30:38.040 --> 00:30:39.540 align:start position:0%
+ 
+ 
+
+00:30:39.540 --> 00:30:41.840 align:start position:0%
+ 
+ 
+
+00:30:41.840 --> 00:30:45.960 align:start position:0%
+ 
+ 
+
+00:30:45.960 --> 00:30:47.730 align:start position:0%
+ 
+ 
+
+00:30:47.730 --> 00:30:49.950 align:start position:0%
+ 
+ 
+
+00:30:49.950 --> 00:30:55.250 align:start position:0%
+ 
+ 
+
+00:30:55.250 --> 00:30:57.540 align:start position:0%
+ 
+ 
+
+00:30:57.540 --> 00:30:59.340 align:start position:0%
+ 
+ 
+
+00:30:59.340 --> 00:31:02.040 align:start position:0%
+ 
+ 
+
+00:31:02.040 --> 00:31:04.140 align:start position:0%
+ 
+ 
+
+00:31:04.140 --> 00:31:05.850 align:start position:0%
+ 
+ 
+
+00:31:05.850 --> 00:31:07.410 align:start position:0%
+ 
+ 
+
+00:31:07.410 --> 00:31:08.910 align:start position:0%
+ 
+ 
+
+00:31:08.910 --> 00:31:10.770 align:start position:0%
+ 
+ 
+
+00:31:10.770 --> 00:31:12.540 align:start position:0%
+ 
+ 
+
+00:31:12.540 --> 00:31:13.770 align:start position:0%
+ 
+ 
+
+00:31:13.770 --> 00:31:15.750 align:start position:0%
+ 
+ 
+
+00:31:15.750 --> 00:31:23.340 align:start position:0%
+ 
+ 
+
+00:31:23.340 --> 00:31:24.419 align:start position:0%
+ 
+ 
+
+00:31:24.419 --> 00:31:26.610 align:start position:0%
+ 
+ 
+
+00:31:26.610 --> 00:31:29.160 align:start position:0%
+ 
+ 
+
+00:31:29.160 --> 00:31:31.290 align:start position:0%
+ 
+ 
+
+00:31:31.290 --> 00:31:33.419 align:start position:0%
+ 
+ 
+
+00:31:33.419 --> 00:31:36.090 align:start position:0%
+ 
+ 
+
+00:31:36.090 --> 00:31:38.040 align:start position:0%
+ 
+ 
+
+00:31:38.040 --> 00:31:40.200 align:start position:0%
+ 
+ 
+
+00:31:40.200 --> 00:31:42.480 align:start position:0%
+ 
+ 
+
+00:31:42.480 --> 00:31:45.330 align:start position:0%
+ 
+ 
+
+00:31:45.330 --> 00:31:49.110 align:start position:0%
+ 
+ 
+
+00:31:49.110 --> 00:31:52.200 align:start position:0%
+ 
+ 
+
+00:31:52.200 --> 00:31:54.120 align:start position:0%
+ 
+ 
+
+00:31:54.120 --> 00:31:55.740 align:start position:0%
+ 
+ 
+
+00:31:55.740 --> 00:31:58.169 align:start position:0%
+ 
+ 
+
+00:31:58.169 --> 00:32:01.169 align:start position:0%
+ 
+ 
+
+00:32:01.169 --> 00:32:03.630 align:start position:0%
+ 
+ 
+
+00:32:03.630 --> 00:32:06.419 align:start position:0%
+ 
+ 
+
+00:32:06.419 --> 00:32:08.549 align:start position:0%
+ 
+ 
+
+00:32:08.549 --> 00:32:10.560 align:start position:0%
+ 
+ 
+
+00:32:10.560 --> 00:32:13.380 align:start position:0%
+ 
+ 
+
+00:32:13.380 --> 00:32:17.970 align:start position:0%
+ 
+ 
+
+00:32:17.970 --> 00:32:20.669 align:start position:0%
+ 
+ 
+
+00:32:20.669 --> 00:32:22.950 align:start position:0%
+ 
+ 
+
+00:32:22.950 --> 00:32:26.460 align:start position:0%
+ 
+ 
+
+00:32:26.460 --> 00:32:28.320 align:start position:0%
+ 
+ 
+
+00:32:28.320 --> 00:32:34.680 align:start position:0%
+ 
+ 
+
+00:32:34.680 --> 00:32:34.690 align:start position:0%
+ 
+ 
+
+00:32:34.690 --> 00:33:05.080 align:start position:0%
+ 
+
+
+00:33:05.080 --> 00:33:07.130 align:start position:0%
+ 
+ 
+
+00:33:07.130 --> 00:33:11.390 align:start position:0%
+ 
+ 
+
+00:33:11.390 --> 00:33:13.640 align:start position:0%
+ 
+ 
+
+00:33:13.640 --> 00:33:16.220 align:start position:0%
+ 
+ 
+
+00:33:16.220 --> 00:33:17.780 align:start position:0%
+ 
+ 
+
+00:33:17.780 --> 00:33:19.400 align:start position:0%
+ 
+ 
+
+00:33:19.400 --> 00:33:21.080 align:start position:0%
+ 
+ 
+
+00:33:21.080 --> 00:33:22.730 align:start position:0%
+ 
+ 
+
+00:33:22.730 --> 00:33:26.710 align:start position:0%
+ 
+ 
+
+00:33:26.710 --> 00:33:28.970 align:start position:0%
+ 
+ 
+
+00:33:28.970 --> 00:33:32.030 align:start position:0%
+ 
+ 
+
+00:33:32.030 --> 00:33:34.550 align:start position:0%
+ 
+ 
+
+00:33:34.550 --> 00:33:36.320 align:start position:0%
+ 
+ 
+
+00:33:36.320 --> 00:33:38.900 align:start position:0%
+ 
+ 
+
+00:33:38.900 --> 00:33:40.820 align:start position:0%
+ 
+ 
+
+00:33:40.820 --> 00:33:46.400 align:start position:0%
+ 
+ 
+
+00:33:46.400 --> 00:33:50.780 align:start position:0%
+ 
+ 
+
+00:33:50.780 --> 00:33:52.430 align:start position:0%
+ 
+ 
+
+00:33:52.430 --> 00:33:54.860 align:start position:0%
+ 
+ 
+
+00:33:54.860 --> 00:34:02.210 align:start position:0%
+ 
+ 
+
+00:34:02.210 --> 00:34:03.950 align:start position:0%
+ 
+ 
+
+00:34:03.950 --> 00:34:08.020 align:start position:0%
+ 
+ 
+
+00:34:08.020 --> 00:34:11.480 align:start position:0%
+ 
+ 
+
+00:34:11.480 --> 00:34:14.899 align:start position:0%
+ 
+ 
+
+00:34:14.899 --> 00:34:17.480 align:start position:0%
+ 
+ 
+
+00:34:17.480 --> 00:34:20.750 align:start position:0%
+ 
+ 
+
+00:34:20.750 --> 00:34:26.750 align:start position:0%
+ 
+ 
+
+00:34:26.750 --> 00:34:28.129 align:start position:0%
+ 
+ 
+
+00:34:28.129 --> 00:34:32.780 align:start position:0%
+ 
+ 
+
+00:34:32.780 --> 00:34:35.419 align:start position:0%
+ 
+ 
+
+00:34:35.419 --> 00:34:38.300 align:start position:0%
+ 
+ 
+
+00:34:38.300 --> 00:34:40.190 align:start position:0%
+ 
+ 
+
+00:34:40.190 --> 00:34:44.119 align:start position:0%
+ 
+ 
+
+00:34:44.119 --> 00:34:51.100 align:start position:0%
+ 
+ 
+
+00:34:51.100 --> 00:35:12.730 align:start position:0%
+ 
+ 
+
+00:35:12.730 --> 00:35:15.770 align:start position:0%
+ 
+ 
+
+00:35:15.770 --> 00:35:18.079 align:start position:0%
+ 
+ 
+
+00:35:18.079 --> 00:35:20.710 align:start position:0%
+ 
+ 
+
+00:35:20.710 --> 00:35:26.359 align:start position:0%
+ 
+ 
+
+00:35:26.359 --> 00:35:28.490 align:start position:0%
+ 
+ 
+
+00:35:28.490 --> 00:35:30.260 align:start position:0%
+ 
+ 
+
+00:35:30.260 --> 00:35:34.220 align:start position:0%
+ 
+ 
+
+00:35:34.220 --> 00:35:37.460 align:start position:0%
+ 
+ 
+
+00:35:37.460 --> 00:35:51.980 align:start position:0%
+ 
+ 
+
+00:35:51.980 --> 00:35:55.130 align:start position:0%
+ 
+ 
+
+00:35:55.130 --> 00:35:56.390 align:start position:0%
+ 
+ 
+
+00:35:56.390 --> 00:36:02.780 align:start position:0%
+ 
+ 
+
+00:36:02.780 --> 00:36:05.000 align:start position:0%
+ 
+ 
+
+00:36:05.000 --> 00:36:06.620 align:start position:0%
+ 
+ 
+
+00:36:06.620 --> 00:36:09.260 align:start position:0%
+ 
+ 
+
+00:36:09.260 --> 00:36:11.329 align:start position:0%
+ 
+ 
+
+00:36:11.329 --> 00:36:12.620 align:start position:0%
+ 
+ 
+
+00:36:12.620 --> 00:36:14.420 align:start position:0%
+ 
+ 
+
+00:36:14.420 --> 00:36:16.760 align:start position:0%
+ 
+ 
+
+00:36:16.760 --> 00:36:18.620 align:start position:0%
+ 
+ 
+
+00:36:18.620 --> 00:36:20.510 align:start position:0%
+ 
+ 
+
+00:36:20.510 --> 00:36:22.280 align:start position:0%
+ 
+ 
+
+00:36:22.280 --> 00:36:22.290 align:start position:0%
+ 
+ 
+
+00:36:22.290 --> 00:36:22.780 align:start position:0%
+ 
+
+
+00:36:22.780 --> 00:36:33.670 align:start position:0%
+ 
+ 
+
+00:36:33.670 --> 00:36:33.680 align:start position:0%
+ 
+ 
+
+00:36:33.680 --> 00:36:43.500 align:start position:0%
+ 
+
+
+00:36:43.500 --> 00:36:48.130 align:start position:0%
+ 
+ 
+
+00:36:48.130 --> 00:36:53.109 align:start position:0%
+ 
+ 
+
+00:36:53.109 --> 00:36:57.809 align:start position:0%
+ 
+ 
+
+00:36:57.809 --> 00:37:06.040 align:start position:0%
+ 
+ 
+
+00:37:06.040 --> 00:37:10.390 align:start position:0%
+ 
+ 
+
+00:37:10.390 --> 00:37:14.260 align:start position:0%
+ 
+ 
+
+00:37:14.260 --> 00:37:16.390 align:start position:0%
+ 
+ 
+
+00:37:16.390 --> 00:37:17.500 align:start position:0%
+ 
+ 
+
+00:37:17.500 --> 00:37:19.870 align:start position:0%
+ 
+ 
+
+00:37:19.870 --> 00:37:22.569 align:start position:0%
+ 
+ 
+
+00:37:22.569 --> 00:37:24.010 align:start position:0%
+ 
+ 
+
+00:37:24.010 --> 00:37:26.559 align:start position:0%
+ 
+ 
+
+00:37:26.559 --> 00:37:28.630 align:start position:0%
+ 
+ 
+
+00:37:28.630 --> 00:37:31.180 align:start position:0%
+ 
+ 
+
+00:37:31.180 --> 00:37:33.910 align:start position:0%
+ 
+ 
+
+00:37:33.910 --> 00:37:35.770 align:start position:0%
+ 
+ 
+
+00:37:35.770 --> 00:37:37.930 align:start position:0%
+ 
+ 
+
+00:37:37.930 --> 00:37:40.569 align:start position:0%
+ 
+ 
+
+00:37:40.569 --> 00:37:42.970 align:start position:0%
+ 
+ 
+
+00:37:42.970 --> 00:37:44.710 align:start position:0%
+ 
+ 
+
+00:37:44.710 --> 00:37:48.849 align:start position:0%
+ 
+ 
+
+00:37:48.849 --> 00:37:52.620 align:start position:0%
+ 
+ 
+
+00:37:52.620 --> 00:37:58.630 align:start position:0%
+ 
+ 
+
+00:37:58.630 --> 00:38:10.280 align:start position:0%
+ 
+ 
+
+00:38:10.280 --> 00:38:13.190 align:start position:0%
+ 
+ 
+
+00:38:13.190 --> 00:38:15.340 align:start position:0%
+ 
+ 
+
+00:38:15.340 --> 00:38:18.200 align:start position:0%
+ 
+ 
+
+00:38:18.200 --> 00:38:21.680 align:start position:0%
+ 
+ 
+
+00:38:21.680 --> 00:38:23.240 align:start position:0%
+ 
+ 
+
+00:38:23.240 --> 00:38:24.920 align:start position:0%
+ 
+ 
+
+00:38:24.920 --> 00:39:22.589 align:start position:0%
+ 
+ 
+
+00:39:22.589 --> 00:39:28.260 align:start position:0%
+ 
+ 
+
+00:39:28.260 --> 00:39:30.059 align:start position:0%
+ 
+ 
+
+00:39:30.059 --> 00:39:32.339 align:start position:0%
+ 
+ 
+
+00:39:32.339 --> 00:39:34.470 align:start position:0%
+ 
+ 
+
+00:39:34.470 --> 00:39:37.200 align:start position:0%
+ 
+ 
+
+00:39:37.200 --> 00:39:40.829 align:start position:0%
+ 
+ 
+
+00:39:40.829 --> 00:39:42.839 align:start position:0%
+ 
+ 
+
+00:39:42.839 --> 00:39:46.589 align:start position:0%
+ 
+ 
+
+00:39:46.589 --> 00:39:49.829 align:start position:0%
+ 
+ 
+
+00:39:49.829 --> 00:39:51.210 align:start position:0%
+ 
+ 
+
+00:39:51.210 --> 00:39:53.339 align:start position:0%
+ 
+ 
+
+00:39:53.339 --> 00:39:56.309 align:start position:0%
+ 
+ 
+
+00:39:56.309 --> 00:40:02.700 align:start position:0%
+ 
+ 
+
+00:40:02.700 --> 00:40:04.500 align:start position:0%
+ 
+ 
+
+00:40:04.500 --> 00:40:06.599 align:start position:0%
+ 
+ 
+
+00:40:06.599 --> 00:40:08.880 align:start position:0%
+ 
+ 
+
+00:40:08.880 --> 00:40:14.750 align:start position:0%
+ 
+ 
+
+00:40:14.750 --> 00:40:17.760 align:start position:0%
+ 
+ 
+
+00:40:17.760 --> 00:40:20.430 align:start position:0%
+ 
+ 
+
+00:40:20.430 --> 00:40:22.650 align:start position:0%
+ 
+ 
+
+00:40:22.650 --> 00:40:26.400 align:start position:0%
+ 
+ 
+
+00:40:26.400 --> 00:40:30.569 align:start position:0%
+ 
+ 
+
+00:40:30.569 --> 00:40:33.769 align:start position:0%
+ 
+ 
+
+00:40:33.769 --> 00:40:37.019 align:start position:0%
+ 
+ 
+
+00:40:37.019 --> 00:40:40.109 align:start position:0%
+ 
+ 
+
+00:40:40.109 --> 00:40:46.410 align:start position:0%
+ 
+ 
+
+00:40:46.410 --> 00:40:48.650 align:start position:0%
+ 
+ 
+
+00:40:48.650 --> 00:40:51.390 align:start position:0%
+ 
+ 
+
+00:40:51.390 --> 00:40:53.640 align:start position:0%
+ 
+ 
+
+00:40:53.640 --> 00:40:55.789 align:start position:0%
+ 
+ 
+
+00:40:55.789 --> 00:40:58.740 align:start position:0%
+ 
+ 
+
+00:40:58.740 --> 00:41:02.789 align:start position:0%
+ 
+ 
+
+00:41:02.789 --> 00:41:04.579 align:start position:0%
+ 
+ 
+
+00:41:04.579 --> 00:41:06.329 align:start position:0%
+ 
+ 
+
+00:41:06.329 --> 00:41:07.920 align:start position:0%
+ 
+ 
+
+00:41:07.920 --> 00:41:09.120 align:start position:0%
+ 
+ 
+
+00:41:09.120 --> 00:41:10.920 align:start position:0%
+ 
+ 
+
+00:41:10.920 --> 00:41:14.240 align:start position:0%
+ 
+ 
+
+00:41:14.240 --> 00:41:19.500 align:start position:0%
+ 
+ 
+
+00:41:19.500 --> 00:41:21.000 align:start position:0%
+ 
+ 
+
+00:41:21.000 --> 00:41:22.799 align:start position:0%
+ 
+ 
+
+00:41:22.799 --> 00:41:25.769 align:start position:0%
+ 
+ 
+
+00:41:25.769 --> 00:41:28.829 align:start position:0%
+ 
+ 
+
+00:41:28.829 --> 00:41:32.130 align:start position:0%
+ 
+ 
+
+00:41:32.130 --> 00:41:36.749 align:start position:0%
+ 
+ 
+
+00:41:36.749 --> 00:41:38.249 align:start position:0%
+ 
+ 
+
+00:41:38.249 --> 00:41:43.440 align:start position:0%
+ 
+ 
+
+00:41:43.440 --> 00:41:44.730 align:start position:0%
+ 
+ 
+
+00:41:44.730 --> 00:41:47.309 align:start position:0%
+ 
+ 
+
+00:41:47.309 --> 00:41:48.690 align:start position:0%
+ 
+ 
+
+00:41:48.690 --> 00:41:51.390 align:start position:0%
+ 
+ 
+
+00:41:51.390 --> 00:41:53.400 align:start position:0%
+ 
+ 
+
+00:41:53.400 --> 00:42:01.019 align:start position:0%
+ 
+ 
+
+00:42:01.019 --> 00:42:03.839 align:start position:0%
+ 
+ 
+
+00:42:03.839 --> 00:42:07.170 align:start position:0%
+ 
+ 
+

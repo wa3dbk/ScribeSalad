@@ -1,0 +1,2968 @@
+WEBVTT
+Kind: captions
+Language: en
+
+00:00:06.080 --> 00:00:08.629 align:start position:0%
+ 
+strange loop hello  um i just want to say thank you for  sharing the saturday post lunch time  together it's my first strange loop and  i'm so grateful to be here  the organizers people and conversations  have been just like amazing thank you  i'm like super excited today to share  patterns and stories on how you might  improve your operational tooling  with around ci with traces  worked with and found the same  general patterns apply when building  operational tooling for scientists  traders  crisis responders and of course where i  spend my time today software developers  real quick i want to share two of my  favorite talks from yesterday richard  from stripe talked about generating code  with simple transformations to make code  more usable  melinda from aggie talked about message  cues with architecture trade-offs  to make your platform more resilient and  legible  like these talks  presented something you're already doing  like ci with a small wrinkle to make the  system better i want to share my  curiosity in exploring the space and  help you get like excited and intrigued  enough to explore your own distributed  systems  in a similar way with traces  i'm going to leave some takeaways and  tools and references to get started a  url  will be  in each slide and the slack channel is  also right over there it's pretty long  but if you're open to it just like raise  your hand and ask questions during the  talk and we can have a conversation  we'll probably explore something pretty  interesting together  we're going to talk about one of the  hardest challenges in distributed  systems today  what is your code in production doing  how is it doing that  and why is it doing that  the patterns we're going to explore on  improving your ci  tooling are going to be building a  common language  for infra clients and people  how to reason about complex  issues with humans in your tooling and  finally how to use context to understand  what changed  i'm frank by the way  my pronouns are he him  i've been at sac for about two years and  guided many of our internal teams on how  to instrument and improve observability  with traces to solve problems  one particular problem we'll explore in  depth is test flakiness on slack's  monolith  it came down  by magnitude over the last years  of course with many as with many complex  problems there's never one single cause  nor solution for flakiness as it has  many inputs  from software and people  it's a socio-technical problem that  takes time to understand an effort to  start solving  for engineers flakiness is extremely  frustrating and for service zone is hard  to concretely pinpoint by the end of  this talk you'll have the patterns that  we use to solve multiple layers of  flakiness in ci  first  how many of you have been on call  wow yep  like let's say you're on call and things  are not fine um you're like trying to  find a needle and a haystack of your  deployed code and infrared to do so in  the old world  you can add some logs or metrics  needle so to speak  and to be able to find those needles in  the haystack you need to  redeploy your haystack then wait for  that data to show up  what happens instead of inserting log  lines and metrics into your code you  could teach your tracing platform to  answer those questions about your  haystack  like hey historically what does hay look  like and what doesn't look like hay  if you look at code traces over time  with context you're able to see what  might have changed  like both changes and non-hay might be  indications of where needles and  therefore problems  lie  like i i'd like you to listen for  iterations of that haystack analogy  throughout the rest of this talk this  hierarchy of needs describes a model  that i use internally to inform how  observability drives understanding of  performance and resiliency bottlenecks  this learning helps us make bets on more  observability changes or changes in  workflows to help people do what they  really want to do  and again we use  observability to inform solving problems  in this space and the  agenda is generally we're going to talk  a little bit about our department and  some challenges  and sources of challenges in ci  um i'm going to hear a little bit about  how we got started  and how we implemented our first  cross-service trace  what we learned along the adoption  journey and finally where we are today  so first i'd love to spend a few minutes  talking about developer productivity and  business goals developer productivity is  about building tools and programs used  to get slack software to customers  quickly and with high quality it's been  a fun journey to be on as slack scales  i work with teams that have the  opportunity to make engineering at slack  simpler more pleasant and more  productive  both slack customer and code bases grew  quickly over the last six years  and this begs the question  how might we create better internal  tools for engineers to build  test and observe  deployed code  well there are challenges  as the great philosopher uncle ben from  spider-man once said  with great power comes great  responsibility  in the same way that it is exciting this  is shadow side to great growth in  customer and code bases  there's an increase in complexity  oftentimes with fuzzy service and team  boundaries  here's a simplified architecture diagram  of slack for desktop and mobile clients  going through multiple backends  slack evolved from a single web app  to a topology of many languages services  and clients that serve different needs  the core business logic lives in web app  and routes to other services like a  distributed cache called flannel a  distributed mysql service called the  tests search and discovery and many  others  oftentimes internal tools were built  quickly and scaled just enough for  slack's main monorepo web app  in 2019 when i joined our team was  already growing and at about six folk  today internal tools teams consist of 60  people  and hopefully this challenge resonates  with y'all services are reasonable  individually within team silos typically  using logs and metrics  for example the test team might create a  prometheus metric for errors with  different dimensions that are meaningful  for development  another team  might see this and create a circuit  breaker for error rate but misunderstand  the nuance  and then misuse this metric at the  course level without context  and finally  user experiences in ci is somewhat  unique when compared to traditional  distributed tracing use cases for things  like apis  ci workflows might span over  days or even weeks they go through  developer environments  commits and different asynchronous parts  of the infrastructure  so given this  how might we do better  in my previous role i helped build  products and teams to help companies  with their hardest problems by reading  about data pipelines and platforms  i found you can create massive business  results when people speak the same  language and reason about data using  that language  oftentimes one team's definition of  dimension x  might mean something completely  different between teams and especially  business groups  so  let's take a different approach  how might we create a common  infrastructure and language to increase  legibility and unplac  complexity across teams  how might we create an integrated  diagnosis and reasoning about complex  system interactions with people in slack  how might we evolve our observability  culture  how can we share this tooling with teams  that need it  and so this body of work  was a slow conspiracy sprinted on  between many teams and didn't happen  overnight i want to say a special thank  you to suman and ryan on the  observability team who founded that  thesis around slacktrace and to all the  folk who improved the ci ecosystem with  traces but first how do we come to this  approach  it is slow is the hardest problem to  debug in distributed systems  it is flaky is the most heard problem by  internal tooling teams  a tracing system doesn't tell me what's  slow or flake or more importantly why  it's an exercise oftentimes left to the  reader an in-depth exploration of slack  traces written by my mentor and  colleague suman and can be found in the  blog post linked  for the purposes of this talk  i'll share a sky-high view of the  motivation and this infrastructure  first we start with the span event  structure  such that we can create an event once  and then use it in multiple places  for example a function within web app  might create a single span event this  deep span event  will contain context for the rest of the  user request with both upstream and  dance room  context  we can now ingest these spans from  separate clients and are able to craft  views from the same data model by  processing it through kafka  users can access fans  through data warehouse through  using presta sql queries in real time  stores like honeycomb and  search  here's a simplified view of our ci  workflows for users and infrastructure  i'll use web app and end-to-end tests  for the purposes of illustration  web app is is where most engineers at  slack spend most of their development  time it ties together business logic  from each client and dependent services  the ci workflow probably looks familiar  a user  pushes  a  a local branch  to github  opens a pr  then presented with test results  the screenshots show dms from checkpoint  an internal ci cd platform  it drives and bridges user workflows  between github enterprise  aws services like s3 and kubernetes  jenkins console and qa environments  which are really beefy machines running  slack to execute and end tests you might  be asking what might go wrong  good question  when i joined in 2019 a lot of existing  ci logic was written by the cto and  early employees it was mostly untouched  for four years it mostly worked just  well enough  well why trace  to find causation today there's many  more downstream services from web app  and the cardinality for ci traces are  very different from other services like  web app  ci has lower volume so there's no need  for sampling  but higher criticality  ci requests go through critical  interconnected systems and a fault that  any system typically means users are  blocked so what does a fault look like  engineers hit retry on their tests and  are frustrated when anything on that hot  critical path fails  between  2017 and 2020 slack saw a 10 month over  month growth  in test execution count so multiple  doublings  many new services came up to support  various features in slack and this led  to a lot of systems being stretched to  their absolute limit  and so there's a lot of needles  in the ci haystack the user experience  was bad for a while  before a series of projects around  github load  circuit breaking on dependencies anomaly  detection and workflow changes we're  seeing a percent  pr flake rate at approximately fifty  percent  um that's pretty bad uh this macro  percent  this macro percent pr flake rate metric  you could think of as bubbling up  multiple commits and potentially  hundreds of test suites that run on  every pr  and for developers this really breaks  trust and tests and slows down velocity  observability through tracing played a  role in each of these projects  and tonight we're at approximately five  percent flake rate per pr  like about 10 10 x better at the  macrometric  both velocity and confidence have  increased in recent developer surveys  and unlike previous years flakiness  wasn't a top issue and every day  we're still learning how to understand  operate and evolve this very complex  system called slack  many business requirements services and  teams are constantly changing  especially compared to when most of our  ci infrastructure was first built early  on in my time here i saw an opportunity  to work with the observability team to  build a better set of tools to  understand and to change how  we looked at ci  let me show how we got there  i looked at my early slack history and  found my first conversation with sumana  mid-2019  this was a time  when we still went to the office on a  daily basis and we'd grab hipster coffee  with colleagues  i heard about suman's exploration and  building of slack trace and i understood  a similar problem data platforms very  well and reached out for a coffee  together i then spent an afternoon to  build a cheap prototype with a  hypothesis  that this type of tooling would become a  critical and compounding value add for  developers  an e like  an easy place to prototype was our  test runner affectionately called the  ibot  even during this pr and a couple of  simulated test runs i noticed get  checkout was slow for a portion of our  fleet  we had our first tracing wind that  afternoon it turns out a few instances  in the asg were not being updated  which was an easy fix once we identified  the needles in our haystack before i  move on like i needed to write code to  make this happen  i want to call out  that today we have a rich ecosystem of  tooling that didn't exist or were much  more premature when we started this work  during this year's strange loop workshop  steve flanders  shared how to get started on open  telemetry and i heard it was great  also if you have the chance stay around  for the next talk by jessica from  honeycomb  in the same room  if you visit the resources section in  the link you'll find links to  honeycomb's reference on open telemetry  collectors  and a sample go test collector from  raikel  from aws  so what's next um  like this is a few months later now um  this is a juicy incident  uh this is day two of a multi-day  multi-team incident full of cascading  failures  um on day one  we were scrambling with one-off hacks to  try and understand  what's happening  and get a few overloaded systems under  control  on the morning of day two i added a  simple cross-service trace and reused  the same instrumentation from our test  runner  very quickly with  honeycombs bubble up functionality  became very clear where the problems  were coming from  git lfs issues  popped up on a third of the qa  environment fleet and this was slowing  down the entire system  discovery was a simple query now tracing  platform on what doesn't look like  everything else  and within two hours  um  ci pipelines were flowing again and  engineers could do their work  over the next few months this led to the  first of many targeted investments for  ci tracing  here's a sample  of the shared dimensions we created for  users and developers in ci to make  queries in honeycomb legible and more  accessible  these dimensions were stubbed early in  our library and instrumented with a few  clients  since then various teams have extended  and reused these dimensions for their  use cases  and this graphic shows a very very high  level zoom out for individual traces and  what dimensions they might use in ci  in a single trace  example tests it might capture all the  data shown in the rightmost column you  can then track earlier related traces  for all the those shared dimensions  elsewhere  um  you could query to find like commit  related tests and build traces  to see if we're seeing build failures or  other test failures due to code issue on  master  like and like let's go back to the root  challenge developer frustration across  lac was increasing due to flaky test  runs over the last several years  flaky test runs was one of the top  reported issues in developer surveys  for a few quarters already  in 2020 by mid-2020 automation teams  across slack had a daily 30-minute  triage session to triage and focus on  the flakiest tests  automation team leads hesitated to  introduce any additional variants on how  we use cyprus and and testing framework  the belief  was that test flakiness was from the  test code itself  yet  there wasn't great progress  i typically work on the infrasight of  the world and felt strongly we could do  better with causation on grey failures  by instrumenting how we use the cypress  framework great failures are where the  system itself reports as healthy yet the  application in this case  tests and the test platform report a  failure or flake  after some negotiating and identifying  no verifiable decrease in performance or  resiliency we scoped a short experiment  we'd instrument the high level test  platform runtime for a month and capture  some variables  what could go wrong  well a lot went right  we discovered a few runtime variables  correlated very very strongly with the  higher flake rates in this graph  you can see compute hours spent on just  flaky tests  at peak we were running  roughly 90 hours  of very large very expensive machines on  tests that were discarded because the  results were flaky  and to build confidence and address  concerns at every merge and hypothesis  test we queued up revert pr at the same  time  we never reverted  so the other  challenge i mentioned earlier is like  fuzzy service boundaries especially came  to how  services operated for internal use like  dev or qa  a broken dependent service like search  or an upgrade in a vendor's checkout  library api might mean that tests will  start to flake for users in ci  while a full discussion of non-league  detection and circuit breakers is beyond  the scope of this talk i hope to share a  few screenshots  of how we're able to build the glue for  service and automation teams to have  discussions  in slack  with  links  to more detailed  observability  oh and before i forget in the coming  week i'll be posting to the slack  engineering blog on how we produced a  magnitude of change  in ci spend with a deeper look at  circuit breakers as one of those big  changes  but what we found was like by detecting  and bringing people together in a single  conversation we could triage  a lot better  by looking at the same things  and just just like in summary it's like  test suite owners may not be distributed  systems experts  and service teams may not be aware of  how internal customers use their  services in conjunction these missing  pieces  presented a working space for disjoint  teams to find causes for ci flakiness  and give an awareness when a test suite  or dependent service was failing  and so let me share a quick story about  another recent incident  in august 2021  at slack we use the incident command  system i'm sharing one of the conditions  actions and needs abbreviated can  messages from that incident the  condition screenshot from our incident  channel says it best  back-end unit and integration test  suites are failing at a high rate with  out-of-memory conditions on hosts  each of these back-end unit test suites  may run hundreds of tens of thousands of  tests  the day before our incident spun up we  actually saw memory tip over the  threshold  and cause our anomaly detection to start  noticing a higher flake rate kind of  like the straw that broke the camel's  back  during the incident we used test case  traces from back and test implemented  earlier to track down high memory  footprint jumps for test cases we were  able to see  a high increase at the p50 p95 and p99  down to the hour over the last few  months  and subject matter experts were able to  identify a few culprit experimental prs  that may have been the cause for those  jumps  and during the incident  there's always this holding pattern  after  someone makes a change  here's some screenshots from the long  thread  um and i'm just gonna like talk through  some of the juicier parts like folks ask  questions like you know did it work what  are the graphs show  and during this incident this was top of  mind for all of us and  so like testing changes are always hard  um arrow one how do we test this change  responders  with identities and names blurred for  privacy were able to revert the pr from  a few months earlier and within minutes  tests appear to be passing at a higher  rate  arrow two  another responder was able to reuse an  earlier query looking at memory usage  for test cases in honeycomb  arrow three  so like this data allowed us to look at  telemetry with context  the changes and breaks became apparent  when we took this type of approach  so  in summary  we significantly reduce ci customers  flake rates and irritation using a few  tools mostly centered around distributed  tracing  this also helped us change the curve of  ci  when compared to baseline growth  um  this like social technical change was  super fun to play with in the last few  years and i hope to hear from you  um specifically about how you solve  these type of challenges in your company  thank you all very much  and i'd love to open the floor for  questions  [Applause]  [Music]  [Applause]  you
+
+00:00:08.629 --> 00:00:10.870 align:start position:0%
+strange loop hello  um i just want to say thank you for  sharing the saturday post lunch time  together it's my first strange loop and  i'm so grateful to be here  the organizers people and conversations  have been just like amazing thank you  i'm like super excited today to share  patterns and stories on how you might  improve your operational tooling  with around ci with traces  worked with and found the same  general patterns apply when building  operational tooling for scientists  traders  crisis responders and of course where i  spend my time today software developers  real quick i want to share two of my  favorite talks from yesterday richard  from stripe talked about generating code  with simple transformations to make code  more usable  melinda from aggie talked about message  cues with architecture trade-offs  to make your platform more resilient and  legible  like these talks  presented something you're already doing  like ci with a small wrinkle to make the  system better i want to share my  curiosity in exploring the space and  help you get like excited and intrigued  enough to explore your own distributed  systems  in a similar way with traces  i'm going to leave some takeaways and  tools and references to get started a  url  will be  in each slide and the slack channel is  also right over there it's pretty long  but if you're open to it just like raise  your hand and ask questions during the  talk and we can have a conversation  we'll probably explore something pretty  interesting together  we're going to talk about one of the  hardest challenges in distributed  systems today  what is your code in production doing  how is it doing that  and why is it doing that  the patterns we're going to explore on  improving your ci  tooling are going to be building a  common language  for infra clients and people  how to reason about complex  issues with humans in your tooling and  finally how to use context to understand  what changed  i'm frank by the way  my pronouns are he him  i've been at sac for about two years and  guided many of our internal teams on how  to instrument and improve observability  with traces to solve problems  one particular problem we'll explore in  depth is test flakiness on slack's  monolith  it came down  by magnitude over the last years  of course with many as with many complex  problems there's never one single cause  nor solution for flakiness as it has  many inputs  from software and people  it's a socio-technical problem that  takes time to understand an effort to  start solving  for engineers flakiness is extremely  frustrating and for service zone is hard  to concretely pinpoint by the end of  this talk you'll have the patterns that  we use to solve multiple layers of  flakiness in ci  first  how many of you have been on call  wow yep  like let's say you're on call and things  are not fine um you're like trying to  find a needle and a haystack of your  deployed code and infrared to do so in  the old world  you can add some logs or metrics  needle so to speak  and to be able to find those needles in  the haystack you need to  redeploy your haystack then wait for  that data to show up  what happens instead of inserting log  lines and metrics into your code you  could teach your tracing platform to  answer those questions about your  haystack  like hey historically what does hay look  like and what doesn't look like hay  if you look at code traces over time  with context you're able to see what  might have changed  like both changes and non-hay might be  indications of where needles and  therefore problems  lie  like i i'd like you to listen for  iterations of that haystack analogy  throughout the rest of this talk this  hierarchy of needs describes a model  that i use internally to inform how  observability drives understanding of  performance and resiliency bottlenecks  this learning helps us make bets on more  observability changes or changes in  workflows to help people do what they  really want to do  and again we use  observability to inform solving problems  in this space and the  agenda is generally we're going to talk  a little bit about our department and  some challenges  and sources of challenges in ci  um i'm going to hear a little bit about  how we got started  and how we implemented our first  cross-service trace  what we learned along the adoption  journey and finally where we are today  so first i'd love to spend a few minutes  talking about developer productivity and  business goals developer productivity is  about building tools and programs used  to get slack software to customers  quickly and with high quality it's been  a fun journey to be on as slack scales  i work with teams that have the  opportunity to make engineering at slack  simpler more pleasant and more  productive  both slack customer and code bases grew  quickly over the last six years  and this begs the question  how might we create better internal  tools for engineers to build  test and observe  deployed code  well there are challenges  as the great philosopher uncle ben from  spider-man once said  with great power comes great  responsibility  in the same way that it is exciting this  is shadow side to great growth in  customer and code bases  there's an increase in complexity  oftentimes with fuzzy service and team  boundaries  here's a simplified architecture diagram  of slack for desktop and mobile clients  going through multiple backends  slack evolved from a single web app  to a topology of many languages services  and clients that serve different needs  the core business logic lives in web app  and routes to other services like a  distributed cache called flannel a  distributed mysql service called the  tests search and discovery and many  others  oftentimes internal tools were built  quickly and scaled just enough for  slack's main monorepo web app  in 2019 when i joined our team was  already growing and at about six folk  today internal tools teams consist of 60  people  and hopefully this challenge resonates  with y'all services are reasonable  individually within team silos typically  using logs and metrics  for example the test team might create a  prometheus metric for errors with  different dimensions that are meaningful  for development  another team  might see this and create a circuit  breaker for error rate but misunderstand  the nuance  and then misuse this metric at the  course level without context  and finally  user experiences in ci is somewhat  unique when compared to traditional  distributed tracing use cases for things  like apis  ci workflows might span over  days or even weeks they go through  developer environments  commits and different asynchronous parts  of the infrastructure  so given this  how might we do better  in my previous role i helped build  products and teams to help companies  with their hardest problems by reading  about data pipelines and platforms  i found you can create massive business  results when people speak the same  language and reason about data using  that language  oftentimes one team's definition of  dimension x  might mean something completely  different between teams and especially  business groups  so  let's take a different approach  how might we create a common  infrastructure and language to increase  legibility and unplac  complexity across teams  how might we create an integrated  diagnosis and reasoning about complex  system interactions with people in slack  how might we evolve our observability  culture  how can we share this tooling with teams  that need it  and so this body of work  was a slow conspiracy sprinted on  between many teams and didn't happen  overnight i want to say a special thank  you to suman and ryan on the  observability team who founded that  thesis around slacktrace and to all the  folk who improved the ci ecosystem with  traces but first how do we come to this  approach  it is slow is the hardest problem to  debug in distributed systems  it is flaky is the most heard problem by  internal tooling teams  a tracing system doesn't tell me what's  slow or flake or more importantly why  it's an exercise oftentimes left to the  reader an in-depth exploration of slack  traces written by my mentor and  colleague suman and can be found in the  blog post linked  for the purposes of this talk  i'll share a sky-high view of the  motivation and this infrastructure  first we start with the span event  structure  such that we can create an event once  and then use it in multiple places  for example a function within web app  might create a single span event this  deep span event  will contain context for the rest of the  user request with both upstream and  dance room  context  we can now ingest these spans from  separate clients and are able to craft  views from the same data model by  processing it through kafka  users can access fans  through data warehouse through  using presta sql queries in real time  stores like honeycomb and  search  here's a simplified view of our ci  workflows for users and infrastructure  i'll use web app and end-to-end tests  for the purposes of illustration  web app is is where most engineers at  slack spend most of their development  time it ties together business logic  from each client and dependent services  the ci workflow probably looks familiar  a user  pushes  a  a local branch  to github  opens a pr  then presented with test results  the screenshots show dms from checkpoint  an internal ci cd platform  it drives and bridges user workflows  between github enterprise  aws services like s3 and kubernetes  jenkins console and qa environments  which are really beefy machines running  slack to execute and end tests you might  be asking what might go wrong  good question  when i joined in 2019 a lot of existing  ci logic was written by the cto and  early employees it was mostly untouched  for four years it mostly worked just  well enough  well why trace  to find causation today there's many  more downstream services from web app  and the cardinality for ci traces are  very different from other services like  web app  ci has lower volume so there's no need  for sampling  but higher criticality  ci requests go through critical  interconnected systems and a fault that  any system typically means users are  blocked so what does a fault look like  engineers hit retry on their tests and  are frustrated when anything on that hot  critical path fails  between  2017 and 2020 slack saw a 10 month over  month growth  in test execution count so multiple  doublings  many new services came up to support  various features in slack and this led  to a lot of systems being stretched to  their absolute limit  and so there's a lot of needles  in the ci haystack the user experience  was bad for a while  before a series of projects around  github load  circuit breaking on dependencies anomaly  detection and workflow changes we're  seeing a percent  pr flake rate at approximately fifty  percent  um that's pretty bad uh this macro  percent  this macro percent pr flake rate metric  you could think of as bubbling up  multiple commits and potentially  hundreds of test suites that run on  every pr  and for developers this really breaks  trust and tests and slows down velocity  observability through tracing played a  role in each of these projects  and tonight we're at approximately five  percent flake rate per pr  like about 10 10 x better at the  macrometric  both velocity and confidence have  increased in recent developer surveys  and unlike previous years flakiness  wasn't a top issue and every day  we're still learning how to understand  operate and evolve this very complex  system called slack  many business requirements services and  teams are constantly changing  especially compared to when most of our  ci infrastructure was first built early  on in my time here i saw an opportunity  to work with the observability team to  build a better set of tools to  understand and to change how  we looked at ci  let me show how we got there  i looked at my early slack history and  found my first conversation with sumana  mid-2019  this was a time  when we still went to the office on a  daily basis and we'd grab hipster coffee  with colleagues  i heard about suman's exploration and  building of slack trace and i understood  a similar problem data platforms very  well and reached out for a coffee  together i then spent an afternoon to  build a cheap prototype with a  hypothesis  that this type of tooling would become a  critical and compounding value add for  developers  an e like  an easy place to prototype was our  test runner affectionately called the  ibot  even during this pr and a couple of  simulated test runs i noticed get  checkout was slow for a portion of our  fleet  we had our first tracing wind that  afternoon it turns out a few instances  in the asg were not being updated  which was an easy fix once we identified  the needles in our haystack before i  move on like i needed to write code to  make this happen  i want to call out  that today we have a rich ecosystem of  tooling that didn't exist or were much  more premature when we started this work  during this year's strange loop workshop  steve flanders  shared how to get started on open  telemetry and i heard it was great  also if you have the chance stay around  for the next talk by jessica from  honeycomb  in the same room  if you visit the resources section in  the link you'll find links to  honeycomb's reference on open telemetry  collectors  and a sample go test collector from  raikel  from aws  so what's next um  like this is a few months later now um  this is a juicy incident  uh this is day two of a multi-day  multi-team incident full of cascading  failures  um on day one  we were scrambling with one-off hacks to  try and understand  what's happening  and get a few overloaded systems under  control  on the morning of day two i added a  simple cross-service trace and reused  the same instrumentation from our test  runner  very quickly with  honeycombs bubble up functionality  became very clear where the problems  were coming from  git lfs issues  popped up on a third of the qa  environment fleet and this was slowing  down the entire system  discovery was a simple query now tracing  platform on what doesn't look like  everything else  and within two hours  um  ci pipelines were flowing again and  engineers could do their work  over the next few months this led to the  first of many targeted investments for  ci tracing  here's a sample  of the shared dimensions we created for  users and developers in ci to make  queries in honeycomb legible and more  accessible  these dimensions were stubbed early in  our library and instrumented with a few  clients  since then various teams have extended  and reused these dimensions for their  use cases  and this graphic shows a very very high  level zoom out for individual traces and  what dimensions they might use in ci  in a single trace  example tests it might capture all the  data shown in the rightmost column you  can then track earlier related traces  for all the those shared dimensions  elsewhere  um  you could query to find like commit  related tests and build traces  to see if we're seeing build failures or  other test failures due to code issue on  master  like and like let's go back to the root  challenge developer frustration across  lac was increasing due to flaky test  runs over the last several years  flaky test runs was one of the top  reported issues in developer surveys  for a few quarters already  in 2020 by mid-2020 automation teams  across slack had a daily 30-minute  triage session to triage and focus on  the flakiest tests  automation team leads hesitated to  introduce any additional variants on how  we use cyprus and and testing framework  the belief  was that test flakiness was from the  test code itself  yet  there wasn't great progress  i typically work on the infrasight of  the world and felt strongly we could do  better with causation on grey failures  by instrumenting how we use the cypress  framework great failures are where the  system itself reports as healthy yet the  application in this case  tests and the test platform report a  failure or flake  after some negotiating and identifying  no verifiable decrease in performance or  resiliency we scoped a short experiment  we'd instrument the high level test  platform runtime for a month and capture  some variables  what could go wrong  well a lot went right  we discovered a few runtime variables  correlated very very strongly with the  higher flake rates in this graph  you can see compute hours spent on just  flaky tests  at peak we were running  roughly 90 hours  of very large very expensive machines on  tests that were discarded because the  results were flaky  and to build confidence and address  concerns at every merge and hypothesis  test we queued up revert pr at the same  time  we never reverted  so the other  challenge i mentioned earlier is like  fuzzy service boundaries especially came  to how  services operated for internal use like  dev or qa  a broken dependent service like search  or an upgrade in a vendor's checkout  library api might mean that tests will  start to flake for users in ci  while a full discussion of non-league  detection and circuit breakers is beyond  the scope of this talk i hope to share a  few screenshots  of how we're able to build the glue for  service and automation teams to have  discussions  in slack  with  links  to more detailed  observability  oh and before i forget in the coming  week i'll be posting to the slack  engineering blog on how we produced a  magnitude of change  in ci spend with a deeper look at  circuit breakers as one of those big  changes  but what we found was like by detecting  and bringing people together in a single  conversation we could triage  a lot better  by looking at the same things  and just just like in summary it's like  test suite owners may not be distributed  systems experts  and service teams may not be aware of  how internal customers use their  services in conjunction these missing  pieces  presented a working space for disjoint  teams to find causes for ci flakiness  and give an awareness when a test suite  or dependent service was failing  and so let me share a quick story about  another recent incident  in august 2021  at slack we use the incident command  system i'm sharing one of the conditions  actions and needs abbreviated can  messages from that incident the  condition screenshot from our incident  channel says it best  back-end unit and integration test  suites are failing at a high rate with  out-of-memory conditions on hosts  each of these back-end unit test suites  may run hundreds of tens of thousands of  tests  the day before our incident spun up we  actually saw memory tip over the  threshold  and cause our anomaly detection to start  noticing a higher flake rate kind of  like the straw that broke the camel's  back  during the incident we used test case  traces from back and test implemented  earlier to track down high memory  footprint jumps for test cases we were  able to see  a high increase at the p50 p95 and p99  down to the hour over the last few  months  and subject matter experts were able to  identify a few culprit experimental prs  that may have been the cause for those  jumps  and during the incident  there's always this holding pattern  after  someone makes a change  here's some screenshots from the long  thread  um and i'm just gonna like talk through  some of the juicier parts like folks ask  questions like you know did it work what  are the graphs show  and during this incident this was top of  mind for all of us and  so like testing changes are always hard  um arrow one how do we test this change  responders  with identities and names blurred for  privacy were able to revert the pr from  a few months earlier and within minutes  tests appear to be passing at a higher  rate  arrow two  another responder was able to reuse an  earlier query looking at memory usage  for test cases in honeycomb  arrow three  so like this data allowed us to look at  telemetry with context  the changes and breaks became apparent  when we took this type of approach  so  in summary  we significantly reduce ci customers  flake rates and irritation using a few  tools mostly centered around distributed  tracing  this also helped us change the curve of  ci  when compared to baseline growth  um  this like social technical change was  super fun to play with in the last few  years and i hope to hear from you  um specifically about how you solve  these type of challenges in your company  thank you all very much  and i'd love to open the floor for  questions  [Applause]  [Music]  [Applause]  you
+ 
+
+00:00:10.870 --> 00:00:12.789 align:start position:0%
+ 
+ 
+
+00:00:12.789 --> 00:00:15.669 align:start position:0%
+ 
+ 
+
+00:00:15.669 --> 00:00:18.070 align:start position:0%
+ 
+ 
+
+00:00:18.070 --> 00:00:20.630 align:start position:0%
+ 
+ 
+
+00:00:20.630 --> 00:00:25.429 align:start position:0%
+ 
+ 
+
+00:00:25.429 --> 00:00:27.509 align:start position:0%
+ 
+ 
+
+00:00:27.509 --> 00:00:29.669 align:start position:0%
+ 
+ 
+
+00:00:29.669 --> 00:00:32.150 align:start position:0%
+ 
+ 
+
+00:00:32.150 --> 00:00:34.549 align:start position:0%
+ 
+ 
+
+00:00:34.549 --> 00:00:36.229 align:start position:0%
+ 
+ 
+
+00:00:36.229 --> 00:00:37.990 align:start position:0%
+ 
+ 
+
+00:00:37.990 --> 00:00:40.549 align:start position:0%
+ 
+ 
+
+00:00:40.549 --> 00:00:40.559 align:start position:0%
+ 
+ 
+
+00:00:40.559 --> 00:00:41.750 align:start position:0%
+ 
+
+
+00:00:41.750 --> 00:00:44.229 align:start position:0%
+ 
+ 
+
+00:00:44.229 --> 00:00:47.029 align:start position:0%
+ 
+ 
+
+00:00:47.029 --> 00:00:48.470 align:start position:0%
+ 
+ 
+
+00:00:48.470 --> 00:00:50.389 align:start position:0%
+ 
+ 
+
+00:00:50.389 --> 00:00:52.549 align:start position:0%
+ 
+ 
+
+00:00:52.549 --> 00:00:54.389 align:start position:0%
+ 
+ 
+
+00:00:54.389 --> 00:00:56.150 align:start position:0%
+ 
+ 
+
+00:00:56.150 --> 00:00:58.310 align:start position:0%
+ 
+ 
+
+00:00:58.310 --> 00:01:00.950 align:start position:0%
+ 
+ 
+
+00:01:00.950 --> 00:01:02.549 align:start position:0%
+ 
+ 
+
+00:01:02.549 --> 00:01:02.559 align:start position:0%
+ 
+ 
+
+00:01:02.559 --> 00:01:03.750 align:start position:0%
+ 
+
+
+00:01:03.750 --> 00:01:05.350 align:start position:0%
+ 
+ 
+
+00:01:05.350 --> 00:01:07.109 align:start position:0%
+ 
+ 
+
+00:01:07.109 --> 00:01:10.230 align:start position:0%
+ 
+ 
+
+00:01:10.230 --> 00:01:12.950 align:start position:0%
+ 
+ 
+
+00:01:12.950 --> 00:01:14.950 align:start position:0%
+ 
+ 
+
+00:01:14.950 --> 00:01:16.950 align:start position:0%
+ 
+ 
+
+00:01:16.950 --> 00:01:18.950 align:start position:0%
+ 
+ 
+
+00:01:18.950 --> 00:01:18.960 align:start position:0%
+ 
+ 
+
+00:01:18.960 --> 00:01:19.910 align:start position:0%
+ 
+
+
+00:01:19.910 --> 00:01:23.030 align:start position:0%
+ 
+ 
+
+00:01:23.030 --> 00:01:24.950 align:start position:0%
+ 
+ 
+
+00:01:24.950 --> 00:01:26.789 align:start position:0%
+ 
+ 
+
+00:01:26.789 --> 00:01:26.799 align:start position:0%
+ 
+ 
+
+00:01:26.799 --> 00:01:27.990 align:start position:0%
+ 
+
+
+00:01:27.990 --> 00:01:29.190 align:start position:0%
+ 
+ 
+
+00:01:29.190 --> 00:01:32.069 align:start position:0%
+ 
+ 
+
+00:01:32.069 --> 00:01:34.390 align:start position:0%
+ 
+ 
+
+00:01:34.390 --> 00:01:36.310 align:start position:0%
+ 
+ 
+
+00:01:36.310 --> 00:01:37.830 align:start position:0%
+ 
+ 
+
+00:01:37.830 --> 00:01:40.310 align:start position:0%
+ 
+ 
+
+00:01:40.310 --> 00:01:41.510 align:start position:0%
+ 
+ 
+
+00:01:41.510 --> 00:01:44.710 align:start position:0%
+ 
+ 
+
+00:01:44.710 --> 00:01:45.749 align:start position:0%
+ 
+ 
+
+00:01:45.749 --> 00:01:47.190 align:start position:0%
+ 
+ 
+
+00:01:47.190 --> 00:01:49.109 align:start position:0%
+ 
+ 
+
+00:01:49.109 --> 00:01:51.510 align:start position:0%
+ 
+ 
+
+00:01:51.510 --> 00:01:53.270 align:start position:0%
+ 
+ 
+
+00:01:53.270 --> 00:01:55.510 align:start position:0%
+ 
+ 
+
+00:01:55.510 --> 00:01:57.109 align:start position:0%
+ 
+ 
+
+00:01:57.109 --> 00:01:58.709 align:start position:0%
+ 
+ 
+
+00:01:58.709 --> 00:02:00.469 align:start position:0%
+ 
+ 
+
+00:02:00.469 --> 00:02:01.830 align:start position:0%
+ 
+ 
+
+00:02:01.830 --> 00:02:04.709 align:start position:0%
+ 
+ 
+
+00:02:04.709 --> 00:02:06.830 align:start position:0%
+ 
+ 
+
+00:02:06.830 --> 00:02:10.229 align:start position:0%
+ 
+ 
+
+00:02:10.229 --> 00:02:13.270 align:start position:0%
+ 
+ 
+
+00:02:13.270 --> 00:02:16.070 align:start position:0%
+ 
+ 
+
+00:02:16.070 --> 00:02:17.670 align:start position:0%
+ 
+ 
+
+00:02:17.670 --> 00:02:19.510 align:start position:0%
+ 
+ 
+
+00:02:19.510 --> 00:02:21.510 align:start position:0%
+ 
+ 
+
+00:02:21.510 --> 00:02:23.990 align:start position:0%
+ 
+ 
+
+00:02:23.990 --> 00:02:26.070 align:start position:0%
+ 
+ 
+
+00:02:26.070 --> 00:02:28.949 align:start position:0%
+ 
+ 
+
+00:02:28.949 --> 00:02:30.710 align:start position:0%
+ 
+ 
+
+00:02:30.710 --> 00:02:34.390 align:start position:0%
+ 
+ 
+
+00:02:34.390 --> 00:02:34.400 align:start position:0%
+ 
+ 
+
+00:02:34.400 --> 00:02:35.509 align:start position:0%
+ 
+
+
+00:02:35.509 --> 00:02:37.030 align:start position:0%
+ 
+ 
+
+00:02:37.030 --> 00:02:39.830 align:start position:0%
+ 
+ 
+
+00:02:39.830 --> 00:02:41.910 align:start position:0%
+ 
+ 
+
+00:02:41.910 --> 00:02:45.350 align:start position:0%
+ 
+ 
+
+00:02:45.350 --> 00:02:48.309 align:start position:0%
+ 
+ 
+
+00:02:48.309 --> 00:02:50.390 align:start position:0%
+ 
+ 
+
+00:02:50.390 --> 00:02:52.790 align:start position:0%
+ 
+ 
+
+00:02:52.790 --> 00:02:54.309 align:start position:0%
+ 
+ 
+
+00:02:54.309 --> 00:02:57.190 align:start position:0%
+ 
+ 
+
+00:02:57.190 --> 00:02:59.430 align:start position:0%
+ 
+ 
+
+00:02:59.430 --> 00:03:01.750 align:start position:0%
+ 
+ 
+
+00:03:01.750 --> 00:03:04.550 align:start position:0%
+ 
+ 
+
+00:03:04.550 --> 00:03:06.949 align:start position:0%
+ 
+ 
+
+00:03:06.949 --> 00:03:08.390 align:start position:0%
+ 
+ 
+
+00:03:08.390 --> 00:03:10.390 align:start position:0%
+ 
+ 
+
+00:03:10.390 --> 00:03:11.990 align:start position:0%
+ 
+ 
+
+00:03:11.990 --> 00:03:12.000 align:start position:0%
+ 
+ 
+
+00:03:12.000 --> 00:03:12.869 align:start position:0%
+ 
+
+
+00:03:12.869 --> 00:03:16.149 align:start position:0%
+ 
+ 
+
+00:03:16.149 --> 00:03:17.589 align:start position:0%
+ 
+ 
+
+00:03:17.589 --> 00:03:19.430 align:start position:0%
+ 
+ 
+
+00:03:19.430 --> 00:03:22.229 align:start position:0%
+ 
+ 
+
+00:03:22.229 --> 00:03:23.750 align:start position:0%
+ 
+ 
+
+00:03:23.750 --> 00:03:25.430 align:start position:0%
+ 
+ 
+
+00:03:25.430 --> 00:03:26.789 align:start position:0%
+ 
+ 
+
+00:03:26.789 --> 00:03:28.869 align:start position:0%
+ 
+ 
+
+00:03:28.869 --> 00:03:30.630 align:start position:0%
+ 
+ 
+
+00:03:30.630 --> 00:03:32.149 align:start position:0%
+ 
+ 
+
+00:03:32.149 --> 00:03:33.750 align:start position:0%
+ 
+ 
+
+00:03:33.750 --> 00:03:36.229 align:start position:0%
+ 
+ 
+
+00:03:36.229 --> 00:03:39.190 align:start position:0%
+ 
+ 
+
+00:03:39.190 --> 00:03:41.190 align:start position:0%
+ 
+ 
+
+00:03:41.190 --> 00:03:43.190 align:start position:0%
+ 
+ 
+
+00:03:43.190 --> 00:03:44.949 align:start position:0%
+ 
+ 
+
+00:03:44.949 --> 00:03:46.149 align:start position:0%
+ 
+ 
+
+00:03:46.149 --> 00:03:46.159 align:start position:0%
+ 
+ 
+
+00:03:46.159 --> 00:03:49.190 align:start position:0%
+ 
+
+
+00:03:49.190 --> 00:03:52.070 align:start position:0%
+ 
+ 
+
+00:03:52.070 --> 00:03:55.750 align:start position:0%
+ 
+ 
+
+00:03:55.750 --> 00:03:57.350 align:start position:0%
+ 
+ 
+
+00:03:57.350 --> 00:03:59.509 align:start position:0%
+ 
+ 
+
+00:03:59.509 --> 00:04:01.110 align:start position:0%
+ 
+ 
+
+00:04:01.110 --> 00:04:03.350 align:start position:0%
+ 
+ 
+
+00:04:03.350 --> 00:04:04.949 align:start position:0%
+ 
+ 
+
+00:04:04.949 --> 00:04:06.869 align:start position:0%
+ 
+ 
+
+00:04:06.869 --> 00:04:06.879 align:start position:0%
+ 
+ 
+
+00:04:06.879 --> 00:04:07.910 align:start position:0%
+ 
+
+
+00:04:07.910 --> 00:04:09.670 align:start position:0%
+ 
+ 
+
+00:04:09.670 --> 00:04:11.589 align:start position:0%
+ 
+ 
+
+00:04:11.589 --> 00:04:13.190 align:start position:0%
+ 
+ 
+
+00:04:13.190 --> 00:04:15.350 align:start position:0%
+ 
+ 
+
+00:04:15.350 --> 00:04:17.110 align:start position:0%
+ 
+ 
+
+00:04:17.110 --> 00:04:19.749 align:start position:0%
+ 
+ 
+
+00:04:19.749 --> 00:04:22.550 align:start position:0%
+ 
+ 
+
+00:04:22.550 --> 00:04:24.629 align:start position:0%
+ 
+ 
+
+00:04:24.629 --> 00:04:26.390 align:start position:0%
+ 
+ 
+
+00:04:26.390 --> 00:04:28.790 align:start position:0%
+ 
+ 
+
+00:04:28.790 --> 00:04:31.110 align:start position:0%
+ 
+ 
+
+00:04:31.110 --> 00:04:32.710 align:start position:0%
+ 
+ 
+
+00:04:32.710 --> 00:04:34.870 align:start position:0%
+ 
+ 
+
+00:04:34.870 --> 00:04:36.469 align:start position:0%
+ 
+ 
+
+00:04:36.469 --> 00:04:38.550 align:start position:0%
+ 
+ 
+
+00:04:38.550 --> 00:04:40.150 align:start position:0%
+ 
+ 
+
+00:04:40.150 --> 00:04:41.590 align:start position:0%
+ 
+ 
+
+00:04:41.590 --> 00:04:44.469 align:start position:0%
+ 
+ 
+
+00:04:44.469 --> 00:04:46.390 align:start position:0%
+ 
+ 
+
+00:04:46.390 --> 00:04:48.070 align:start position:0%
+ 
+ 
+
+00:04:48.070 --> 00:04:49.670 align:start position:0%
+ 
+ 
+
+00:04:49.670 --> 00:04:51.430 align:start position:0%
+ 
+ 
+
+00:04:51.430 --> 00:04:53.110 align:start position:0%
+ 
+ 
+
+00:04:53.110 --> 00:04:58.070 align:start position:0%
+ 
+ 
+
+00:04:58.070 --> 00:05:00.469 align:start position:0%
+ 
+ 
+
+00:05:00.469 --> 00:05:02.790 align:start position:0%
+ 
+ 
+
+00:05:02.790 --> 00:05:04.629 align:start position:0%
+ 
+ 
+
+00:05:04.629 --> 00:05:07.029 align:start position:0%
+ 
+ 
+
+00:05:07.029 --> 00:05:08.950 align:start position:0%
+ 
+ 
+
+00:05:08.950 --> 00:05:11.110 align:start position:0%
+ 
+ 
+
+00:05:11.110 --> 00:05:13.830 align:start position:0%
+ 
+ 
+
+00:05:13.830 --> 00:05:15.270 align:start position:0%
+ 
+ 
+
+00:05:15.270 --> 00:05:18.310 align:start position:0%
+ 
+ 
+
+00:05:18.310 --> 00:05:20.390 align:start position:0%
+ 
+ 
+
+00:05:20.390 --> 00:05:20.400 align:start position:0%
+ 
+ 
+
+00:05:20.400 --> 00:05:21.590 align:start position:0%
+ 
+
+
+00:05:21.590 --> 00:05:23.270 align:start position:0%
+ 
+ 
+
+00:05:23.270 --> 00:05:26.070 align:start position:0%
+ 
+ 
+
+00:05:26.070 --> 00:05:27.990 align:start position:0%
+ 
+ 
+
+00:05:27.990 --> 00:05:29.430 align:start position:0%
+ 
+ 
+
+00:05:29.430 --> 00:05:31.749 align:start position:0%
+ 
+ 
+
+00:05:31.749 --> 00:05:33.909 align:start position:0%
+ 
+ 
+
+00:05:33.909 --> 00:05:35.749 align:start position:0%
+ 
+ 
+
+00:05:35.749 --> 00:05:38.469 align:start position:0%
+ 
+ 
+
+00:05:38.469 --> 00:05:40.550 align:start position:0%
+ 
+ 
+
+00:05:40.550 --> 00:05:42.230 align:start position:0%
+ 
+ 
+
+00:05:42.230 --> 00:05:43.590 align:start position:0%
+ 
+ 
+
+00:05:43.590 --> 00:05:43.600 align:start position:0%
+ 
+ 
+
+00:05:43.600 --> 00:05:45.270 align:start position:0%
+ 
+
+
+00:05:45.270 --> 00:05:47.110 align:start position:0%
+ 
+ 
+
+00:05:47.110 --> 00:05:48.390 align:start position:0%
+ 
+ 
+
+00:05:48.390 --> 00:05:51.110 align:start position:0%
+ 
+ 
+
+00:05:51.110 --> 00:05:52.790 align:start position:0%
+ 
+ 
+
+00:05:52.790 --> 00:05:55.350 align:start position:0%
+ 
+ 
+
+00:05:55.350 --> 00:05:55.360 align:start position:0%
+ 
+ 
+
+00:05:55.360 --> 00:05:56.870 align:start position:0%
+ 
+
+
+00:05:56.870 --> 00:05:59.029 align:start position:0%
+ 
+ 
+
+00:05:59.029 --> 00:06:01.909 align:start position:0%
+ 
+ 
+
+00:06:01.909 --> 00:06:04.070 align:start position:0%
+ 
+ 
+
+00:06:04.070 --> 00:06:07.749 align:start position:0%
+ 
+ 
+
+00:06:07.749 --> 00:06:10.550 align:start position:0%
+ 
+ 
+
+00:06:10.550 --> 00:06:12.469 align:start position:0%
+ 
+ 
+
+00:06:12.469 --> 00:06:14.469 align:start position:0%
+ 
+ 
+
+00:06:14.469 --> 00:06:15.909 align:start position:0%
+ 
+ 
+
+00:06:15.909 --> 00:06:17.830 align:start position:0%
+ 
+ 
+
+00:06:17.830 --> 00:06:19.510 align:start position:0%
+ 
+ 
+
+00:06:19.510 --> 00:06:21.830 align:start position:0%
+ 
+ 
+
+00:06:21.830 --> 00:06:21.840 align:start position:0%
+ 
+ 
+
+00:06:21.840 --> 00:06:24.469 align:start position:0%
+ 
+
+
+00:06:24.469 --> 00:06:26.550 align:start position:0%
+ 
+ 
+
+00:06:26.550 --> 00:06:28.070 align:start position:0%
+ 
+ 
+
+00:06:28.070 --> 00:06:30.309 align:start position:0%
+ 
+ 
+
+00:06:30.309 --> 00:06:32.309 align:start position:0%
+ 
+ 
+
+00:06:32.309 --> 00:06:35.510 align:start position:0%
+ 
+ 
+
+00:06:35.510 --> 00:06:38.870 align:start position:0%
+ 
+ 
+
+00:06:38.870 --> 00:06:38.880 align:start position:0%
+ 
+ 
+
+00:06:38.880 --> 00:06:40.870 align:start position:0%
+ 
+
+
+00:06:40.870 --> 00:06:42.629 align:start position:0%
+ 
+ 
+
+00:06:42.629 --> 00:06:45.110 align:start position:0%
+ 
+ 
+
+00:06:45.110 --> 00:06:47.510 align:start position:0%
+ 
+ 
+
+00:06:47.510 --> 00:06:49.350 align:start position:0%
+ 
+ 
+
+00:06:49.350 --> 00:06:51.110 align:start position:0%
+ 
+ 
+
+00:06:51.110 --> 00:06:53.110 align:start position:0%
+ 
+ 
+
+00:06:53.110 --> 00:06:54.550 align:start position:0%
+ 
+ 
+
+00:06:54.550 --> 00:06:55.830 align:start position:0%
+ 
+ 
+
+00:06:55.830 --> 00:06:57.350 align:start position:0%
+ 
+ 
+
+00:06:57.350 --> 00:06:58.710 align:start position:0%
+ 
+ 
+
+00:06:58.710 --> 00:07:00.870 align:start position:0%
+ 
+ 
+
+00:07:00.870 --> 00:07:02.550 align:start position:0%
+ 
+ 
+
+00:07:02.550 --> 00:07:04.629 align:start position:0%
+ 
+ 
+
+00:07:04.629 --> 00:07:07.749 align:start position:0%
+ 
+ 
+
+00:07:07.749 --> 00:07:09.589 align:start position:0%
+ 
+ 
+
+00:07:09.589 --> 00:07:11.270 align:start position:0%
+ 
+ 
+
+00:07:11.270 --> 00:07:13.510 align:start position:0%
+ 
+ 
+
+00:07:13.510 --> 00:07:15.350 align:start position:0%
+ 
+ 
+
+00:07:15.350 --> 00:07:16.950 align:start position:0%
+ 
+ 
+
+00:07:16.950 --> 00:07:20.070 align:start position:0%
+ 
+ 
+
+00:07:20.070 --> 00:07:21.909 align:start position:0%
+ 
+ 
+
+00:07:21.909 --> 00:07:23.510 align:start position:0%
+ 
+ 
+
+00:07:23.510 --> 00:07:25.990 align:start position:0%
+ 
+ 
+
+00:07:25.990 --> 00:07:27.350 align:start position:0%
+ 
+ 
+
+00:07:27.350 --> 00:07:28.710 align:start position:0%
+ 
+ 
+
+00:07:28.710 --> 00:07:30.870 align:start position:0%
+ 
+ 
+
+00:07:30.870 --> 00:07:33.189 align:start position:0%
+ 
+ 
+
+00:07:33.189 --> 00:07:35.110 align:start position:0%
+ 
+ 
+
+00:07:35.110 --> 00:07:36.469 align:start position:0%
+ 
+ 
+
+00:07:36.469 --> 00:07:39.430 align:start position:0%
+ 
+ 
+
+00:07:39.430 --> 00:07:41.270 align:start position:0%
+ 
+ 
+
+00:07:41.270 --> 00:07:42.790 align:start position:0%
+ 
+ 
+
+00:07:42.790 --> 00:07:45.189 align:start position:0%
+ 
+ 
+
+00:07:45.189 --> 00:07:46.710 align:start position:0%
+ 
+ 
+
+00:07:46.710 --> 00:07:49.189 align:start position:0%
+ 
+ 
+
+00:07:49.189 --> 00:07:50.790 align:start position:0%
+ 
+ 
+
+00:07:50.790 --> 00:07:52.070 align:start position:0%
+ 
+ 
+
+00:07:52.070 --> 00:07:54.309 align:start position:0%
+ 
+ 
+
+00:07:54.309 --> 00:07:55.990 align:start position:0%
+ 
+ 
+
+00:07:55.990 --> 00:07:56.000 align:start position:0%
+ 
+ 
+
+00:07:56.000 --> 00:07:57.189 align:start position:0%
+ 
+
+
+00:07:57.189 --> 00:07:59.510 align:start position:0%
+ 
+ 
+
+00:07:59.510 --> 00:08:00.790 align:start position:0%
+ 
+ 
+
+00:08:00.790 --> 00:08:03.029 align:start position:0%
+ 
+ 
+
+00:08:03.029 --> 00:08:05.510 align:start position:0%
+ 
+ 
+
+00:08:05.510 --> 00:08:07.350 align:start position:0%
+ 
+ 
+
+00:08:07.350 --> 00:08:09.830 align:start position:0%
+ 
+ 
+
+00:08:09.830 --> 00:08:11.589 align:start position:0%
+ 
+ 
+
+00:08:11.589 --> 00:08:15.589 align:start position:0%
+ 
+ 
+
+00:08:15.589 --> 00:08:17.670 align:start position:0%
+ 
+ 
+
+00:08:17.670 --> 00:08:17.680 align:start position:0%
+ 
+ 
+
+00:08:17.680 --> 00:08:18.710 align:start position:0%
+ 
+
+
+00:08:18.710 --> 00:08:20.710 align:start position:0%
+ 
+ 
+
+00:08:20.710 --> 00:08:23.029 align:start position:0%
+ 
+ 
+
+00:08:23.029 --> 00:08:24.710 align:start position:0%
+ 
+ 
+
+00:08:24.710 --> 00:08:26.629 align:start position:0%
+ 
+ 
+
+00:08:26.629 --> 00:08:28.710 align:start position:0%
+ 
+ 
+
+00:08:28.710 --> 00:08:30.629 align:start position:0%
+ 
+ 
+
+00:08:30.629 --> 00:08:32.550 align:start position:0%
+ 
+ 
+
+00:08:32.550 --> 00:08:34.469 align:start position:0%
+ 
+ 
+
+00:08:34.469 --> 00:08:37.029 align:start position:0%
+ 
+ 
+
+00:08:37.029 --> 00:08:39.110 align:start position:0%
+ 
+ 
+
+00:08:39.110 --> 00:08:41.509 align:start position:0%
+ 
+ 
+
+00:08:41.509 --> 00:08:41.519 align:start position:0%
+ 
+ 
+
+00:08:41.519 --> 00:08:43.589 align:start position:0%
+ 
+
+
+00:08:43.589 --> 00:08:45.829 align:start position:0%
+ 
+ 
+
+00:08:45.829 --> 00:08:48.150 align:start position:0%
+ 
+ 
+
+00:08:48.150 --> 00:08:50.790 align:start position:0%
+ 
+ 
+
+00:08:50.790 --> 00:08:52.870 align:start position:0%
+ 
+ 
+
+00:08:52.870 --> 00:08:54.550 align:start position:0%
+ 
+ 
+
+00:08:54.550 --> 00:08:56.389 align:start position:0%
+ 
+ 
+
+00:08:56.389 --> 00:08:59.269 align:start position:0%
+ 
+ 
+
+00:08:59.269 --> 00:09:01.910 align:start position:0%
+ 
+ 
+
+00:09:01.910 --> 00:09:03.190 align:start position:0%
+ 
+ 
+
+00:09:03.190 --> 00:09:05.430 align:start position:0%
+ 
+ 
+
+00:09:05.430 --> 00:09:06.790 align:start position:0%
+ 
+ 
+
+00:09:06.790 --> 00:09:08.870 align:start position:0%
+ 
+ 
+
+00:09:08.870 --> 00:09:10.310 align:start position:0%
+ 
+ 
+
+00:09:10.310 --> 00:09:14.150 align:start position:0%
+ 
+ 
+
+00:09:14.150 --> 00:09:15.910 align:start position:0%
+ 
+ 
+
+00:09:15.910 --> 00:09:15.920 align:start position:0%
+ 
+ 
+
+00:09:15.920 --> 00:09:16.949 align:start position:0%
+ 
+
+
+00:09:16.949 --> 00:09:18.870 align:start position:0%
+ 
+ 
+
+00:09:18.870 --> 00:09:21.190 align:start position:0%
+ 
+ 
+
+00:09:21.190 --> 00:09:22.949 align:start position:0%
+ 
+ 
+
+00:09:22.949 --> 00:09:24.710 align:start position:0%
+ 
+ 
+
+00:09:24.710 --> 00:09:26.230 align:start position:0%
+ 
+ 
+
+00:09:26.230 --> 00:09:28.070 align:start position:0%
+ 
+ 
+
+00:09:28.070 --> 00:09:30.310 align:start position:0%
+ 
+ 
+
+00:09:30.310 --> 00:09:31.430 align:start position:0%
+ 
+ 
+
+00:09:31.430 --> 00:09:31.440 align:start position:0%
+ 
+ 
+
+00:09:31.440 --> 00:09:33.110 align:start position:0%
+ 
+
+
+00:09:33.110 --> 00:09:34.870 align:start position:0%
+ 
+ 
+
+00:09:34.870 --> 00:09:36.710 align:start position:0%
+ 
+ 
+
+00:09:36.710 --> 00:09:38.870 align:start position:0%
+ 
+ 
+
+00:09:38.870 --> 00:09:40.790 align:start position:0%
+ 
+ 
+
+00:09:40.790 --> 00:09:42.870 align:start position:0%
+ 
+ 
+
+00:09:42.870 --> 00:09:44.949 align:start position:0%
+ 
+ 
+
+00:09:44.949 --> 00:09:46.870 align:start position:0%
+ 
+ 
+
+00:09:46.870 --> 00:09:49.190 align:start position:0%
+ 
+ 
+
+00:09:49.190 --> 00:09:49.200 align:start position:0%
+ 
+ 
+
+00:09:49.200 --> 00:09:53.910 align:start position:0%
+ 
+
+
+00:09:53.910 --> 00:09:55.509 align:start position:0%
+ 
+ 
+
+00:09:55.509 --> 00:09:58.070 align:start position:0%
+ 
+ 
+
+00:09:58.070 --> 00:10:00.230 align:start position:0%
+ 
+ 
+
+00:10:00.230 --> 00:10:02.790 align:start position:0%
+ 
+ 
+
+00:10:02.790 --> 00:10:05.190 align:start position:0%
+ 
+ 
+
+00:10:05.190 --> 00:10:06.790 align:start position:0%
+ 
+ 
+
+00:10:06.790 --> 00:10:08.870 align:start position:0%
+ 
+ 
+
+00:10:08.870 --> 00:10:11.269 align:start position:0%
+ 
+ 
+
+00:10:11.269 --> 00:10:14.069 align:start position:0%
+ 
+ 
+
+00:10:14.069 --> 00:10:15.190 align:start position:0%
+ 
+ 
+
+00:10:15.190 --> 00:10:15.200 align:start position:0%
+ 
+ 
+
+00:10:15.200 --> 00:10:16.630 align:start position:0%
+ 
+
+
+00:10:16.630 --> 00:10:16.640 align:start position:0%
+ 
+ 
+
+00:10:16.640 --> 00:10:17.750 align:start position:0%
+ 
+
+
+00:10:17.750 --> 00:10:19.110 align:start position:0%
+ 
+ 
+
+00:10:19.110 --> 00:10:20.470 align:start position:0%
+ 
+ 
+
+00:10:20.470 --> 00:10:22.470 align:start position:0%
+ 
+ 
+
+00:10:22.470 --> 00:10:24.949 align:start position:0%
+ 
+ 
+
+00:10:24.949 --> 00:10:27.590 align:start position:0%
+ 
+ 
+
+00:10:27.590 --> 00:10:30.630 align:start position:0%
+ 
+ 
+
+00:10:30.630 --> 00:10:32.630 align:start position:0%
+ 
+ 
+
+00:10:32.630 --> 00:10:34.470 align:start position:0%
+ 
+ 
+
+00:10:34.470 --> 00:10:37.350 align:start position:0%
+ 
+ 
+
+00:10:37.350 --> 00:10:40.470 align:start position:0%
+ 
+ 
+
+00:10:40.470 --> 00:10:42.630 align:start position:0%
+ 
+ 
+
+00:10:42.630 --> 00:10:46.150 align:start position:0%
+ 
+ 
+
+00:10:46.150 --> 00:10:49.190 align:start position:0%
+ 
+ 
+
+00:10:49.190 --> 00:10:50.870 align:start position:0%
+ 
+ 
+
+00:10:50.870 --> 00:10:53.350 align:start position:0%
+ 
+ 
+
+00:10:53.350 --> 00:10:55.750 align:start position:0%
+ 
+ 
+
+00:10:55.750 --> 00:10:58.710 align:start position:0%
+ 
+ 
+
+00:10:58.710 --> 00:11:01.110 align:start position:0%
+ 
+ 
+
+00:11:01.110 --> 00:11:02.230 align:start position:0%
+ 
+ 
+
+00:11:02.230 --> 00:11:04.230 align:start position:0%
+ 
+ 
+
+00:11:04.230 --> 00:11:06.710 align:start position:0%
+ 
+ 
+
+00:11:06.710 --> 00:11:09.590 align:start position:0%
+ 
+ 
+
+00:11:09.590 --> 00:11:11.750 align:start position:0%
+ 
+ 
+
+00:11:11.750 --> 00:11:13.430 align:start position:0%
+ 
+ 
+
+00:11:13.430 --> 00:11:14.389 align:start position:0%
+ 
+ 
+
+00:11:14.389 --> 00:11:16.470 align:start position:0%
+ 
+ 
+
+00:11:16.470 --> 00:11:17.750 align:start position:0%
+ 
+ 
+
+00:11:17.750 --> 00:11:19.670 align:start position:0%
+ 
+ 
+
+00:11:19.670 --> 00:11:22.069 align:start position:0%
+ 
+ 
+
+00:11:22.069 --> 00:11:23.990 align:start position:0%
+ 
+ 
+
+00:11:23.990 --> 00:11:26.069 align:start position:0%
+ 
+ 
+
+00:11:26.069 --> 00:11:29.670 align:start position:0%
+ 
+ 
+
+00:11:29.670 --> 00:11:31.190 align:start position:0%
+ 
+ 
+
+00:11:31.190 --> 00:11:33.350 align:start position:0%
+ 
+ 
+
+00:11:33.350 --> 00:11:35.670 align:start position:0%
+ 
+ 
+
+00:11:35.670 --> 00:11:35.680 align:start position:0%
+ 
+ 
+
+00:11:35.680 --> 00:11:36.550 align:start position:0%
+ 
+
+
+00:11:36.550 --> 00:11:40.470 align:start position:0%
+ 
+ 
+
+00:11:40.470 --> 00:11:41.750 align:start position:0%
+ 
+ 
+
+00:11:41.750 --> 00:11:44.310 align:start position:0%
+ 
+ 
+
+00:11:44.310 --> 00:11:44.320 align:start position:0%
+ 
+ 
+
+00:11:44.320 --> 00:11:45.509 align:start position:0%
+ 
+
+
+00:11:45.509 --> 00:11:47.509 align:start position:0%
+ 
+ 
+
+00:11:47.509 --> 00:11:49.030 align:start position:0%
+ 
+ 
+
+00:11:49.030 --> 00:11:51.590 align:start position:0%
+ 
+ 
+
+00:11:51.590 --> 00:11:54.310 align:start position:0%
+ 
+ 
+
+00:11:54.310 --> 00:11:57.030 align:start position:0%
+ 
+ 
+
+00:11:57.030 --> 00:11:58.870 align:start position:0%
+ 
+ 
+
+00:11:58.870 --> 00:12:00.550 align:start position:0%
+ 
+ 
+
+00:12:00.550 --> 00:12:02.230 align:start position:0%
+ 
+ 
+
+00:12:02.230 --> 00:12:03.509 align:start position:0%
+ 
+ 
+
+00:12:03.509 --> 00:12:05.829 align:start position:0%
+ 
+ 
+
+00:12:05.829 --> 00:12:07.829 align:start position:0%
+ 
+ 
+
+00:12:07.829 --> 00:12:09.110 align:start position:0%
+ 
+ 
+
+00:12:09.110 --> 00:12:11.030 align:start position:0%
+ 
+ 
+
+00:12:11.030 --> 00:12:11.040 align:start position:0%
+ 
+ 
+
+00:12:11.040 --> 00:12:12.470 align:start position:0%
+ 
+
+
+00:12:12.470 --> 00:12:15.110 align:start position:0%
+ 
+ 
+
+00:12:15.110 --> 00:12:15.120 align:start position:0%
+ 
+ 
+
+00:12:15.120 --> 00:12:16.710 align:start position:0%
+ 
+
+
+00:12:16.710 --> 00:12:19.430 align:start position:0%
+ 
+ 
+
+00:12:19.430 --> 00:12:20.470 align:start position:0%
+ 
+ 
+
+00:12:20.470 --> 00:12:22.150 align:start position:0%
+ 
+ 
+
+00:12:22.150 --> 00:12:24.230 align:start position:0%
+ 
+ 
+
+00:12:24.230 --> 00:12:25.509 align:start position:0%
+ 
+ 
+
+00:12:25.509 --> 00:12:27.829 align:start position:0%
+ 
+ 
+
+00:12:27.829 --> 00:12:30.550 align:start position:0%
+ 
+ 
+
+00:12:30.550 --> 00:12:32.710 align:start position:0%
+ 
+ 
+
+00:12:32.710 --> 00:12:35.350 align:start position:0%
+ 
+ 
+
+00:12:35.350 --> 00:12:36.949 align:start position:0%
+ 
+ 
+
+00:12:36.949 --> 00:12:38.790 align:start position:0%
+ 
+ 
+
+00:12:38.790 --> 00:12:41.269 align:start position:0%
+ 
+ 
+
+00:12:41.269 --> 00:12:41.279 align:start position:0%
+ 
+ 
+
+00:12:41.279 --> 00:12:42.629 align:start position:0%
+ 
+
+
+00:12:42.629 --> 00:12:44.150 align:start position:0%
+ 
+ 
+
+00:12:44.150 --> 00:12:45.670 align:start position:0%
+ 
+ 
+
+00:12:45.670 --> 00:12:47.910 align:start position:0%
+ 
+ 
+
+00:12:47.910 --> 00:12:50.790 align:start position:0%
+ 
+ 
+
+00:12:50.790 --> 00:12:53.590 align:start position:0%
+ 
+ 
+
+00:12:53.590 --> 00:12:55.590 align:start position:0%
+ 
+ 
+
+00:12:55.590 --> 00:12:57.670 align:start position:0%
+ 
+ 
+
+00:12:57.670 --> 00:12:59.590 align:start position:0%
+ 
+ 
+
+00:12:59.590 --> 00:13:02.550 align:start position:0%
+ 
+ 
+
+00:13:02.550 --> 00:13:04.550 align:start position:0%
+ 
+ 
+
+00:13:04.550 --> 00:13:06.550 align:start position:0%
+ 
+ 
+
+00:13:06.550 --> 00:13:08.870 align:start position:0%
+ 
+ 
+
+00:13:08.870 --> 00:13:10.710 align:start position:0%
+ 
+ 
+
+00:13:10.710 --> 00:13:12.550 align:start position:0%
+ 
+ 
+
+00:13:12.550 --> 00:13:15.670 align:start position:0%
+ 
+ 
+
+00:13:15.670 --> 00:13:17.829 align:start position:0%
+ 
+ 
+
+00:13:17.829 --> 00:13:19.590 align:start position:0%
+ 
+ 
+
+00:13:19.590 --> 00:13:21.509 align:start position:0%
+ 
+ 
+
+00:13:21.509 --> 00:13:23.110 align:start position:0%
+ 
+ 
+
+00:13:23.110 --> 00:13:23.120 align:start position:0%
+ 
+ 
+
+00:13:23.120 --> 00:13:24.949 align:start position:0%
+ 
+
+
+00:13:24.949 --> 00:13:26.310 align:start position:0%
+ 
+ 
+
+00:13:26.310 --> 00:13:27.750 align:start position:0%
+ 
+ 
+
+00:13:27.750 --> 00:13:30.629 align:start position:0%
+ 
+ 
+
+00:13:30.629 --> 00:13:32.790 align:start position:0%
+ 
+ 
+
+00:13:32.790 --> 00:13:35.350 align:start position:0%
+ 
+ 
+
+00:13:35.350 --> 00:13:36.710 align:start position:0%
+ 
+ 
+
+00:13:36.710 --> 00:13:38.470 align:start position:0%
+ 
+ 
+
+00:13:38.470 --> 00:13:40.790 align:start position:0%
+ 
+ 
+
+00:13:40.790 --> 00:13:42.870 align:start position:0%
+ 
+ 
+
+00:13:42.870 --> 00:13:44.230 align:start position:0%
+ 
+ 
+
+00:13:44.230 --> 00:13:44.240 align:start position:0%
+ 
+ 
+
+00:13:44.240 --> 00:13:45.670 align:start position:0%
+ 
+
+
+00:13:45.670 --> 00:13:47.430 align:start position:0%
+ 
+ 
+
+00:13:47.430 --> 00:13:48.949 align:start position:0%
+ 
+ 
+
+00:13:48.949 --> 00:13:48.959 align:start position:0%
+ 
+ 
+
+00:13:48.959 --> 00:13:50.389 align:start position:0%
+ 
+
+
+00:13:50.389 --> 00:13:51.910 align:start position:0%
+ 
+ 
+
+00:13:51.910 --> 00:13:54.470 align:start position:0%
+ 
+ 
+
+00:13:54.470 --> 00:13:55.829 align:start position:0%
+ 
+ 
+
+00:13:55.829 --> 00:13:55.839 align:start position:0%
+ 
+ 
+
+00:13:55.839 --> 00:13:58.069 align:start position:0%
+ 
+
+
+00:13:58.069 --> 00:13:59.509 align:start position:0%
+ 
+ 
+
+00:13:59.509 --> 00:14:00.949 align:start position:0%
+ 
+ 
+
+00:14:00.949 --> 00:14:02.310 align:start position:0%
+ 
+ 
+
+00:14:02.310 --> 00:14:02.320 align:start position:0%
+ 
+ 
+
+00:14:02.320 --> 00:14:03.750 align:start position:0%
+ 
+
+
+00:14:03.750 --> 00:14:05.110 align:start position:0%
+ 
+ 
+
+00:14:05.110 --> 00:14:07.430 align:start position:0%
+ 
+ 
+
+00:14:07.430 --> 00:14:11.030 align:start position:0%
+ 
+ 
+
+00:14:11.030 --> 00:14:13.430 align:start position:0%
+ 
+ 
+
+00:14:13.430 --> 00:14:14.790 align:start position:0%
+ 
+ 
+
+00:14:14.790 --> 00:14:17.910 align:start position:0%
+ 
+ 
+
+00:14:17.910 --> 00:14:19.350 align:start position:0%
+ 
+ 
+
+00:14:19.350 --> 00:14:20.790 align:start position:0%
+ 
+ 
+
+00:14:20.790 --> 00:14:23.430 align:start position:0%
+ 
+ 
+
+00:14:23.430 --> 00:14:25.829 align:start position:0%
+ 
+ 
+
+00:14:25.829 --> 00:14:29.030 align:start position:0%
+ 
+ 
+
+00:14:29.030 --> 00:14:31.110 align:start position:0%
+ 
+ 
+
+00:14:31.110 --> 00:14:32.550 align:start position:0%
+ 
+ 
+
+00:14:32.550 --> 00:14:33.990 align:start position:0%
+ 
+ 
+
+00:14:33.990 --> 00:14:35.750 align:start position:0%
+ 
+ 
+
+00:14:35.750 --> 00:14:37.189 align:start position:0%
+ 
+ 
+
+00:14:37.189 --> 00:14:38.870 align:start position:0%
+ 
+ 
+
+00:14:38.870 --> 00:14:38.880 align:start position:0%
+ 
+ 
+
+00:14:38.880 --> 00:14:40.150 align:start position:0%
+ 
+
+
+00:14:40.150 --> 00:14:41.670 align:start position:0%
+ 
+ 
+
+00:14:41.670 --> 00:14:43.990 align:start position:0%
+ 
+ 
+
+00:14:43.990 --> 00:14:45.430 align:start position:0%
+ 
+ 
+
+00:14:45.430 --> 00:14:47.110 align:start position:0%
+ 
+ 
+
+00:14:47.110 --> 00:14:47.120 align:start position:0%
+ 
+ 
+
+00:14:47.120 --> 00:14:48.230 align:start position:0%
+ 
+
+
+00:14:48.230 --> 00:14:50.069 align:start position:0%
+ 
+ 
+
+00:14:50.069 --> 00:14:50.079 align:start position:0%
+ 
+ 
+
+00:14:50.079 --> 00:14:51.269 align:start position:0%
+ 
+
+
+00:14:51.269 --> 00:14:55.189 align:start position:0%
+ 
+ 
+
+00:14:55.189 --> 00:14:57.110 align:start position:0%
+ 
+ 
+
+00:14:57.110 --> 00:14:59.110 align:start position:0%
+ 
+ 
+
+00:14:59.110 --> 00:15:00.870 align:start position:0%
+ 
+ 
+
+00:15:00.870 --> 00:15:03.829 align:start position:0%
+ 
+ 
+
+00:15:03.829 --> 00:15:05.910 align:start position:0%
+ 
+ 
+
+00:15:05.910 --> 00:15:05.920 align:start position:0%
+ 
+ 
+
+00:15:05.920 --> 00:15:07.030 align:start position:0%
+ 
+
+
+00:15:07.030 --> 00:15:08.550 align:start position:0%
+ 
+ 
+
+00:15:08.550 --> 00:15:10.629 align:start position:0%
+ 
+ 
+
+00:15:10.629 --> 00:15:13.509 align:start position:0%
+ 
+ 
+
+00:15:13.509 --> 00:15:14.790 align:start position:0%
+ 
+ 
+
+00:15:14.790 --> 00:15:16.710 align:start position:0%
+ 
+ 
+
+00:15:16.710 --> 00:15:16.720 align:start position:0%
+ 
+ 
+
+00:15:16.720 --> 00:15:18.230 align:start position:0%
+ 
+
+
+00:15:18.230 --> 00:15:20.310 align:start position:0%
+ 
+ 
+
+00:15:20.310 --> 00:15:22.470 align:start position:0%
+ 
+ 
+
+00:15:22.470 --> 00:15:23.990 align:start position:0%
+ 
+ 
+
+00:15:23.990 --> 00:15:24.000 align:start position:0%
+ 
+ 
+
+00:15:24.000 --> 00:15:25.350 align:start position:0%
+ 
+
+
+00:15:25.350 --> 00:15:26.949 align:start position:0%
+ 
+ 
+
+00:15:26.949 --> 00:15:28.389 align:start position:0%
+ 
+ 
+
+00:15:28.389 --> 00:15:29.829 align:start position:0%
+ 
+ 
+
+00:15:29.829 --> 00:15:31.110 align:start position:0%
+ 
+ 
+
+00:15:31.110 --> 00:15:33.430 align:start position:0%
+ 
+ 
+
+00:15:33.430 --> 00:15:35.030 align:start position:0%
+ 
+ 
+
+00:15:35.030 --> 00:15:36.629 align:start position:0%
+ 
+ 
+
+00:15:36.629 --> 00:15:39.990 align:start position:0%
+ 
+ 
+
+00:15:39.990 --> 00:15:42.389 align:start position:0%
+ 
+ 
+
+00:15:42.389 --> 00:15:44.069 align:start position:0%
+ 
+ 
+
+00:15:44.069 --> 00:15:45.430 align:start position:0%
+ 
+ 
+
+00:15:45.430 --> 00:15:47.990 align:start position:0%
+ 
+ 
+
+00:15:47.990 --> 00:15:48.000 align:start position:0%
+ 
+ 
+
+00:15:48.000 --> 00:15:49.430 align:start position:0%
+ 
+
+
+00:15:49.430 --> 00:15:51.030 align:start position:0%
+ 
+ 
+
+00:15:51.030 --> 00:15:53.670 align:start position:0%
+ 
+ 
+
+00:15:53.670 --> 00:15:55.829 align:start position:0%
+ 
+ 
+
+00:15:55.829 --> 00:15:57.509 align:start position:0%
+ 
+ 
+
+00:15:57.509 --> 00:16:00.389 align:start position:0%
+ 
+ 
+
+00:16:00.389 --> 00:16:01.749 align:start position:0%
+ 
+ 
+
+00:16:01.749 --> 00:16:03.509 align:start position:0%
+ 
+ 
+
+00:16:03.509 --> 00:16:05.829 align:start position:0%
+ 
+ 
+
+00:16:05.829 --> 00:16:07.670 align:start position:0%
+ 
+ 
+
+00:16:07.670 --> 00:16:07.680 align:start position:0%
+ 
+ 
+
+00:16:07.680 --> 00:16:08.949 align:start position:0%
+ 
+
+
+00:16:08.949 --> 00:16:10.470 align:start position:0%
+ 
+ 
+
+00:16:10.470 --> 00:16:12.310 align:start position:0%
+ 
+ 
+
+00:16:12.310 --> 00:16:12.320 align:start position:0%
+ 
+ 
+
+00:16:12.320 --> 00:16:13.430 align:start position:0%
+ 
+
+
+00:16:13.430 --> 00:16:15.590 align:start position:0%
+ 
+ 
+
+00:16:15.590 --> 00:16:17.430 align:start position:0%
+ 
+ 
+
+00:16:17.430 --> 00:16:20.550 align:start position:0%
+ 
+ 
+
+00:16:20.550 --> 00:16:22.949 align:start position:0%
+ 
+ 
+
+00:16:22.949 --> 00:16:24.870 align:start position:0%
+ 
+ 
+
+00:16:24.870 --> 00:16:28.870 align:start position:0%
+ 
+ 
+
+00:16:28.870 --> 00:16:30.790 align:start position:0%
+ 
+ 
+
+00:16:30.790 --> 00:16:33.110 align:start position:0%
+ 
+ 
+
+00:16:33.110 --> 00:16:35.110 align:start position:0%
+ 
+ 
+
+00:16:35.110 --> 00:16:37.189 align:start position:0%
+ 
+ 
+
+00:16:37.189 --> 00:16:39.430 align:start position:0%
+ 
+ 
+
+00:16:39.430 --> 00:16:39.440 align:start position:0%
+ 
+ 
+
+00:16:39.440 --> 00:16:40.790 align:start position:0%
+ 
+
+
+00:16:40.790 --> 00:16:40.800 align:start position:0%
+ 
+ 
+
+00:16:40.800 --> 00:16:41.670 align:start position:0%
+ 
+
+
+00:16:41.670 --> 00:16:43.189 align:start position:0%
+ 
+ 
+
+00:16:43.189 --> 00:16:45.670 align:start position:0%
+ 
+ 
+
+00:16:45.670 --> 00:16:47.590 align:start position:0%
+ 
+ 
+
+00:16:47.590 --> 00:16:50.150 align:start position:0%
+ 
+ 
+
+00:16:50.150 --> 00:16:50.160 align:start position:0%
+ 
+ 
+
+00:16:50.160 --> 00:16:52.550 align:start position:0%
+ 
+
+
+00:16:52.550 --> 00:16:54.310 align:start position:0%
+ 
+ 
+
+00:16:54.310 --> 00:16:56.550 align:start position:0%
+ 
+ 
+
+00:16:56.550 --> 00:16:58.870 align:start position:0%
+ 
+ 
+
+00:16:58.870 --> 00:17:00.710 align:start position:0%
+ 
+ 
+
+00:17:00.710 --> 00:17:02.230 align:start position:0%
+ 
+ 
+
+00:17:02.230 --> 00:17:04.949 align:start position:0%
+ 
+ 
+
+00:17:04.949 --> 00:17:07.110 align:start position:0%
+ 
+ 
+
+00:17:07.110 --> 00:17:10.789 align:start position:0%
+ 
+ 
+
+00:17:10.789 --> 00:17:12.630 align:start position:0%
+ 
+ 
+
+00:17:12.630 --> 00:17:14.870 align:start position:0%
+ 
+ 
+
+00:17:14.870 --> 00:17:16.549 align:start position:0%
+ 
+ 
+
+00:17:16.549 --> 00:17:18.470 align:start position:0%
+ 
+ 
+
+00:17:18.470 --> 00:17:20.150 align:start position:0%
+ 
+ 
+
+00:17:20.150 --> 00:17:23.350 align:start position:0%
+ 
+ 
+
+00:17:23.350 --> 00:17:24.549 align:start position:0%
+ 
+ 
+
+00:17:24.549 --> 00:17:26.069 align:start position:0%
+ 
+ 
+
+00:17:26.069 --> 00:17:27.590 align:start position:0%
+ 
+ 
+
+00:17:27.590 --> 00:17:27.600 align:start position:0%
+ 
+ 
+
+00:17:27.600 --> 00:17:28.710 align:start position:0%
+ 
+
+
+00:17:28.710 --> 00:17:31.110 align:start position:0%
+ 
+ 
+
+00:17:31.110 --> 00:17:32.549 align:start position:0%
+ 
+ 
+
+00:17:32.549 --> 00:17:33.909 align:start position:0%
+ 
+ 
+
+00:17:33.909 --> 00:17:36.070 align:start position:0%
+ 
+ 
+
+00:17:36.070 --> 00:17:37.830 align:start position:0%
+ 
+ 
+
+00:17:37.830 --> 00:17:40.390 align:start position:0%
+ 
+ 
+
+00:17:40.390 --> 00:17:42.630 align:start position:0%
+ 
+ 
+
+00:17:42.630 --> 00:17:44.710 align:start position:0%
+ 
+ 
+
+00:17:44.710 --> 00:17:47.270 align:start position:0%
+ 
+ 
+
+00:17:47.270 --> 00:17:49.110 align:start position:0%
+ 
+ 
+
+00:17:49.110 --> 00:17:51.590 align:start position:0%
+ 
+ 
+
+00:17:51.590 --> 00:17:54.070 align:start position:0%
+ 
+ 
+
+00:17:54.070 --> 00:17:56.230 align:start position:0%
+ 
+ 
+
+00:17:56.230 --> 00:17:57.750 align:start position:0%
+ 
+ 
+
+00:17:57.750 --> 00:18:00.789 align:start position:0%
+ 
+ 
+
+00:18:00.789 --> 00:18:02.950 align:start position:0%
+ 
+ 
+
+00:18:02.950 --> 00:18:06.070 align:start position:0%
+ 
+ 
+
+00:18:06.070 --> 00:18:08.789 align:start position:0%
+ 
+ 
+
+00:18:08.789 --> 00:18:10.470 align:start position:0%
+ 
+ 
+
+00:18:10.470 --> 00:18:12.870 align:start position:0%
+ 
+ 
+
+00:18:12.870 --> 00:18:16.870 align:start position:0%
+ 
+ 
+
+00:18:16.870 --> 00:18:18.710 align:start position:0%
+ 
+ 
+
+00:18:18.710 --> 00:18:20.310 align:start position:0%
+ 
+ 
+
+00:18:20.310 --> 00:18:22.789 align:start position:0%
+ 
+ 
+
+00:18:22.789 --> 00:18:24.870 align:start position:0%
+ 
+ 
+
+00:18:24.870 --> 00:18:27.190 align:start position:0%
+ 
+ 
+
+00:18:27.190 --> 00:18:29.270 align:start position:0%
+ 
+ 
+
+00:18:29.270 --> 00:18:31.510 align:start position:0%
+ 
+ 
+
+00:18:31.510 --> 00:18:32.950 align:start position:0%
+ 
+ 
+
+00:18:32.950 --> 00:18:34.950 align:start position:0%
+ 
+ 
+
+00:18:34.950 --> 00:18:36.950 align:start position:0%
+ 
+ 
+
+00:18:36.950 --> 00:18:36.960 align:start position:0%
+ 
+ 
+
+00:18:36.960 --> 00:18:38.070 align:start position:0%
+ 
+
+
+00:18:38.070 --> 00:18:41.430 align:start position:0%
+ 
+ 
+
+00:18:41.430 --> 00:18:42.710 align:start position:0%
+ 
+ 
+
+00:18:42.710 --> 00:18:44.070 align:start position:0%
+ 
+ 
+
+00:18:44.070 --> 00:18:45.590 align:start position:0%
+ 
+ 
+
+00:18:45.590 --> 00:18:46.789 align:start position:0%
+ 
+ 
+
+00:18:46.789 --> 00:18:48.789 align:start position:0%
+ 
+ 
+
+00:18:48.789 --> 00:18:50.150 align:start position:0%
+ 
+ 
+
+00:18:50.150 --> 00:18:52.630 align:start position:0%
+ 
+ 
+
+00:18:52.630 --> 00:18:54.230 align:start position:0%
+ 
+ 
+
+00:18:54.230 --> 00:18:56.390 align:start position:0%
+ 
+ 
+
+00:18:56.390 --> 00:18:59.110 align:start position:0%
+ 
+ 
+
+00:18:59.110 --> 00:19:01.430 align:start position:0%
+ 
+ 
+
+00:19:01.430 --> 00:19:03.510 align:start position:0%
+ 
+ 
+
+00:19:03.510 --> 00:19:05.510 align:start position:0%
+ 
+ 
+
+00:19:05.510 --> 00:19:07.270 align:start position:0%
+ 
+ 
+
+00:19:07.270 --> 00:19:09.270 align:start position:0%
+ 
+ 
+
+00:19:09.270 --> 00:19:11.270 align:start position:0%
+ 
+ 
+
+00:19:11.270 --> 00:19:11.280 align:start position:0%
+ 
+ 
+
+00:19:11.280 --> 00:19:12.870 align:start position:0%
+ 
+
+
+00:19:12.870 --> 00:19:14.630 align:start position:0%
+ 
+ 
+
+00:19:14.630 --> 00:19:14.640 align:start position:0%
+ 
+ 
+
+00:19:14.640 --> 00:19:15.590 align:start position:0%
+ 
+
+
+00:19:15.590 --> 00:19:15.600 align:start position:0%
+ 
+ 
+
+00:19:15.600 --> 00:19:16.549 align:start position:0%
+ 
+
+
+00:19:16.549 --> 00:19:18.630 align:start position:0%
+ 
+ 
+
+00:19:18.630 --> 00:19:18.640 align:start position:0%
+ 
+ 
+
+00:19:18.640 --> 00:19:20.070 align:start position:0%
+ 
+
+
+00:19:20.070 --> 00:19:21.750 align:start position:0%
+ 
+ 
+
+00:19:21.750 --> 00:19:23.270 align:start position:0%
+ 
+ 
+
+00:19:23.270 --> 00:19:25.190 align:start position:0%
+ 
+ 
+
+00:19:25.190 --> 00:19:27.430 align:start position:0%
+ 
+ 
+
+00:19:27.430 --> 00:19:29.190 align:start position:0%
+ 
+ 
+
+00:19:29.190 --> 00:19:30.870 align:start position:0%
+ 
+ 
+
+00:19:30.870 --> 00:19:30.880 align:start position:0%
+ 
+ 
+
+00:19:30.880 --> 00:19:32.630 align:start position:0%
+ 
+
+
+00:19:32.630 --> 00:19:34.630 align:start position:0%
+ 
+ 
+
+00:19:34.630 --> 00:19:35.990 align:start position:0%
+ 
+ 
+
+00:19:35.990 --> 00:19:38.390 align:start position:0%
+ 
+ 
+
+00:19:38.390 --> 00:19:40.230 align:start position:0%
+ 
+ 
+
+00:19:40.230 --> 00:19:42.230 align:start position:0%
+ 
+ 
+
+00:19:42.230 --> 00:19:43.830 align:start position:0%
+ 
+ 
+
+00:19:43.830 --> 00:19:45.990 align:start position:0%
+ 
+ 
+
+00:19:45.990 --> 00:19:47.430 align:start position:0%
+ 
+ 
+
+00:19:47.430 --> 00:19:49.270 align:start position:0%
+ 
+ 
+
+00:19:49.270 --> 00:19:50.870 align:start position:0%
+ 
+ 
+
+00:19:50.870 --> 00:19:53.750 align:start position:0%
+ 
+ 
+
+00:19:53.750 --> 00:19:53.760 align:start position:0%
+ 
+ 
+
+00:19:53.760 --> 00:19:55.909 align:start position:0%
+ 
+
+
+00:19:55.909 --> 00:19:57.990 align:start position:0%
+ 
+ 
+
+00:19:57.990 --> 00:20:00.390 align:start position:0%
+ 
+ 
+
+00:20:00.390 --> 00:20:03.029 align:start position:0%
+ 
+ 
+
+00:20:03.029 --> 00:20:08.149 align:start position:0%
+ 
+ 
+
+00:20:08.149 --> 00:20:09.909 align:start position:0%
+ 
+ 
+
+00:20:09.909 --> 00:20:12.310 align:start position:0%
+ 
+ 
+
+00:20:12.310 --> 00:20:14.549 align:start position:0%
+ 
+ 
+
+00:20:14.549 --> 00:20:15.990 align:start position:0%
+ 
+ 
+
+00:20:15.990 --> 00:20:18.710 align:start position:0%
+ 
+ 
+
+00:20:18.710 --> 00:20:21.909 align:start position:0%
+ 
+ 
+
+00:20:21.909 --> 00:20:23.669 align:start position:0%
+ 
+ 
+
+00:20:23.669 --> 00:20:25.430 align:start position:0%
+ 
+ 
+
+00:20:25.430 --> 00:20:27.190 align:start position:0%
+ 
+ 
+
+00:20:27.190 --> 00:20:29.110 align:start position:0%
+ 
+ 
+
+00:20:29.110 --> 00:20:31.590 align:start position:0%
+ 
+ 
+
+00:20:31.590 --> 00:20:34.630 align:start position:0%
+ 
+ 
+
+00:20:34.630 --> 00:20:36.630 align:start position:0%
+ 
+ 
+
+00:20:36.630 --> 00:20:38.950 align:start position:0%
+ 
+ 
+
+00:20:38.950 --> 00:20:38.960 align:start position:0%
+ 
+ 
+
+00:20:38.960 --> 00:20:39.909 align:start position:0%
+ 
+
+
+00:20:39.909 --> 00:20:42.310 align:start position:0%
+ 
+ 
+
+00:20:42.310 --> 00:20:44.070 align:start position:0%
+ 
+ 
+
+00:20:44.070 --> 00:20:44.080 align:start position:0%
+ 
+ 
+
+00:20:44.080 --> 00:20:45.350 align:start position:0%
+ 
+
+
+00:20:45.350 --> 00:20:49.510 align:start position:0%
+ 
+ 
+
+00:20:49.510 --> 00:20:51.029 align:start position:0%
+ 
+ 
+
+00:20:51.029 --> 00:20:52.789 align:start position:0%
+ 
+ 
+
+00:20:52.789 --> 00:20:52.799 align:start position:0%
+ 
+ 
+
+00:20:52.799 --> 00:20:54.070 align:start position:0%
+ 
+
+
+00:20:54.070 --> 00:20:55.830 align:start position:0%
+ 
+ 
+
+00:20:55.830 --> 00:20:57.750 align:start position:0%
+ 
+ 
+
+00:20:57.750 --> 00:20:59.669 align:start position:0%
+ 
+ 
+
+00:20:59.669 --> 00:21:02.149 align:start position:0%
+ 
+ 
+
+00:21:02.149 --> 00:21:03.270 align:start position:0%
+ 
+ 
+
+00:21:03.270 --> 00:21:09.510 align:start position:0%
+ 
+ 
+
+00:21:09.510 --> 00:21:11.590 align:start position:0%
+ 
+ 
+
+00:21:11.590 --> 00:21:11.600 align:start position:0%
+ 
+ 
+
+00:21:11.600 --> 00:21:13.430 align:start position:0%
+ 
+
+
+00:21:13.430 --> 00:21:15.190 align:start position:0%
+ 
+ 
+
+00:21:15.190 --> 00:21:17.909 align:start position:0%
+ 
+ 
+
+00:21:17.909 --> 00:21:19.270 align:start position:0%
+ 
+ 
+
+00:21:19.270 --> 00:21:19.280 align:start position:0%
+ 
+ 
+
+00:21:19.280 --> 00:21:21.590 align:start position:0%
+ 
+
+
+00:21:21.590 --> 00:21:23.669 align:start position:0%
+ 
+ 
+
+00:21:23.669 --> 00:21:25.909 align:start position:0%
+ 
+ 
+
+00:21:25.909 --> 00:21:25.919 align:start position:0%
+ 
+ 
+
+00:21:25.919 --> 00:21:27.110 align:start position:0%
+ 
+
+
+00:21:27.110 --> 00:21:29.110 align:start position:0%
+ 
+ 
+
+00:21:29.110 --> 00:21:31.190 align:start position:0%
+ 
+ 
+
+00:21:31.190 --> 00:21:31.200 align:start position:0%
+ 
+ 
+
+00:21:31.200 --> 00:21:32.390 align:start position:0%
+ 
+
+
+00:21:32.390 --> 00:21:34.630 align:start position:0%
+ 
+ 
+
+00:21:34.630 --> 00:21:36.950 align:start position:0%
+ 
+ 
+
+00:21:36.950 --> 00:21:39.190 align:start position:0%
+ 
+ 
+
+00:21:39.190 --> 00:21:40.630 align:start position:0%
+ 
+ 
+
+00:21:40.630 --> 00:21:42.390 align:start position:0%
+ 
+ 
+
+00:21:42.390 --> 00:21:44.950 align:start position:0%
+ 
+ 
+
+00:21:44.950 --> 00:21:47.590 align:start position:0%
+ 
+ 
+
+00:21:47.590 --> 00:21:51.990 align:start position:0%
+ 
+ 
+
+00:21:51.990 --> 00:21:52.000 align:start position:0%
+ 
+ 
+
+00:21:52.000 --> 00:21:53.350 align:start position:0%
+ 
+
+
+00:21:53.350 --> 00:21:55.029 align:start position:0%
+ 
+ 
+
+00:21:55.029 --> 00:21:57.270 align:start position:0%
+ 
+ 
+
+00:21:57.270 --> 00:21:59.029 align:start position:0%
+ 
+ 
+
+00:21:59.029 --> 00:22:00.390 align:start position:0%
+ 
+ 
+
+00:22:00.390 --> 00:22:00.400 align:start position:0%
+ 
+ 
+
+00:22:00.400 --> 00:22:02.230 align:start position:0%
+ 
+
+
+00:22:02.230 --> 00:22:03.510 align:start position:0%
+ 
+ 
+
+00:22:03.510 --> 00:22:05.190 align:start position:0%
+ 
+ 
+
+00:22:05.190 --> 00:22:06.789 align:start position:0%
+ 
+ 
+
+00:22:06.789 --> 00:22:09.430 align:start position:0%
+ 
+ 
+
+00:22:09.430 --> 00:22:10.789 align:start position:0%
+ 
+ 
+
+00:22:10.789 --> 00:22:13.270 align:start position:0%
+ 
+ 
+
+00:22:13.270 --> 00:22:15.590 align:start position:0%
+ 
+ 
+
+00:22:15.590 --> 00:22:18.149 align:start position:0%
+ 
+ 
+
+00:22:18.149 --> 00:22:22.630 align:start position:0%
+ 
+ 
+
+00:22:22.630 --> 00:22:22.640 align:start position:0%
+ 
+ 
+
+00:22:22.640 --> 00:22:23.990 align:start position:0%
+ 
+
+
+00:22:23.990 --> 00:22:25.350 align:start position:0%
+ 
+ 
+
+00:22:25.350 --> 00:22:27.830 align:start position:0%
+ 
+ 
+
+00:22:27.830 --> 00:22:30.070 align:start position:0%
+ 
+ 
+
+00:22:30.070 --> 00:22:32.070 align:start position:0%
+ 
+ 
+
+00:22:32.070 --> 00:22:32.080 align:start position:0%
+ 
+ 
+
+00:22:32.080 --> 00:22:33.590 align:start position:0%
+ 
+
+
+00:22:33.590 --> 00:22:35.029 align:start position:0%
+ 
+ 
+
+00:22:35.029 --> 00:22:35.039 align:start position:0%
+ 
+ 
+
+00:22:35.039 --> 00:22:36.630 align:start position:0%
+ 
+
+
+00:22:36.630 --> 00:22:38.710 align:start position:0%
+ 
+ 
+
+00:22:38.710 --> 00:22:38.720 align:start position:0%
+ 
+ 
+
+00:22:38.720 --> 00:22:40.630 align:start position:0%
+ 
+
+
+00:22:40.630 --> 00:22:42.470 align:start position:0%
+ 
+ 
+
+00:22:42.470 --> 00:22:44.070 align:start position:0%
+ 
+ 
+
+00:22:44.070 --> 00:22:46.390 align:start position:0%
+ 
+ 
+
+00:22:46.390 --> 00:22:48.470 align:start position:0%
+ 
+ 
+
+00:22:48.470 --> 00:22:51.590 align:start position:0%
+ 
+ 
+
+00:22:51.590 --> 00:22:53.430 align:start position:0%
+ 
+ 
+
+00:22:53.430 --> 00:22:54.710 align:start position:0%
+ 
+ 
+
+00:22:54.710 --> 00:22:54.720 align:start position:0%
+ 
+ 
+
+00:22:54.720 --> 00:22:56.630 align:start position:0%
+ 
+
+
+00:22:56.630 --> 00:22:56.640 align:start position:0%
+ 
+ 
+
+00:22:56.640 --> 00:22:56.870 align:start position:0%
+ 
+
+
+00:22:56.870 --> 00:22:56.880 align:start position:0%
+ 
+ 
+
+00:22:56.880 --> 00:23:07.940 align:start position:0%
+ 
+
+
+00:23:07.940 --> 00:23:07.950 align:start position:0%
+ 
+ 
+
+00:23:07.950 --> 00:23:13.750 align:start position:0%
+ 
+
+
+00:23:13.750 --> 00:23:13.760 align:start position:0%
+ 
+ 
+
+00:23:13.760 --> 00:23:15.840 align:start position:0%
+ 
+
+

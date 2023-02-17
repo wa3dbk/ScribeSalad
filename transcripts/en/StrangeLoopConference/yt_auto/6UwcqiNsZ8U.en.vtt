@@ -1,0 +1,3704 @@
+WEBVTT
+Kind: captions
+Language: en
+
+00:00:04.910 --> 00:00:08.530 align:start position:0%
+ 
+so my name is Arthur and I work on the  cloud gateway team in Netflix and our  primary responsibility is building and  maintaining Zhul and Zul primarily  routes traffic to all of our micro  services and we have a lot of micro  services you may have seen this picture  before this is a map of our streaming  related micro services so only the  streaming related micro services not all  the other stuff we do and this is the  flow of traffic among them so it comes  from the Internet through the EO B's  goes through multiple Zul clusters those  dual clusters route traffic to our  back-end services mainly our API and  then to our mid tiers and you'll humor  you'll hear me use the word origin a lot  and origin essentially is our  terminology for downstream service so  when I say origin that's what I'm  talking about the service that Zul is  gonna rap to so this is pretty  impressive right here's the thing though  this picture is actually several years  old since then some major services have  been you know sharded and decomposed  into smaller ones there are also more  business functions and product features  that we've added and and that creates  you know more new services we've also  started using containers and this is  great for developers it makes it really  easy to spin up a new service and do  something new but for every container  every environment every different  configuration this creates a new route  for Zul and very quickly the system  starts looking more like this so over  time the amount of backends that Zul  talks to has exploded and it'll probably  continue to do so in the future now it's  important to keep in mind that each one  of these dots is a service so it could  be composed of potentially hundreds of  instances  and dozens of critical metrics that win  we may need to sift through just to see  what's going on so when we inevitably  run into production incidents we need to  root cause them as fast as possible when  we had just a handful of origins  it was mostly doable but now it's like  finding a needle in a haystack we have  to sift through dozens and dozens of  dashboards to figure out what's going on  and where so imagine getting a page at  3:00 in the morning you roll over you  grab your laptop and you try and find  that one needle in this massive massive  haystack not easy right it's pretty  clear to us that we needed a solution to  help us root cause these incidents more  effectively we've always had alerts  based on static percentage based metric  thresholds and the problem with these  alerts is that they're broad and the  thresholds are set very high so that we  don't get a lot of false positives so  you may not catch certain anomalies that  are very specific to your service or  just too low to hit that threshold  they're also slow because they have to  go through this huge time series  database that serves the whole company  you may not get your alert until 10  minutes later like in this graph so you  can see the threshold gets crossed and  then only 10 minutes later we get an  alert so a lot of stuff can happen in 10  minutes especially when you're dealing  with massive scale another problem is  these alerts would only be specific to  our service so we'd only get alerts for  Zul and not for other services that may  be having trouble and since we're in the  front door we'd be getting alerts for  everyone's services error rates go up  for downstreams a rates go up for us so  an example here the top graph and the  bottom graph are identical one is Xul's  error rate the other one is a specific  origins area  you look at the dashboard you know five  ten minutes you figure out pretty  quickly okay this is this is the problem  here so this created an operational  burden for us and you know we wanted to  offload that and what we ended up doing  is building a real-time anomaly  detection system it has dynamic  thresholds and we run them for every  metric and every grouping of different  clusters and origins and essentially it  creates this adaptive threshold that  follows the metric we then take all  those anomaly detection across all of  those slices and when one of them is  anomalous we know exactly which origin  is in trouble because we've sliced it by  that origin or that dual cluster to know  what's going on so then we compile all  these anomalies into a time line and  send it out to the responsible or  on-call operators we named our anomaly  detector raju and you know it's kind of  a neat acronym but realistically we  named it after a former colleague whose  name is Raju and he was famous at the  company for like being so in tune with  every metric that he could like just  jump in and figure out what's going on  he was like it's like he was living  inside the computer so these alerts they  can pinpoint basically which system is  in trouble when create a time line of  events and this creates kind of a causal  relationship that helps us figure out  which system is the root cause of all  the problems and we were blown away by  the results we saw so we've grown to  rely on them pretty heavily and it's  significantly reduced our operational  burden for example our team used to get  ten pages a week now we're down to about  one page a week or less so that's that's  a huge improvement for us that's a  massive win and helps us sleep at night  you know literally and the other big win  here is that it's in real-time so we can  detect these alerts sometimes before our  pagers fire and sometimes before metrics  show up on our dashboards  and we built all this without any fancy  AI there's no machine learning it's just  some elegant math some statistics and  some algorithms that help us solve some  very hard problems so let's get into how  we built it first I'm going to talk  about why static alerts suck why they  didn't work for us how we use real-time  event processing and then how we use  those real-time events to do anomaly  detection and then finally how to filter  out the anomalies that don't matter and  make the alerts actually useful so  static alerts suck and the biggest the  biggest thing we needed was speed speed  is critical let me give you an example  we have a small incident and incident  happens at zero minutes so we have to  wait for our metrics to catch up let's  say we're five minutes in and the pager  fires somebody gets paged usually it was  Zul so the zhulong call you know it  might take them 10 minutes to get out of  bed and get their laptop they respond  within 10 minutes so already 15 minutes  deep before we even looked at anything  finally if it's a you know if it's a  minor incident the zhulong call can dig  through the metrics and you know maybe  they can figure it out in 15 minutes and  then they realize that it's actually a  downstream system that didn't get paged  because we didn't have that visibility  so now the zhulong call has to page the  downstream on call again we have to wait  for the downstream own call to respond  then they look through some metrics if  they're really lucky they can identify  that issue in 10 minutes and then if  they're even luckier if it's like a  config change they can fix it in five  minutes so this best case scenario still  takes about 50 minutes to resolve and  the first 30 minutes of that is just  figuring out who to page this is this is  very problematic speed when resolving is  this these incidents is very critical  so most metrics collection solutions  like time series databases they're  solving a very comprehensive problem for  the whole company and they tend to be  pretty slow for example at Netflix we're  processing like a billion metrics per  minute and what we want to look at is a  much narrower slice in that in a much  faster way so when these events happen  it takes at least five to ten minutes  those metrics to catch up we also use  rolling counts on our alarms or sorry  our alerts so that we don't get false  positives so for example you want to see  that you've passed that threshold nine  out of the last ten minutes before you  send an email so you're not constantly  emailing people for like minor blitz and  then each time you page another team you  create that loop so if you have to page  several teams in that investigation it's  gonna take a very long time to figure  out the root cause and all these things  put together mean we have much slower  resolutions which has a massive massive  impact this is a graph of essentially  extrapolated impact of incidents over  time so when we built a lot of these  systems let's say five years ago we  could have a two-hour outage which today  would be equivalent to a five-minute  outage so a lot of these tools aren't  really solving the problems that we're  having today and we're actually trending  even further so a five minute impact is  just as big as a two hour outage five  years ago that's that's insane right and  maybe in ten years it'll be like one  minute or 30 seconds or whatever but  let's let's not get ahead of ourselves  so obviously over time it's becoming  more and more critical to resolve these  incidents as fast as possible the other  thing we need is context so alerts fire  on a single metric for a single app  that's set up by that specific team and  they don't really get to look at other  team's alerts and typically when an SRE  sees that there's a huge out  they'll page all the suspects they'll  page everyone that could potentially be  involved so that they don't have to go  through that loop of paging every  downstream over and over again which  means that if you're the front door like  us we get paged all the time so we  needed to show the what the where and  the when in the alert so that the  operators could orient themselves and  figure out who needs to be paged we also  need accuracy as I showed you in that  previous graph that the static  thresholds don't necessarily catch all  the anomalies and they're set for only  these obvious high impact issues that  happen you know at a very high scale and  that may not necessarily be enough so we  need more adaptive thresholds and then  selfishly for us we wanted to reduce our  operational burden we were constantly  getting paged and that creates alert  fatigue after a while you have to go  through all these dashboards when you  get paged and that created very  difficult on-call rotations for us and  as I mentioned our page load is about 10  a week and we wanted to get that down so  what's the solution  real-time alerting combining several  anomalies into one alerts so we can see  which which systems are the pattern here  and then orient the operators so they  can page the exact team and not every  team so let's talk about how we do  real-time events so for stream  processing we use a framework called  mantis and mantis is used essentially to  collect and process real-time events you  can think of it as like Kafka Plus  Apache flink put together and all the  critical services at Netflix send events  into mantas not just zoo to give you a  sense of scale just for Zul we send  millions of events per second across all  like all the thousands of devices that  we have and each one of those events has  hundreds of dimensions so  mantis is incredibly useful for allowing  us to kind of search and sip to those  events and just pick out the slice that  we need for all of our real-time traffic  and then we can do it on demand so it  doesn't necessarily need to push the  vents all the time we can submit a query  and it'll just match the query and  return the results here's how it works  so imagine we have all the Zul clusters  which are you know hundreds and hundreds  of instances we have a big mantas job  called the Mantis request source and it  opens an SSE socket to every single Zul  instance then we have downstream jobs  that want specific functionality  specific parts of that request source so  a certain subset and they submit queries  through the request source into Zhul Zul  will find all the things that match and  then send that back to the request  source and the request source will  multiplex it to all the jobs that are  interested in that event so some of the  big features the first one is querying  so you can submit sequel style queries  and get results back on that you can  sample any portion of traffic so you  could do one percent of traffic ten  percent you can do a hundred percent if  you want to and aside from anomaly  detection this is an incredibly useful  framework just for debugging production  is in so you can see exactly what a  certain type of event looks like right  now going through the servers we also  use mantis for stream processing so that  mantis job that's getting a stream of  events can actually run some arbitrary  code every time it gets an event so you  can think of it as like a mapping  function it also allows us to aggregate  so we can build complex result sets in  real time we can aggregate by any key in  that highly dimensional space and  ultimately allows us to reduce those  large result sets into kind of useful  aggregates and then lastly job chaining  is very important so we can take a bunch  of these mapping functions we can chain  them together we can pipe them into  these reduce functions  we could end up with a really really  useful result set and make some  interesting decisions which is what raju  does so now for the good stuff how do we  do anomaly detection we had some  requirements the biggest one it needs to  be cheap enough that we can do it in  real time it needs to be stable enough  that we can did we can detect sharp  spikes and recover from them and then  still dynamic enough that it will adjust  to neutrons over time and then lastly we  wanted to have it somewhat lenient so we  don't get a lot of false positives so we  tried a handful of algorithms like  double exponential smoothing which had  historical analysis like week over week  but the solution we eventually came to  is median estimation so the median is a  robust indicator which means it doesn't  get skewed when there's a huge outlier  it stays very stable and it's it's  really cheap to calculate now you might  be wondering how do you calculate a  median on streaming data you don't have  the whole distribution how do you have  the median well that brings me to our  median estimation algorithm or as I call  it the kodi algorithm named after my  colleague Cody because he came up with  it it's actually called mad or median  absolute deviation I believe and it's  effectively just a stochastic gradient  descent with a static learning rate so  if a streaming value comes in and it's  greater than a median estimate then we  increase our median estimate by one if a  streaming value comes in and it's less  than our median estimate then we  decrease the median value by one so very  simple very cheap but surprisingly  effective here's the here's a graph from  Raju and the red line is the metric and  the blue line is a threshold and you can  see the metric is very noisy it's gone  up and down up and down up and down and  the threshold is very stable but it  still follows along so as that spiky  metric goes up  the threshold slowly goes up and as a  spiky metric drops the threshold slowly  drops but it's very stable and that's  because that learning rate is static and  it's it's one so it's learning very  slowly and and that's that's a big  feature because when you get this which  is very common for outages is metrics  that go from zero to a thousand or 8,000  in this case that threshold doesn't  overcorrect  it doesn't chase that error metric too  fast so it remains very stable and  eventually when that error metric drops  back down to zero you can see that the  thresholds not too far up and it can  recover pretty quickly whereas with some  other algorithms it would go to from 0  to 8,000 and now your thresholds like  blown-out for an hour and then when it  recovers it's blowing out for another  hour because it's like negative now so  stability big feature it's also it's  also very simple right which produces a  simple code base and predictable  behavior and again very cheap to  calculate over thousands and thousands  of metrics and all these permutations of  cluster origin and combinations so  that's that's incredibly important the  other feature that we really wanted was  recovery detection it's critical to see  if an alert is ongoing or if it's  transient right it's if you wake up in  the morning you don't necessarily want  to get out of bed if this thing is  recovered already right and if it  recovers in a couple minutes then you're  probably okay to go back to sleep  it also prevents action right if you  know something's recovered it's going to  mitigate action without you having to  figure out if it's recovered or not so  you're not gonna have to go scale  something up or scale something down or  push a new build or whatever and then it  gives you some info right if it spiked  and recovered quickly that's information  that's useful to figuring out what the  problem is and since we're building this  timeline of events we have this open  window for anomalies we could  potentially recover before we've sent  the email in which case we don't need to  send the email at all  how do we detect recovery well it's  pretty simple we calculate the pre alert  range which is our kind of stable metric  and then we look at the recent range and  we have to confidently be able to say  that the recent range is the same  distribution as the pre alert range if  that's true then we've recovered but  again this is harder than it sounds for  streaming data because you don't have  the entire set you need to find a  heuristic that's useful for figuring out  what your boundary is and what we did  for that is we used the huffing bound  and you should take a picture of this  with your cell phones because this is  extremely useful streaming data this is  like a killer app for streaming data you  basically only have to give it the range  which is the max minus the min and the  set of numbers the size of the data set  that you have and it will give you some  boundary with confidence of epsilon so  if you play with that Delta the 1 minus  Delta there if you play with that Delta  you can kind of tweak it for your metric  and be fairly confident that your recent  points are in the same distribution as  your previous points so here's an  example you can see there's a  distribution in the bottom corner there  and depending on your Delta you're going  to be either very close to that  distribution or very far from that  distribution so you don't want to be too  close because then you'll you'll be not  leaning enough you don't be too far  because then you're gonna overshoot your  distribution and be way too lenient and  everything is going to look like a  recovery typically we've been pretty  happy with the delta of 0.1 which is  that 99% line and it's worked very well  for us so what does a recovery algorithm  look like it's a huffing bound on the  pre alert distribution we then take the  last 30 seconds of data points and get  the mean and then if the recent mean is  below that bound then we're good we've  recovered here's what it looks like on a  graph so usually the error rate is flat  and in some  thing happens there eight spikes we have  our pre alert range now we're anomalous  and then it starts tapering off slowly  and depending what kind of algorithm  you're using like if you're calculating  slope or something like that you may  think you've recovered at one of those  two upper recovery ranges but in reality  you haven't really recovered until  you're back to that normal error rate  that you're used to so it's very  effective in that sense now these  anomalies happen all the time we don't  want to get flooded with emails right we  want to make sure we only get the emails  that are real problems and have a real  impact so first let's look at what Raju  really looks like so these boxes are the  chain of mantas jobs that compose Raju  and the size of the Box corresponds  roughly to how many containers are  required to run it so the duel request  source is huge it's hundreds of  containers because it has to be able to  handle potentially all of Xul's traffic  we then pipe it to an aggregator so some  aggregation query and this can be a much  smaller cluster maybe tens of instances  and produce a distilled aggregate once  we get that aggregate then we can have  like one instance clusters like the  anomaly detector and Raju are very small  because all they get is just aggregates  for the Zul aggregation it's pretty  simple we select the status for all  requests and then we aggregate all the  values of that status and we group them  by Zul cluster and destination origin we  then window it for ten seconds and we  output it a one-second interval so the  groupings that we end up with are the  Zul cluster the downstream origin and  then cluster and origin together in case  it's a very specific type of issue  we then take those groupings and we feed  them into that anomaly detector and what  it does is it flattens all of those  groupings into a big list sorry and we  take that big list and we run anomaly  detection on each item in that list so  each item that list is gonna have some  count and then if one of those counts is  anomalous we know exactly what's broken  you know it's that exact permutation of  cluster and origin that's in trouble  so recall this slide from earlier right  this is this is the representation of  all the different permutations that we  have and when one of them has that  anomalous metric we know right away it's  that guy here's the here's what the data  looks like this is a think of more  useful like this is this is like the  real explanation this is this is the  money of what it looks like right so you  have all these predictions coming in and  you can see it's color-coded a little  bit so on the Left we have the Zul  cluster as the grouping so it's all for  the same cluster but different values of  status so we have success we have read  time out we have throttling and then on  the right we have different groupings  like Zul cluster 2 and then cluster an  API put together just API and when one  of these is anomalous we know that it's  that cluster we know it's like Zul  cluster one has an anomalous count for  this value so we can say in the email  Zul cluster 1 is throttling traffic at  this rate  that's essentially you know it's it's  almost like root cause detection but  it's it's the very first step to that  root cause detection and you know this  is this is what makes it so powerful  this this this ability to dig down into  all these aggregates now most anomalies  aren't really anomalies right they  happen all the time  so we need to assess impact we need to  figure out is it recovered or not and  essentially filter out all the noise so  the way we did that is with  engine we open this window when the  first anomaly happens and we then  collect all the subsequent anomalies for  that window sighs and at the end of the  window we run this rules engine for each  anomaly and this rules engine basically  just tags every one of those anomalies  with a bunch of useful data once we get  all those tagged anomalies we can then  make an intelligent decision on what we  should do whether we shall learn we  should not alert things like that so an  example of some useful rules time very  important when of the alert happen when  of the alert recover impact also very  important if it doesn't impact any  traffic we don't care if it has a really  big impact that's very important so what  percent of traffic is erroneous versus  successful a description so when we send  the email to operators we don't  necessarily have to expect them to know  all of our status codes we want to  describe what the problem is and then  finally decisions on do we alert do we  not alert do we page do we not page and  these rules are all handwritten which is  somewhat time consuming but incredibly  accurate so as I mentioned we have this  timeline of events when the first  anomaly happens we start a window we  close the window after three minutes and  then we end up with this tagged timeline  so it's a very rich timeline of events  and what it ends up doing is creating  this time-based causation almost well  technically correlation but the  correlation is very strong because  things are happening in a very tight  window so you can figure out pretty  clearly what's going on and we can look  at some examples this is what a Roger  email looks like I know you can't see  anything on the slide it's very dense so  I'm gonna clean it up for you guys so  I've kind of simplified and renamed a  couple of the things so that you  actually know what they say instead of  like our internal Netflix names for  things in blue we have the Zul cluster  in green we have the downstream origin  in yellow slash orange we  the failure the failure status described  and then purple is the impact so you can  see the first thing that we get is this  grouping of Zul cluster so the Zul  website cluster and our API origin and  it's starting to have some connectivity  issues connectivity issues meaning like  we can't connect we're getting a  connection refused next thing that  happens is just that API service  grouping is now failing with timeouts  and then in a few seconds later just the  website grouping the website cluster is  also failing with timeouts then it gets  a little bit worse now Sewell is  throttling retries to that API service  and throttling retries essentially means  we're trying to prevent a retry storm so  instead of sending all the traffic to  this downstream origin and basically  taking it under water we're rejecting  anything that is tagged as a retry to  protect it but this is a pretty dire  situation so that this means that people  are probably not able to stream anything  at least for that cluster and then a  different Zul cluster which is the api  zuo api cluster which generally fronts  that api service as well is now also  throttling retries so another retry  storm and then finally just the cluster  grouping is throttling so it's pretty  clear here that the root cause is  somewhere in API right you have multiple  dual clusters having trouble talking to  this api service and the api service on  its own is also in trouble so even  though in the past you would have  potentially paged both Zul and api in  this case it's pretty clear it's not a  dual problem it's almost certainly an  API problem and this was this was a  powerful thing to see for us because we  can now point to this you know this  being the root cause and we can send  that directly to that team in fact it  was it was so successful that we wanted  to dig a little bit deeper and so we  expanded Raju into API as well  now let's take a step back and talk  about what API actually is at Netflix  it's called the API dot next platform if  some of you are aware of that or not  it's essentially an orchestration layer  so there are many device teams and those  device teams deploy their endpoints  which are basically groovy scripts for  the most part into this shared platform  and they use the platform code to do all  kinds of stuff all kinds of  functionality that goes downstream to  other services and that code is always  whatever function that service is doing  whether it's making a downstream or not  is gonna be wrapped in a history command  so those are the h's on that graph and  history is essentially a framework for  you know short-circuiting and isolating  traffic so it creates an isolation of  all these functions so that they so one  bad function basically doesn't take down  the entire server now there's there's so  much functionality here there's so much  stuff that API does that you end up with  hundreds and hundreds of these hystrix  commands and you guessed it it's another  needle in a haystack problem so this  seemed like another natural place where  we could put Raju so what we did is we  aggregated all the history response  codes and we group them by the command  name so the actual functionality of that  history command and API cluster that was  running on and then we basically threw  them on to the same timeline as all the  Zul anomalies so here's an example again  cleaned up for your viewing pleasure but  you can see there's now like a prefix on  the line that says which app it came  from so it's either API or Zul and the  API cluster is coded blue and then the  history command is coded or sorry  colored green so let's go through it we  have this incident and the first thing  that happens is this grouping of API  service which is that API origin  and this authenticate customer command  is suddenly failing and then just the  authentic a customer command is failing  which means it's probably happening  across multiple clusters you wait a  couple minutes and eventually it  escalates into Zul failing with the read  timeouts and it's the Zul api which is  the cluster fronting API and the api  origin so again pretty clear indicator  where the problem is and then the  website cluster and the website UI  service start failing and this is  because that website UI service has to  make some calls to API in order to  render the website starts throttling  requests failing with three timeouts and  then a related history command starts  failing which is get customer  permissions so in this case authenticate  customer get customer permissions all go  to the same origin that downstream of  API which is our subscriber service that  holds all that information and then  finally the Zulu API cluster across the  board is saying no more retries we're  throttling this retry storm so this is  problematic but you can see how powerful  this is right not only do we know that  the issues happening in API but we know  exactly which slice of functionality in  the API is broken so we know that okay  most likely our subscriber service is in  trouble so the operators with s Ari's  see this kind of email and they're not  gonna page Zul and they're not gonna  page api probably they're gonna page a  subscriber team so huge win huge win for  us and on top of that it's pretty clear  that you know what the root cause is  here right you can see the root cause  pretty pretty pretty easily just by  looking at this timeline of events so we  didn't stop there we expanded we expand  it to other types of events so events  that aren't anomalies but that we can  see happening now our gold standard  metric for a KPI so our  gold-standard indicator of is the system  good or not is the start play indicator  so how many star plays are we getting  per second if you can't play that means  we're in trouble right if you can't push  play and play a video that means we're  down most likely because it's it's a  very predictable cycle of our traffic so  in this example one of our DRM services  which is the PlayReady DRM it's  typically used for windows and streaming  sticks you can see that hystrix command  starts failing and then within about a  minute we get this SPS drop event for  the Windows app and the streaming stick  now this is this is mind blowing to us  right this is this is like insanely  powerful you're getting this SBS drop  event which we've had for years and  years but you're not only getting this  SBS drop event you're also getting what  caused the drop right so before you say  okay well Windows is down let's figure  it out now you're saying okay Windows is  down and it's because the DRM service is  broken here's another example so this  one is Zul instead of API but basically  we have this dual cluster that Front's  are a lot of our production traffic and  in this case it's fronting the iOS UI  service and services in trouble and then  again within about a minute iPhone iPod  and iPad get an SBS drop so you're  getting this SBS drop event for iOS  devices and guess what the iOS service  is in trouble let's page those guys we  took it another step further we added  spinnaker events and spinnaker is our  kind of deployment framework so in this  particular example again you see it's  not an SBS job but it's a push so  somebody pushes a service and then the  history command for that service breaks  a minute later so you get this email and  you can pretty quickly as the operators  say okay let's roll back that push it's  obviously broken and then finally you  know we have all this functionality now  but we don't want to get those pages we  don't want to get those email  so we start actually emailing the  culprits directly the origins sometimes  aren't aware of the issue if it's a  connectivity issue they may not even see  it in their metrics so this gives them  much better visibility into whether  their services in trouble or not and  then obviously if it recovers we'll send  them a followup with with the recovery  info so this ultimately reduced the need  for us to get paged on everything and  and it kind of pushes the onus onto the  teens that own the services that are in  trouble  so elephant in the room  machine learning right any for any black  mirror fans that's a crazy episode by  the way  so why didn't we use machine learning  well for this particular problem it  wouldn't have worked well right it's  very hard to train something when you  have very few examples of problems right  we don't have that many outages that we  can train this effectively and when we  do have outages they're all different  they don't we we don't have outages  because the same thing keeps happening  over and over again so it's very hard to  train a reinforcement type model and  because of that you'll have this huge  false positive rate and then the other  problem is even if you could get half of  the way there the data set will then  change and so whatever you've trained is  now useless because things don't look  the same after like a month or two  months things are always evolving and  looking different so some of the  benefits are you know we get the simple  predictable code base we have these  handwritten rules which have this really  high true positive rate and that's super  super important when you're dealing with  thousands and thousands of metrics and  all these different clusters and all  these different permutations if you had  a high false positive rate you would  never look at those alerts you'd be  getting like a hundred a second right  it's not useful so that high true  positive rate is very important but  obviously you know there's trade-offs  there it's not necessarily easy to  transfer a new service into Raju there's  a lot of hand-holding that has to happen  the rules need to be created manually as  I mentioned  the alerting decisions are potentially  different for every service so those may  need to be tweaked every time you add a  new service and then in order to do all  that stuff you need deep operational  knowledge and that comes at a premium so  you know pros and cons but we're pretty  happy with it  we built this real-time contextual  alerting system over thousands of  metrics millions of events per second  they go off super fast and they  sometimes even recover before our pagers  fire and they give us this rich timeline  of events that gives us deep insight  into our system and essentially help us  root cause a lot of incidents we've also  expanded into API and other services you  know for deeper insights and we continue  to do that and we're gonna continue to  expand Roger and make it more user  friendly to hopefully help onboarding  and things like that and ultimately we  did in a very simple way without any AI  and pretty happy with it that's it thank  you  [Applause]
+
+00:00:08.530 --> 00:00:11.500 align:start position:0%
+so my name is Arthur and I work on the  cloud gateway team in Netflix and our  primary responsibility is building and  maintaining Zhul and Zul primarily  routes traffic to all of our micro  services and we have a lot of micro  services you may have seen this picture  before this is a map of our streaming  related micro services so only the  streaming related micro services not all  the other stuff we do and this is the  flow of traffic among them so it comes  from the Internet through the EO B's  goes through multiple Zul clusters those  dual clusters route traffic to our  back-end services mainly our API and  then to our mid tiers and you'll humor  you'll hear me use the word origin a lot  and origin essentially is our  terminology for downstream service so  when I say origin that's what I'm  talking about the service that Zul is  gonna rap to so this is pretty  impressive right here's the thing though  this picture is actually several years  old since then some major services have  been you know sharded and decomposed  into smaller ones there are also more  business functions and product features  that we've added and and that creates  you know more new services we've also  started using containers and this is  great for developers it makes it really  easy to spin up a new service and do  something new but for every container  every environment every different  configuration this creates a new route  for Zul and very quickly the system  starts looking more like this so over  time the amount of backends that Zul  talks to has exploded and it'll probably  continue to do so in the future now it's  important to keep in mind that each one  of these dots is a service so it could  be composed of potentially hundreds of  instances  and dozens of critical metrics that win  we may need to sift through just to see  what's going on so when we inevitably  run into production incidents we need to  root cause them as fast as possible when  we had just a handful of origins  it was mostly doable but now it's like  finding a needle in a haystack we have  to sift through dozens and dozens of  dashboards to figure out what's going on  and where so imagine getting a page at  3:00 in the morning you roll over you  grab your laptop and you try and find  that one needle in this massive massive  haystack not easy right it's pretty  clear to us that we needed a solution to  help us root cause these incidents more  effectively we've always had alerts  based on static percentage based metric  thresholds and the problem with these  alerts is that they're broad and the  thresholds are set very high so that we  don't get a lot of false positives so  you may not catch certain anomalies that  are very specific to your service or  just too low to hit that threshold  they're also slow because they have to  go through this huge time series  database that serves the whole company  you may not get your alert until 10  minutes later like in this graph so you  can see the threshold gets crossed and  then only 10 minutes later we get an  alert so a lot of stuff can happen in 10  minutes especially when you're dealing  with massive scale another problem is  these alerts would only be specific to  our service so we'd only get alerts for  Zul and not for other services that may  be having trouble and since we're in the  front door we'd be getting alerts for  everyone's services error rates go up  for downstreams a rates go up for us so  an example here the top graph and the  bottom graph are identical one is Xul's  error rate the other one is a specific  origins area  you look at the dashboard you know five  ten minutes you figure out pretty  quickly okay this is this is the problem  here so this created an operational  burden for us and you know we wanted to  offload that and what we ended up doing  is building a real-time anomaly  detection system it has dynamic  thresholds and we run them for every  metric and every grouping of different  clusters and origins and essentially it  creates this adaptive threshold that  follows the metric we then take all  those anomaly detection across all of  those slices and when one of them is  anomalous we know exactly which origin  is in trouble because we've sliced it by  that origin or that dual cluster to know  what's going on so then we compile all  these anomalies into a time line and  send it out to the responsible or  on-call operators we named our anomaly  detector raju and you know it's kind of  a neat acronym but realistically we  named it after a former colleague whose  name is Raju and he was famous at the  company for like being so in tune with  every metric that he could like just  jump in and figure out what's going on  he was like it's like he was living  inside the computer so these alerts they  can pinpoint basically which system is  in trouble when create a time line of  events and this creates kind of a causal  relationship that helps us figure out  which system is the root cause of all  the problems and we were blown away by  the results we saw so we've grown to  rely on them pretty heavily and it's  significantly reduced our operational  burden for example our team used to get  ten pages a week now we're down to about  one page a week or less so that's that's  a huge improvement for us that's a  massive win and helps us sleep at night  you know literally and the other big win  here is that it's in real-time so we can  detect these alerts sometimes before our  pagers fire and sometimes before metrics  show up on our dashboards  and we built all this without any fancy  AI there's no machine learning it's just  some elegant math some statistics and  some algorithms that help us solve some  very hard problems so let's get into how  we built it first I'm going to talk  about why static alerts suck why they  didn't work for us how we use real-time  event processing and then how we use  those real-time events to do anomaly  detection and then finally how to filter  out the anomalies that don't matter and  make the alerts actually useful so  static alerts suck and the biggest the  biggest thing we needed was speed speed  is critical let me give you an example  we have a small incident and incident  happens at zero minutes so we have to  wait for our metrics to catch up let's  say we're five minutes in and the pager  fires somebody gets paged usually it was  Zul so the zhulong call you know it  might take them 10 minutes to get out of  bed and get their laptop they respond  within 10 minutes so already 15 minutes  deep before we even looked at anything  finally if it's a you know if it's a  minor incident the zhulong call can dig  through the metrics and you know maybe  they can figure it out in 15 minutes and  then they realize that it's actually a  downstream system that didn't get paged  because we didn't have that visibility  so now the zhulong call has to page the  downstream on call again we have to wait  for the downstream own call to respond  then they look through some metrics if  they're really lucky they can identify  that issue in 10 minutes and then if  they're even luckier if it's like a  config change they can fix it in five  minutes so this best case scenario still  takes about 50 minutes to resolve and  the first 30 minutes of that is just  figuring out who to page this is this is  very problematic speed when resolving is  this these incidents is very critical  so most metrics collection solutions  like time series databases they're  solving a very comprehensive problem for  the whole company and they tend to be  pretty slow for example at Netflix we're  processing like a billion metrics per  minute and what we want to look at is a  much narrower slice in that in a much  faster way so when these events happen  it takes at least five to ten minutes  those metrics to catch up we also use  rolling counts on our alarms or sorry  our alerts so that we don't get false  positives so for example you want to see  that you've passed that threshold nine  out of the last ten minutes before you  send an email so you're not constantly  emailing people for like minor blitz and  then each time you page another team you  create that loop so if you have to page  several teams in that investigation it's  gonna take a very long time to figure  out the root cause and all these things  put together mean we have much slower  resolutions which has a massive massive  impact this is a graph of essentially  extrapolated impact of incidents over  time so when we built a lot of these  systems let's say five years ago we  could have a two-hour outage which today  would be equivalent to a five-minute  outage so a lot of these tools aren't  really solving the problems that we're  having today and we're actually trending  even further so a five minute impact is  just as big as a two hour outage five  years ago that's that's insane right and  maybe in ten years it'll be like one  minute or 30 seconds or whatever but  let's let's not get ahead of ourselves  so obviously over time it's becoming  more and more critical to resolve these  incidents as fast as possible the other  thing we need is context so alerts fire  on a single metric for a single app  that's set up by that specific team and  they don't really get to look at other  team's alerts and typically when an SRE  sees that there's a huge out  they'll page all the suspects they'll  page everyone that could potentially be  involved so that they don't have to go  through that loop of paging every  downstream over and over again which  means that if you're the front door like  us we get paged all the time so we  needed to show the what the where and  the when in the alert so that the  operators could orient themselves and  figure out who needs to be paged we also  need accuracy as I showed you in that  previous graph that the static  thresholds don't necessarily catch all  the anomalies and they're set for only  these obvious high impact issues that  happen you know at a very high scale and  that may not necessarily be enough so we  need more adaptive thresholds and then  selfishly for us we wanted to reduce our  operational burden we were constantly  getting paged and that creates alert  fatigue after a while you have to go  through all these dashboards when you  get paged and that created very  difficult on-call rotations for us and  as I mentioned our page load is about 10  a week and we wanted to get that down so  what's the solution  real-time alerting combining several  anomalies into one alerts so we can see  which which systems are the pattern here  and then orient the operators so they  can page the exact team and not every  team so let's talk about how we do  real-time events so for stream  processing we use a framework called  mantis and mantis is used essentially to  collect and process real-time events you  can think of it as like Kafka Plus  Apache flink put together and all the  critical services at Netflix send events  into mantas not just zoo to give you a  sense of scale just for Zul we send  millions of events per second across all  like all the thousands of devices that  we have and each one of those events has  hundreds of dimensions so  mantis is incredibly useful for allowing  us to kind of search and sip to those  events and just pick out the slice that  we need for all of our real-time traffic  and then we can do it on demand so it  doesn't necessarily need to push the  vents all the time we can submit a query  and it'll just match the query and  return the results here's how it works  so imagine we have all the Zul clusters  which are you know hundreds and hundreds  of instances we have a big mantas job  called the Mantis request source and it  opens an SSE socket to every single Zul  instance then we have downstream jobs  that want specific functionality  specific parts of that request source so  a certain subset and they submit queries  through the request source into Zhul Zul  will find all the things that match and  then send that back to the request  source and the request source will  multiplex it to all the jobs that are  interested in that event so some of the  big features the first one is querying  so you can submit sequel style queries  and get results back on that you can  sample any portion of traffic so you  could do one percent of traffic ten  percent you can do a hundred percent if  you want to and aside from anomaly  detection this is an incredibly useful  framework just for debugging production  is in so you can see exactly what a  certain type of event looks like right  now going through the servers we also  use mantis for stream processing so that  mantis job that's getting a stream of  events can actually run some arbitrary  code every time it gets an event so you  can think of it as like a mapping  function it also allows us to aggregate  so we can build complex result sets in  real time we can aggregate by any key in  that highly dimensional space and  ultimately allows us to reduce those  large result sets into kind of useful  aggregates and then lastly job chaining  is very important so we can take a bunch  of these mapping functions we can chain  them together we can pipe them into  these reduce functions  we could end up with a really really  useful result set and make some  interesting decisions which is what raju  does so now for the good stuff how do we  do anomaly detection we had some  requirements the biggest one it needs to  be cheap enough that we can do it in  real time it needs to be stable enough  that we can did we can detect sharp  spikes and recover from them and then  still dynamic enough that it will adjust  to neutrons over time and then lastly we  wanted to have it somewhat lenient so we  don't get a lot of false positives so we  tried a handful of algorithms like  double exponential smoothing which had  historical analysis like week over week  but the solution we eventually came to  is median estimation so the median is a  robust indicator which means it doesn't  get skewed when there's a huge outlier  it stays very stable and it's it's  really cheap to calculate now you might  be wondering how do you calculate a  median on streaming data you don't have  the whole distribution how do you have  the median well that brings me to our  median estimation algorithm or as I call  it the kodi algorithm named after my  colleague Cody because he came up with  it it's actually called mad or median  absolute deviation I believe and it's  effectively just a stochastic gradient  descent with a static learning rate so  if a streaming value comes in and it's  greater than a median estimate then we  increase our median estimate by one if a  streaming value comes in and it's less  than our median estimate then we  decrease the median value by one so very  simple very cheap but surprisingly  effective here's the here's a graph from  Raju and the red line is the metric and  the blue line is a threshold and you can  see the metric is very noisy it's gone  up and down up and down up and down and  the threshold is very stable but it  still follows along so as that spiky  metric goes up  the threshold slowly goes up and as a  spiky metric drops the threshold slowly  drops but it's very stable and that's  because that learning rate is static and  it's it's one so it's learning very  slowly and and that's that's a big  feature because when you get this which  is very common for outages is metrics  that go from zero to a thousand or 8,000  in this case that threshold doesn't  overcorrect  it doesn't chase that error metric too  fast so it remains very stable and  eventually when that error metric drops  back down to zero you can see that the  thresholds not too far up and it can  recover pretty quickly whereas with some  other algorithms it would go to from 0  to 8,000 and now your thresholds like  blown-out for an hour and then when it  recovers it's blowing out for another  hour because it's like negative now so  stability big feature it's also it's  also very simple right which produces a  simple code base and predictable  behavior and again very cheap to  calculate over thousands and thousands  of metrics and all these permutations of  cluster origin and combinations so  that's that's incredibly important the  other feature that we really wanted was  recovery detection it's critical to see  if an alert is ongoing or if it's  transient right it's if you wake up in  the morning you don't necessarily want  to get out of bed if this thing is  recovered already right and if it  recovers in a couple minutes then you're  probably okay to go back to sleep  it also prevents action right if you  know something's recovered it's going to  mitigate action without you having to  figure out if it's recovered or not so  you're not gonna have to go scale  something up or scale something down or  push a new build or whatever and then it  gives you some info right if it spiked  and recovered quickly that's information  that's useful to figuring out what the  problem is and since we're building this  timeline of events we have this open  window for anomalies we could  potentially recover before we've sent  the email in which case we don't need to  send the email at all  how do we detect recovery well it's  pretty simple we calculate the pre alert  range which is our kind of stable metric  and then we look at the recent range and  we have to confidently be able to say  that the recent range is the same  distribution as the pre alert range if  that's true then we've recovered but  again this is harder than it sounds for  streaming data because you don't have  the entire set you need to find a  heuristic that's useful for figuring out  what your boundary is and what we did  for that is we used the huffing bound  and you should take a picture of this  with your cell phones because this is  extremely useful streaming data this is  like a killer app for streaming data you  basically only have to give it the range  which is the max minus the min and the  set of numbers the size of the data set  that you have and it will give you some  boundary with confidence of epsilon so  if you play with that Delta the 1 minus  Delta there if you play with that Delta  you can kind of tweak it for your metric  and be fairly confident that your recent  points are in the same distribution as  your previous points so here's an  example you can see there's a  distribution in the bottom corner there  and depending on your Delta you're going  to be either very close to that  distribution or very far from that  distribution so you don't want to be too  close because then you'll you'll be not  leaning enough you don't be too far  because then you're gonna overshoot your  distribution and be way too lenient and  everything is going to look like a  recovery typically we've been pretty  happy with the delta of 0.1 which is  that 99% line and it's worked very well  for us so what does a recovery algorithm  look like it's a huffing bound on the  pre alert distribution we then take the  last 30 seconds of data points and get  the mean and then if the recent mean is  below that bound then we're good we've  recovered here's what it looks like on a  graph so usually the error rate is flat  and in some  thing happens there eight spikes we have  our pre alert range now we're anomalous  and then it starts tapering off slowly  and depending what kind of algorithm  you're using like if you're calculating  slope or something like that you may  think you've recovered at one of those  two upper recovery ranges but in reality  you haven't really recovered until  you're back to that normal error rate  that you're used to so it's very  effective in that sense now these  anomalies happen all the time we don't  want to get flooded with emails right we  want to make sure we only get the emails  that are real problems and have a real  impact so first let's look at what Raju  really looks like so these boxes are the  chain of mantas jobs that compose Raju  and the size of the Box corresponds  roughly to how many containers are  required to run it so the duel request  source is huge it's hundreds of  containers because it has to be able to  handle potentially all of Xul's traffic  we then pipe it to an aggregator so some  aggregation query and this can be a much  smaller cluster maybe tens of instances  and produce a distilled aggregate once  we get that aggregate then we can have  like one instance clusters like the  anomaly detector and Raju are very small  because all they get is just aggregates  for the Zul aggregation it's pretty  simple we select the status for all  requests and then we aggregate all the  values of that status and we group them  by Zul cluster and destination origin we  then window it for ten seconds and we  output it a one-second interval so the  groupings that we end up with are the  Zul cluster the downstream origin and  then cluster and origin together in case  it's a very specific type of issue  we then take those groupings and we feed  them into that anomaly detector and what  it does is it flattens all of those  groupings into a big list sorry and we  take that big list and we run anomaly  detection on each item in that list so  each item that list is gonna have some  count and then if one of those counts is  anomalous we know exactly what's broken  you know it's that exact permutation of  cluster and origin that's in trouble  so recall this slide from earlier right  this is this is the representation of  all the different permutations that we  have and when one of them has that  anomalous metric we know right away it's  that guy here's the here's what the data  looks like this is a think of more  useful like this is this is like the  real explanation this is this is the  money of what it looks like right so you  have all these predictions coming in and  you can see it's color-coded a little  bit so on the Left we have the Zul  cluster as the grouping so it's all for  the same cluster but different values of  status so we have success we have read  time out we have throttling and then on  the right we have different groupings  like Zul cluster 2 and then cluster an  API put together just API and when one  of these is anomalous we know that it's  that cluster we know it's like Zul  cluster one has an anomalous count for  this value so we can say in the email  Zul cluster 1 is throttling traffic at  this rate  that's essentially you know it's it's  almost like root cause detection but  it's it's the very first step to that  root cause detection and you know this  is this is what makes it so powerful  this this this ability to dig down into  all these aggregates now most anomalies  aren't really anomalies right they  happen all the time  so we need to assess impact we need to  figure out is it recovered or not and  essentially filter out all the noise so  the way we did that is with  engine we open this window when the  first anomaly happens and we then  collect all the subsequent anomalies for  that window sighs and at the end of the  window we run this rules engine for each  anomaly and this rules engine basically  just tags every one of those anomalies  with a bunch of useful data once we get  all those tagged anomalies we can then  make an intelligent decision on what we  should do whether we shall learn we  should not alert things like that so an  example of some useful rules time very  important when of the alert happen when  of the alert recover impact also very  important if it doesn't impact any  traffic we don't care if it has a really  big impact that's very important so what  percent of traffic is erroneous versus  successful a description so when we send  the email to operators we don't  necessarily have to expect them to know  all of our status codes we want to  describe what the problem is and then  finally decisions on do we alert do we  not alert do we page do we not page and  these rules are all handwritten which is  somewhat time consuming but incredibly  accurate so as I mentioned we have this  timeline of events when the first  anomaly happens we start a window we  close the window after three minutes and  then we end up with this tagged timeline  so it's a very rich timeline of events  and what it ends up doing is creating  this time-based causation almost well  technically correlation but the  correlation is very strong because  things are happening in a very tight  window so you can figure out pretty  clearly what's going on and we can look  at some examples this is what a Roger  email looks like I know you can't see  anything on the slide it's very dense so  I'm gonna clean it up for you guys so  I've kind of simplified and renamed a  couple of the things so that you  actually know what they say instead of  like our internal Netflix names for  things in blue we have the Zul cluster  in green we have the downstream origin  in yellow slash orange we  the failure the failure status described  and then purple is the impact so you can  see the first thing that we get is this  grouping of Zul cluster so the Zul  website cluster and our API origin and  it's starting to have some connectivity  issues connectivity issues meaning like  we can't connect we're getting a  connection refused next thing that  happens is just that API service  grouping is now failing with timeouts  and then in a few seconds later just the  website grouping the website cluster is  also failing with timeouts then it gets  a little bit worse now Sewell is  throttling retries to that API service  and throttling retries essentially means  we're trying to prevent a retry storm so  instead of sending all the traffic to  this downstream origin and basically  taking it under water we're rejecting  anything that is tagged as a retry to  protect it but this is a pretty dire  situation so that this means that people  are probably not able to stream anything  at least for that cluster and then a  different Zul cluster which is the api  zuo api cluster which generally fronts  that api service as well is now also  throttling retries so another retry  storm and then finally just the cluster  grouping is throttling so it's pretty  clear here that the root cause is  somewhere in API right you have multiple  dual clusters having trouble talking to  this api service and the api service on  its own is also in trouble so even  though in the past you would have  potentially paged both Zul and api in  this case it's pretty clear it's not a  dual problem it's almost certainly an  API problem and this was this was a  powerful thing to see for us because we  can now point to this you know this  being the root cause and we can send  that directly to that team in fact it  was it was so successful that we wanted  to dig a little bit deeper and so we  expanded Raju into API as well  now let's take a step back and talk  about what API actually is at Netflix  it's called the API dot next platform if  some of you are aware of that or not  it's essentially an orchestration layer  so there are many device teams and those  device teams deploy their endpoints  which are basically groovy scripts for  the most part into this shared platform  and they use the platform code to do all  kinds of stuff all kinds of  functionality that goes downstream to  other services and that code is always  whatever function that service is doing  whether it's making a downstream or not  is gonna be wrapped in a history command  so those are the h's on that graph and  history is essentially a framework for  you know short-circuiting and isolating  traffic so it creates an isolation of  all these functions so that they so one  bad function basically doesn't take down  the entire server now there's there's so  much functionality here there's so much  stuff that API does that you end up with  hundreds and hundreds of these hystrix  commands and you guessed it it's another  needle in a haystack problem so this  seemed like another natural place where  we could put Raju so what we did is we  aggregated all the history response  codes and we group them by the command  name so the actual functionality of that  history command and API cluster that was  running on and then we basically threw  them on to the same timeline as all the  Zul anomalies so here's an example again  cleaned up for your viewing pleasure but  you can see there's now like a prefix on  the line that says which app it came  from so it's either API or Zul and the  API cluster is coded blue and then the  history command is coded or sorry  colored green so let's go through it we  have this incident and the first thing  that happens is this grouping of API  service which is that API origin  and this authenticate customer command  is suddenly failing and then just the  authentic a customer command is failing  which means it's probably happening  across multiple clusters you wait a  couple minutes and eventually it  escalates into Zul failing with the read  timeouts and it's the Zul api which is  the cluster fronting API and the api  origin so again pretty clear indicator  where the problem is and then the  website cluster and the website UI  service start failing and this is  because that website UI service has to  make some calls to API in order to  render the website starts throttling  requests failing with three timeouts and  then a related history command starts  failing which is get customer  permissions so in this case authenticate  customer get customer permissions all go  to the same origin that downstream of  API which is our subscriber service that  holds all that information and then  finally the Zulu API cluster across the  board is saying no more retries we're  throttling this retry storm so this is  problematic but you can see how powerful  this is right not only do we know that  the issues happening in API but we know  exactly which slice of functionality in  the API is broken so we know that okay  most likely our subscriber service is in  trouble so the operators with s Ari's  see this kind of email and they're not  gonna page Zul and they're not gonna  page api probably they're gonna page a  subscriber team so huge win huge win for  us and on top of that it's pretty clear  that you know what the root cause is  here right you can see the root cause  pretty pretty pretty easily just by  looking at this timeline of events so we  didn't stop there we expanded we expand  it to other types of events so events  that aren't anomalies but that we can  see happening now our gold standard  metric for a KPI so our  gold-standard indicator of is the system  good or not is the start play indicator  so how many star plays are we getting  per second if you can't play that means  we're in trouble right if you can't push  play and play a video that means we're  down most likely because it's it's a  very predictable cycle of our traffic so  in this example one of our DRM services  which is the PlayReady DRM it's  typically used for windows and streaming  sticks you can see that hystrix command  starts failing and then within about a  minute we get this SPS drop event for  the Windows app and the streaming stick  now this is this is mind blowing to us  right this is this is like insanely  powerful you're getting this SBS drop  event which we've had for years and  years but you're not only getting this  SBS drop event you're also getting what  caused the drop right so before you say  okay well Windows is down let's figure  it out now you're saying okay Windows is  down and it's because the DRM service is  broken here's another example so this  one is Zul instead of API but basically  we have this dual cluster that Front's  are a lot of our production traffic and  in this case it's fronting the iOS UI  service and services in trouble and then  again within about a minute iPhone iPod  and iPad get an SBS drop so you're  getting this SBS drop event for iOS  devices and guess what the iOS service  is in trouble let's page those guys we  took it another step further we added  spinnaker events and spinnaker is our  kind of deployment framework so in this  particular example again you see it's  not an SBS job but it's a push so  somebody pushes a service and then the  history command for that service breaks  a minute later so you get this email and  you can pretty quickly as the operators  say okay let's roll back that push it's  obviously broken and then finally you  know we have all this functionality now  but we don't want to get those pages we  don't want to get those email  so we start actually emailing the  culprits directly the origins sometimes  aren't aware of the issue if it's a  connectivity issue they may not even see  it in their metrics so this gives them  much better visibility into whether  their services in trouble or not and  then obviously if it recovers we'll send  them a followup with with the recovery  info so this ultimately reduced the need  for us to get paged on everything and  and it kind of pushes the onus onto the  teens that own the services that are in  trouble  so elephant in the room  machine learning right any for any black  mirror fans that's a crazy episode by  the way  so why didn't we use machine learning  well for this particular problem it  wouldn't have worked well right it's  very hard to train something when you  have very few examples of problems right  we don't have that many outages that we  can train this effectively and when we  do have outages they're all different  they don't we we don't have outages  because the same thing keeps happening  over and over again so it's very hard to  train a reinforcement type model and  because of that you'll have this huge  false positive rate and then the other  problem is even if you could get half of  the way there the data set will then  change and so whatever you've trained is  now useless because things don't look  the same after like a month or two  months things are always evolving and  looking different so some of the  benefits are you know we get the simple  predictable code base we have these  handwritten rules which have this really  high true positive rate and that's super  super important when you're dealing with  thousands and thousands of metrics and  all these different clusters and all  these different permutations if you had  a high false positive rate you would  never look at those alerts you'd be  getting like a hundred a second right  it's not useful so that high true  positive rate is very important but  obviously you know there's trade-offs  there it's not necessarily easy to  transfer a new service into Raju there's  a lot of hand-holding that has to happen  the rules need to be created manually as  I mentioned  the alerting decisions are potentially  different for every service so those may  need to be tweaked every time you add a  new service and then in order to do all  that stuff you need deep operational  knowledge and that comes at a premium so  you know pros and cons but we're pretty  happy with it  we built this real-time contextual  alerting system over thousands of  metrics millions of events per second  they go off super fast and they  sometimes even recover before our pagers  fire and they give us this rich timeline  of events that gives us deep insight  into our system and essentially help us  root cause a lot of incidents we've also  expanded into API and other services you  know for deeper insights and we continue  to do that and we're gonna continue to  expand Roger and make it more user  friendly to hopefully help onboarding  and things like that and ultimately we  did in a very simple way without any AI  and pretty happy with it that's it thank  you  [Applause]
+ 
+
+00:00:11.500 --> 00:00:13.509 align:start position:0%
+ 
+ 
+
+00:00:13.509 --> 00:00:16.900 align:start position:0%
+ 
+ 
+
+00:00:16.900 --> 00:00:19.540 align:start position:0%
+ 
+ 
+
+00:00:19.540 --> 00:00:23.589 align:start position:0%
+ 
+ 
+
+00:00:23.589 --> 00:00:27.130 align:start position:0%
+ 
+ 
+
+00:00:27.130 --> 00:00:30.040 align:start position:0%
+ 
+ 
+
+00:00:30.040 --> 00:00:32.589 align:start position:0%
+ 
+ 
+
+00:00:32.589 --> 00:00:34.030 align:start position:0%
+ 
+ 
+
+00:00:34.030 --> 00:00:37.720 align:start position:0%
+ 
+ 
+
+00:00:37.720 --> 00:00:40.630 align:start position:0%
+ 
+ 
+
+00:00:40.630 --> 00:00:42.420 align:start position:0%
+ 
+ 
+
+00:00:42.420 --> 00:00:45.490 align:start position:0%
+ 
+ 
+
+00:00:45.490 --> 00:00:48.400 align:start position:0%
+ 
+ 
+
+00:00:48.400 --> 00:00:50.980 align:start position:0%
+ 
+ 
+
+00:00:50.980 --> 00:00:54.520 align:start position:0%
+ 
+ 
+
+00:00:54.520 --> 00:00:56.470 align:start position:0%
+ 
+ 
+
+00:00:56.470 --> 00:00:58.480 align:start position:0%
+ 
+ 
+
+00:00:58.480 --> 00:01:01.180 align:start position:0%
+ 
+ 
+
+00:01:01.180 --> 00:01:02.230 align:start position:0%
+ 
+ 
+
+00:01:02.230 --> 00:01:04.179 align:start position:0%
+ 
+ 
+
+00:01:04.179 --> 00:01:07.870 align:start position:0%
+ 
+ 
+
+00:01:07.870 --> 00:01:10.569 align:start position:0%
+ 
+ 
+
+00:01:10.569 --> 00:01:13.270 align:start position:0%
+ 
+ 
+
+00:01:13.270 --> 00:01:17.440 align:start position:0%
+ 
+ 
+
+00:01:17.440 --> 00:01:19.450 align:start position:0%
+ 
+ 
+
+00:01:19.450 --> 00:01:25.270 align:start position:0%
+ 
+ 
+
+00:01:25.270 --> 00:01:27.010 align:start position:0%
+ 
+ 
+
+00:01:27.010 --> 00:01:28.719 align:start position:0%
+ 
+ 
+
+00:01:28.719 --> 00:01:33.819 align:start position:0%
+ 
+ 
+
+00:01:33.819 --> 00:01:37.359 align:start position:0%
+ 
+ 
+
+00:01:37.359 --> 00:01:38.859 align:start position:0%
+ 
+ 
+
+00:01:38.859 --> 00:01:40.569 align:start position:0%
+ 
+ 
+
+00:01:40.569 --> 00:01:45.609 align:start position:0%
+ 
+ 
+
+00:01:45.609 --> 00:01:47.109 align:start position:0%
+ 
+ 
+
+00:01:47.109 --> 00:01:49.359 align:start position:0%
+ 
+ 
+
+00:01:49.359 --> 00:01:53.050 align:start position:0%
+ 
+ 
+
+00:01:53.050 --> 00:02:00.340 align:start position:0%
+ 
+ 
+
+00:02:00.340 --> 00:02:02.559 align:start position:0%
+ 
+ 
+
+00:02:02.559 --> 00:02:06.190 align:start position:0%
+ 
+ 
+
+00:02:06.190 --> 00:02:10.120 align:start position:0%
+ 
+ 
+
+00:02:10.120 --> 00:02:11.920 align:start position:0%
+ 
+ 
+
+00:02:11.920 --> 00:02:15.490 align:start position:0%
+ 
+ 
+
+00:02:15.490 --> 00:02:17.170 align:start position:0%
+ 
+ 
+
+00:02:17.170 --> 00:02:17.180 align:start position:0%
+ 
+ 
+
+00:02:17.180 --> 00:02:17.990 align:start position:0%
+ 
+
+
+00:02:17.990 --> 00:02:21.230 align:start position:0%
+ 
+ 
+
+00:02:21.230 --> 00:02:23.690 align:start position:0%
+ 
+ 
+
+00:02:23.690 --> 00:02:27.050 align:start position:0%
+ 
+ 
+
+00:02:27.050 --> 00:02:29.840 align:start position:0%
+ 
+ 
+
+00:02:29.840 --> 00:02:33.380 align:start position:0%
+ 
+ 
+
+00:02:33.380 --> 00:02:35.960 align:start position:0%
+ 
+ 
+
+00:02:35.960 --> 00:02:40.160 align:start position:0%
+ 
+ 
+
+00:02:40.160 --> 00:02:45.050 align:start position:0%
+ 
+ 
+
+00:02:45.050 --> 00:02:46.610 align:start position:0%
+ 
+ 
+
+00:02:46.610 --> 00:02:49.040 align:start position:0%
+ 
+ 
+
+00:02:49.040 --> 00:02:54.229 align:start position:0%
+ 
+ 
+
+00:02:54.229 --> 00:02:57.620 align:start position:0%
+ 
+ 
+
+00:02:57.620 --> 00:03:00.949 align:start position:0%
+ 
+ 
+
+00:03:00.949 --> 00:03:03.320 align:start position:0%
+ 
+ 
+
+00:03:03.320 --> 00:03:08.240 align:start position:0%
+ 
+ 
+
+00:03:08.240 --> 00:03:10.699 align:start position:0%
+ 
+ 
+
+00:03:10.699 --> 00:03:13.610 align:start position:0%
+ 
+ 
+
+00:03:13.610 --> 00:03:17.570 align:start position:0%
+ 
+ 
+
+00:03:17.570 --> 00:03:20.780 align:start position:0%
+ 
+ 
+
+00:03:20.780 --> 00:03:23.600 align:start position:0%
+ 
+ 
+
+00:03:23.600 --> 00:03:25.610 align:start position:0%
+ 
+ 
+
+00:03:25.610 --> 00:03:27.800 align:start position:0%
+ 
+ 
+
+00:03:27.800 --> 00:03:29.680 align:start position:0%
+ 
+ 
+
+00:03:29.680 --> 00:03:31.970 align:start position:0%
+ 
+ 
+
+00:03:31.970 --> 00:03:33.860 align:start position:0%
+ 
+ 
+
+00:03:33.860 --> 00:03:36.640 align:start position:0%
+ 
+ 
+
+00:03:36.640 --> 00:03:39.020 align:start position:0%
+ 
+ 
+
+00:03:39.020 --> 00:03:40.430 align:start position:0%
+ 
+ 
+
+00:03:40.430 --> 00:03:42.340 align:start position:0%
+ 
+ 
+
+00:03:42.340 --> 00:03:45.500 align:start position:0%
+ 
+ 
+
+00:03:45.500 --> 00:03:50.240 align:start position:0%
+ 
+ 
+
+00:03:50.240 --> 00:03:52.039 align:start position:0%
+ 
+ 
+
+00:03:52.039 --> 00:03:53.810 align:start position:0%
+ 
+ 
+
+00:03:53.810 --> 00:03:55.910 align:start position:0%
+ 
+ 
+
+00:03:55.910 --> 00:03:57.800 align:start position:0%
+ 
+ 
+
+00:03:57.800 --> 00:04:02.840 align:start position:0%
+ 
+ 
+
+00:04:02.840 --> 00:04:05.090 align:start position:0%
+ 
+ 
+
+00:04:05.090 --> 00:04:07.580 align:start position:0%
+ 
+ 
+
+00:04:07.580 --> 00:04:10.160 align:start position:0%
+ 
+ 
+
+00:04:10.160 --> 00:04:13.610 align:start position:0%
+ 
+ 
+
+00:04:13.610 --> 00:04:16.430 align:start position:0%
+ 
+ 
+
+00:04:16.430 --> 00:04:18.830 align:start position:0%
+ 
+ 
+
+00:04:18.830 --> 00:04:23.170 align:start position:0%
+ 
+ 
+
+00:04:23.170 --> 00:04:26.150 align:start position:0%
+ 
+ 
+
+00:04:26.150 --> 00:04:28.190 align:start position:0%
+ 
+ 
+
+00:04:28.190 --> 00:04:29.870 align:start position:0%
+ 
+ 
+
+00:04:29.870 --> 00:04:30.990 align:start position:0%
+ 
+ 
+
+00:04:30.990 --> 00:04:33.730 align:start position:0%
+ 
+ 
+
+00:04:33.730 --> 00:04:35.140 align:start position:0%
+ 
+ 
+
+00:04:35.140 --> 00:04:37.120 align:start position:0%
+ 
+ 
+
+00:04:37.120 --> 00:04:40.510 align:start position:0%
+ 
+ 
+
+00:04:40.510 --> 00:04:42.520 align:start position:0%
+ 
+ 
+
+00:04:42.520 --> 00:04:45.100 align:start position:0%
+ 
+ 
+
+00:04:45.100 --> 00:04:48.160 align:start position:0%
+ 
+ 
+
+00:04:48.160 --> 00:04:50.770 align:start position:0%
+ 
+ 
+
+00:04:50.770 --> 00:04:53.080 align:start position:0%
+ 
+ 
+
+00:04:53.080 --> 00:04:54.910 align:start position:0%
+ 
+ 
+
+00:04:54.910 --> 00:04:59.680 align:start position:0%
+ 
+ 
+
+00:04:59.680 --> 00:05:01.390 align:start position:0%
+ 
+ 
+
+00:05:01.390 --> 00:05:05.200 align:start position:0%
+ 
+ 
+
+00:05:05.200 --> 00:05:07.180 align:start position:0%
+ 
+ 
+
+00:05:07.180 --> 00:05:10.030 align:start position:0%
+ 
+ 
+
+00:05:10.030 --> 00:05:13.060 align:start position:0%
+ 
+ 
+
+00:05:13.060 --> 00:05:14.530 align:start position:0%
+ 
+ 
+
+00:05:14.530 --> 00:05:16.570 align:start position:0%
+ 
+ 
+
+00:05:16.570 --> 00:05:19.930 align:start position:0%
+ 
+ 
+
+00:05:19.930 --> 00:05:21.700 align:start position:0%
+ 
+ 
+
+00:05:21.700 --> 00:05:24.640 align:start position:0%
+ 
+ 
+
+00:05:24.640 --> 00:05:30.850 align:start position:0%
+ 
+ 
+
+00:05:30.850 --> 00:05:33.190 align:start position:0%
+ 
+ 
+
+00:05:33.190 --> 00:05:35.650 align:start position:0%
+ 
+ 
+
+00:05:35.650 --> 00:05:37.360 align:start position:0%
+ 
+ 
+
+00:05:37.360 --> 00:05:41.560 align:start position:0%
+ 
+ 
+
+00:05:41.560 --> 00:05:43.810 align:start position:0%
+ 
+ 
+
+00:05:43.810 --> 00:05:45.250 align:start position:0%
+ 
+ 
+
+00:05:45.250 --> 00:05:46.660 align:start position:0%
+ 
+ 
+
+00:05:46.660 --> 00:05:48.550 align:start position:0%
+ 
+ 
+
+00:05:48.550 --> 00:05:54.010 align:start position:0%
+ 
+ 
+
+00:05:54.010 --> 00:05:56.980 align:start position:0%
+ 
+ 
+
+00:05:56.980 --> 00:05:59.080 align:start position:0%
+ 
+ 
+
+00:05:59.080 --> 00:06:01.120 align:start position:0%
+ 
+ 
+
+00:06:01.120 --> 00:06:02.410 align:start position:0%
+ 
+ 
+
+00:06:02.410 --> 00:06:04.630 align:start position:0%
+ 
+ 
+
+00:06:04.630 --> 00:06:08.320 align:start position:0%
+ 
+ 
+
+00:06:08.320 --> 00:06:11.590 align:start position:0%
+ 
+ 
+
+00:06:11.590 --> 00:06:14.160 align:start position:0%
+ 
+ 
+
+00:06:14.160 --> 00:06:16.240 align:start position:0%
+ 
+ 
+
+00:06:16.240 --> 00:06:19.150 align:start position:0%
+ 
+ 
+
+00:06:19.150 --> 00:06:21.850 align:start position:0%
+ 
+ 
+
+00:06:21.850 --> 00:06:24.400 align:start position:0%
+ 
+ 
+
+00:06:24.400 --> 00:06:25.810 align:start position:0%
+ 
+ 
+
+00:06:25.810 --> 00:06:28.510 align:start position:0%
+ 
+ 
+
+00:06:28.510 --> 00:06:33.430 align:start position:0%
+ 
+ 
+
+00:06:33.430 --> 00:06:35.620 align:start position:0%
+ 
+ 
+
+00:06:35.620 --> 00:06:38.140 align:start position:0%
+ 
+ 
+
+00:06:38.140 --> 00:06:40.630 align:start position:0%
+ 
+ 
+
+00:06:40.630 --> 00:06:43.370 align:start position:0%
+ 
+ 
+
+00:06:43.370 --> 00:06:48.180 align:start position:0%
+ 
+ 
+
+00:06:48.180 --> 00:06:51.030 align:start position:0%
+ 
+ 
+
+00:06:51.030 --> 00:06:53.580 align:start position:0%
+ 
+ 
+
+00:06:53.580 --> 00:06:55.650 align:start position:0%
+ 
+ 
+
+00:06:55.650 --> 00:07:00.570 align:start position:0%
+ 
+ 
+
+00:07:00.570 --> 00:07:03.060 align:start position:0%
+ 
+ 
+
+00:07:03.060 --> 00:07:05.940 align:start position:0%
+ 
+ 
+
+00:07:05.940 --> 00:07:09.030 align:start position:0%
+ 
+ 
+
+00:07:09.030 --> 00:07:12.810 align:start position:0%
+ 
+ 
+
+00:07:12.810 --> 00:07:14.370 align:start position:0%
+ 
+ 
+
+00:07:14.370 --> 00:07:16.890 align:start position:0%
+ 
+ 
+
+00:07:16.890 --> 00:07:18.570 align:start position:0%
+ 
+ 
+
+00:07:18.570 --> 00:07:23.850 align:start position:0%
+ 
+ 
+
+00:07:23.850 --> 00:07:27.420 align:start position:0%
+ 
+ 
+
+00:07:27.420 --> 00:07:29.580 align:start position:0%
+ 
+ 
+
+00:07:29.580 --> 00:07:34.730 align:start position:0%
+ 
+ 
+
+00:07:34.730 --> 00:07:39.180 align:start position:0%
+ 
+ 
+
+00:07:39.180 --> 00:07:43.770 align:start position:0%
+ 
+ 
+
+00:07:43.770 --> 00:07:45.180 align:start position:0%
+ 
+ 
+
+00:07:45.180 --> 00:07:47.490 align:start position:0%
+ 
+ 
+
+00:07:47.490 --> 00:07:53.400 align:start position:0%
+ 
+ 
+
+00:07:53.400 --> 00:07:56.190 align:start position:0%
+ 
+ 
+
+00:07:56.190 --> 00:07:57.540 align:start position:0%
+ 
+ 
+
+00:07:57.540 --> 00:07:58.980 align:start position:0%
+ 
+ 
+
+00:07:58.980 --> 00:08:00.930 align:start position:0%
+ 
+ 
+
+00:08:00.930 --> 00:08:05.000 align:start position:0%
+ 
+ 
+
+00:08:05.000 --> 00:08:07.860 align:start position:0%
+ 
+ 
+
+00:08:07.860 --> 00:08:10.380 align:start position:0%
+ 
+ 
+
+00:08:10.380 --> 00:08:11.970 align:start position:0%
+ 
+ 
+
+00:08:11.970 --> 00:08:13.530 align:start position:0%
+ 
+ 
+
+00:08:13.530 --> 00:08:15.810 align:start position:0%
+ 
+ 
+
+00:08:15.810 --> 00:08:17.820 align:start position:0%
+ 
+ 
+
+00:08:17.820 --> 00:08:19.110 align:start position:0%
+ 
+ 
+
+00:08:19.110 --> 00:08:22.380 align:start position:0%
+ 
+ 
+
+00:08:22.380 --> 00:08:25.920 align:start position:0%
+ 
+ 
+
+00:08:25.920 --> 00:08:27.470 align:start position:0%
+ 
+ 
+
+00:08:27.470 --> 00:08:30.980 align:start position:0%
+ 
+ 
+
+00:08:30.980 --> 00:08:33.089 align:start position:0%
+ 
+ 
+
+00:08:33.089 --> 00:08:35.580 align:start position:0%
+ 
+ 
+
+00:08:35.580 --> 00:08:36.990 align:start position:0%
+ 
+ 
+
+00:08:36.990 --> 00:08:39.120 align:start position:0%
+ 
+ 
+
+00:08:39.120 --> 00:08:42.300 align:start position:0%
+ 
+ 
+
+00:08:42.300 --> 00:08:44.070 align:start position:0%
+ 
+ 
+
+00:08:44.070 --> 00:08:46.440 align:start position:0%
+ 
+ 
+
+00:08:46.440 --> 00:08:49.350 align:start position:0%
+ 
+ 
+
+00:08:49.350 --> 00:08:52.380 align:start position:0%
+ 
+ 
+
+00:08:52.380 --> 00:08:56.110 align:start position:0%
+ 
+ 
+
+00:08:56.110 --> 00:08:59.120 align:start position:0%
+ 
+ 
+
+00:08:59.120 --> 00:09:01.940 align:start position:0%
+ 
+ 
+
+00:09:01.940 --> 00:09:04.220 align:start position:0%
+ 
+ 
+
+00:09:04.220 --> 00:09:06.590 align:start position:0%
+ 
+ 
+
+00:09:06.590 --> 00:09:08.690 align:start position:0%
+ 
+ 
+
+00:09:08.690 --> 00:09:11.330 align:start position:0%
+ 
+ 
+
+00:09:11.330 --> 00:09:14.570 align:start position:0%
+ 
+ 
+
+00:09:14.570 --> 00:09:16.250 align:start position:0%
+ 
+ 
+
+00:09:16.250 --> 00:09:18.470 align:start position:0%
+ 
+ 
+
+00:09:18.470 --> 00:09:20.360 align:start position:0%
+ 
+ 
+
+00:09:20.360 --> 00:09:23.360 align:start position:0%
+ 
+ 
+
+00:09:23.360 --> 00:09:25.670 align:start position:0%
+ 
+ 
+
+00:09:25.670 --> 00:09:28.430 align:start position:0%
+ 
+ 
+
+00:09:28.430 --> 00:09:31.010 align:start position:0%
+ 
+ 
+
+00:09:31.010 --> 00:09:32.810 align:start position:0%
+ 
+ 
+
+00:09:32.810 --> 00:09:34.700 align:start position:0%
+ 
+ 
+
+00:09:34.700 --> 00:09:35.990 align:start position:0%
+ 
+ 
+
+00:09:35.990 --> 00:09:40.030 align:start position:0%
+ 
+ 
+
+00:09:40.030 --> 00:09:43.370 align:start position:0%
+ 
+ 
+
+00:09:43.370 --> 00:09:45.890 align:start position:0%
+ 
+ 
+
+00:09:45.890 --> 00:09:47.840 align:start position:0%
+ 
+ 
+
+00:09:47.840 --> 00:09:49.220 align:start position:0%
+ 
+ 
+
+00:09:49.220 --> 00:09:52.970 align:start position:0%
+ 
+ 
+
+00:09:52.970 --> 00:09:56.120 align:start position:0%
+ 
+ 
+
+00:09:56.120 --> 00:09:59.030 align:start position:0%
+ 
+ 
+
+00:09:59.030 --> 00:10:05.300 align:start position:0%
+ 
+ 
+
+00:10:05.300 --> 00:10:07.670 align:start position:0%
+ 
+ 
+
+00:10:07.670 --> 00:10:11.330 align:start position:0%
+ 
+ 
+
+00:10:11.330 --> 00:10:14.210 align:start position:0%
+ 
+ 
+
+00:10:14.210 --> 00:10:17.390 align:start position:0%
+ 
+ 
+
+00:10:17.390 --> 00:10:19.130 align:start position:0%
+ 
+ 
+
+00:10:19.130 --> 00:10:22.820 align:start position:0%
+ 
+ 
+
+00:10:22.820 --> 00:10:24.320 align:start position:0%
+ 
+ 
+
+00:10:24.320 --> 00:10:26.180 align:start position:0%
+ 
+ 
+
+00:10:26.180 --> 00:10:29.860 align:start position:0%
+ 
+ 
+
+00:10:29.860 --> 00:10:33.890 align:start position:0%
+ 
+ 
+
+00:10:33.890 --> 00:10:37.700 align:start position:0%
+ 
+ 
+
+00:10:37.700 --> 00:10:39.740 align:start position:0%
+ 
+ 
+
+00:10:39.740 --> 00:10:42.310 align:start position:0%
+ 
+ 
+
+00:10:42.310 --> 00:10:45.550 align:start position:0%
+ 
+ 
+
+00:10:45.550 --> 00:10:47.750 align:start position:0%
+ 
+ 
+
+00:10:47.750 --> 00:10:49.579 align:start position:0%
+ 
+ 
+
+00:10:49.579 --> 00:10:53.660 align:start position:0%
+ 
+ 
+
+00:10:53.660 --> 00:10:57.530 align:start position:0%
+ 
+ 
+
+00:10:57.530 --> 00:10:59.540 align:start position:0%
+ 
+ 
+
+00:10:59.540 --> 00:11:01.430 align:start position:0%
+ 
+ 
+
+00:11:01.430 --> 00:11:03.260 align:start position:0%
+ 
+ 
+
+00:11:03.260 --> 00:11:06.800 align:start position:0%
+ 
+ 
+
+00:11:06.800 --> 00:11:09.139 align:start position:0%
+ 
+ 
+
+00:11:09.139 --> 00:11:11.540 align:start position:0%
+ 
+ 
+
+00:11:11.540 --> 00:11:13.309 align:start position:0%
+ 
+ 
+
+00:11:13.309 --> 00:11:15.290 align:start position:0%
+ 
+ 
+
+00:11:15.290 --> 00:11:16.639 align:start position:0%
+ 
+ 
+
+00:11:16.639 --> 00:11:18.530 align:start position:0%
+ 
+ 
+
+00:11:18.530 --> 00:11:20.030 align:start position:0%
+ 
+ 
+
+00:11:20.030 --> 00:11:25.429 align:start position:0%
+ 
+ 
+
+00:11:25.429 --> 00:11:27.740 align:start position:0%
+ 
+ 
+
+00:11:27.740 --> 00:11:29.869 align:start position:0%
+ 
+ 
+
+00:11:29.869 --> 00:11:32.090 align:start position:0%
+ 
+ 
+
+00:11:32.090 --> 00:11:39.860 align:start position:0%
+ 
+ 
+
+00:11:39.860 --> 00:11:41.869 align:start position:0%
+ 
+ 
+
+00:11:41.869 --> 00:11:44.030 align:start position:0%
+ 
+ 
+
+00:11:44.030 --> 00:11:45.410 align:start position:0%
+ 
+ 
+
+00:11:45.410 --> 00:11:48.499 align:start position:0%
+ 
+ 
+
+00:11:48.499 --> 00:11:51.050 align:start position:0%
+ 
+ 
+
+00:11:51.050 --> 00:11:53.269 align:start position:0%
+ 
+ 
+
+00:11:53.269 --> 00:11:56.179 align:start position:0%
+ 
+ 
+
+00:11:56.179 --> 00:12:00.290 align:start position:0%
+ 
+ 
+
+00:12:00.290 --> 00:12:02.300 align:start position:0%
+ 
+ 
+
+00:12:02.300 --> 00:12:04.939 align:start position:0%
+ 
+ 
+
+00:12:04.939 --> 00:12:07.460 align:start position:0%
+ 
+ 
+
+00:12:07.460 --> 00:12:09.650 align:start position:0%
+ 
+ 
+
+00:12:09.650 --> 00:12:10.910 align:start position:0%
+ 
+ 
+
+00:12:10.910 --> 00:12:13.939 align:start position:0%
+ 
+ 
+
+00:12:13.939 --> 00:12:17.769 align:start position:0%
+ 
+ 
+
+00:12:17.769 --> 00:12:20.600 align:start position:0%
+ 
+ 
+
+00:12:20.600 --> 00:12:23.960 align:start position:0%
+ 
+ 
+
+00:12:23.960 --> 00:12:25.389 align:start position:0%
+ 
+ 
+
+00:12:25.389 --> 00:12:28.819 align:start position:0%
+ 
+ 
+
+00:12:28.819 --> 00:12:30.499 align:start position:0%
+ 
+ 
+
+00:12:30.499 --> 00:12:32.389 align:start position:0%
+ 
+ 
+
+00:12:32.389 --> 00:12:35.449 align:start position:0%
+ 
+ 
+
+00:12:35.449 --> 00:12:37.129 align:start position:0%
+ 
+ 
+
+00:12:37.129 --> 00:12:41.179 align:start position:0%
+ 
+ 
+
+00:12:41.179 --> 00:12:45.679 align:start position:0%
+ 
+ 
+
+00:12:45.679 --> 00:12:48.019 align:start position:0%
+ 
+ 
+
+00:12:48.019 --> 00:12:52.790 align:start position:0%
+ 
+ 
+
+00:12:52.790 --> 00:12:56.240 align:start position:0%
+ 
+ 
+
+00:12:56.240 --> 00:12:58.009 align:start position:0%
+ 
+ 
+
+00:12:58.009 --> 00:13:00.949 align:start position:0%
+ 
+ 
+
+00:13:00.949 --> 00:13:04.369 align:start position:0%
+ 
+ 
+
+00:13:04.369 --> 00:13:07.910 align:start position:0%
+ 
+ 
+
+00:13:07.910 --> 00:13:10.549 align:start position:0%
+ 
+ 
+
+00:13:10.549 --> 00:13:14.720 align:start position:0%
+ 
+ 
+
+00:13:14.720 --> 00:13:16.670 align:start position:0%
+ 
+ 
+
+00:13:16.670 --> 00:13:18.980 align:start position:0%
+ 
+ 
+
+00:13:18.980 --> 00:13:22.480 align:start position:0%
+ 
+ 
+
+00:13:22.480 --> 00:13:24.130 align:start position:0%
+ 
+ 
+
+00:13:24.130 --> 00:13:26.380 align:start position:0%
+ 
+ 
+
+00:13:26.380 --> 00:13:27.970 align:start position:0%
+ 
+ 
+
+00:13:27.970 --> 00:13:30.389 align:start position:0%
+ 
+ 
+
+00:13:30.389 --> 00:13:33.519 align:start position:0%
+ 
+ 
+
+00:13:33.519 --> 00:13:34.960 align:start position:0%
+ 
+ 
+
+00:13:34.960 --> 00:13:37.360 align:start position:0%
+ 
+ 
+
+00:13:37.360 --> 00:13:39.550 align:start position:0%
+ 
+ 
+
+00:13:39.550 --> 00:13:44.579 align:start position:0%
+ 
+ 
+
+00:13:44.579 --> 00:13:47.199 align:start position:0%
+ 
+ 
+
+00:13:47.199 --> 00:13:48.760 align:start position:0%
+ 
+ 
+
+00:13:48.760 --> 00:13:53.380 align:start position:0%
+ 
+ 
+
+00:13:53.380 --> 00:13:56.769 align:start position:0%
+ 
+ 
+
+00:13:56.769 --> 00:13:59.560 align:start position:0%
+ 
+ 
+
+00:13:59.560 --> 00:14:02.620 align:start position:0%
+ 
+ 
+
+00:14:02.620 --> 00:14:04.720 align:start position:0%
+ 
+ 
+
+00:14:04.720 --> 00:14:07.030 align:start position:0%
+ 
+ 
+
+00:14:07.030 --> 00:14:09.850 align:start position:0%
+ 
+ 
+
+00:14:09.850 --> 00:14:12.519 align:start position:0%
+ 
+ 
+
+00:14:12.519 --> 00:14:15.820 align:start position:0%
+ 
+ 
+
+00:14:15.820 --> 00:14:17.110 align:start position:0%
+ 
+ 
+
+00:14:17.110 --> 00:14:18.280 align:start position:0%
+ 
+ 
+
+00:14:18.280 --> 00:14:21.040 align:start position:0%
+ 
+ 
+
+00:14:21.040 --> 00:14:24.550 align:start position:0%
+ 
+ 
+
+00:14:24.550 --> 00:14:27.579 align:start position:0%
+ 
+ 
+
+00:14:27.579 --> 00:14:29.889 align:start position:0%
+ 
+ 
+
+00:14:29.889 --> 00:14:33.220 align:start position:0%
+ 
+ 
+
+00:14:33.220 --> 00:14:35.230 align:start position:0%
+ 
+ 
+
+00:14:35.230 --> 00:14:37.269 align:start position:0%
+ 
+ 
+
+00:14:37.269 --> 00:14:38.920 align:start position:0%
+ 
+ 
+
+00:14:38.920 --> 00:14:41.680 align:start position:0%
+ 
+ 
+
+00:14:41.680 --> 00:14:43.329 align:start position:0%
+ 
+ 
+
+00:14:43.329 --> 00:14:45.730 align:start position:0%
+ 
+ 
+
+00:14:45.730 --> 00:14:47.470 align:start position:0%
+ 
+ 
+
+00:14:47.470 --> 00:14:49.449 align:start position:0%
+ 
+ 
+
+00:14:49.449 --> 00:14:54.490 align:start position:0%
+ 
+ 
+
+00:14:54.490 --> 00:14:57.060 align:start position:0%
+ 
+ 
+
+00:14:57.060 --> 00:14:59.199 align:start position:0%
+ 
+ 
+
+00:14:59.199 --> 00:15:03.370 align:start position:0%
+ 
+ 
+
+00:15:03.370 --> 00:15:05.500 align:start position:0%
+ 
+ 
+
+00:15:05.500 --> 00:15:06.519 align:start position:0%
+ 
+ 
+
+00:15:06.519 --> 00:15:10.410 align:start position:0%
+ 
+ 
+
+00:15:10.410 --> 00:15:13.510 align:start position:0%
+ 
+ 
+
+00:15:13.510 --> 00:15:15.819 align:start position:0%
+ 
+ 
+
+00:15:15.819 --> 00:15:18.240 align:start position:0%
+ 
+ 
+
+00:15:18.240 --> 00:15:20.350 align:start position:0%
+ 
+ 
+
+00:15:20.350 --> 00:15:21.940 align:start position:0%
+ 
+ 
+
+00:15:21.940 --> 00:15:26.920 align:start position:0%
+ 
+ 
+
+00:15:26.920 --> 00:15:29.170 align:start position:0%
+ 
+ 
+
+00:15:29.170 --> 00:15:31.060 align:start position:0%
+ 
+ 
+
+00:15:31.060 --> 00:15:32.920 align:start position:0%
+ 
+ 
+
+00:15:32.920 --> 00:15:34.870 align:start position:0%
+ 
+ 
+
+00:15:34.870 --> 00:15:35.830 align:start position:0%
+ 
+ 
+
+00:15:35.830 --> 00:15:37.900 align:start position:0%
+ 
+ 
+
+00:15:37.900 --> 00:15:39.400 align:start position:0%
+ 
+ 
+
+00:15:39.400 --> 00:15:45.790 align:start position:0%
+ 
+ 
+
+00:15:45.790 --> 00:15:50.800 align:start position:0%
+ 
+ 
+
+00:15:50.800 --> 00:15:54.190 align:start position:0%
+ 
+ 
+
+00:15:54.190 --> 00:15:55.420 align:start position:0%
+ 
+ 
+
+00:15:55.420 --> 00:15:59.860 align:start position:0%
+ 
+ 
+
+00:15:59.860 --> 00:16:02.020 align:start position:0%
+ 
+ 
+
+00:16:02.020 --> 00:16:05.590 align:start position:0%
+ 
+ 
+
+00:16:05.590 --> 00:16:07.660 align:start position:0%
+ 
+ 
+
+00:16:07.660 --> 00:16:10.750 align:start position:0%
+ 
+ 
+
+00:16:10.750 --> 00:16:12.940 align:start position:0%
+ 
+ 
+
+00:16:12.940 --> 00:16:16.960 align:start position:0%
+ 
+ 
+
+00:16:16.960 --> 00:16:18.340 align:start position:0%
+ 
+ 
+
+00:16:18.340 --> 00:16:20.770 align:start position:0%
+ 
+ 
+
+00:16:20.770 --> 00:16:22.710 align:start position:0%
+ 
+ 
+
+00:16:22.710 --> 00:16:25.440 align:start position:0%
+ 
+ 
+
+00:16:25.440 --> 00:16:29.350 align:start position:0%
+ 
+ 
+
+00:16:29.350 --> 00:16:32.590 align:start position:0%
+ 
+ 
+
+00:16:32.590 --> 00:16:34.840 align:start position:0%
+ 
+ 
+
+00:16:34.840 --> 00:16:38.650 align:start position:0%
+ 
+ 
+
+00:16:38.650 --> 00:16:41.740 align:start position:0%
+ 
+ 
+
+00:16:41.740 --> 00:16:43.960 align:start position:0%
+ 
+ 
+
+00:16:43.960 --> 00:16:47.320 align:start position:0%
+ 
+ 
+
+00:16:47.320 --> 00:16:48.400 align:start position:0%
+ 
+ 
+
+00:16:48.400 --> 00:16:52.510 align:start position:0%
+ 
+ 
+
+00:16:52.510 --> 00:16:55.000 align:start position:0%
+ 
+ 
+
+00:16:55.000 --> 00:16:57.250 align:start position:0%
+ 
+ 
+
+00:16:57.250 --> 00:16:59.650 align:start position:0%
+ 
+ 
+
+00:16:59.650 --> 00:17:02.650 align:start position:0%
+ 
+ 
+
+00:17:02.650 --> 00:17:07.390 align:start position:0%
+ 
+ 
+
+00:17:07.390 --> 00:17:08.740 align:start position:0%
+ 
+ 
+
+00:17:08.740 --> 00:17:10.840 align:start position:0%
+ 
+ 
+
+00:17:10.840 --> 00:17:13.270 align:start position:0%
+ 
+ 
+
+00:17:13.270 --> 00:17:15.429 align:start position:0%
+ 
+ 
+
+00:17:15.429 --> 00:17:17.679 align:start position:0%
+ 
+ 
+
+00:17:17.679 --> 00:17:19.090 align:start position:0%
+ 
+ 
+
+00:17:19.090 --> 00:17:20.590 align:start position:0%
+ 
+ 
+
+00:17:20.590 --> 00:17:23.829 align:start position:0%
+ 
+ 
+
+00:17:23.829 --> 00:17:27.160 align:start position:0%
+ 
+ 
+
+00:17:27.160 --> 00:17:31.000 align:start position:0%
+ 
+ 
+
+00:17:31.000 --> 00:17:35.050 align:start position:0%
+ 
+ 
+
+00:17:35.050 --> 00:17:37.030 align:start position:0%
+ 
+ 
+
+00:17:37.030 --> 00:17:39.010 align:start position:0%
+ 
+ 
+
+00:17:39.010 --> 00:17:40.980 align:start position:0%
+ 
+ 
+
+00:17:40.980 --> 00:17:44.560 align:start position:0%
+ 
+ 
+
+00:17:44.560 --> 00:17:47.650 align:start position:0%
+ 
+ 
+
+00:17:47.650 --> 00:17:48.760 align:start position:0%
+ 
+ 
+
+00:17:48.760 --> 00:17:51.130 align:start position:0%
+ 
+ 
+
+00:17:51.130 --> 00:17:53.049 align:start position:0%
+ 
+ 
+
+00:17:53.049 --> 00:17:55.539 align:start position:0%
+ 
+ 
+
+00:17:55.539 --> 00:17:57.460 align:start position:0%
+ 
+ 
+
+00:17:57.460 --> 00:17:59.740 align:start position:0%
+ 
+ 
+
+00:17:59.740 --> 00:18:01.450 align:start position:0%
+ 
+ 
+
+00:18:01.450 --> 00:18:04.330 align:start position:0%
+ 
+ 
+
+00:18:04.330 --> 00:18:07.840 align:start position:0%
+ 
+ 
+
+00:18:07.840 --> 00:18:09.850 align:start position:0%
+ 
+ 
+
+00:18:09.850 --> 00:18:13.950 align:start position:0%
+ 
+ 
+
+00:18:13.950 --> 00:18:13.960 align:start position:0%
+ 
+ 
+
+00:18:13.960 --> 00:18:15.100 align:start position:0%
+ 
+
+
+00:18:15.100 --> 00:18:17.799 align:start position:0%
+ 
+ 
+
+00:18:17.799 --> 00:18:21.029 align:start position:0%
+ 
+ 
+
+00:18:21.029 --> 00:18:23.230 align:start position:0%
+ 
+ 
+
+00:18:23.230 --> 00:18:25.389 align:start position:0%
+ 
+ 
+
+00:18:25.389 --> 00:18:26.919 align:start position:0%
+ 
+ 
+
+00:18:26.919 --> 00:18:29.110 align:start position:0%
+ 
+ 
+
+00:18:29.110 --> 00:18:30.970 align:start position:0%
+ 
+ 
+
+00:18:30.970 --> 00:18:33.130 align:start position:0%
+ 
+ 
+
+00:18:33.130 --> 00:18:35.769 align:start position:0%
+ 
+ 
+
+00:18:35.769 --> 00:18:37.000 align:start position:0%
+ 
+ 
+
+00:18:37.000 --> 00:18:41.289 align:start position:0%
+ 
+ 
+
+00:18:41.289 --> 00:18:47.169 align:start position:0%
+ 
+ 
+
+00:18:47.169 --> 00:18:49.090 align:start position:0%
+ 
+ 
+
+00:18:49.090 --> 00:18:51.610 align:start position:0%
+ 
+ 
+
+00:18:51.610 --> 00:18:54.190 align:start position:0%
+ 
+ 
+
+00:18:54.190 --> 00:18:55.779 align:start position:0%
+ 
+ 
+
+00:18:55.779 --> 00:18:58.510 align:start position:0%
+ 
+ 
+
+00:18:58.510 --> 00:19:00.750 align:start position:0%
+ 
+ 
+
+00:19:00.750 --> 00:19:05.289 align:start position:0%
+ 
+ 
+
+00:19:05.289 --> 00:19:07.139 align:start position:0%
+ 
+ 
+
+00:19:07.139 --> 00:19:12.340 align:start position:0%
+ 
+ 
+
+00:19:12.340 --> 00:19:13.840 align:start position:0%
+ 
+ 
+
+00:19:13.840 --> 00:19:16.899 align:start position:0%
+ 
+ 
+
+00:19:16.899 --> 00:19:19.690 align:start position:0%
+ 
+ 
+
+00:19:19.690 --> 00:19:20.710 align:start position:0%
+ 
+ 
+
+00:19:20.710 --> 00:19:22.149 align:start position:0%
+ 
+ 
+
+00:19:22.149 --> 00:19:23.590 align:start position:0%
+ 
+ 
+
+00:19:23.590 --> 00:19:26.710 align:start position:0%
+ 
+ 
+
+00:19:26.710 --> 00:19:29.169 align:start position:0%
+ 
+ 
+
+00:19:29.169 --> 00:19:30.370 align:start position:0%
+ 
+ 
+
+00:19:30.370 --> 00:19:31.690 align:start position:0%
+ 
+ 
+
+00:19:31.690 --> 00:19:33.250 align:start position:0%
+ 
+ 
+
+00:19:33.250 --> 00:19:34.360 align:start position:0%
+ 
+ 
+
+00:19:34.360 --> 00:19:35.909 align:start position:0%
+ 
+ 
+
+00:19:35.909 --> 00:19:39.820 align:start position:0%
+ 
+ 
+
+00:19:39.820 --> 00:19:41.409 align:start position:0%
+ 
+ 
+
+00:19:41.409 --> 00:19:42.909 align:start position:0%
+ 
+ 
+
+00:19:42.909 --> 00:19:45.159 align:start position:0%
+ 
+ 
+
+00:19:45.159 --> 00:19:49.029 align:start position:0%
+ 
+ 
+
+00:19:49.029 --> 00:19:51.159 align:start position:0%
+ 
+ 
+
+00:19:51.159 --> 00:19:53.529 align:start position:0%
+ 
+ 
+
+00:19:53.529 --> 00:19:55.450 align:start position:0%
+ 
+ 
+
+00:19:55.450 --> 00:19:57.639 align:start position:0%
+ 
+ 
+
+00:19:57.639 --> 00:20:02.140 align:start position:0%
+ 
+ 
+
+00:20:02.140 --> 00:20:05.930 align:start position:0%
+ 
+ 
+
+00:20:05.930 --> 00:20:09.020 align:start position:0%
+ 
+ 
+
+00:20:09.020 --> 00:20:12.260 align:start position:0%
+ 
+ 
+
+00:20:12.260 --> 00:20:15.140 align:start position:0%
+ 
+ 
+
+00:20:15.140 --> 00:20:17.420 align:start position:0%
+ 
+ 
+
+00:20:17.420 --> 00:20:20.390 align:start position:0%
+ 
+ 
+
+00:20:20.390 --> 00:20:22.850 align:start position:0%
+ 
+ 
+
+00:20:22.850 --> 00:20:26.600 align:start position:0%
+ 
+ 
+
+00:20:26.600 --> 00:20:28.100 align:start position:0%
+ 
+ 
+
+00:20:28.100 --> 00:20:29.570 align:start position:0%
+ 
+ 
+
+00:20:29.570 --> 00:20:31.400 align:start position:0%
+ 
+ 
+
+00:20:31.400 --> 00:20:34.550 align:start position:0%
+ 
+ 
+
+00:20:34.550 --> 00:20:38.000 align:start position:0%
+ 
+ 
+
+00:20:38.000 --> 00:20:40.250 align:start position:0%
+ 
+ 
+
+00:20:40.250 --> 00:20:43.550 align:start position:0%
+ 
+ 
+
+00:20:43.550 --> 00:20:44.810 align:start position:0%
+ 
+ 
+
+00:20:44.810 --> 00:20:46.700 align:start position:0%
+ 
+ 
+
+00:20:46.700 --> 00:20:50.480 align:start position:0%
+ 
+ 
+
+00:20:50.480 --> 00:20:51.950 align:start position:0%
+ 
+ 
+
+00:20:51.950 --> 00:20:55.700 align:start position:0%
+ 
+ 
+
+00:20:55.700 --> 00:20:57.470 align:start position:0%
+ 
+ 
+
+00:20:57.470 --> 00:21:00.500 align:start position:0%
+ 
+ 
+
+00:21:00.500 --> 00:21:03.320 align:start position:0%
+ 
+ 
+
+00:21:03.320 --> 00:21:07.070 align:start position:0%
+ 
+ 
+
+00:21:07.070 --> 00:21:08.990 align:start position:0%
+ 
+ 
+
+00:21:08.990 --> 00:21:11.510 align:start position:0%
+ 
+ 
+
+00:21:11.510 --> 00:21:14.270 align:start position:0%
+ 
+ 
+
+00:21:14.270 --> 00:21:16.190 align:start position:0%
+ 
+ 
+
+00:21:16.190 --> 00:21:18.320 align:start position:0%
+ 
+ 
+
+00:21:18.320 --> 00:21:20.750 align:start position:0%
+ 
+ 
+
+00:21:20.750 --> 00:21:22.670 align:start position:0%
+ 
+ 
+
+00:21:22.670 --> 00:21:26.090 align:start position:0%
+ 
+ 
+
+00:21:26.090 --> 00:21:27.860 align:start position:0%
+ 
+ 
+
+00:21:27.860 --> 00:21:29.360 align:start position:0%
+ 
+ 
+
+00:21:29.360 --> 00:21:31.400 align:start position:0%
+ 
+ 
+
+00:21:31.400 --> 00:21:33.770 align:start position:0%
+ 
+ 
+
+00:21:33.770 --> 00:21:35.180 align:start position:0%
+ 
+ 
+
+00:21:35.180 --> 00:21:36.560 align:start position:0%
+ 
+ 
+
+00:21:36.560 --> 00:21:38.360 align:start position:0%
+ 
+ 
+
+00:21:38.360 --> 00:21:39.170 align:start position:0%
+ 
+ 
+
+00:21:39.170 --> 00:21:43.130 align:start position:0%
+ 
+ 
+
+00:21:43.130 --> 00:21:45.200 align:start position:0%
+ 
+ 
+
+00:21:45.200 --> 00:21:49.190 align:start position:0%
+ 
+ 
+
+00:21:49.190 --> 00:21:52.550 align:start position:0%
+ 
+ 
+
+00:21:52.550 --> 00:21:55.520 align:start position:0%
+ 
+ 
+
+00:21:55.520 --> 00:21:58.070 align:start position:0%
+ 
+ 
+
+00:21:58.070 --> 00:22:00.920 align:start position:0%
+ 
+ 
+
+00:22:00.920 --> 00:22:04.010 align:start position:0%
+ 
+ 
+
+00:22:04.010 --> 00:22:07.370 align:start position:0%
+ 
+ 
+
+00:22:07.370 --> 00:22:10.640 align:start position:0%
+ 
+ 
+
+00:22:10.640 --> 00:22:14.750 align:start position:0%
+ 
+ 
+
+00:22:14.750 --> 00:22:15.440 align:start position:0%
+ 
+ 
+
+00:22:15.440 --> 00:22:18.379 align:start position:0%
+ 
+ 
+
+00:22:18.379 --> 00:22:21.549 align:start position:0%
+ 
+ 
+
+00:22:21.549 --> 00:22:23.899 align:start position:0%
+ 
+ 
+
+00:22:23.899 --> 00:22:26.149 align:start position:0%
+ 
+ 
+
+00:22:26.149 --> 00:22:28.070 align:start position:0%
+ 
+ 
+
+00:22:28.070 --> 00:22:29.990 align:start position:0%
+ 
+ 
+
+00:22:29.990 --> 00:22:31.250 align:start position:0%
+ 
+ 
+
+00:22:31.250 --> 00:22:35.690 align:start position:0%
+ 
+ 
+
+00:22:35.690 --> 00:22:37.100 align:start position:0%
+ 
+ 
+
+00:22:37.100 --> 00:22:38.930 align:start position:0%
+ 
+ 
+
+00:22:38.930 --> 00:22:41.269 align:start position:0%
+ 
+ 
+
+00:22:41.269 --> 00:22:46.669 align:start position:0%
+ 
+ 
+
+00:22:46.669 --> 00:22:49.190 align:start position:0%
+ 
+ 
+
+00:22:49.190 --> 00:22:51.440 align:start position:0%
+ 
+ 
+
+00:22:51.440 --> 00:22:53.210 align:start position:0%
+ 
+ 
+
+00:22:53.210 --> 00:22:56.360 align:start position:0%
+ 
+ 
+
+00:22:56.360 --> 00:23:00.320 align:start position:0%
+ 
+ 
+
+00:23:00.320 --> 00:23:05.149 align:start position:0%
+ 
+ 
+
+00:23:05.149 --> 00:23:07.460 align:start position:0%
+ 
+ 
+
+00:23:07.460 --> 00:23:11.690 align:start position:0%
+ 
+ 
+
+00:23:11.690 --> 00:23:14.389 align:start position:0%
+ 
+ 
+
+00:23:14.389 --> 00:23:16.700 align:start position:0%
+ 
+ 
+
+00:23:16.700 --> 00:23:18.769 align:start position:0%
+ 
+ 
+
+00:23:18.769 --> 00:23:20.240 align:start position:0%
+ 
+ 
+
+00:23:20.240 --> 00:23:24.159 align:start position:0%
+ 
+ 
+
+00:23:24.159 --> 00:23:27.549 align:start position:0%
+ 
+ 
+
+00:23:27.549 --> 00:23:30.379 align:start position:0%
+ 
+ 
+
+00:23:30.379 --> 00:23:32.419 align:start position:0%
+ 
+ 
+
+00:23:32.419 --> 00:23:35.060 align:start position:0%
+ 
+ 
+
+00:23:35.060 --> 00:23:36.830 align:start position:0%
+ 
+ 
+
+00:23:36.830 --> 00:23:39.769 align:start position:0%
+ 
+ 
+
+00:23:39.769 --> 00:23:42.409 align:start position:0%
+ 
+ 
+
+00:23:42.409 --> 00:23:47.919 align:start position:0%
+ 
+ 
+
+00:23:47.919 --> 00:23:50.659 align:start position:0%
+ 
+ 
+
+00:23:50.659 --> 00:23:53.960 align:start position:0%
+ 
+ 
+
+00:23:53.960 --> 00:23:57.680 align:start position:0%
+ 
+ 
+
+00:23:57.680 --> 00:24:00.320 align:start position:0%
+ 
+ 
+
+00:24:00.320 --> 00:24:04.009 align:start position:0%
+ 
+ 
+
+00:24:04.009 --> 00:24:06.590 align:start position:0%
+ 
+ 
+
+00:24:06.590 --> 00:24:09.289 align:start position:0%
+ 
+ 
+
+00:24:09.289 --> 00:24:11.450 align:start position:0%
+ 
+ 
+
+00:24:11.450 --> 00:24:14.090 align:start position:0%
+ 
+ 
+
+00:24:14.090 --> 00:24:16.580 align:start position:0%
+ 
+ 
+
+00:24:16.580 --> 00:24:22.510 align:start position:0%
+ 
+ 
+
+00:24:22.510 --> 00:24:24.640 align:start position:0%
+ 
+ 
+
+00:24:24.640 --> 00:24:27.820 align:start position:0%
+ 
+ 
+
+00:24:27.820 --> 00:24:30.280 align:start position:0%
+ 
+ 
+
+00:24:30.280 --> 00:24:37.450 align:start position:0%
+ 
+ 
+
+00:24:37.450 --> 00:24:40.299 align:start position:0%
+ 
+ 
+
+00:24:40.299 --> 00:24:42.220 align:start position:0%
+ 
+ 
+
+00:24:42.220 --> 00:24:43.480 align:start position:0%
+ 
+ 
+
+00:24:43.480 --> 00:24:47.410 align:start position:0%
+ 
+ 
+
+00:24:47.410 --> 00:24:50.440 align:start position:0%
+ 
+ 
+
+00:24:50.440 --> 00:24:52.600 align:start position:0%
+ 
+ 
+
+00:24:52.600 --> 00:24:56.880 align:start position:0%
+ 
+ 
+
+00:24:56.880 --> 00:24:59.680 align:start position:0%
+ 
+ 
+
+00:24:59.680 --> 00:25:01.120 align:start position:0%
+ 
+ 
+
+00:25:01.120 --> 00:25:02.560 align:start position:0%
+ 
+ 
+
+00:25:02.560 --> 00:25:05.169 align:start position:0%
+ 
+ 
+
+00:25:05.169 --> 00:25:07.630 align:start position:0%
+ 
+ 
+
+00:25:07.630 --> 00:25:11.740 align:start position:0%
+ 
+ 
+
+00:25:11.740 --> 00:25:13.720 align:start position:0%
+ 
+ 
+
+00:25:13.720 --> 00:25:17.980 align:start position:0%
+ 
+ 
+
+00:25:17.980 --> 00:25:19.390 align:start position:0%
+ 
+ 
+
+00:25:19.390 --> 00:25:22.000 align:start position:0%
+ 
+ 
+
+00:25:22.000 --> 00:25:23.970 align:start position:0%
+ 
+ 
+
+00:25:23.970 --> 00:25:26.260 align:start position:0%
+ 
+ 
+
+00:25:26.260 --> 00:25:27.820 align:start position:0%
+ 
+ 
+
+00:25:27.820 --> 00:25:32.650 align:start position:0%
+ 
+ 
+
+00:25:32.650 --> 00:25:34.150 align:start position:0%
+ 
+ 
+
+00:25:34.150 --> 00:25:37.060 align:start position:0%
+ 
+ 
+
+00:25:37.060 --> 00:25:40.540 align:start position:0%
+ 
+ 
+
+00:25:40.540 --> 00:25:42.400 align:start position:0%
+ 
+ 
+
+00:25:42.400 --> 00:25:44.770 align:start position:0%
+ 
+ 
+
+00:25:44.770 --> 00:25:48.790 align:start position:0%
+ 
+ 
+
+00:25:48.790 --> 00:25:50.620 align:start position:0%
+ 
+ 
+
+00:25:50.620 --> 00:25:52.660 align:start position:0%
+ 
+ 
+
+00:25:52.660 --> 00:25:55.630 align:start position:0%
+ 
+ 
+
+00:25:55.630 --> 00:25:58.650 align:start position:0%
+ 
+ 
+
+00:25:58.650 --> 00:26:01.540 align:start position:0%
+ 
+ 
+
+00:26:01.540 --> 00:26:02.280 align:start position:0%
+ 
+ 
+
+00:26:02.280 --> 00:26:07.240 align:start position:0%
+ 
+ 
+
+00:26:07.240 --> 00:26:09.130 align:start position:0%
+ 
+ 
+
+00:26:09.130 --> 00:26:10.930 align:start position:0%
+ 
+ 
+
+00:26:10.930 --> 00:26:15.190 align:start position:0%
+ 
+ 
+
+00:26:15.190 --> 00:26:16.900 align:start position:0%
+ 
+ 
+
+00:26:16.900 --> 00:26:18.940 align:start position:0%
+ 
+ 
+
+00:26:18.940 --> 00:26:23.470 align:start position:0%
+ 
+ 
+
+00:26:23.470 --> 00:26:25.660 align:start position:0%
+ 
+ 
+
+00:26:25.660 --> 00:26:26.799 align:start position:0%
+ 
+ 
+
+00:26:26.799 --> 00:26:29.680 align:start position:0%
+ 
+ 
+
+00:26:29.680 --> 00:26:31.330 align:start position:0%
+ 
+ 
+
+00:26:31.330 --> 00:26:35.140 align:start position:0%
+ 
+ 
+
+00:26:35.140 --> 00:26:36.370 align:start position:0%
+ 
+ 
+
+00:26:36.370 --> 00:26:41.110 align:start position:0%
+ 
+ 
+
+00:26:41.110 --> 00:26:42.430 align:start position:0%
+ 
+ 
+
+00:26:42.430 --> 00:26:44.230 align:start position:0%
+ 
+ 
+
+00:26:44.230 --> 00:26:47.049 align:start position:0%
+ 
+ 
+
+00:26:47.049 --> 00:26:49.960 align:start position:0%
+ 
+ 
+
+00:26:49.960 --> 00:26:52.390 align:start position:0%
+ 
+ 
+
+00:26:52.390 --> 00:26:53.950 align:start position:0%
+ 
+ 
+
+00:26:53.950 --> 00:26:57.070 align:start position:0%
+ 
+ 
+
+00:26:57.070 --> 00:26:59.110 align:start position:0%
+ 
+ 
+
+00:26:59.110 --> 00:27:01.930 align:start position:0%
+ 
+ 
+
+00:27:01.930 --> 00:27:03.370 align:start position:0%
+ 
+ 
+
+00:27:03.370 --> 00:27:07.810 align:start position:0%
+ 
+ 
+
+00:27:07.810 --> 00:27:10.960 align:start position:0%
+ 
+ 
+
+00:27:10.960 --> 00:27:14.200 align:start position:0%
+ 
+ 
+
+00:27:14.200 --> 00:27:17.860 align:start position:0%
+ 
+ 
+
+00:27:17.860 --> 00:27:19.480 align:start position:0%
+ 
+ 
+
+00:27:19.480 --> 00:27:22.000 align:start position:0%
+ 
+ 
+
+00:27:22.000 --> 00:27:24.490 align:start position:0%
+ 
+ 
+
+00:27:24.490 --> 00:27:27.039 align:start position:0%
+ 
+ 
+
+00:27:27.039 --> 00:27:30.430 align:start position:0%
+ 
+ 
+
+00:27:30.430 --> 00:27:32.919 align:start position:0%
+ 
+ 
+
+00:27:32.919 --> 00:27:34.570 align:start position:0%
+ 
+ 
+
+00:27:34.570 --> 00:27:36.070 align:start position:0%
+ 
+ 
+
+00:27:36.070 --> 00:27:39.640 align:start position:0%
+ 
+ 
+
+00:27:39.640 --> 00:27:41.770 align:start position:0%
+ 
+ 
+
+00:27:41.770 --> 00:27:44.580 align:start position:0%
+ 
+ 
+
+00:27:44.580 --> 00:27:47.350 align:start position:0%
+ 
+ 
+
+00:27:47.350 --> 00:27:50.049 align:start position:0%
+ 
+ 
+
+00:27:50.049 --> 00:27:55.180 align:start position:0%
+ 
+ 
+
+00:27:55.180 --> 00:27:56.919 align:start position:0%
+ 
+ 
+
+00:27:56.919 --> 00:27:59.860 align:start position:0%
+ 
+ 
+
+00:27:59.860 --> 00:28:01.560 align:start position:0%
+ 
+ 
+
+00:28:01.560 --> 00:28:04.419 align:start position:0%
+ 
+ 
+
+00:28:04.419 --> 00:28:06.700 align:start position:0%
+ 
+ 
+
+00:28:06.700 --> 00:28:09.190 align:start position:0%
+ 
+ 
+
+00:28:09.190 --> 00:28:12.070 align:start position:0%
+ 
+ 
+
+00:28:12.070 --> 00:28:13.930 align:start position:0%
+ 
+ 
+
+00:28:13.930 --> 00:28:15.490 align:start position:0%
+ 
+ 
+
+00:28:15.490 --> 00:28:16.690 align:start position:0%
+ 
+ 
+
+00:28:16.690 --> 00:28:19.090 align:start position:0%
+ 
+ 
+
+00:28:19.090 --> 00:28:20.830 align:start position:0%
+ 
+ 
+
+00:28:20.830 --> 00:28:23.590 align:start position:0%
+ 
+ 
+
+00:28:23.590 --> 00:28:25.930 align:start position:0%
+ 
+ 
+
+00:28:25.930 --> 00:28:28.990 align:start position:0%
+ 
+ 
+
+00:28:28.990 --> 00:28:33.370 align:start position:0%
+ 
+ 
+
+00:28:33.370 --> 00:28:35.919 align:start position:0%
+ 
+ 
+
+00:28:35.919 --> 00:28:37.120 align:start position:0%
+ 
+ 
+
+00:28:37.120 --> 00:28:38.560 align:start position:0%
+ 
+ 
+
+00:28:38.560 --> 00:28:40.360 align:start position:0%
+ 
+ 
+
+00:28:40.360 --> 00:28:43.090 align:start position:0%
+ 
+ 
+
+00:28:43.090 --> 00:28:46.649 align:start position:0%
+ 
+ 
+
+00:28:46.649 --> 00:28:49.710 align:start position:0%
+ 
+ 
+
+00:28:49.710 --> 00:28:53.350 align:start position:0%
+ 
+ 
+
+00:28:53.350 --> 00:28:57.789 align:start position:0%
+ 
+ 
+
+00:28:57.789 --> 00:28:59.380 align:start position:0%
+ 
+ 
+
+00:28:59.380 --> 00:29:02.260 align:start position:0%
+ 
+ 
+
+00:29:02.260 --> 00:29:05.730 align:start position:0%
+ 
+ 
+
+00:29:05.730 --> 00:29:07.690 align:start position:0%
+ 
+ 
+
+00:29:07.690 --> 00:29:09.700 align:start position:0%
+ 
+ 
+
+00:29:09.700 --> 00:29:10.870 align:start position:0%
+ 
+ 
+
+00:29:10.870 --> 00:29:14.620 align:start position:0%
+ 
+ 
+
+00:29:14.620 --> 00:29:17.770 align:start position:0%
+ 
+ 
+
+00:29:17.770 --> 00:29:20.940 align:start position:0%
+ 
+ 
+
+00:29:20.940 --> 00:29:25.030 align:start position:0%
+ 
+ 
+
+00:29:25.030 --> 00:29:27.430 align:start position:0%
+ 
+ 
+
+00:29:27.430 --> 00:29:31.600 align:start position:0%
+ 
+ 
+
+00:29:31.600 --> 00:29:33.190 align:start position:0%
+ 
+ 
+
+00:29:33.190 --> 00:29:37.210 align:start position:0%
+ 
+ 
+
+00:29:37.210 --> 00:29:38.830 align:start position:0%
+ 
+ 
+
+00:29:38.830 --> 00:29:40.870 align:start position:0%
+ 
+ 
+
+00:29:40.870 --> 00:29:42.789 align:start position:0%
+ 
+ 
+
+00:29:42.789 --> 00:29:44.830 align:start position:0%
+ 
+ 
+
+00:29:44.830 --> 00:29:47.049 align:start position:0%
+ 
+ 
+
+00:29:47.049 --> 00:29:50.560 align:start position:0%
+ 
+ 
+
+00:29:50.560 --> 00:29:53.140 align:start position:0%
+ 
+ 
+
+00:29:53.140 --> 00:29:54.730 align:start position:0%
+ 
+ 
+
+00:29:54.730 --> 00:29:56.669 align:start position:0%
+ 
+ 
+
+00:29:56.669 --> 00:30:00.610 align:start position:0%
+ 
+ 
+
+00:30:00.610 --> 00:30:02.409 align:start position:0%
+ 
+ 
+
+00:30:02.409 --> 00:30:05.200 align:start position:0%
+ 
+ 
+
+00:30:05.200 --> 00:30:08.830 align:start position:0%
+ 
+ 
+
+00:30:08.830 --> 00:30:10.480 align:start position:0%
+ 
+ 
+
+00:30:10.480 --> 00:30:12.820 align:start position:0%
+ 
+ 
+
+00:30:12.820 --> 00:30:16.780 align:start position:0%
+ 
+ 
+
+00:30:16.780 --> 00:30:18.760 align:start position:0%
+ 
+ 
+
+00:30:18.760 --> 00:30:21.430 align:start position:0%
+ 
+ 
+
+00:30:21.430 --> 00:30:23.350 align:start position:0%
+ 
+ 
+
+00:30:23.350 --> 00:30:27.159 align:start position:0%
+ 
+ 
+
+00:30:27.159 --> 00:30:29.440 align:start position:0%
+ 
+ 
+
+00:30:29.440 --> 00:30:30.820 align:start position:0%
+ 
+ 
+
+00:30:30.820 --> 00:30:33.310 align:start position:0%
+ 
+ 
+
+00:30:33.310 --> 00:30:35.020 align:start position:0%
+ 
+ 
+
+00:30:35.020 --> 00:30:36.970 align:start position:0%
+ 
+ 
+
+00:30:36.970 --> 00:30:40.390 align:start position:0%
+ 
+ 
+
+00:30:40.390 --> 00:30:43.870 align:start position:0%
+ 
+ 
+
+00:30:43.870 --> 00:30:46.630 align:start position:0%
+ 
+ 
+
+00:30:46.630 --> 00:30:48.190 align:start position:0%
+ 
+ 
+
+00:30:48.190 --> 00:30:52.360 align:start position:0%
+ 
+ 
+
+00:30:52.360 --> 00:30:55.720 align:start position:0%
+ 
+ 
+
+00:30:55.720 --> 00:30:58.690 align:start position:0%
+ 
+ 
+
+00:30:58.690 --> 00:31:03.600 align:start position:0%
+ 
+ 
+
+00:31:03.600 --> 00:31:06.970 align:start position:0%
+ 
+ 
+
+00:31:06.970 --> 00:31:10.529 align:start position:0%
+ 
+ 
+
+00:31:10.529 --> 00:31:13.210 align:start position:0%
+ 
+ 
+
+00:31:13.210 --> 00:31:14.909 align:start position:0%
+ 
+ 
+
+00:31:14.909 --> 00:31:17.019 align:start position:0%
+ 
+ 
+
+00:31:17.019 --> 00:31:20.379 align:start position:0%
+ 
+ 
+
+00:31:20.379 --> 00:31:22.029 align:start position:0%
+ 
+ 
+
+00:31:22.029 --> 00:31:24.730 align:start position:0%
+ 
+ 
+
+00:31:24.730 --> 00:31:27.610 align:start position:0%
+ 
+ 
+
+00:31:27.610 --> 00:31:31.930 align:start position:0%
+ 
+ 
+
+00:31:31.930 --> 00:31:33.070 align:start position:0%
+ 
+ 
+
+00:31:33.070 --> 00:31:35.529 align:start position:0%
+ 
+ 
+
+00:31:35.529 --> 00:31:39.129 align:start position:0%
+ 
+ 
+
+00:31:39.129 --> 00:31:41.190 align:start position:0%
+ 
+ 
+
+00:31:41.190 --> 00:31:43.299 align:start position:0%
+ 
+ 
+
+00:31:43.299 --> 00:31:45.549 align:start position:0%
+ 
+ 
+
+00:31:45.549 --> 00:31:48.810 align:start position:0%
+ 
+ 
+
+00:31:48.810 --> 00:31:51.460 align:start position:0%
+ 
+ 
+
+00:31:51.460 --> 00:31:55.269 align:start position:0%
+ 
+ 
+
+00:31:55.269 --> 00:31:57.100 align:start position:0%
+ 
+ 
+
+00:31:57.100 --> 00:31:58.899 align:start position:0%
+ 
+ 
+
+00:31:58.899 --> 00:32:00.519 align:start position:0%
+ 
+ 
+
+00:32:00.519 --> 00:32:05.110 align:start position:0%
+ 
+ 
+
+00:32:05.110 --> 00:32:06.759 align:start position:0%
+ 
+ 
+
+00:32:06.759 --> 00:32:10.000 align:start position:0%
+ 
+ 
+
+00:32:10.000 --> 00:32:12.009 align:start position:0%
+ 
+ 
+
+00:32:12.009 --> 00:32:15.639 align:start position:0%
+ 
+ 
+
+00:32:15.639 --> 00:32:18.490 align:start position:0%
+ 
+ 
+
+00:32:18.490 --> 00:32:21.340 align:start position:0%
+ 
+ 
+
+00:32:21.340 --> 00:32:27.299 align:start position:0%
+ 
+ 
+
+00:32:27.299 --> 00:32:29.649 align:start position:0%
+ 
+ 
+
+00:32:29.649 --> 00:32:33.220 align:start position:0%
+ 
+ 
+
+00:32:33.220 --> 00:32:35.350 align:start position:0%
+ 
+ 
+
+00:32:35.350 --> 00:32:38.019 align:start position:0%
+ 
+ 
+
+00:32:38.019 --> 00:32:40.539 align:start position:0%
+ 
+ 
+
+00:32:40.539 --> 00:32:42.580 align:start position:0%
+ 
+ 
+
+00:32:42.580 --> 00:32:46.149 align:start position:0%
+ 
+ 
+
+00:32:46.149 --> 00:32:51.730 align:start position:0%
+ 
+ 
+
+00:32:51.730 --> 00:32:53.649 align:start position:0%
+ 
+ 
+
+00:32:53.649 --> 00:32:55.240 align:start position:0%
+ 
+ 
+
+00:32:55.240 --> 00:32:58.750 align:start position:0%
+ 
+ 
+
+00:32:58.750 --> 00:33:00.730 align:start position:0%
+ 
+ 
+
+00:33:00.730 --> 00:33:02.500 align:start position:0%
+ 
+ 
+
+00:33:02.500 --> 00:33:08.470 align:start position:0%
+ 
+ 
+
+00:33:08.470 --> 00:33:10.629 align:start position:0%
+ 
+ 
+
+00:33:10.629 --> 00:33:14.019 align:start position:0%
+ 
+ 
+
+00:33:14.019 --> 00:33:17.020 align:start position:0%
+ 
+ 
+
+00:33:17.020 --> 00:33:19.840 align:start position:0%
+ 
+ 
+
+00:33:19.840 --> 00:33:26.230 align:start position:0%
+ 
+ 
+
+00:33:26.230 --> 00:33:27.670 align:start position:0%
+ 
+ 
+
+00:33:27.670 --> 00:33:29.020 align:start position:0%
+ 
+ 
+
+00:33:29.020 --> 00:33:34.780 align:start position:0%
+ 
+ 
+
+00:33:34.780 --> 00:33:36.010 align:start position:0%
+ 
+ 
+
+00:33:36.010 --> 00:33:39.370 align:start position:0%
+ 
+ 
+
+00:33:39.370 --> 00:33:42.850 align:start position:0%
+ 
+ 
+
+00:33:42.850 --> 00:33:45.130 align:start position:0%
+ 
+ 
+
+00:33:45.130 --> 00:33:47.890 align:start position:0%
+ 
+ 
+
+00:33:47.890 --> 00:33:51.700 align:start position:0%
+ 
+ 
+
+00:33:51.700 --> 00:33:53.860 align:start position:0%
+ 
+ 
+
+00:33:53.860 --> 00:33:57.070 align:start position:0%
+ 
+ 
+
+00:33:57.070 --> 00:33:59.590 align:start position:0%
+ 
+ 
+
+00:33:59.590 --> 00:34:01.240 align:start position:0%
+ 
+ 
+
+00:34:01.240 --> 00:34:04.690 align:start position:0%
+ 
+ 
+
+00:34:04.690 --> 00:34:07.530 align:start position:0%
+ 
+ 
+
+00:34:07.530 --> 00:34:11.500 align:start position:0%
+ 
+ 
+
+00:34:11.500 --> 00:34:12.730 align:start position:0%
+ 
+ 
+
+00:34:12.730 --> 00:34:15.130 align:start position:0%
+ 
+ 
+
+00:34:15.130 --> 00:34:17.919 align:start position:0%
+ 
+ 
+
+00:34:17.919 --> 00:34:19.630 align:start position:0%
+ 
+ 
+
+00:34:19.630 --> 00:34:21.730 align:start position:0%
+ 
+ 
+
+00:34:21.730 --> 00:34:24.880 align:start position:0%
+ 
+ 
+
+00:34:24.880 --> 00:34:26.830 align:start position:0%
+ 
+ 
+
+00:34:26.830 --> 00:34:29.230 align:start position:0%
+ 
+ 
+
+00:34:29.230 --> 00:34:32.050 align:start position:0%
+ 
+ 
+
+00:34:32.050 --> 00:34:34.060 align:start position:0%
+ 
+ 
+
+00:34:34.060 --> 00:34:35.950 align:start position:0%
+ 
+ 
+
+00:34:35.950 --> 00:34:39.340 align:start position:0%
+ 
+ 
+
+00:34:39.340 --> 00:34:41.950 align:start position:0%
+ 
+ 
+
+00:34:41.950 --> 00:34:44.409 align:start position:0%
+ 
+ 
+
+00:34:44.409 --> 00:34:47.980 align:start position:0%
+ 
+ 
+
+00:34:47.980 --> 00:34:51.040 align:start position:0%
+ 
+ 
+
+00:34:51.040 --> 00:34:53.500 align:start position:0%
+ 
+ 
+
+00:34:53.500 --> 00:34:54.850 align:start position:0%
+ 
+ 
+
+00:34:54.850 --> 00:34:57.910 align:start position:0%
+ 
+ 
+
+00:34:57.910 --> 00:35:00.910 align:start position:0%
+ 
+ 
+
+00:35:00.910 --> 00:35:06.430 align:start position:0%
+ 
+ 
+
+00:35:06.430 --> 00:35:08.170 align:start position:0%
+ 
+ 
+
+00:35:08.170 --> 00:35:09.820 align:start position:0%
+ 
+ 
+
+00:35:09.820 --> 00:35:11.770 align:start position:0%
+ 
+ 
+
+00:35:11.770 --> 00:35:16.330 align:start position:0%
+ 
+ 
+
+00:35:16.330 --> 00:35:20.410 align:start position:0%
+ 
+ 
+
+00:35:20.410 --> 00:35:22.420 align:start position:0%
+ 
+ 
+
+00:35:22.420 --> 00:35:25.120 align:start position:0%
+ 
+ 
+
+00:35:25.120 --> 00:35:27.930 align:start position:0%
+ 
+ 
+
+00:35:27.930 --> 00:35:30.640 align:start position:0%
+ 
+ 
+
+00:35:30.640 --> 00:35:32.920 align:start position:0%
+ 
+ 
+
+00:35:32.920 --> 00:35:35.109 align:start position:0%
+ 
+ 
+
+00:35:35.109 --> 00:35:36.609 align:start position:0%
+ 
+ 
+
+00:35:36.609 --> 00:35:39.670 align:start position:0%
+ 
+ 
+
+00:35:39.670 --> 00:35:41.620 align:start position:0%
+ 
+ 
+
+00:35:41.620 --> 00:35:43.750 align:start position:0%
+ 
+ 
+
+00:35:43.750 --> 00:35:46.599 align:start position:0%
+ 
+ 
+
+00:35:46.599 --> 00:35:50.680 align:start position:0%
+ 
+ 
+
+00:35:50.680 --> 00:35:54.660 align:start position:0%
+ 
+ 
+
+00:35:54.660 --> 00:35:57.730 align:start position:0%
+ 
+ 
+
+00:35:57.730 --> 00:35:59.710 align:start position:0%
+ 
+ 
+
+00:35:59.710 --> 00:36:03.130 align:start position:0%
+ 
+ 
+
+00:36:03.130 --> 00:36:05.440 align:start position:0%
+ 
+ 
+
+00:36:05.440 --> 00:36:08.950 align:start position:0%
+ 
+ 
+
+00:36:08.950 --> 00:36:11.130 align:start position:0%
+ 
+ 
+
+00:36:11.130 --> 00:36:14.529 align:start position:0%
+ 
+ 
+
+00:36:14.529 --> 00:36:15.970 align:start position:0%
+ 
+ 
+
+00:36:15.970 --> 00:36:17.920 align:start position:0%
+ 
+ 
+
+00:36:17.920 --> 00:36:19.510 align:start position:0%
+ 
+ 
+
+00:36:19.510 --> 00:36:21.609 align:start position:0%
+ 
+ 
+
+00:36:21.609 --> 00:36:23.829 align:start position:0%
+ 
+ 
+
+00:36:23.829 --> 00:36:27.130 align:start position:0%
+ 
+ 
+
+00:36:27.130 --> 00:36:28.809 align:start position:0%
+ 
+ 
+
+00:36:28.809 --> 00:36:30.640 align:start position:0%
+ 
+ 
+
+00:36:30.640 --> 00:36:33.010 align:start position:0%
+ 
+ 
+
+00:36:33.010 --> 00:36:36.760 align:start position:0%
+ 
+ 
+
+00:36:36.760 --> 00:36:41.140 align:start position:0%
+ 
+ 
+
+00:36:41.140 --> 00:36:44.829 align:start position:0%
+ 
+ 
+
+00:36:44.829 --> 00:36:46.630 align:start position:0%
+ 
+ 
+
+00:36:46.630 --> 00:36:48.730 align:start position:0%
+ 
+ 
+
+00:36:48.730 --> 00:36:53.349 align:start position:0%
+ 
+ 
+
+00:36:53.349 --> 00:36:55.569 align:start position:0%
+ 
+ 
+
+00:36:55.569 --> 00:36:58.809 align:start position:0%
+ 
+ 
+
+00:36:58.809 --> 00:37:00.700 align:start position:0%
+ 
+ 
+
+00:37:00.700 --> 00:37:03.400 align:start position:0%
+ 
+ 
+
+00:37:03.400 --> 00:37:08.559 align:start position:0%
+ 
+ 
+
+00:37:08.559 --> 00:37:12.370 align:start position:0%
+ 
+ 
+
+00:37:12.370 --> 00:37:14.200 align:start position:0%
+ 
+ 
+
+00:37:14.200 --> 00:37:17.410 align:start position:0%
+ 
+ 
+
+00:37:17.410 --> 00:37:19.779 align:start position:0%
+ 
+ 
+
+00:37:19.779 --> 00:37:21.900 align:start position:0%
+ 
+ 
+
+00:37:21.900 --> 00:37:25.870 align:start position:0%
+ 
+ 
+
+00:37:25.870 --> 00:37:27.190 align:start position:0%
+ 
+ 
+
+00:37:27.190 --> 00:37:29.319 align:start position:0%
+ 
+ 
+
+00:37:29.319 --> 00:37:31.210 align:start position:0%
+ 
+ 
+
+00:37:31.210 --> 00:37:32.769 align:start position:0%
+ 
+ 
+
+00:37:32.769 --> 00:37:39.490 align:start position:0%
+ 
+ 
+
+00:37:39.490 --> 00:37:41.160 align:start position:0%
+ 
+ 
+
+00:37:41.160 --> 00:37:43.539 align:start position:0%
+ 
+ 
+
+00:37:43.539 --> 00:37:44.859 align:start position:0%
+ 
+ 
+
+00:37:44.859 --> 00:37:47.380 align:start position:0%
+ 
+ 
+
+00:37:47.380 --> 00:37:51.250 align:start position:0%
+ 
+ 
+
+00:37:51.250 --> 00:37:52.930 align:start position:0%
+ 
+ 
+
+00:37:52.930 --> 00:37:54.609 align:start position:0%
+ 
+ 
+
+00:37:54.609 --> 00:37:56.800 align:start position:0%
+ 
+ 
+
+00:37:56.800 --> 00:37:59.020 align:start position:0%
+ 
+ 
+
+00:37:59.020 --> 00:38:00.460 align:start position:0%
+ 
+ 
+
+00:38:00.460 --> 00:38:02.890 align:start position:0%
+ 
+ 
+
+00:38:02.890 --> 00:38:05.020 align:start position:0%
+ 
+ 
+
+00:38:05.020 --> 00:38:07.960 align:start position:0%
+ 
+ 
+
+00:38:07.960 --> 00:38:10.109 align:start position:0%
+ 
+ 
+
+00:38:10.109 --> 00:38:12.760 align:start position:0%
+ 
+ 
+
+00:38:12.760 --> 00:38:14.349 align:start position:0%
+ 
+ 
+
+00:38:14.349 --> 00:38:14.359 align:start position:0%
+ 
+ 
+
+00:38:14.359 --> 00:38:18.329 align:start position:0%
+ 
+
+
+00:38:18.329 --> 00:38:21.069 align:start position:0%
+ 
+ 
+
+00:38:21.069 --> 00:38:24.220 align:start position:0%
+ 
+ 
+
+00:38:24.220 --> 00:38:28.420 align:start position:0%
+ 
+ 
+
+00:38:28.420 --> 00:38:31.560 align:start position:0%
+ 
+ 
+
+00:38:31.560 --> 00:38:33.960 align:start position:0%
+ 
+ 
+
+00:38:33.960 --> 00:38:38.620 align:start position:0%
+ 
+ 
+
+00:38:38.620 --> 00:38:39.910 align:start position:0%
+ 
+ 
+
+00:38:39.910 --> 00:38:41.829 align:start position:0%
+ 
+ 
+
+00:38:41.829 --> 00:38:44.589 align:start position:0%
+ 
+ 
+
+00:38:44.589 --> 00:38:46.720 align:start position:0%
+ 
+ 
+
+00:38:46.720 --> 00:38:49.000 align:start position:0%
+ 
+ 
+
+00:38:49.000 --> 00:38:50.530 align:start position:0%
+ 
+ 
+
+00:38:50.530 --> 00:38:52.030 align:start position:0%
+ 
+ 
+
+00:38:52.030 --> 00:38:53.020 align:start position:0%
+ 
+ 
+
+00:38:53.020 --> 00:38:55.870 align:start position:0%
+ 
+ 
+
+00:38:55.870 --> 00:38:57.930 align:start position:0%
+ 
+ 
+
+00:38:57.930 --> 00:39:00.099 align:start position:0%
+ 
+ 
+
+00:39:00.099 --> 00:39:03.250 align:start position:0%
+ 
+ 
+
+00:39:03.250 --> 00:39:04.750 align:start position:0%
+ 
+ 
+
+00:39:04.750 --> 00:39:06.730 align:start position:0%
+ 
+ 
+
+00:39:06.730 --> 00:39:09.190 align:start position:0%
+ 
+ 
+
+00:39:09.190 --> 00:39:11.349 align:start position:0%
+ 
+ 
+
+00:39:11.349 --> 00:39:13.270 align:start position:0%
+ 
+ 
+
+00:39:13.270 --> 00:39:14.740 align:start position:0%
+ 
+ 
+
+00:39:14.740 --> 00:39:18.430 align:start position:0%
+ 
+ 
+
+00:39:18.430 --> 00:39:20.710 align:start position:0%
+ 
+ 
+
+00:39:20.710 --> 00:39:23.230 align:start position:0%
+ 
+ 
+
+00:39:23.230 --> 00:39:26.140 align:start position:0%
+ 
+ 
+
+00:39:26.140 --> 00:39:28.660 align:start position:0%
+ 
+ 
+
+00:39:28.660 --> 00:39:30.309 align:start position:0%
+ 
+ 
+
+00:39:30.309 --> 00:39:32.730 align:start position:0%
+ 
+ 
+
+00:39:32.730 --> 00:39:34.780 align:start position:0%
+ 
+ 
+
+00:39:34.780 --> 00:39:36.069 align:start position:0%
+ 
+ 
+
+00:39:36.069 --> 00:39:37.480 align:start position:0%
+ 
+ 
+
+00:39:37.480 --> 00:39:38.620 align:start position:0%
+ 
+ 
+
+00:39:38.620 --> 00:39:39.790 align:start position:0%
+ 
+ 
+
+00:39:39.790 --> 00:39:41.770 align:start position:0%
+ 
+ 
+
+00:39:41.770 --> 00:39:45.220 align:start position:0%
+ 
+ 
+
+00:39:45.220 --> 00:39:46.510 align:start position:0%
+ 
+ 
+
+00:39:46.510 --> 00:39:48.970 align:start position:0%
+ 
+ 
+
+00:39:48.970 --> 00:39:51.309 align:start position:0%
+ 
+ 
+
+00:39:51.309 --> 00:39:53.309 align:start position:0%
+ 
+ 
+
+00:39:53.309 --> 00:39:56.109 align:start position:0%
+ 
+ 
+
+00:39:56.109 --> 00:39:57.440 align:start position:0%
+ 
+ 
+
+00:39:57.440 --> 00:39:59.390 align:start position:0%
+ 
+ 
+
+00:39:59.390 --> 00:40:01.280 align:start position:0%
+ 
+ 
+
+00:40:01.280 --> 00:40:02.690 align:start position:0%
+ 
+ 
+
+00:40:02.690 --> 00:40:05.420 align:start position:0%
+ 
+ 
+
+00:40:05.420 --> 00:40:07.850 align:start position:0%
+ 
+ 
+
+00:40:07.850 --> 00:40:10.150 align:start position:0%
+ 
+ 
+
+00:40:10.150 --> 00:40:13.340 align:start position:0%
+ 
+ 
+
+00:40:13.340 --> 00:40:14.380 align:start position:0%
+ 
+ 
+
+00:40:14.380 --> 00:40:16.820 align:start position:0%
+ 
+ 
+
+00:40:16.820 --> 00:40:19.190 align:start position:0%
+ 
+ 
+
+00:40:19.190 --> 00:40:21.970 align:start position:0%
+ 
+ 
+
+00:40:21.970 --> 00:40:24.380 align:start position:0%
+ 
+ 
+
+00:40:24.380 --> 00:40:26.900 align:start position:0%
+ 
+ 
+
+00:40:26.900 --> 00:40:31.640 align:start position:0%
+ 
+ 
+
+00:40:31.640 --> 00:40:33.170 align:start position:0%
+ 
+ 
+
+00:40:33.170 --> 00:40:35.570 align:start position:0%
+ 
+ 
+
+00:40:35.570 --> 00:40:38.420 align:start position:0%
+ 
+ 
+
+00:40:38.420 --> 00:40:41.510 align:start position:0%
+ 
+ 
+
+00:40:41.510 --> 00:40:43.700 align:start position:0%
+ 
+ 
+
+00:40:43.700 --> 00:40:45.590 align:start position:0%
+ 
+ 
+
+00:40:45.590 --> 00:40:47.420 align:start position:0%
+ 
+ 
+
+00:40:47.420 --> 00:40:49.400 align:start position:0%
+ 
+ 
+
+00:40:49.400 --> 00:40:52.340 align:start position:0%
+ 
+ 
+
+00:40:52.340 --> 00:40:53.960 align:start position:0%
+ 
+ 
+
+00:40:53.960 --> 00:41:00.020 align:start position:0%
+ 
+ 
+
+00:41:00.020 --> 00:41:00.030 align:start position:0%
+ 
+ 
+
+00:41:00.030 --> 00:41:00.630 align:start position:0%
+ 
+
+
+00:41:00.630 --> 00:41:00.640 align:start position:0%
+ 
+ 
+
+00:41:00.640 --> 00:41:05.920 align:start position:0%
+ 
+
+

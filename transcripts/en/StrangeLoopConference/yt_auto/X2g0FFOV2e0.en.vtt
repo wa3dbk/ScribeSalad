@@ -1,0 +1,4240 @@
+WEBVTT
+Kind: captions
+Language: en
+
+00:00:04.930 --> 00:00:07.950 align:start position:0%
+ 
+good afternoon everybody thank you for  coming out my name is David McNeil I'm a  developer I work at Llano cloud been  there for about three years and  basically what we do is we build out  cloud application infrastructure using  closure and a fair bit of Amazon Web  Services so I really like my job it's  great people good business good  technology and in particular for the  last year and a half or so I spent a lot  of time with the Amazon Kinesis service  so that's what I'll be talking about  today and if I kind of go back to a year  and a half ago trying to get my head  around what it is I can imagine myself  going to this page and seeing okay we've  got clickstream data we've got a pipe  and do some processing that sort of  thing not a lot to really get traction  on understanding what it is here but  some point along line I didn't evitable  you hear that okay it's basically a  hosted Kafka so you go over to Kafka and  you check that out now you see some more  technical me technical meet in  particular you see this this concept of  a distributed commit log being mentioned  and this turns out to be something that  you can get traction on you can start to  research and figure out and understand  what that is so what I'm going to do  today is try to accomplish two goals  first I'm going to try to share a mental  model of how to think of a distributed  commit log how it works and how you'd  make effective use of it and then as I  go through this I'm going to try to  provide some patterns based on our  experience techniques of using it to  achieve transaction processing and  here's really a difference from what I  would see and much of the many of the  blog posts and discussion about it or  people are using it for like clickstream  analysis where you're seeing what's  trending and you just kind of sloshing  the data about and some can spill  whereas our application we needed to  account for each and every event so we  wanted to make sure that we were  systematically processing all the events  so this was an area that seemed a bit of  a blind spot at least in my ability to  Google for things so this is kind of my  retrospective of things that I think  would have been useful to me a year and  a half ago getting started with this  technology so a few disclaimers Canisius  and Kafka are very similar but I'll be  talking  really primarily from the perspective of  Kinesis that's what I know that's the  terminology I'll use I believe that many  of these ideas translate to Kafka but I  won't be doing that here and I'll be  presenting patterns I really hope  they're taken as patterns not best  practices so as a pattern there's a  context in which it applies there's  trade-offs you know it's not Universal  rules about what you should do so rather  I'm hoping to contribute some ideas to  talk about different approaches that not  promote a best practice per se so we'll  start off dig into this idea of a commit  log at its core it's so simple I mean  you say it describe it to somebody and  it's hard to even believe that you could  have a discussion about it right they're  like what is it you just write things to  the log so you go to the log and the  basic idea is it's a log of everything  that happened and when you want to write  something you go to the end of the log  and you immutably write some record and  just an append-only fashion and so the  log just grows and has records in it not  very exciting at all and in fact there's  not really much action for me here on  the right side the interesting part is  really on the read side but it starts  out really simple so on the read side  the basic operation you do is you come  through and you read you read items out  of this log and the two main kind of  constraints that govern how you read it  is first you read it in sequence so you  just start at a point and then go  forward and the other key characteristic  here is you're doing non-destructive  reads so you're not like consuming the  records in a sense that like they  disappear you're merely observing those  records in the log and so now you're  free to come back later and observe them  again another application could observe  them etc so with Kinesis the the data  doesn't stay there forever so you can  imagine take this analogy too far the  scroll is like curling up there you get  a window of things that you can read by  default the records will stay in the log  for 24 hours if you're willing to pay  more you can turn that up and have them  be kept for up to 7 days so the idea is  you Amy really write these records in  somebody else can come in maybe multiple  people who come in and read them but  they need to read them within 24 hours  or else they're going to be gone so in  that sense it ends up looking like a  buffer right that's a buffer between  these writers and these readers and you  need to clear that buffer  not in a sense of destructively but just  getting them before they disappear so as  you go in to read there's three  different ways you can open an iterator  so all of these will just start at a  point and go forward in time but there's  three different kind of places you could  start at you could say I want an  iterator starting at the oldest item in  the log and that will just go to the  oldest item in the log and you'll start  reading forward from there you can ask  for the newest items and that really  kind of skips everything that's there  today and just goes to the head or the  tail of log and then as new items get  written  you'll receive those and you'll iterate  across those and the final is probably  the most useful it's to go to a specific  sequence number so basically this is the  pattern you're reading along you get to  a certain place and then you die or you  want to restart or something and when  you come back in you want to pick up  where you left off so you'd open up an  iterator by sequence number to point to  a specific place in the log where you  left off so now a bit more about what  actually goes into these records that  are written into the log basically  there's two fields that you provide as a  user as a caller you say here's the key  for this this item and here's a data the  payload so when you hear key don't think  like it's a global unique key think it's  a key that associates many of the  records together so for instance you  could keep a track of all the  transactions on an account the key might  naturally be like the account ID and  then you'd have a record for every  transaction that ties those together so  in addition to those two fields there's  this third field that the system Kinesis  will add in automatically and that's a  sequence number and that identifies the  the order in which the items were  received and that's what you would  reference when you make your sequence  number iterator you'd go to a specific  location so these three items are really  what make up a record for for our  discussion here today so there's the key  and there's the data payload and this  number the sequence number so I'm going  to switch gears in notation I'm going to  switch to this colored ball notation so  here it's a more compact way to  represent these three pieces of  information the color indicates that key  that I mentioned the payload the data is  inside of the ball and I'll show that  when it's important and I'll just omit  it in many cases and then the order the  C  number is rendered here by a consistent  pattern I'll use in the slides here is  that time goes from top to bottom so the  most recent records on the bottom the  oldest records are on the top the  sequence tells you you know basically  what the sequence number was all right  so now we can get into looking at what  Kinesis actually does so at the bottom  here I have these producers they all  come with their bucketfuls of records  that need to be written they might have  multiple threads don't I'm  simultaneously writing to all different  keys and what Kinesis does is it slurps  those up into the cloud because that's  that's where you'd want them right is up  in the cloud so they get slurped up and  it's relatively chaotic going in but  what Kinesis is going to do is it's  going to resolve all the race conditions  between which one came in win and it's  going to produce like a canonical here  is the sequence in which these are  considered to have been received so you  get this disorder going in and this nice  ordered sequence coming out the top but  it's not limited to that what actually  okay so then workers they're going to  come along and move down in top-down  fashion they'll read the oldest record  first and they'll sequence through these  records and process them but this is  Regan and the whole kind of distributed  nature of this commit log so we're  adding the distributed now to commit log  and so the output it's not a single  output stream but it'll actually be  charted and its sharded by key range so  you notice like all the red balls are in  one shard all the green ones are in  another right so at a given point in  time all the records with a given key  will be in a single shard so really what  you get out of this the guarantee you  get is not not that all the records are  globally ordered that's not really the  interesting aspect of it really what you  end up with is all the records are  ordered by key and the expectation is  that you'll be processing these shards  in parallel so concurrently so it's not  so much important about the global  ordering as it is making sure that the  the events are ordered by key so this is  now all the terminology for the Kinesis  stack that I'll talk about today you  have the producers at the bottom they're  all sending these records into a stream  that's true  is sharded and you have workers not  consuming them but but processing them  at the top alright so we might start off  small but of course all things Amazon  the expectation is we'll be able to  scale this up right so at the bottom  it's pretty natural to think about  scales like things Amazon hosts you can  hit this with many producers all at once  hammer in your bucketfuls of data in  fact the limits you'll get by default  from Amazon are you can do up to 50,000  rights per second to a stream for this  aggregate 15 megabytes per second and  you can get this increased if you need  more you can ask Amazon they'll increase  it or you can make additional streams so  you can shard it yourself basically by  having additional streams on the read  side it's actually limited by shard  because that's the thing of interest  that's what you're actually reading you  can read up to 2 megabytes per second  and this turns out to be really  important limitation you can do five  reads per second and that's not for  individual messages but I'll talk about  this more as we go through this this  turns out to be a key a key restriction  here all right so this might all seem  like fun and games and it is fun tech  it's it's good good stuff to work with  but of course like all things Amazon its  metered right and it's metered in this  miniscule micro fashion that's hard to  reason about but if you do the math it  works out to be this so for every shard  you're gonna pay 11 bucks per month you  know just for the privilege of having  the shard if you write to it at the max  rate you could possibly write you're  going to pay an additional buck 50 and  if you turn on that feature to extend  the storage beyond 24 hours you'll pay  an additional 15 dollars per month and  these are all for like a u.s. East  region or something like that so it's  yeah it's relatively cheap of course it  depends on how many shards you need but  certainly to get started with it's not  very expensive so now we can revisit  that initial analogy and understand now  well it's not just the single monolithic  log that's being written to there's  actually many write heads if you will  that are all writing to different logs  and for Kinesis you don't need to know  that it started you simply write to the  stream but when you go to read you have  to understand that you're reading from a  shard and you have to read from  The Shard you're supposed to so a lot of  times initially it can be hard to  understand like this looks like  messaging how is this different from  more traditional messaging so if I paint  with a really broad brush and just talk  about messaging systems and kind of  gross over generalization you could talk  about okay you've got all these  producers at the bottom throwing these  balls in this pit you got workers kind  of pulling them out this looks very  similar to what I just showed but of  course there's a key distinction here  these workers aren't coordinated right  they're all they're not getting items in  order in general they're just kind of  reaching then pulling one out and  they're all different colors mixed  together and that's what Kinesis one of  the key characteristics of what Kinesis  gives you it allows you to process these  records at scale in a way that you're  coordinating which workers are getting  which subsets of your of your keys and  they're in order a consistent order that  doesn't change over time all right so  we've got the shards we can read from  them but we have this problem we need to  coordinate who's going to be reading  from which shard when you want to just  start up a bunch of servers and say hey  go read from the stream so Amazon  provides some client-side code Kinesis  it's called the Kinesis client library  so it's not part of their service per se  it's clothes that you'd run on your  application and it will take care of a  lot of the kind of low-level details of  figuring out who's going to be reading  which shard at which time so what it  does is it'll design  it'll assign a lease or a lock to every  shard and then when you start up your  workers so you start up three workers  and there's three shards it will use the  Kinesis client library to sort out kind  of a balanced load across those two or  each of them would process one of the  shards and the Kinesis client library  does this by using dynamo so it stores a  record of what the leases are and and  who has them and what the sequence  number is for each of them in dynamo s--  there's no additional infrastructure for  you to set up and those ooh keeper or  anything like that so that's nice the  number of shards and the number of  workers can vary independently so here  if you start one worker and you have  three shards he'll just go out the  worker will go out and grab all three  leases and work on all three shards if  you end up starting up five workers and  they have three then there will be two  idle waiting for work essentially  alright so like I said all the  complexity here is in the read side so  one of the complexities of the read side  is you're not reading records  individually but you're actually reading  them in batches so that looks something  like this you're you're going along  through this stream you're processing it  and every time you do a read so one of  those five reads per second what you get  back is a batch starting at wherever  your iterator is going forward you get a  batch of records in sequence and so the  idea is you'd read those and you've got  this checkpoint that the kinases client  libraries keeping track of that's  keeping track of what sequence number  you've processed so that as you go back  to read it can pick up with a an  iterator from there so you've got a  checkpoint say on the last record you  pick up a batch you work through it and  the idea is you then when you complete  that batch you update the checkpoint and  grab a new batch so you work through it  in this kind of mini batch fashion and  this again is a little twist on kind of  traditional messaging like it's easy to  think of messaging is like event-driven  you're getting one you know processing  individual items but here it's really  key to understand your processing  batches of items and you're advancing  your iterator kind of in batch steps so  another wrinkle on the read side is what  you get is at least once delivery which  is kind of a convoluted way of saying  hey you're going to get duplicates and  you need to deal with it so how can that  happen it can happen from a variety of  reasons one reason is shown here you go  in as kind of the top worker here you  ask for a badge you're given one and  sort of unbeknownst to you maybe you in  a past life or maybe somebody else had  already asked for this batch almost  processed at all but then died before  they could update the checkpoint so  you're basically getting those records  again from your perspective it looks  like they're being replayed to you a  similar phenomenon that I think of as  these zombie workers is there might be  other workers out there simultaneously  that think they have the lease but  they've actually lost the lease so maybe  because of a network partition or their  VM was quest or something they no longer  hold the lease  but they haven't realized that yet so  they're walking around you know they're  dead they just don't know it they're  processing records and so really what  this ends up leading to is even though  you have this lease or this lock and the  messages are coming to you you can't  think of it as oh I'm exclusively  processing these you really need to be  paranoid and think of it as well I'm  getting this message for the umpteenth  time and there's a bunch of other people  processing it simultaneously how do I  think about my processing in that  context because that's really what it  takes to build this as a distributed  fault-tolerant system is to basically  assume the worst at all times and be  paranoid so this leads to the first  pattern that I'll present here it's  obviously a pretty basic one but a an  effective way to deal with this replay  is if it's possible make your record  processing processing identity basic  ideas if you get the records repeatedly  and you apply the kind of side effects  from them repeatedly it'll have the same  result no matter how many times you do  it so this doesn't come for free  there's work required there's a lot of  times very careful design that's  required to make this possible but I  think it's a key technique to talk about  so related to this as we talk about this  checkpointing mechanism at least I had  this problem early on it was easy for me  to think of well the checkpoint that's  the definitive statement of where I am  in the sequence but as we went through  some of our applications we realized  it's actually more effective if I think  of that checkmark that checkpoint the  heavy black one at the top being that's  kind of like a lower bound on how far  I've gotten or an upper bound how it is  but really I could keep track if I'm  willing to I could keep application  state that says oh for red I actually  know that I processed these two records  and if I update some state kind of  simultaneous with processing these  records and I keep track of what  sequence number I've received then even  if it gets replayed I'll understand  oh no I've actually processed that I  know where I'm at so the the check mark  then that the Kinesis client library  uses is just a bound doesn't  specifically say what I've processed and  this turns out to be useful for us even  if the record processing is idempotent  because just because it's I dumped it in  doesn't mean you want to do it right it  still takes CPU it still takes time  don't necessarily want to be doing that  especially if you have like kind of a  really bad scenario where you end up  needing to or bouncing back and  processing a bunch of records and if  you're going through thousands of  records that you've already processed  that can be really expensive so this is  the next pattern basically where an  option you have to deal with replay is  to keep track by key of the last  sequence number processed and again this  doesn't come for free this requires  keeping some additional state so you  need to balance the trade-offs here and  see if it makes sense all right next  topic still in the reading side is  talking about parallelizing the the  processing so obviously the shards you  can do parallel processing on the shards  but inevitably you'll come to the point  where you say okay yeah I don't want to  make another shard but I'd like you know  my processing is a bottleneck here and  I'd like to be able to process this  batch this shard in parallel so a  technique we've been using for this is  will have the worker read in a batch and  so that's a sequence of records and then  it'll rip through it and partition it  break it up into sub sequences by key so  here you've got all the yellow and green  ones you break it up into here's the  yellow sequence and here's the green  sequence so you preserve the order by  key but you're breaking it up and once  you break it up then you can farm it out  to a pool of threads that you have to a  pool of worker threads that you have to  run it and so this is recognizing that  really the invariant that we're  leveraging from Kinesis is not the  global ordering of events but it's the  ordering of events by key so this  doesn't violate that we're keeping them  in order by key I think it's also  interesting to think of this now once  you get to this point you can look at  this grey worker down here getting all  these yellow messages and it's not hard  to now start to think of that as like a  distributed object system or from  closure like a distributed actor that's  or distribute agent that's like a thing  that lives out there that potentially  has state like there's all these  producers shoving in all these messages  and they're all going to like that guy  in order and so it really enables a  style of processing if you think of it  like that that's pretty powerful so we  write this up we talk about what it  means to to do subsequence processing  and like all of them there's trade-offs  this really kind of drives you to now  want to scale up your processing nodes  which is kind of not the it's kind of  against the grain a little bit with all  the cloud stuff you want to really scale  out typically so I think if this is  really just giving us another dimension  so of course we can scale out but now  you can also talk about how we how we  scale up the nodes all right so yeah so  things go wrong you know building these  fault-tolerant systems it's not that  faults aren't going to happen it's you  know tolerating them so yeah so some  domains you simply don't care if you get  a record fails right you're doing some  clickstream analysis not to disparage  clickstream analysis but there might be  a domain where you don't really care for  a few records every once in a while fail  you can just chuck them but I'm  concerned with this this application  domain where every record counts so for  example these are say these are  transactions on accounts and you want to  balance you know sum them up to know  what the balance is on each account well  if you just throw out records in the  middle it's you're not gonna get the  right answer right so every record  matters how do you deal with errors in  this context and in particular it's like  I struggled I bashed my head against  this for a long time because with a  regular messaging system you reach in  you pull out an item you know you do  some processing if it fails you can just  kind of throw it back in and somebody  else will pick it up later you know  something will happen fine but here  we've got like this fire hose this  assembly line of all these records  coming through like one of them fails  like we can't like pull the lever stop  the line and say you know everything  stop and you know we're gonna figure  this out like things have to keep going  through if this is one read one fails  you know all the greens and yellows and  oranges we how do we keep them going and  how do we think about this so this I  spent a fair bit of time on this and one  of the things we came up with is to do  some work create some heuristics to try  to categorize what kind of errors were  seeing so we try to look at say we look  at the exceptions and this is inherently  hard right because  once you get an exception you're kind of  by definition off the beaten path right  it's hard to understand exactly what's  going on but you can apply some  heuristics so we look at and say well is  this an intrinsic error this is  something to do with the message itself  like a Poisson event that's coming  through or is this really something to  do with my environment like did I get  this message and I'm going out to hit a  database or go across a network and  something misconfigured and so we put in  place some heuristics to categorize  classify exceptions into these  categories and like I said there's  definitely trade-offs here it's very  challenging to sort through exception  handling or exception generation is  often a very poorly Specht part of the  the libraries that we use and so it can  be very fragile to rely on you know what  kind of exception you're getting and how  they're nested you know there's all  kinds of wrinkles here so a related  technique here is if we get an error so  this red one is failing we don't just  have to give up at that point especially  if we have this idea of identity  processing so we just retry like up to  some number of times just try it again  and maybe eventually that you know is a  transient error and everything's fine we  can carry on so as long as we don't do  that so long that it really jeopardizes  the the timing of the whole batch this  is a tool that we can use again it has  trade-offs yep okay so we're  categorizing the errors we're saying we  think this is environmental we think  this one is intrinsic but then that's  not really sufficient so say we have  this case and we look in here and we see  well basically every message is getting  an environmental error so we can apply  some common-sense and say well yeah I  think that's probably an environmental  problem but then what if you have  something like this where most of all  the messages are fine except this one  but it looks like it's actually an  environmental problem and this can  happen there's weird things that happen  so this led us to the point where you  said well it's not enough simply to  categorize them we also have to count  them and we have to look at this batch  and say you know how many of them are  actually failing if it's just one is it  pervasive and again couple this with  that other thing where you have a kind  of these two heuristics you're applying  and I really left out a category here if  you think about this so I talked about  well it might be  the event and it might be the  environment and the one I left out is  once hard to see sometimes like well it  might be me  like I might be the problem and you know  that could be a startling question to  ask but yeah I didn't write it up but we  also have a mechanism where the worker  can decide you know I think I'm actually  the problem and it can surrender its  leases at that point say hey I'm gonna  let somebody else kind of step in and  see if they can do better with this  alright so I mentioned at the beginning  kind of made a point of this that  reading records is not destructive you  can read them multiple times and what  this enables you to do now is have  multiple applications that are all  reading from the same stream the same  shards so the way this works is you know  these are the workers I've been showing  there for a particular application they  have their locks but there could be like  just like this two ships in the night  there could be these other workers out  there and they have their own set of  locks they keep in track of their own  checkpoints and they're just you know  reading the streams in parallel with me  streams are not reads are  non-destructive so that that works fine  there's no direct ties between these so  all those there's no direct ties there  is an indirect tie  so I mentioned you're limited to five  reads per second per shard and this is  per shard so it's it doesn't care how  many applications you're running it says  hey you can't do more than five reads  per second so if you focus on this a  little bit and they don't really call it  out in the docs but if you really focus  on this like the docs talk a ton about  scaling out right you can do however  many you know gigabytes per say you know  just tons of scale out if you focus on  this one what this really says is it's  producing there's a imposing a pretty  hard limit on the latency that you can  achieve through this system if you can  only read five times per second I mean  it's only over 200 milliseconds you can  go do reads the expected latency of  messages going through here is going to  be 100 milliseconds and now if you have  two applications that are reading that  means if you're going to do it in a fair  way you have to now read it half that  rate and so now you're doubling your  expected latency so this especially if  you know depending on your kind of real  requirements this can be a real bitter  pill here so one of the techniques we've  adopted for this is we've introduced  this idea of a composite worker or a  composite application so here I'm  showing we'll have one worker that goes  out and reads the the batches from the  shards and if we have two applications  they'll both be like a part of that  worker and as the the batches are read  they're handed a copy of those go to  both of those kind of internal separate  applications so this allows us to do  kind of two totally different kinds of  processing on the data without  compromising on that read rate without  introducing additional latency through  this pipeline so like all these this  definitely comes with a cost  so there's trade-offs here it gets  complicated you're thinking through like  okay we're trying to do checkpointing  well what if one of these applications  is successful the other ones not well  what do you do we're checkpointing at  that point there's other complications  like you're effectively yoking these two  applications together in terms of the  rate at which they're going through the  data so you're effectively you know the  slowest one is going to govern the rate  at which you can do the processing here  so there's there's definitely trade-offs  ok so I've been talking about the shards  as if they were static but it's in my  opinion it's a mistake in terms of the  way Kinesis wants you to operate to  think of the shards of static so you  need to write your code you can't assume  there's a certain set of shard you can't  assume what key ranges are in them  rather you need to assume that it's  dynamic it's changing over time and you  just need to adapt to whatever the world  is so to start to illustrate this here's  an example you see two shards again like  always time is going down and so at some  point we decide well we really need more  scale-out and so we split both of those  shards and now we have four and then  later we say well that was really too  many we combined to a home now we end up  with three so this is the real picture  that you have to deal with as a reader  of a stream is you need to understand  that you need to dynamically figure out  how many shards there are at a given  point in time and pross  and in terms of the order of processing  you know the constraint we're going for  is that the records are processed in  order by key and so that you can kind of  extend that idea here to shards as well  that is you have to process the shards  in order so you can kind of see here you  start at the top right you can't process  a shard until you've processed all of  its parents so the two at the top there  they have no living parents so you can  start with those and then once you  complete those now you can go to the  four shards beneath and once you  complete the two in the middle then you  can go to the one at the bottom so you  have to do the shard processing in order  and then of course within those you  process the records in order and if you  do that if I didn't make any mistakes  here if you follow this through you will  have processed all of the records by key  in order so I care  the red ones they're all like at a given  point in time they're all in one shard  the yellow ones all in one shard the  same way so this leads to one of my  favorite ways of visualizing over all  the Kinesis is doing and that's like  this so at the bottom you've got this  Khattak mess of all this stuff being  jammed into this funnel and then Kinesis  is working to resolve all the races  figure out a canonical ordering for  those and it's producing this kind of  tapestry here right of all these these  shards and so then your job as a reader  is to come through and and process that  with the level of parallelism that's  available at each stage so the the  Kinesis client library helps with this  quite a bit so if you think about these  these leases or these locks on shards  you'll have a changing number of locks  over time okay and this finally leads  then to the final pattern that I'll talk  about here and I haven't really talked  into talk much about applications state  but here at this point we've got this  worker the darker worker at the top is  has done some processing on the shard  and let's imagine it has some  application state so like if it's  keeping track of those account balances  maybe it's got the running balance for  every account that's in its shard and  then it comes to the point and says oh  my shard is done so it there's no more  work to do there but there's more work  to do on the subsequent shards so now  you can imagine if you have that state  the shard level state if you will you  now need to kind of break that up and  you need to take like well half of the  half the state needs to go to this one  new gray worker and half needs to go to  another one and that can be a really  tricky problem so one of the approaches  that we came up with for dealing with  this is to track our shard state not by  chard because shards are dynamic and  they're changing over time but rather to  track our shard state by partition key  so by the keys and the data and if you  do that so you can imagine like say you  have like a dynamo table and you want to  have the balances so for the key to the  table would be the the key from your  your stream and then another column and  have the balance so if you key it in  that way like with the grain of the  stream then when the shard splits or  merges you don't have to do anything to  split your shard state right it's just  accessible by key and so if you know  this new shard workers has all the even  accounts the other one has all the odd  accounts they just go access theirs from  the state so if you record the shard  state by partition key then you can make  the shard splits and shards shard merges  trivial in terms of state management but  like everything there's trade-offs here  there's additional expense to storing  that state and yeah there's there's  definitely other things to consider so  that's it those are the kind of the  basic patterns techniques that we've  developed in building some transaction  processing applications I'd like to  think that these are the you know that  these things this is what would have  helped me when I was starting out like a  year and a half ago so if somebody finds  use of it everyone really glad about  that so thank you all thank you for your  time  these are a couple of references that I  found particularly useful to crystallize  my thinking they're not affiliated with  me in any way they're just useful  resources and that's all I had I think I  have a few minutes for questions so any  yes do the upper version you can run in  your laptop okay so the question is when  you're testing Kinesis it's hard to test  this thing in the cloud do they have  something to test locally I'm not aware  of anything that Amazon has what we've  done is we've developed our own just  really lightweight in-memory data stream  that has very similar semantics so we  tend to do you know we have our tight  feedback cycle with that and then we're  sure to run our tests regularly against  Amazon to make sure we don't diverge so  it's like many Amazon services the  feature footprint is really really small  it's easy to replicate it's the mountain  of like the non-functional stuff that  they do that that's really what they  offer so yeah pretty sure previous slide  and behind him  right so the question is I think the  question is if you actually have a  Poisson event what do you do I failed to  comment on that that was a line I left  out so the technique we actually use is  as a technique I prefer at this point is  when you have that Poisson event and  it's really failing you can't stop the  assembly line so the idea is well  identify like off to the side say this  key is in error I think of it like  closure agents right the agent can be an  error at some point if you know closure  so you say that's an error and then any  events that you get for that key you  kind of shunt off to another area maybe  that's what you were saying I yeah you  have this queue of those and now you  need your assembly line can proceed  you know things go on and somebody's  somewhere as to come back and like sort  through what is this process all those  queued events and then get back on to  the main assembly line at some point  yeah yep  yes on the producer side what's the  question  you're right so I think the question is  on the producer side when you send  something you might fail and you might  have to send it again so that's another  source of duplicates that I didn't  mention so yeah I mean there's different  techniques one way is if you have an  identifier in the payload that you're  sending then it can be distinguished  downstream like if you say this is  account this is a transaction five and  then you send it twice then the  downstream they can they can understand  that and figure that out  so that's of course that's a source of  duplication which is kind of subtly  different than the duplication I talked  about but I think there's other  techniques to deal with it yeah right  so the may not main things we would  reach for would be like dynamo DB or an  in-memory cache like elastic cache or  something yeah yeah so can the clients  when they're reading control the  backsides I don't know actually I'm not  sure I'd have to check the docs yeah  yeah  so question is what sterilization to use  I don't know that I have the best advice  on this I'm I like for development time  JSON for the readability but then when  it comes to hard core production like  there's different constraints on you so  I wouldn't necessarily do that yeah yeah  so the question is do you know how you  figure out how far behind your workers  are or your consumers are that is one of  the most important metrics to monitor in  this thing because that's the heartbeat  of your system and so Kinesis actually  produces a metric so you can go in the  cloud watch and you can see how many  milliseconds behind your your workers  are yeah free chart yeah yeah so I'm  kind of embarrassed to say this actually  so do a ton of cloud work and it's  almost entirely with Amazon and I feel  like I'm missing out like I should  broaden my perspective but I tell you  it's so good and it's it works so well  that I'm really kind of I've blinders  right now on Amazon but kind of in  general in terms of career development  and broadening my understanding I would  love to see other providers and how they  handle this and in particular I know  there's a lot of similarities here  between Kinesis and Kafka but I haven't  personally done enough Kafka to really  understand all those so at some point I  would love to dig into that more and  understand what it does I still time I  do  anything else yes  yeah so with composite workers I  actually tried to make that point but  obviously I didn't make it clear enough  but yes you that will reduce you down to  the rate of your slowest application and  that's a definite problem  okay so yeah so do you so yes I would  say this so when you're making those  composite workers you can't just do that  blindly I think this is your point you  need to take into account what they're  doing so that you don't have like  unequal yoking right their yoke together  they need to be going at the same rate  they can't be going to dramatically  different rates yeah anyone else  no all right thank you I'm happy to talk  about this stuff I love this stuff so if  you want to come up front or whatever we  can talk more thanks
+
+00:00:07.950 --> 00:00:11.160 align:start position:0%
+good afternoon everybody thank you for  coming out my name is David McNeil I'm a  developer I work at Llano cloud been  there for about three years and  basically what we do is we build out  cloud application infrastructure using  closure and a fair bit of Amazon Web  Services so I really like my job it's  great people good business good  technology and in particular for the  last year and a half or so I spent a lot  of time with the Amazon Kinesis service  so that's what I'll be talking about  today and if I kind of go back to a year  and a half ago trying to get my head  around what it is I can imagine myself  going to this page and seeing okay we've  got clickstream data we've got a pipe  and do some processing that sort of  thing not a lot to really get traction  on understanding what it is here but  some point along line I didn't evitable  you hear that okay it's basically a  hosted Kafka so you go over to Kafka and  you check that out now you see some more  technical me technical meet in  particular you see this this concept of  a distributed commit log being mentioned  and this turns out to be something that  you can get traction on you can start to  research and figure out and understand  what that is so what I'm going to do  today is try to accomplish two goals  first I'm going to try to share a mental  model of how to think of a distributed  commit log how it works and how you'd  make effective use of it and then as I  go through this I'm going to try to  provide some patterns based on our  experience techniques of using it to  achieve transaction processing and  here's really a difference from what I  would see and much of the many of the  blog posts and discussion about it or  people are using it for like clickstream  analysis where you're seeing what's  trending and you just kind of sloshing  the data about and some can spill  whereas our application we needed to  account for each and every event so we  wanted to make sure that we were  systematically processing all the events  so this was an area that seemed a bit of  a blind spot at least in my ability to  Google for things so this is kind of my  retrospective of things that I think  would have been useful to me a year and  a half ago getting started with this  technology so a few disclaimers Canisius  and Kafka are very similar but I'll be  talking  really primarily from the perspective of  Kinesis that's what I know that's the  terminology I'll use I believe that many  of these ideas translate to Kafka but I  won't be doing that here and I'll be  presenting patterns I really hope  they're taken as patterns not best  practices so as a pattern there's a  context in which it applies there's  trade-offs you know it's not Universal  rules about what you should do so rather  I'm hoping to contribute some ideas to  talk about different approaches that not  promote a best practice per se so we'll  start off dig into this idea of a commit  log at its core it's so simple I mean  you say it describe it to somebody and  it's hard to even believe that you could  have a discussion about it right they're  like what is it you just write things to  the log so you go to the log and the  basic idea is it's a log of everything  that happened and when you want to write  something you go to the end of the log  and you immutably write some record and  just an append-only fashion and so the  log just grows and has records in it not  very exciting at all and in fact there's  not really much action for me here on  the right side the interesting part is  really on the read side but it starts  out really simple so on the read side  the basic operation you do is you come  through and you read you read items out  of this log and the two main kind of  constraints that govern how you read it  is first you read it in sequence so you  just start at a point and then go  forward and the other key characteristic  here is you're doing non-destructive  reads so you're not like consuming the  records in a sense that like they  disappear you're merely observing those  records in the log and so now you're  free to come back later and observe them  again another application could observe  them etc so with Kinesis the the data  doesn't stay there forever so you can  imagine take this analogy too far the  scroll is like curling up there you get  a window of things that you can read by  default the records will stay in the log  for 24 hours if you're willing to pay  more you can turn that up and have them  be kept for up to 7 days so the idea is  you Amy really write these records in  somebody else can come in maybe multiple  people who come in and read them but  they need to read them within 24 hours  or else they're going to be gone so in  that sense it ends up looking like a  buffer right that's a buffer between  these writers and these readers and you  need to clear that buffer  not in a sense of destructively but just  getting them before they disappear so as  you go in to read there's three  different ways you can open an iterator  so all of these will just start at a  point and go forward in time but there's  three different kind of places you could  start at you could say I want an  iterator starting at the oldest item in  the log and that will just go to the  oldest item in the log and you'll start  reading forward from there you can ask  for the newest items and that really  kind of skips everything that's there  today and just goes to the head or the  tail of log and then as new items get  written  you'll receive those and you'll iterate  across those and the final is probably  the most useful it's to go to a specific  sequence number so basically this is the  pattern you're reading along you get to  a certain place and then you die or you  want to restart or something and when  you come back in you want to pick up  where you left off so you'd open up an  iterator by sequence number to point to  a specific place in the log where you  left off so now a bit more about what  actually goes into these records that  are written into the log basically  there's two fields that you provide as a  user as a caller you say here's the key  for this this item and here's a data the  payload so when you hear key don't think  like it's a global unique key think it's  a key that associates many of the  records together so for instance you  could keep a track of all the  transactions on an account the key might  naturally be like the account ID and  then you'd have a record for every  transaction that ties those together so  in addition to those two fields there's  this third field that the system Kinesis  will add in automatically and that's a  sequence number and that identifies the  the order in which the items were  received and that's what you would  reference when you make your sequence  number iterator you'd go to a specific  location so these three items are really  what make up a record for for our  discussion here today so there's the key  and there's the data payload and this  number the sequence number so I'm going  to switch gears in notation I'm going to  switch to this colored ball notation so  here it's a more compact way to  represent these three pieces of  information the color indicates that key  that I mentioned the payload the data is  inside of the ball and I'll show that  when it's important and I'll just omit  it in many cases and then the order the  C  number is rendered here by a consistent  pattern I'll use in the slides here is  that time goes from top to bottom so the  most recent records on the bottom the  oldest records are on the top the  sequence tells you you know basically  what the sequence number was all right  so now we can get into looking at what  Kinesis actually does so at the bottom  here I have these producers they all  come with their bucketfuls of records  that need to be written they might have  multiple threads don't I'm  simultaneously writing to all different  keys and what Kinesis does is it slurps  those up into the cloud because that's  that's where you'd want them right is up  in the cloud so they get slurped up and  it's relatively chaotic going in but  what Kinesis is going to do is it's  going to resolve all the race conditions  between which one came in win and it's  going to produce like a canonical here  is the sequence in which these are  considered to have been received so you  get this disorder going in and this nice  ordered sequence coming out the top but  it's not limited to that what actually  okay so then workers they're going to  come along and move down in top-down  fashion they'll read the oldest record  first and they'll sequence through these  records and process them but this is  Regan and the whole kind of distributed  nature of this commit log so we're  adding the distributed now to commit log  and so the output it's not a single  output stream but it'll actually be  charted and its sharded by key range so  you notice like all the red balls are in  one shard all the green ones are in  another right so at a given point in  time all the records with a given key  will be in a single shard so really what  you get out of this the guarantee you  get is not not that all the records are  globally ordered that's not really the  interesting aspect of it really what you  end up with is all the records are  ordered by key and the expectation is  that you'll be processing these shards  in parallel so concurrently so it's not  so much important about the global  ordering as it is making sure that the  the events are ordered by key so this is  now all the terminology for the Kinesis  stack that I'll talk about today you  have the producers at the bottom they're  all sending these records into a stream  that's true  is sharded and you have workers not  consuming them but but processing them  at the top alright so we might start off  small but of course all things Amazon  the expectation is we'll be able to  scale this up right so at the bottom  it's pretty natural to think about  scales like things Amazon hosts you can  hit this with many producers all at once  hammer in your bucketfuls of data in  fact the limits you'll get by default  from Amazon are you can do up to 50,000  rights per second to a stream for this  aggregate 15 megabytes per second and  you can get this increased if you need  more you can ask Amazon they'll increase  it or you can make additional streams so  you can shard it yourself basically by  having additional streams on the read  side it's actually limited by shard  because that's the thing of interest  that's what you're actually reading you  can read up to 2 megabytes per second  and this turns out to be really  important limitation you can do five  reads per second and that's not for  individual messages but I'll talk about  this more as we go through this this  turns out to be a key a key restriction  here all right so this might all seem  like fun and games and it is fun tech  it's it's good good stuff to work with  but of course like all things Amazon its  metered right and it's metered in this  miniscule micro fashion that's hard to  reason about but if you do the math it  works out to be this so for every shard  you're gonna pay 11 bucks per month you  know just for the privilege of having  the shard if you write to it at the max  rate you could possibly write you're  going to pay an additional buck 50 and  if you turn on that feature to extend  the storage beyond 24 hours you'll pay  an additional 15 dollars per month and  these are all for like a u.s. East  region or something like that so it's  yeah it's relatively cheap of course it  depends on how many shards you need but  certainly to get started with it's not  very expensive so now we can revisit  that initial analogy and understand now  well it's not just the single monolithic  log that's being written to there's  actually many write heads if you will  that are all writing to different logs  and for Kinesis you don't need to know  that it started you simply write to the  stream but when you go to read you have  to understand that you're reading from a  shard and you have to read from  The Shard you're supposed to so a lot of  times initially it can be hard to  understand like this looks like  messaging how is this different from  more traditional messaging so if I paint  with a really broad brush and just talk  about messaging systems and kind of  gross over generalization you could talk  about okay you've got all these  producers at the bottom throwing these  balls in this pit you got workers kind  of pulling them out this looks very  similar to what I just showed but of  course there's a key distinction here  these workers aren't coordinated right  they're all they're not getting items in  order in general they're just kind of  reaching then pulling one out and  they're all different colors mixed  together and that's what Kinesis one of  the key characteristics of what Kinesis  gives you it allows you to process these  records at scale in a way that you're  coordinating which workers are getting  which subsets of your of your keys and  they're in order a consistent order that  doesn't change over time all right so  we've got the shards we can read from  them but we have this problem we need to  coordinate who's going to be reading  from which shard when you want to just  start up a bunch of servers and say hey  go read from the stream so Amazon  provides some client-side code Kinesis  it's called the Kinesis client library  so it's not part of their service per se  it's clothes that you'd run on your  application and it will take care of a  lot of the kind of low-level details of  figuring out who's going to be reading  which shard at which time so what it  does is it'll design  it'll assign a lease or a lock to every  shard and then when you start up your  workers so you start up three workers  and there's three shards it will use the  Kinesis client library to sort out kind  of a balanced load across those two or  each of them would process one of the  shards and the Kinesis client library  does this by using dynamo so it stores a  record of what the leases are and and  who has them and what the sequence  number is for each of them in dynamo s--  there's no additional infrastructure for  you to set up and those ooh keeper or  anything like that so that's nice the  number of shards and the number of  workers can vary independently so here  if you start one worker and you have  three shards he'll just go out the  worker will go out and grab all three  leases and work on all three shards if  you end up starting up five workers and  they have three then there will be two  idle waiting for work essentially  alright so like I said all the  complexity here is in the read side so  one of the complexities of the read side  is you're not reading records  individually but you're actually reading  them in batches so that looks something  like this you're you're going along  through this stream you're processing it  and every time you do a read so one of  those five reads per second what you get  back is a batch starting at wherever  your iterator is going forward you get a  batch of records in sequence and so the  idea is you'd read those and you've got  this checkpoint that the kinases client  libraries keeping track of that's  keeping track of what sequence number  you've processed so that as you go back  to read it can pick up with a an  iterator from there so you've got a  checkpoint say on the last record you  pick up a batch you work through it and  the idea is you then when you complete  that batch you update the checkpoint and  grab a new batch so you work through it  in this kind of mini batch fashion and  this again is a little twist on kind of  traditional messaging like it's easy to  think of messaging is like event-driven  you're getting one you know processing  individual items but here it's really  key to understand your processing  batches of items and you're advancing  your iterator kind of in batch steps so  another wrinkle on the read side is what  you get is at least once delivery which  is kind of a convoluted way of saying  hey you're going to get duplicates and  you need to deal with it so how can that  happen it can happen from a variety of  reasons one reason is shown here you go  in as kind of the top worker here you  ask for a badge you're given one and  sort of unbeknownst to you maybe you in  a past life or maybe somebody else had  already asked for this batch almost  processed at all but then died before  they could update the checkpoint so  you're basically getting those records  again from your perspective it looks  like they're being replayed to you a  similar phenomenon that I think of as  these zombie workers is there might be  other workers out there simultaneously  that think they have the lease but  they've actually lost the lease so maybe  because of a network partition or their  VM was quest or something they no longer  hold the lease  but they haven't realized that yet so  they're walking around you know they're  dead they just don't know it they're  processing records and so really what  this ends up leading to is even though  you have this lease or this lock and the  messages are coming to you you can't  think of it as oh I'm exclusively  processing these you really need to be  paranoid and think of it as well I'm  getting this message for the umpteenth  time and there's a bunch of other people  processing it simultaneously how do I  think about my processing in that  context because that's really what it  takes to build this as a distributed  fault-tolerant system is to basically  assume the worst at all times and be  paranoid so this leads to the first  pattern that I'll present here it's  obviously a pretty basic one but a an  effective way to deal with this replay  is if it's possible make your record  processing processing identity basic  ideas if you get the records repeatedly  and you apply the kind of side effects  from them repeatedly it'll have the same  result no matter how many times you do  it so this doesn't come for free  there's work required there's a lot of  times very careful design that's  required to make this possible but I  think it's a key technique to talk about  so related to this as we talk about this  checkpointing mechanism at least I had  this problem early on it was easy for me  to think of well the checkpoint that's  the definitive statement of where I am  in the sequence but as we went through  some of our applications we realized  it's actually more effective if I think  of that checkmark that checkpoint the  heavy black one at the top being that's  kind of like a lower bound on how far  I've gotten or an upper bound how it is  but really I could keep track if I'm  willing to I could keep application  state that says oh for red I actually  know that I processed these two records  and if I update some state kind of  simultaneous with processing these  records and I keep track of what  sequence number I've received then even  if it gets replayed I'll understand  oh no I've actually processed that I  know where I'm at so the the check mark  then that the Kinesis client library  uses is just a bound doesn't  specifically say what I've processed and  this turns out to be useful for us even  if the record processing is idempotent  because just because it's I dumped it in  doesn't mean you want to do it right it  still takes CPU it still takes time  don't necessarily want to be doing that  especially if you have like kind of a  really bad scenario where you end up  needing to or bouncing back and  processing a bunch of records and if  you're going through thousands of  records that you've already processed  that can be really expensive so this is  the next pattern basically where an  option you have to deal with replay is  to keep track by key of the last  sequence number processed and again this  doesn't come for free this requires  keeping some additional state so you  need to balance the trade-offs here and  see if it makes sense all right next  topic still in the reading side is  talking about parallelizing the the  processing so obviously the shards you  can do parallel processing on the shards  but inevitably you'll come to the point  where you say okay yeah I don't want to  make another shard but I'd like you know  my processing is a bottleneck here and  I'd like to be able to process this  batch this shard in parallel so a  technique we've been using for this is  will have the worker read in a batch and  so that's a sequence of records and then  it'll rip through it and partition it  break it up into sub sequences by key so  here you've got all the yellow and green  ones you break it up into here's the  yellow sequence and here's the green  sequence so you preserve the order by  key but you're breaking it up and once  you break it up then you can farm it out  to a pool of threads that you have to a  pool of worker threads that you have to  run it and so this is recognizing that  really the invariant that we're  leveraging from Kinesis is not the  global ordering of events but it's the  ordering of events by key so this  doesn't violate that we're keeping them  in order by key I think it's also  interesting to think of this now once  you get to this point you can look at  this grey worker down here getting all  these yellow messages and it's not hard  to now start to think of that as like a  distributed object system or from  closure like a distributed actor that's  or distribute agent that's like a thing  that lives out there that potentially  has state like there's all these  producers shoving in all these messages  and they're all going to like that guy  in order and so it really enables a  style of processing if you think of it  like that that's pretty powerful so we  write this up we talk about what it  means to to do subsequence processing  and like all of them there's trade-offs  this really kind of drives you to now  want to scale up your processing nodes  which is kind of not the it's kind of  against the grain a little bit with all  the cloud stuff you want to really scale  out typically so I think if this is  really just giving us another dimension  so of course we can scale out but now  you can also talk about how we how we  scale up the nodes all right so yeah so  things go wrong you know building these  fault-tolerant systems it's not that  faults aren't going to happen it's you  know tolerating them so yeah so some  domains you simply don't care if you get  a record fails right you're doing some  clickstream analysis not to disparage  clickstream analysis but there might be  a domain where you don't really care for  a few records every once in a while fail  you can just chuck them but I'm  concerned with this this application  domain where every record counts so for  example these are say these are  transactions on accounts and you want to  balance you know sum them up to know  what the balance is on each account well  if you just throw out records in the  middle it's you're not gonna get the  right answer right so every record  matters how do you deal with errors in  this context and in particular it's like  I struggled I bashed my head against  this for a long time because with a  regular messaging system you reach in  you pull out an item you know you do  some processing if it fails you can just  kind of throw it back in and somebody  else will pick it up later you know  something will happen fine but here  we've got like this fire hose this  assembly line of all these records  coming through like one of them fails  like we can't like pull the lever stop  the line and say you know everything  stop and you know we're gonna figure  this out like things have to keep going  through if this is one read one fails  you know all the greens and yellows and  oranges we how do we keep them going and  how do we think about this so this I  spent a fair bit of time on this and one  of the things we came up with is to do  some work create some heuristics to try  to categorize what kind of errors were  seeing so we try to look at say we look  at the exceptions and this is inherently  hard right because  once you get an exception you're kind of  by definition off the beaten path right  it's hard to understand exactly what's  going on but you can apply some  heuristics so we look at and say well is  this an intrinsic error this is  something to do with the message itself  like a Poisson event that's coming  through or is this really something to  do with my environment like did I get  this message and I'm going out to hit a  database or go across a network and  something misconfigured and so we put in  place some heuristics to categorize  classify exceptions into these  categories and like I said there's  definitely trade-offs here it's very  challenging to sort through exception  handling or exception generation is  often a very poorly Specht part of the  the libraries that we use and so it can  be very fragile to rely on you know what  kind of exception you're getting and how  they're nested you know there's all  kinds of wrinkles here so a related  technique here is if we get an error so  this red one is failing we don't just  have to give up at that point especially  if we have this idea of identity  processing so we just retry like up to  some number of times just try it again  and maybe eventually that you know is a  transient error and everything's fine we  can carry on so as long as we don't do  that so long that it really jeopardizes  the the timing of the whole batch this  is a tool that we can use again it has  trade-offs yep okay so we're  categorizing the errors we're saying we  think this is environmental we think  this one is intrinsic but then that's  not really sufficient so say we have  this case and we look in here and we see  well basically every message is getting  an environmental error so we can apply  some common-sense and say well yeah I  think that's probably an environmental  problem but then what if you have  something like this where most of all  the messages are fine except this one  but it looks like it's actually an  environmental problem and this can  happen there's weird things that happen  so this led us to the point where you  said well it's not enough simply to  categorize them we also have to count  them and we have to look at this batch  and say you know how many of them are  actually failing if it's just one is it  pervasive and again couple this with  that other thing where you have a kind  of these two heuristics you're applying  and I really left out a category here if  you think about this so I talked about  well it might be  the event and it might be the  environment and the one I left out is  once hard to see sometimes like well it  might be me  like I might be the problem and you know  that could be a startling question to  ask but yeah I didn't write it up but we  also have a mechanism where the worker  can decide you know I think I'm actually  the problem and it can surrender its  leases at that point say hey I'm gonna  let somebody else kind of step in and  see if they can do better with this  alright so I mentioned at the beginning  kind of made a point of this that  reading records is not destructive you  can read them multiple times and what  this enables you to do now is have  multiple applications that are all  reading from the same stream the same  shards so the way this works is you know  these are the workers I've been showing  there for a particular application they  have their locks but there could be like  just like this two ships in the night  there could be these other workers out  there and they have their own set of  locks they keep in track of their own  checkpoints and they're just you know  reading the streams in parallel with me  streams are not reads are  non-destructive so that that works fine  there's no direct ties between these so  all those there's no direct ties there  is an indirect tie  so I mentioned you're limited to five  reads per second per shard and this is  per shard so it's it doesn't care how  many applications you're running it says  hey you can't do more than five reads  per second so if you focus on this a  little bit and they don't really call it  out in the docs but if you really focus  on this like the docs talk a ton about  scaling out right you can do however  many you know gigabytes per say you know  just tons of scale out if you focus on  this one what this really says is it's  producing there's a imposing a pretty  hard limit on the latency that you can  achieve through this system if you can  only read five times per second I mean  it's only over 200 milliseconds you can  go do reads the expected latency of  messages going through here is going to  be 100 milliseconds and now if you have  two applications that are reading that  means if you're going to do it in a fair  way you have to now read it half that  rate and so now you're doubling your  expected latency so this especially if  you know depending on your kind of real  requirements this can be a real bitter  pill here so one of the techniques we've  adopted for this is we've introduced  this idea of a composite worker or a  composite application so here I'm  showing we'll have one worker that goes  out and reads the the batches from the  shards and if we have two applications  they'll both be like a part of that  worker and as the the batches are read  they're handed a copy of those go to  both of those kind of internal separate  applications so this allows us to do  kind of two totally different kinds of  processing on the data without  compromising on that read rate without  introducing additional latency through  this pipeline so like all these this  definitely comes with a cost  so there's trade-offs here it gets  complicated you're thinking through like  okay we're trying to do checkpointing  well what if one of these applications  is successful the other ones not well  what do you do we're checkpointing at  that point there's other complications  like you're effectively yoking these two  applications together in terms of the  rate at which they're going through the  data so you're effectively you know the  slowest one is going to govern the rate  at which you can do the processing here  so there's there's definitely trade-offs  ok so I've been talking about the shards  as if they were static but it's in my  opinion it's a mistake in terms of the  way Kinesis wants you to operate to  think of the shards of static so you  need to write your code you can't assume  there's a certain set of shard you can't  assume what key ranges are in them  rather you need to assume that it's  dynamic it's changing over time and you  just need to adapt to whatever the world  is so to start to illustrate this here's  an example you see two shards again like  always time is going down and so at some  point we decide well we really need more  scale-out and so we split both of those  shards and now we have four and then  later we say well that was really too  many we combined to a home now we end up  with three so this is the real picture  that you have to deal with as a reader  of a stream is you need to understand  that you need to dynamically figure out  how many shards there are at a given  point in time and pross  and in terms of the order of processing  you know the constraint we're going for  is that the records are processed in  order by key and so that you can kind of  extend that idea here to shards as well  that is you have to process the shards  in order so you can kind of see here you  start at the top right you can't process  a shard until you've processed all of  its parents so the two at the top there  they have no living parents so you can  start with those and then once you  complete those now you can go to the  four shards beneath and once you  complete the two in the middle then you  can go to the one at the bottom so you  have to do the shard processing in order  and then of course within those you  process the records in order and if you  do that if I didn't make any mistakes  here if you follow this through you will  have processed all of the records by key  in order so I care  the red ones they're all like at a given  point in time they're all in one shard  the yellow ones all in one shard the  same way so this leads to one of my  favorite ways of visualizing over all  the Kinesis is doing and that's like  this so at the bottom you've got this  Khattak mess of all this stuff being  jammed into this funnel and then Kinesis  is working to resolve all the races  figure out a canonical ordering for  those and it's producing this kind of  tapestry here right of all these these  shards and so then your job as a reader  is to come through and and process that  with the level of parallelism that's  available at each stage so the the  Kinesis client library helps with this  quite a bit so if you think about these  these leases or these locks on shards  you'll have a changing number of locks  over time okay and this finally leads  then to the final pattern that I'll talk  about here and I haven't really talked  into talk much about applications state  but here at this point we've got this  worker the darker worker at the top is  has done some processing on the shard  and let's imagine it has some  application state so like if it's  keeping track of those account balances  maybe it's got the running balance for  every account that's in its shard and  then it comes to the point and says oh  my shard is done so it there's no more  work to do there but there's more work  to do on the subsequent shards so now  you can imagine if you have that state  the shard level state if you will you  now need to kind of break that up and  you need to take like well half of the  half the state needs to go to this one  new gray worker and half needs to go to  another one and that can be a really  tricky problem so one of the approaches  that we came up with for dealing with  this is to track our shard state not by  chard because shards are dynamic and  they're changing over time but rather to  track our shard state by partition key  so by the keys and the data and if you  do that so you can imagine like say you  have like a dynamo table and you want to  have the balances so for the key to the  table would be the the key from your  your stream and then another column and  have the balance so if you key it in  that way like with the grain of the  stream then when the shard splits or  merges you don't have to do anything to  split your shard state right it's just  accessible by key and so if you know  this new shard workers has all the even  accounts the other one has all the odd  accounts they just go access theirs from  the state so if you record the shard  state by partition key then you can make  the shard splits and shards shard merges  trivial in terms of state management but  like everything there's trade-offs here  there's additional expense to storing  that state and yeah there's there's  definitely other things to consider so  that's it those are the kind of the  basic patterns techniques that we've  developed in building some transaction  processing applications I'd like to  think that these are the you know that  these things this is what would have  helped me when I was starting out like a  year and a half ago so if somebody finds  use of it everyone really glad about  that so thank you all thank you for your  time  these are a couple of references that I  found particularly useful to crystallize  my thinking they're not affiliated with  me in any way they're just useful  resources and that's all I had I think I  have a few minutes for questions so any  yes do the upper version you can run in  your laptop okay so the question is when  you're testing Kinesis it's hard to test  this thing in the cloud do they have  something to test locally I'm not aware  of anything that Amazon has what we've  done is we've developed our own just  really lightweight in-memory data stream  that has very similar semantics so we  tend to do you know we have our tight  feedback cycle with that and then we're  sure to run our tests regularly against  Amazon to make sure we don't diverge so  it's like many Amazon services the  feature footprint is really really small  it's easy to replicate it's the mountain  of like the non-functional stuff that  they do that that's really what they  offer so yeah pretty sure previous slide  and behind him  right so the question is I think the  question is if you actually have a  Poisson event what do you do I failed to  comment on that that was a line I left  out so the technique we actually use is  as a technique I prefer at this point is  when you have that Poisson event and  it's really failing you can't stop the  assembly line so the idea is well  identify like off to the side say this  key is in error I think of it like  closure agents right the agent can be an  error at some point if you know closure  so you say that's an error and then any  events that you get for that key you  kind of shunt off to another area maybe  that's what you were saying I yeah you  have this queue of those and now you  need your assembly line can proceed  you know things go on and somebody's  somewhere as to come back and like sort  through what is this process all those  queued events and then get back on to  the main assembly line at some point  yeah yep  yes on the producer side what's the  question  you're right so I think the question is  on the producer side when you send  something you might fail and you might  have to send it again so that's another  source of duplicates that I didn't  mention so yeah I mean there's different  techniques one way is if you have an  identifier in the payload that you're  sending then it can be distinguished  downstream like if you say this is  account this is a transaction five and  then you send it twice then the  downstream they can they can understand  that and figure that out  so that's of course that's a source of  duplication which is kind of subtly  different than the duplication I talked  about but I think there's other  techniques to deal with it yeah right  so the may not main things we would  reach for would be like dynamo DB or an  in-memory cache like elastic cache or  something yeah yeah so can the clients  when they're reading control the  backsides I don't know actually I'm not  sure I'd have to check the docs yeah  yeah  so question is what sterilization to use  I don't know that I have the best advice  on this I'm I like for development time  JSON for the readability but then when  it comes to hard core production like  there's different constraints on you so  I wouldn't necessarily do that yeah yeah  so the question is do you know how you  figure out how far behind your workers  are or your consumers are that is one of  the most important metrics to monitor in  this thing because that's the heartbeat  of your system and so Kinesis actually  produces a metric so you can go in the  cloud watch and you can see how many  milliseconds behind your your workers  are yeah free chart yeah yeah so I'm  kind of embarrassed to say this actually  so do a ton of cloud work and it's  almost entirely with Amazon and I feel  like I'm missing out like I should  broaden my perspective but I tell you  it's so good and it's it works so well  that I'm really kind of I've blinders  right now on Amazon but kind of in  general in terms of career development  and broadening my understanding I would  love to see other providers and how they  handle this and in particular I know  there's a lot of similarities here  between Kinesis and Kafka but I haven't  personally done enough Kafka to really  understand all those so at some point I  would love to dig into that more and  understand what it does I still time I  do  anything else yes  yeah so with composite workers I  actually tried to make that point but  obviously I didn't make it clear enough  but yes you that will reduce you down to  the rate of your slowest application and  that's a definite problem  okay so yeah so do you so yes I would  say this so when you're making those  composite workers you can't just do that  blindly I think this is your point you  need to take into account what they're  doing so that you don't have like  unequal yoking right their yoke together  they need to be going at the same rate  they can't be going to dramatically  different rates yeah anyone else  no all right thank you I'm happy to talk  about this stuff I love this stuff so if  you want to come up front or whatever we  can talk more thanks
+ 
+
+00:00:11.160 --> 00:00:14.730 align:start position:0%
+ 
+ 
+
+00:00:14.730 --> 00:00:16.080 align:start position:0%
+ 
+ 
+
+00:00:16.080 --> 00:00:17.280 align:start position:0%
+ 
+ 
+
+00:00:17.280 --> 00:00:20.010 align:start position:0%
+ 
+ 
+
+00:00:20.010 --> 00:00:22.620 align:start position:0%
+ 
+ 
+
+00:00:22.620 --> 00:00:26.100 align:start position:0%
+ 
+ 
+
+00:00:26.100 --> 00:00:28.800 align:start position:0%
+ 
+ 
+
+00:00:28.800 --> 00:00:31.529 align:start position:0%
+ 
+ 
+
+00:00:31.529 --> 00:00:33.060 align:start position:0%
+ 
+ 
+
+00:00:33.060 --> 00:00:35.460 align:start position:0%
+ 
+ 
+
+00:00:35.460 --> 00:00:36.990 align:start position:0%
+ 
+ 
+
+00:00:36.990 --> 00:00:40.830 align:start position:0%
+ 
+ 
+
+00:00:40.830 --> 00:00:42.060 align:start position:0%
+ 
+ 
+
+00:00:42.060 --> 00:00:44.400 align:start position:0%
+ 
+ 
+
+00:00:44.400 --> 00:00:47.430 align:start position:0%
+ 
+ 
+
+00:00:47.430 --> 00:00:50.160 align:start position:0%
+ 
+ 
+
+00:00:50.160 --> 00:00:52.560 align:start position:0%
+ 
+ 
+
+00:00:52.560 --> 00:00:55.110 align:start position:0%
+ 
+ 
+
+00:00:55.110 --> 00:00:58.560 align:start position:0%
+ 
+ 
+
+00:00:58.560 --> 00:00:59.850 align:start position:0%
+ 
+ 
+
+00:00:59.850 --> 00:01:01.590 align:start position:0%
+ 
+ 
+
+00:01:01.590 --> 00:01:04.229 align:start position:0%
+ 
+ 
+
+00:01:04.229 --> 00:01:06.060 align:start position:0%
+ 
+ 
+
+00:01:06.060 --> 00:01:07.740 align:start position:0%
+ 
+ 
+
+00:01:07.740 --> 00:01:09.990 align:start position:0%
+ 
+ 
+
+00:01:09.990 --> 00:01:11.699 align:start position:0%
+ 
+ 
+
+00:01:11.699 --> 00:01:13.469 align:start position:0%
+ 
+ 
+
+00:01:13.469 --> 00:01:15.630 align:start position:0%
+ 
+ 
+
+00:01:15.630 --> 00:01:17.430 align:start position:0%
+ 
+ 
+
+00:01:17.430 --> 00:01:20.609 align:start position:0%
+ 
+ 
+
+00:01:20.609 --> 00:01:22.669 align:start position:0%
+ 
+ 
+
+00:01:22.669 --> 00:01:25.080 align:start position:0%
+ 
+ 
+
+00:01:25.080 --> 00:01:26.910 align:start position:0%
+ 
+ 
+
+00:01:26.910 --> 00:01:28.980 align:start position:0%
+ 
+ 
+
+00:01:28.980 --> 00:01:31.469 align:start position:0%
+ 
+ 
+
+00:01:31.469 --> 00:01:32.550 align:start position:0%
+ 
+ 
+
+00:01:32.550 --> 00:01:34.469 align:start position:0%
+ 
+ 
+
+00:01:34.469 --> 00:01:37.260 align:start position:0%
+ 
+ 
+
+00:01:37.260 --> 00:01:39.290 align:start position:0%
+ 
+ 
+
+00:01:39.290 --> 00:01:41.999 align:start position:0%
+ 
+ 
+
+00:01:41.999 --> 00:01:43.380 align:start position:0%
+ 
+ 
+
+00:01:43.380 --> 00:01:45.839 align:start position:0%
+ 
+ 
+
+00:01:45.839 --> 00:01:47.070 align:start position:0%
+ 
+ 
+
+00:01:47.070 --> 00:01:48.479 align:start position:0%
+ 
+ 
+
+00:01:48.479 --> 00:01:50.460 align:start position:0%
+ 
+ 
+
+00:01:50.460 --> 00:01:52.350 align:start position:0%
+ 
+ 
+
+00:01:52.350 --> 00:01:54.809 align:start position:0%
+ 
+ 
+
+00:01:54.809 --> 00:01:57.419 align:start position:0%
+ 
+ 
+
+00:01:57.419 --> 00:01:58.440 align:start position:0%
+ 
+ 
+
+00:01:58.440 --> 00:02:00.120 align:start position:0%
+ 
+ 
+
+00:02:00.120 --> 00:02:02.550 align:start position:0%
+ 
+ 
+
+00:02:02.550 --> 00:02:04.080 align:start position:0%
+ 
+ 
+
+00:02:04.080 --> 00:02:06.559 align:start position:0%
+ 
+ 
+
+00:02:06.559 --> 00:02:08.400 align:start position:0%
+ 
+ 
+
+00:02:08.400 --> 00:02:10.290 align:start position:0%
+ 
+ 
+
+00:02:10.290 --> 00:02:11.940 align:start position:0%
+ 
+ 
+
+00:02:11.940 --> 00:02:16.170 align:start position:0%
+ 
+ 
+
+00:02:16.170 --> 00:02:17.970 align:start position:0%
+ 
+ 
+
+00:02:17.970 --> 00:02:17.980 align:start position:0%
+ 
+ 
+
+00:02:17.980 --> 00:02:18.720 align:start position:0%
+ 
+
+
+00:02:18.720 --> 00:02:20.070 align:start position:0%
+ 
+ 
+
+00:02:20.070 --> 00:02:22.050 align:start position:0%
+ 
+ 
+
+00:02:22.050 --> 00:02:24.150 align:start position:0%
+ 
+ 
+
+00:02:24.150 --> 00:02:25.770 align:start position:0%
+ 
+ 
+
+00:02:25.770 --> 00:02:28.170 align:start position:0%
+ 
+ 
+
+00:02:28.170 --> 00:02:29.699 align:start position:0%
+ 
+ 
+
+00:02:29.699 --> 00:02:31.530 align:start position:0%
+ 
+ 
+
+00:02:31.530 --> 00:02:33.690 align:start position:0%
+ 
+ 
+
+00:02:33.690 --> 00:02:35.370 align:start position:0%
+ 
+ 
+
+00:02:35.370 --> 00:02:37.259 align:start position:0%
+ 
+ 
+
+00:02:37.259 --> 00:02:39.059 align:start position:0%
+ 
+ 
+
+00:02:39.059 --> 00:02:40.589 align:start position:0%
+ 
+ 
+
+00:02:40.589 --> 00:02:43.770 align:start position:0%
+ 
+ 
+
+00:02:43.770 --> 00:02:48.839 align:start position:0%
+ 
+ 
+
+00:02:48.839 --> 00:02:50.850 align:start position:0%
+ 
+ 
+
+00:02:50.850 --> 00:02:54.120 align:start position:0%
+ 
+ 
+
+00:02:54.120 --> 00:02:55.830 align:start position:0%
+ 
+ 
+
+00:02:55.830 --> 00:02:57.210 align:start position:0%
+ 
+ 
+
+00:02:57.210 --> 00:02:58.559 align:start position:0%
+ 
+ 
+
+00:02:58.559 --> 00:03:00.449 align:start position:0%
+ 
+ 
+
+00:03:00.449 --> 00:03:02.759 align:start position:0%
+ 
+ 
+
+00:03:02.759 --> 00:03:04.140 align:start position:0%
+ 
+ 
+
+00:03:04.140 --> 00:03:06.059 align:start position:0%
+ 
+ 
+
+00:03:06.059 --> 00:03:07.319 align:start position:0%
+ 
+ 
+
+00:03:07.319 --> 00:03:09.240 align:start position:0%
+ 
+ 
+
+00:03:09.240 --> 00:03:11.160 align:start position:0%
+ 
+ 
+
+00:03:11.160 --> 00:03:13.800 align:start position:0%
+ 
+ 
+
+00:03:13.800 --> 00:03:15.210 align:start position:0%
+ 
+ 
+
+00:03:15.210 --> 00:03:17.339 align:start position:0%
+ 
+ 
+
+00:03:17.339 --> 00:03:19.680 align:start position:0%
+ 
+ 
+
+00:03:19.680 --> 00:03:22.890 align:start position:0%
+ 
+ 
+
+00:03:22.890 --> 00:03:24.539 align:start position:0%
+ 
+ 
+
+00:03:24.539 --> 00:03:26.580 align:start position:0%
+ 
+ 
+
+00:03:26.580 --> 00:03:28.440 align:start position:0%
+ 
+ 
+
+00:03:28.440 --> 00:03:31.170 align:start position:0%
+ 
+ 
+
+00:03:31.170 --> 00:03:32.370 align:start position:0%
+ 
+ 
+
+00:03:32.370 --> 00:03:34.650 align:start position:0%
+ 
+ 
+
+00:03:34.650 --> 00:03:35.879 align:start position:0%
+ 
+ 
+
+00:03:35.879 --> 00:03:38.430 align:start position:0%
+ 
+ 
+
+00:03:38.430 --> 00:03:40.170 align:start position:0%
+ 
+ 
+
+00:03:40.170 --> 00:03:42.509 align:start position:0%
+ 
+ 
+
+00:03:42.509 --> 00:03:44.129 align:start position:0%
+ 
+ 
+
+00:03:44.129 --> 00:03:46.050 align:start position:0%
+ 
+ 
+
+00:03:46.050 --> 00:03:47.879 align:start position:0%
+ 
+ 
+
+00:03:47.879 --> 00:03:49.140 align:start position:0%
+ 
+ 
+
+00:03:49.140 --> 00:03:50.849 align:start position:0%
+ 
+ 
+
+00:03:50.849 --> 00:03:56.729 align:start position:0%
+ 
+ 
+
+00:03:56.729 --> 00:03:58.740 align:start position:0%
+ 
+ 
+
+00:03:58.740 --> 00:04:00.930 align:start position:0%
+ 
+ 
+
+00:04:00.930 --> 00:04:02.759 align:start position:0%
+ 
+ 
+
+00:04:02.759 --> 00:04:04.740 align:start position:0%
+ 
+ 
+
+00:04:04.740 --> 00:04:06.420 align:start position:0%
+ 
+ 
+
+00:04:06.420 --> 00:04:09.240 align:start position:0%
+ 
+ 
+
+00:04:09.240 --> 00:04:10.710 align:start position:0%
+ 
+ 
+
+00:04:10.710 --> 00:04:13.830 align:start position:0%
+ 
+ 
+
+00:04:13.830 --> 00:04:15.330 align:start position:0%
+ 
+ 
+
+00:04:15.330 --> 00:04:17.129 align:start position:0%
+ 
+ 
+
+00:04:17.129 --> 00:04:18.690 align:start position:0%
+ 
+ 
+
+00:04:18.690 --> 00:04:19.920 align:start position:0%
+ 
+ 
+
+00:04:19.920 --> 00:04:23.550 align:start position:0%
+ 
+ 
+
+00:04:23.550 --> 00:04:25.200 align:start position:0%
+ 
+ 
+
+00:04:25.200 --> 00:04:26.880 align:start position:0%
+ 
+ 
+
+00:04:26.880 --> 00:04:28.980 align:start position:0%
+ 
+ 
+
+00:04:28.980 --> 00:04:30.549 align:start position:0%
+ 
+ 
+
+00:04:30.549 --> 00:04:32.529 align:start position:0%
+ 
+ 
+
+00:04:32.529 --> 00:04:36.519 align:start position:0%
+ 
+ 
+
+00:04:36.519 --> 00:04:37.959 align:start position:0%
+ 
+ 
+
+00:04:37.959 --> 00:04:39.609 align:start position:0%
+ 
+ 
+
+00:04:39.609 --> 00:04:41.169 align:start position:0%
+ 
+ 
+
+00:04:41.169 --> 00:04:43.269 align:start position:0%
+ 
+ 
+
+00:04:43.269 --> 00:04:44.589 align:start position:0%
+ 
+ 
+
+00:04:44.589 --> 00:04:46.659 align:start position:0%
+ 
+ 
+
+00:04:46.659 --> 00:04:48.309 align:start position:0%
+ 
+ 
+
+00:04:48.309 --> 00:04:50.049 align:start position:0%
+ 
+ 
+
+00:04:50.049 --> 00:04:51.459 align:start position:0%
+ 
+ 
+
+00:04:51.459 --> 00:04:54.399 align:start position:0%
+ 
+ 
+
+00:04:54.399 --> 00:04:55.719 align:start position:0%
+ 
+ 
+
+00:04:55.719 --> 00:04:56.919 align:start position:0%
+ 
+ 
+
+00:04:56.919 --> 00:04:59.349 align:start position:0%
+ 
+ 
+
+00:04:59.349 --> 00:05:01.869 align:start position:0%
+ 
+ 
+
+00:05:01.869 --> 00:05:01.879 align:start position:0%
+ 
+ 
+
+00:05:01.879 --> 00:05:02.139 align:start position:0%
+ 
+
+
+00:05:02.139 --> 00:05:03.609 align:start position:0%
+ 
+ 
+
+00:05:03.609 --> 00:05:06.609 align:start position:0%
+ 
+ 
+
+00:05:06.609 --> 00:05:08.289 align:start position:0%
+ 
+ 
+
+00:05:08.289 --> 00:05:10.959 align:start position:0%
+ 
+ 
+
+00:05:10.959 --> 00:05:12.669 align:start position:0%
+ 
+ 
+
+00:05:12.669 --> 00:05:14.199 align:start position:0%
+ 
+ 
+
+00:05:14.199 --> 00:05:15.849 align:start position:0%
+ 
+ 
+
+00:05:15.849 --> 00:05:17.169 align:start position:0%
+ 
+ 
+
+00:05:17.169 --> 00:05:19.059 align:start position:0%
+ 
+ 
+
+00:05:19.059 --> 00:05:20.949 align:start position:0%
+ 
+ 
+
+00:05:20.949 --> 00:05:22.599 align:start position:0%
+ 
+ 
+
+00:05:22.599 --> 00:05:26.769 align:start position:0%
+ 
+ 
+
+00:05:26.769 --> 00:05:28.809 align:start position:0%
+ 
+ 
+
+00:05:28.809 --> 00:05:31.449 align:start position:0%
+ 
+ 
+
+00:05:31.449 --> 00:05:33.549 align:start position:0%
+ 
+ 
+
+00:05:33.549 --> 00:05:35.679 align:start position:0%
+ 
+ 
+
+00:05:35.679 --> 00:05:38.439 align:start position:0%
+ 
+ 
+
+00:05:38.439 --> 00:05:42.129 align:start position:0%
+ 
+ 
+
+00:05:42.129 --> 00:05:43.899 align:start position:0%
+ 
+ 
+
+00:05:43.899 --> 00:05:45.699 align:start position:0%
+ 
+ 
+
+00:05:45.699 --> 00:05:47.829 align:start position:0%
+ 
+ 
+
+00:05:47.829 --> 00:05:48.609 align:start position:0%
+ 
+ 
+
+00:05:48.609 --> 00:05:50.859 align:start position:0%
+ 
+ 
+
+00:05:50.859 --> 00:05:52.419 align:start position:0%
+ 
+ 
+
+00:05:52.419 --> 00:05:54.159 align:start position:0%
+ 
+ 
+
+00:05:54.159 --> 00:05:58.899 align:start position:0%
+ 
+ 
+
+00:05:58.899 --> 00:06:00.249 align:start position:0%
+ 
+ 
+
+00:06:00.249 --> 00:06:02.319 align:start position:0%
+ 
+ 
+
+00:06:02.319 --> 00:06:03.969 align:start position:0%
+ 
+ 
+
+00:06:03.969 --> 00:06:06.789 align:start position:0%
+ 
+ 
+
+00:06:06.789 --> 00:06:08.229 align:start position:0%
+ 
+ 
+
+00:06:08.229 --> 00:06:09.939 align:start position:0%
+ 
+ 
+
+00:06:09.939 --> 00:06:11.769 align:start position:0%
+ 
+ 
+
+00:06:11.769 --> 00:06:13.149 align:start position:0%
+ 
+ 
+
+00:06:13.149 --> 00:06:15.819 align:start position:0%
+ 
+ 
+
+00:06:15.819 --> 00:06:17.379 align:start position:0%
+ 
+ 
+
+00:06:17.379 --> 00:06:18.789 align:start position:0%
+ 
+ 
+
+00:06:18.789 --> 00:06:20.469 align:start position:0%
+ 
+ 
+
+00:06:20.469 --> 00:06:24.309 align:start position:0%
+ 
+ 
+
+00:06:24.309 --> 00:06:26.169 align:start position:0%
+ 
+ 
+
+00:06:26.169 --> 00:06:28.569 align:start position:0%
+ 
+ 
+
+00:06:28.569 --> 00:06:30.489 align:start position:0%
+ 
+ 
+
+00:06:30.489 --> 00:06:31.929 align:start position:0%
+ 
+ 
+
+00:06:31.929 --> 00:06:34.509 align:start position:0%
+ 
+ 
+
+00:06:34.509 --> 00:06:37.209 align:start position:0%
+ 
+ 
+
+00:06:37.209 --> 00:06:39.009 align:start position:0%
+ 
+ 
+
+00:06:39.009 --> 00:06:40.869 align:start position:0%
+ 
+ 
+
+00:06:40.869 --> 00:06:43.689 align:start position:0%
+ 
+ 
+
+00:06:43.689 --> 00:06:43.699 align:start position:0%
+ 
+ 
+
+00:06:43.699 --> 00:06:43.960 align:start position:0%
+ 
+
+
+00:06:43.960 --> 00:06:46.600 align:start position:0%
+ 
+ 
+
+00:06:46.600 --> 00:06:48.940 align:start position:0%
+ 
+ 
+
+00:06:48.940 --> 00:06:51.580 align:start position:0%
+ 
+ 
+
+00:06:51.580 --> 00:06:53.290 align:start position:0%
+ 
+ 
+
+00:06:53.290 --> 00:06:54.790 align:start position:0%
+ 
+ 
+
+00:06:54.790 --> 00:06:56.320 align:start position:0%
+ 
+ 
+
+00:06:56.320 --> 00:07:02.680 align:start position:0%
+ 
+ 
+
+00:07:02.680 --> 00:07:04.030 align:start position:0%
+ 
+ 
+
+00:07:04.030 --> 00:07:06.220 align:start position:0%
+ 
+ 
+
+00:07:06.220 --> 00:07:08.980 align:start position:0%
+ 
+ 
+
+00:07:08.980 --> 00:07:10.900 align:start position:0%
+ 
+ 
+
+00:07:10.900 --> 00:07:12.460 align:start position:0%
+ 
+ 
+
+00:07:12.460 --> 00:07:13.420 align:start position:0%
+ 
+ 
+
+00:07:13.420 --> 00:07:14.710 align:start position:0%
+ 
+ 
+
+00:07:14.710 --> 00:07:17.890 align:start position:0%
+ 
+ 
+
+00:07:17.890 --> 00:07:19.510 align:start position:0%
+ 
+ 
+
+00:07:19.510 --> 00:07:20.620 align:start position:0%
+ 
+ 
+
+00:07:20.620 --> 00:07:22.780 align:start position:0%
+ 
+ 
+
+00:07:22.780 --> 00:07:24.880 align:start position:0%
+ 
+ 
+
+00:07:24.880 --> 00:07:26.260 align:start position:0%
+ 
+ 
+
+00:07:26.260 --> 00:07:27.670 align:start position:0%
+ 
+ 
+
+00:07:27.670 --> 00:07:29.920 align:start position:0%
+ 
+ 
+
+00:07:29.920 --> 00:07:32.560 align:start position:0%
+ 
+ 
+
+00:07:32.560 --> 00:07:34.000 align:start position:0%
+ 
+ 
+
+00:07:34.000 --> 00:07:36.160 align:start position:0%
+ 
+ 
+
+00:07:36.160 --> 00:07:38.020 align:start position:0%
+ 
+ 
+
+00:07:38.020 --> 00:07:42.340 align:start position:0%
+ 
+ 
+
+00:07:42.340 --> 00:07:45.310 align:start position:0%
+ 
+ 
+
+00:07:45.310 --> 00:07:47.110 align:start position:0%
+ 
+ 
+
+00:07:47.110 --> 00:07:49.390 align:start position:0%
+ 
+ 
+
+00:07:49.390 --> 00:07:51.070 align:start position:0%
+ 
+ 
+
+00:07:51.070 --> 00:07:52.810 align:start position:0%
+ 
+ 
+
+00:07:52.810 --> 00:07:57.820 align:start position:0%
+ 
+ 
+
+00:07:57.820 --> 00:07:59.350 align:start position:0%
+ 
+ 
+
+00:07:59.350 --> 00:08:01.120 align:start position:0%
+ 
+ 
+
+00:08:01.120 --> 00:08:02.800 align:start position:0%
+ 
+ 
+
+00:08:02.800 --> 00:08:05.110 align:start position:0%
+ 
+ 
+
+00:08:05.110 --> 00:08:07.450 align:start position:0%
+ 
+ 
+
+00:08:07.450 --> 00:08:12.159 align:start position:0%
+ 
+ 
+
+00:08:12.159 --> 00:08:13.810 align:start position:0%
+ 
+ 
+
+00:08:13.810 --> 00:08:15.340 align:start position:0%
+ 
+ 
+
+00:08:15.340 --> 00:08:17.050 align:start position:0%
+ 
+ 
+
+00:08:17.050 --> 00:08:19.720 align:start position:0%
+ 
+ 
+
+00:08:19.720 --> 00:08:23.140 align:start position:0%
+ 
+ 
+
+00:08:23.140 --> 00:08:25.120 align:start position:0%
+ 
+ 
+
+00:08:25.120 --> 00:08:27.280 align:start position:0%
+ 
+ 
+
+00:08:27.280 --> 00:08:29.110 align:start position:0%
+ 
+ 
+
+00:08:29.110 --> 00:08:30.760 align:start position:0%
+ 
+ 
+
+00:08:30.760 --> 00:08:32.860 align:start position:0%
+ 
+ 
+
+00:08:32.860 --> 00:08:35.740 align:start position:0%
+ 
+ 
+
+00:08:35.740 --> 00:08:37.900 align:start position:0%
+ 
+ 
+
+00:08:37.900 --> 00:08:40.420 align:start position:0%
+ 
+ 
+
+00:08:40.420 --> 00:08:41.709 align:start position:0%
+ 
+ 
+
+00:08:41.709 --> 00:08:44.020 align:start position:0%
+ 
+ 
+
+00:08:44.020 --> 00:08:49.210 align:start position:0%
+ 
+ 
+
+00:08:49.210 --> 00:08:51.100 align:start position:0%
+ 
+ 
+
+00:08:51.100 --> 00:08:53.200 align:start position:0%
+ 
+ 
+
+00:08:53.200 --> 00:08:55.060 align:start position:0%
+ 
+ 
+
+00:08:55.060 --> 00:08:57.040 align:start position:0%
+ 
+ 
+
+00:08:57.040 --> 00:08:57.730 align:start position:0%
+ 
+ 
+
+00:08:57.730 --> 00:09:00.490 align:start position:0%
+ 
+ 
+
+00:09:00.490 --> 00:09:02.410 align:start position:0%
+ 
+ 
+
+00:09:02.410 --> 00:09:08.080 align:start position:0%
+ 
+ 
+
+00:09:08.080 --> 00:09:10.120 align:start position:0%
+ 
+ 
+
+00:09:10.120 --> 00:09:11.290 align:start position:0%
+ 
+ 
+
+00:09:11.290 --> 00:09:14.980 align:start position:0%
+ 
+ 
+
+00:09:14.980 --> 00:09:16.630 align:start position:0%
+ 
+ 
+
+00:09:16.630 --> 00:09:19.300 align:start position:0%
+ 
+ 
+
+00:09:19.300 --> 00:09:22.600 align:start position:0%
+ 
+ 
+
+00:09:22.600 --> 00:09:24.910 align:start position:0%
+ 
+ 
+
+00:09:24.910 --> 00:09:26.680 align:start position:0%
+ 
+ 
+
+00:09:26.680 --> 00:09:29.560 align:start position:0%
+ 
+ 
+
+00:09:29.560 --> 00:09:32.710 align:start position:0%
+ 
+ 
+
+00:09:32.710 --> 00:09:34.690 align:start position:0%
+ 
+ 
+
+00:09:34.690 --> 00:09:35.860 align:start position:0%
+ 
+ 
+
+00:09:35.860 --> 00:09:37.720 align:start position:0%
+ 
+ 
+
+00:09:37.720 --> 00:09:40.120 align:start position:0%
+ 
+ 
+
+00:09:40.120 --> 00:09:41.710 align:start position:0%
+ 
+ 
+
+00:09:41.710 --> 00:09:45.040 align:start position:0%
+ 
+ 
+
+00:09:45.040 --> 00:09:47.950 align:start position:0%
+ 
+ 
+
+00:09:47.950 --> 00:09:49.180 align:start position:0%
+ 
+ 
+
+00:09:49.180 --> 00:09:50.830 align:start position:0%
+ 
+ 
+
+00:09:50.830 --> 00:09:52.780 align:start position:0%
+ 
+ 
+
+00:09:52.780 --> 00:09:54.280 align:start position:0%
+ 
+ 
+
+00:09:54.280 --> 00:09:55.600 align:start position:0%
+ 
+ 
+
+00:09:55.600 --> 00:09:57.640 align:start position:0%
+ 
+ 
+
+00:09:57.640 --> 00:09:59.380 align:start position:0%
+ 
+ 
+
+00:09:59.380 --> 00:10:00.820 align:start position:0%
+ 
+ 
+
+00:10:00.820 --> 00:10:02.860 align:start position:0%
+ 
+ 
+
+00:10:02.860 --> 00:10:06.100 align:start position:0%
+ 
+ 
+
+00:10:06.100 --> 00:10:07.420 align:start position:0%
+ 
+ 
+
+00:10:07.420 --> 00:10:08.860 align:start position:0%
+ 
+ 
+
+00:10:08.860 --> 00:10:11.560 align:start position:0%
+ 
+ 
+
+00:10:11.560 --> 00:10:13.030 align:start position:0%
+ 
+ 
+
+00:10:13.030 --> 00:10:15.250 align:start position:0%
+ 
+ 
+
+00:10:15.250 --> 00:10:17.230 align:start position:0%
+ 
+ 
+
+00:10:17.230 --> 00:10:19.450 align:start position:0%
+ 
+ 
+
+00:10:19.450 --> 00:10:21.880 align:start position:0%
+ 
+ 
+
+00:10:21.880 --> 00:10:22.960 align:start position:0%
+ 
+ 
+
+00:10:22.960 --> 00:10:25.960 align:start position:0%
+ 
+ 
+
+00:10:25.960 --> 00:10:27.400 align:start position:0%
+ 
+ 
+
+00:10:27.400 --> 00:10:29.910 align:start position:0%
+ 
+ 
+
+00:10:29.910 --> 00:10:32.530 align:start position:0%
+ 
+ 
+
+00:10:32.530 --> 00:10:34.990 align:start position:0%
+ 
+ 
+
+00:10:34.990 --> 00:10:36.460 align:start position:0%
+ 
+ 
+
+00:10:36.460 --> 00:10:37.900 align:start position:0%
+ 
+ 
+
+00:10:37.900 --> 00:10:40.780 align:start position:0%
+ 
+ 
+
+00:10:40.780 --> 00:10:43.450 align:start position:0%
+ 
+ 
+
+00:10:43.450 --> 00:10:45.580 align:start position:0%
+ 
+ 
+
+00:10:45.580 --> 00:10:47.650 align:start position:0%
+ 
+ 
+
+00:10:47.650 --> 00:10:51.010 align:start position:0%
+ 
+ 
+
+00:10:51.010 --> 00:10:53.560 align:start position:0%
+ 
+ 
+
+00:10:53.560 --> 00:10:55.180 align:start position:0%
+ 
+ 
+
+00:10:55.180 --> 00:10:56.800 align:start position:0%
+ 
+ 
+
+00:10:56.800 --> 00:10:58.540 align:start position:0%
+ 
+ 
+
+00:10:58.540 --> 00:11:00.670 align:start position:0%
+ 
+ 
+
+00:11:00.670 --> 00:11:03.730 align:start position:0%
+ 
+ 
+
+00:11:03.730 --> 00:11:05.230 align:start position:0%
+ 
+ 
+
+00:11:05.230 --> 00:11:07.120 align:start position:0%
+ 
+ 
+
+00:11:07.120 --> 00:11:08.470 align:start position:0%
+ 
+ 
+
+00:11:08.470 --> 00:11:09.680 align:start position:0%
+ 
+ 
+
+00:11:09.680 --> 00:11:12.890 align:start position:0%
+ 
+ 
+
+00:11:12.890 --> 00:11:15.380 align:start position:0%
+ 
+ 
+
+00:11:15.380 --> 00:11:16.640 align:start position:0%
+ 
+ 
+
+00:11:16.640 --> 00:11:17.990 align:start position:0%
+ 
+ 
+
+00:11:17.990 --> 00:11:20.420 align:start position:0%
+ 
+ 
+
+00:11:20.420 --> 00:11:21.890 align:start position:0%
+ 
+ 
+
+00:11:21.890 --> 00:11:23.330 align:start position:0%
+ 
+ 
+
+00:11:23.330 --> 00:11:25.100 align:start position:0%
+ 
+ 
+
+00:11:25.100 --> 00:11:26.920 align:start position:0%
+ 
+ 
+
+00:11:26.920 --> 00:11:28.880 align:start position:0%
+ 
+ 
+
+00:11:28.880 --> 00:11:30.620 align:start position:0%
+ 
+ 
+
+00:11:30.620 --> 00:11:31.790 align:start position:0%
+ 
+ 
+
+00:11:31.790 --> 00:11:35.090 align:start position:0%
+ 
+ 
+
+00:11:35.090 --> 00:11:36.380 align:start position:0%
+ 
+ 
+
+00:11:36.380 --> 00:11:38.150 align:start position:0%
+ 
+ 
+
+00:11:38.150 --> 00:11:39.680 align:start position:0%
+ 
+ 
+
+00:11:39.680 --> 00:11:41.690 align:start position:0%
+ 
+ 
+
+00:11:41.690 --> 00:11:42.950 align:start position:0%
+ 
+ 
+
+00:11:42.950 --> 00:11:44.060 align:start position:0%
+ 
+ 
+
+00:11:44.060 --> 00:11:47.030 align:start position:0%
+ 
+ 
+
+00:11:47.030 --> 00:11:48.440 align:start position:0%
+ 
+ 
+
+00:11:48.440 --> 00:11:50.960 align:start position:0%
+ 
+ 
+
+00:11:50.960 --> 00:11:53.150 align:start position:0%
+ 
+ 
+
+00:11:53.150 --> 00:11:55.190 align:start position:0%
+ 
+ 
+
+00:11:55.190 --> 00:11:58.190 align:start position:0%
+ 
+ 
+
+00:11:58.190 --> 00:12:00.830 align:start position:0%
+ 
+ 
+
+00:12:00.830 --> 00:12:06.110 align:start position:0%
+ 
+ 
+
+00:12:06.110 --> 00:12:07.970 align:start position:0%
+ 
+ 
+
+00:12:07.970 --> 00:12:10.700 align:start position:0%
+ 
+ 
+
+00:12:10.700 --> 00:12:11.990 align:start position:0%
+ 
+ 
+
+00:12:11.990 --> 00:12:14.330 align:start position:0%
+ 
+ 
+
+00:12:14.330 --> 00:12:15.620 align:start position:0%
+ 
+ 
+
+00:12:15.620 --> 00:12:18.620 align:start position:0%
+ 
+ 
+
+00:12:18.620 --> 00:12:21.800 align:start position:0%
+ 
+ 
+
+00:12:21.800 --> 00:12:23.360 align:start position:0%
+ 
+ 
+
+00:12:23.360 --> 00:12:25.100 align:start position:0%
+ 
+ 
+
+00:12:25.100 --> 00:12:26.300 align:start position:0%
+ 
+ 
+
+00:12:26.300 --> 00:12:28.340 align:start position:0%
+ 
+ 
+
+00:12:28.340 --> 00:12:30.110 align:start position:0%
+ 
+ 
+
+00:12:30.110 --> 00:12:32.030 align:start position:0%
+ 
+ 
+
+00:12:32.030 --> 00:12:34.940 align:start position:0%
+ 
+ 
+
+00:12:34.940 --> 00:12:36.350 align:start position:0%
+ 
+ 
+
+00:12:36.350 --> 00:12:38.660 align:start position:0%
+ 
+ 
+
+00:12:38.660 --> 00:12:41.360 align:start position:0%
+ 
+ 
+
+00:12:41.360 --> 00:12:42.980 align:start position:0%
+ 
+ 
+
+00:12:42.980 --> 00:12:44.960 align:start position:0%
+ 
+ 
+
+00:12:44.960 --> 00:12:47.060 align:start position:0%
+ 
+ 
+
+00:12:47.060 --> 00:12:48.650 align:start position:0%
+ 
+ 
+
+00:12:48.650 --> 00:12:49.790 align:start position:0%
+ 
+ 
+
+00:12:49.790 --> 00:12:52.910 align:start position:0%
+ 
+ 
+
+00:12:52.910 --> 00:12:55.760 align:start position:0%
+ 
+ 
+
+00:12:55.760 --> 00:12:57.860 align:start position:0%
+ 
+ 
+
+00:12:57.860 --> 00:13:00.590 align:start position:0%
+ 
+ 
+
+00:13:00.590 --> 00:13:02.930 align:start position:0%
+ 
+ 
+
+00:13:02.930 --> 00:13:04.340 align:start position:0%
+ 
+ 
+
+00:13:04.340 --> 00:13:05.660 align:start position:0%
+ 
+ 
+
+00:13:05.660 --> 00:13:09.740 align:start position:0%
+ 
+ 
+
+00:13:09.740 --> 00:13:11.000 align:start position:0%
+ 
+ 
+
+00:13:11.000 --> 00:13:12.890 align:start position:0%
+ 
+ 
+
+00:13:12.890 --> 00:13:14.420 align:start position:0%
+ 
+ 
+
+00:13:14.420 --> 00:13:16.370 align:start position:0%
+ 
+ 
+
+00:13:16.370 --> 00:13:17.540 align:start position:0%
+ 
+ 
+
+00:13:17.540 --> 00:13:19.790 align:start position:0%
+ 
+ 
+
+00:13:19.790 --> 00:13:22.250 align:start position:0%
+ 
+ 
+
+00:13:22.250 --> 00:13:23.290 align:start position:0%
+ 
+ 
+
+00:13:23.290 --> 00:13:26.040 align:start position:0%
+ 
+ 
+
+00:13:26.040 --> 00:13:27.970 align:start position:0%
+ 
+ 
+
+00:13:27.970 --> 00:13:32.490 align:start position:0%
+ 
+ 
+
+00:13:32.490 --> 00:13:34.630 align:start position:0%
+ 
+ 
+
+00:13:34.630 --> 00:13:35.530 align:start position:0%
+ 
+ 
+
+00:13:35.530 --> 00:13:36.970 align:start position:0%
+ 
+ 
+
+00:13:36.970 --> 00:13:40.269 align:start position:0%
+ 
+ 
+
+00:13:40.269 --> 00:13:41.740 align:start position:0%
+ 
+ 
+
+00:13:41.740 --> 00:13:43.389 align:start position:0%
+ 
+ 
+
+00:13:43.389 --> 00:13:45.430 align:start position:0%
+ 
+ 
+
+00:13:45.430 --> 00:13:47.230 align:start position:0%
+ 
+ 
+
+00:13:47.230 --> 00:13:49.900 align:start position:0%
+ 
+ 
+
+00:13:49.900 --> 00:13:51.670 align:start position:0%
+ 
+ 
+
+00:13:51.670 --> 00:13:54.790 align:start position:0%
+ 
+ 
+
+00:13:54.790 --> 00:13:56.920 align:start position:0%
+ 
+ 
+
+00:13:56.920 --> 00:13:58.960 align:start position:0%
+ 
+ 
+
+00:13:58.960 --> 00:14:00.639 align:start position:0%
+ 
+ 
+
+00:14:00.639 --> 00:14:02.139 align:start position:0%
+ 
+ 
+
+00:14:02.139 --> 00:14:05.050 align:start position:0%
+ 
+ 
+
+00:14:05.050 --> 00:14:06.610 align:start position:0%
+ 
+ 
+
+00:14:06.610 --> 00:14:08.410 align:start position:0%
+ 
+ 
+
+00:14:08.410 --> 00:14:11.019 align:start position:0%
+ 
+ 
+
+00:14:11.019 --> 00:14:12.519 align:start position:0%
+ 
+ 
+
+00:14:12.519 --> 00:14:16.150 align:start position:0%
+ 
+ 
+
+00:14:16.150 --> 00:14:17.769 align:start position:0%
+ 
+ 
+
+00:14:17.769 --> 00:14:19.360 align:start position:0%
+ 
+ 
+
+00:14:19.360 --> 00:14:22.230 align:start position:0%
+ 
+ 
+
+00:14:22.230 --> 00:14:24.579 align:start position:0%
+ 
+ 
+
+00:14:24.579 --> 00:14:26.440 align:start position:0%
+ 
+ 
+
+00:14:26.440 --> 00:14:27.970 align:start position:0%
+ 
+ 
+
+00:14:27.970 --> 00:14:30.069 align:start position:0%
+ 
+ 
+
+00:14:30.069 --> 00:14:32.260 align:start position:0%
+ 
+ 
+
+00:14:32.260 --> 00:14:33.699 align:start position:0%
+ 
+ 
+
+00:14:33.699 --> 00:14:35.800 align:start position:0%
+ 
+ 
+
+00:14:35.800 --> 00:14:42.100 align:start position:0%
+ 
+ 
+
+00:14:42.100 --> 00:14:44.350 align:start position:0%
+ 
+ 
+
+00:14:44.350 --> 00:14:47.710 align:start position:0%
+ 
+ 
+
+00:14:47.710 --> 00:14:49.389 align:start position:0%
+ 
+ 
+
+00:14:49.389 --> 00:14:51.100 align:start position:0%
+ 
+ 
+
+00:14:51.100 --> 00:14:54.819 align:start position:0%
+ 
+ 
+
+00:14:54.819 --> 00:14:56.440 align:start position:0%
+ 
+ 
+
+00:14:56.440 --> 00:15:00.100 align:start position:0%
+ 
+ 
+
+00:15:00.100 --> 00:15:02.620 align:start position:0%
+ 
+ 
+
+00:15:02.620 --> 00:15:04.569 align:start position:0%
+ 
+ 
+
+00:15:04.569 --> 00:15:07.510 align:start position:0%
+ 
+ 
+
+00:15:07.510 --> 00:15:09.160 align:start position:0%
+ 
+ 
+
+00:15:09.160 --> 00:15:10.930 align:start position:0%
+ 
+ 
+
+00:15:10.930 --> 00:15:12.880 align:start position:0%
+ 
+ 
+
+00:15:12.880 --> 00:15:14.980 align:start position:0%
+ 
+ 
+
+00:15:14.980 --> 00:15:16.780 align:start position:0%
+ 
+ 
+
+00:15:16.780 --> 00:15:18.130 align:start position:0%
+ 
+ 
+
+00:15:18.130 --> 00:15:20.910 align:start position:0%
+ 
+ 
+
+00:15:20.910 --> 00:15:23.530 align:start position:0%
+ 
+ 
+
+00:15:23.530 --> 00:15:25.750 align:start position:0%
+ 
+ 
+
+00:15:25.750 --> 00:15:27.610 align:start position:0%
+ 
+ 
+
+00:15:27.610 --> 00:15:30.610 align:start position:0%
+ 
+ 
+
+00:15:30.610 --> 00:15:32.470 align:start position:0%
+ 
+ 
+
+00:15:32.470 --> 00:15:34.120 align:start position:0%
+ 
+ 
+
+00:15:34.120 --> 00:15:36.189 align:start position:0%
+ 
+ 
+
+00:15:36.189 --> 00:15:37.070 align:start position:0%
+ 
+ 
+
+00:15:37.070 --> 00:15:38.990 align:start position:0%
+ 
+ 
+
+00:15:38.990 --> 00:15:40.190 align:start position:0%
+ 
+ 
+
+00:15:40.190 --> 00:15:41.090 align:start position:0%
+ 
+ 
+
+00:15:41.090 --> 00:15:44.390 align:start position:0%
+ 
+ 
+
+00:15:44.390 --> 00:15:47.720 align:start position:0%
+ 
+ 
+
+00:15:47.720 --> 00:15:49.820 align:start position:0%
+ 
+ 
+
+00:15:49.820 --> 00:15:51.530 align:start position:0%
+ 
+ 
+
+00:15:51.530 --> 00:15:53.840 align:start position:0%
+ 
+ 
+
+00:15:53.840 --> 00:15:55.940 align:start position:0%
+ 
+ 
+
+00:15:55.940 --> 00:15:57.680 align:start position:0%
+ 
+ 
+
+00:15:57.680 --> 00:15:58.880 align:start position:0%
+ 
+ 
+
+00:15:58.880 --> 00:16:00.140 align:start position:0%
+ 
+ 
+
+00:16:00.140 --> 00:16:02.060 align:start position:0%
+ 
+ 
+
+00:16:02.060 --> 00:16:03.350 align:start position:0%
+ 
+ 
+
+00:16:03.350 --> 00:16:05.450 align:start position:0%
+ 
+ 
+
+00:16:05.450 --> 00:16:07.600 align:start position:0%
+ 
+ 
+
+00:16:07.600 --> 00:16:10.040 align:start position:0%
+ 
+ 
+
+00:16:10.040 --> 00:16:11.600 align:start position:0%
+ 
+ 
+
+00:16:11.600 --> 00:16:15.650 align:start position:0%
+ 
+ 
+
+00:16:15.650 --> 00:16:17.330 align:start position:0%
+ 
+ 
+
+00:16:17.330 --> 00:16:19.460 align:start position:0%
+ 
+ 
+
+00:16:19.460 --> 00:16:22.430 align:start position:0%
+ 
+ 
+
+00:16:22.430 --> 00:16:24.890 align:start position:0%
+ 
+ 
+
+00:16:24.890 --> 00:16:27.770 align:start position:0%
+ 
+ 
+
+00:16:27.770 --> 00:16:29.510 align:start position:0%
+ 
+ 
+
+00:16:29.510 --> 00:16:31.310 align:start position:0%
+ 
+ 
+
+00:16:31.310 --> 00:16:32.870 align:start position:0%
+ 
+ 
+
+00:16:32.870 --> 00:16:34.220 align:start position:0%
+ 
+ 
+
+00:16:34.220 --> 00:16:37.070 align:start position:0%
+ 
+ 
+
+00:16:37.070 --> 00:16:39.620 align:start position:0%
+ 
+ 
+
+00:16:39.620 --> 00:16:40.820 align:start position:0%
+ 
+ 
+
+00:16:40.820 --> 00:16:43.460 align:start position:0%
+ 
+ 
+
+00:16:43.460 --> 00:16:47.500 align:start position:0%
+ 
+ 
+
+00:16:47.500 --> 00:16:50.000 align:start position:0%
+ 
+ 
+
+00:16:50.000 --> 00:16:53.360 align:start position:0%
+ 
+ 
+
+00:16:53.360 --> 00:16:54.740 align:start position:0%
+ 
+ 
+
+00:16:54.740 --> 00:16:56.390 align:start position:0%
+ 
+ 
+
+00:16:56.390 --> 00:16:58.160 align:start position:0%
+ 
+ 
+
+00:16:58.160 --> 00:17:00.950 align:start position:0%
+ 
+ 
+
+00:17:00.950 --> 00:17:02.450 align:start position:0%
+ 
+ 
+
+00:17:02.450 --> 00:17:04.250 align:start position:0%
+ 
+ 
+
+00:17:04.250 --> 00:17:07.760 align:start position:0%
+ 
+ 
+
+00:17:07.760 --> 00:17:10.160 align:start position:0%
+ 
+ 
+
+00:17:10.160 --> 00:17:12.800 align:start position:0%
+ 
+ 
+
+00:17:12.800 --> 00:17:14.240 align:start position:0%
+ 
+ 
+
+00:17:14.240 --> 00:17:16.490 align:start position:0%
+ 
+ 
+
+00:17:16.490 --> 00:17:17.870 align:start position:0%
+ 
+ 
+
+00:17:17.870 --> 00:17:19.790 align:start position:0%
+ 
+ 
+
+00:17:19.790 --> 00:17:21.410 align:start position:0%
+ 
+ 
+
+00:17:21.410 --> 00:17:23.689 align:start position:0%
+ 
+ 
+
+00:17:23.689 --> 00:17:24.980 align:start position:0%
+ 
+ 
+
+00:17:24.980 --> 00:17:26.449 align:start position:0%
+ 
+ 
+
+00:17:26.449 --> 00:17:28.310 align:start position:0%
+ 
+ 
+
+00:17:28.310 --> 00:17:30.590 align:start position:0%
+ 
+ 
+
+00:17:30.590 --> 00:17:32.060 align:start position:0%
+ 
+ 
+
+00:17:32.060 --> 00:17:34.400 align:start position:0%
+ 
+ 
+
+00:17:34.400 --> 00:17:36.050 align:start position:0%
+ 
+ 
+
+00:17:36.050 --> 00:17:39.440 align:start position:0%
+ 
+ 
+
+00:17:39.440 --> 00:17:41.510 align:start position:0%
+ 
+ 
+
+00:17:41.510 --> 00:17:43.610 align:start position:0%
+ 
+ 
+
+00:17:43.610 --> 00:17:45.320 align:start position:0%
+ 
+ 
+
+00:17:45.320 --> 00:17:46.820 align:start position:0%
+ 
+ 
+
+00:17:46.820 --> 00:17:48.200 align:start position:0%
+ 
+ 
+
+00:17:48.200 --> 00:17:50.549 align:start position:0%
+ 
+ 
+
+00:17:50.549 --> 00:17:51.509 align:start position:0%
+ 
+ 
+
+00:17:51.509 --> 00:17:55.080 align:start position:0%
+ 
+ 
+
+00:17:55.080 --> 00:17:56.369 align:start position:0%
+ 
+ 
+
+00:17:56.369 --> 00:17:58.710 align:start position:0%
+ 
+ 
+
+00:17:58.710 --> 00:18:01.289 align:start position:0%
+ 
+ 
+
+00:18:01.289 --> 00:18:02.100 align:start position:0%
+ 
+ 
+
+00:18:02.100 --> 00:18:03.210 align:start position:0%
+ 
+ 
+
+00:18:03.210 --> 00:18:06.659 align:start position:0%
+ 
+ 
+
+00:18:06.659 --> 00:18:10.769 align:start position:0%
+ 
+ 
+
+00:18:10.769 --> 00:18:13.080 align:start position:0%
+ 
+ 
+
+00:18:13.080 --> 00:18:15.690 align:start position:0%
+ 
+ 
+
+00:18:15.690 --> 00:18:18.029 align:start position:0%
+ 
+ 
+
+00:18:18.029 --> 00:18:19.889 align:start position:0%
+ 
+ 
+
+00:18:19.889 --> 00:18:21.539 align:start position:0%
+ 
+ 
+
+00:18:21.539 --> 00:18:23.489 align:start position:0%
+ 
+ 
+
+00:18:23.489 --> 00:18:27.450 align:start position:0%
+ 
+ 
+
+00:18:27.450 --> 00:18:29.159 align:start position:0%
+ 
+ 
+
+00:18:29.159 --> 00:18:32.399 align:start position:0%
+ 
+ 
+
+00:18:32.399 --> 00:18:36.840 align:start position:0%
+ 
+ 
+
+00:18:36.840 --> 00:18:38.749 align:start position:0%
+ 
+ 
+
+00:18:38.749 --> 00:18:41.009 align:start position:0%
+ 
+ 
+
+00:18:41.009 --> 00:18:43.799 align:start position:0%
+ 
+ 
+
+00:18:43.799 --> 00:18:46.350 align:start position:0%
+ 
+ 
+
+00:18:46.350 --> 00:18:48.090 align:start position:0%
+ 
+ 
+
+00:18:48.090 --> 00:18:49.259 align:start position:0%
+ 
+ 
+
+00:18:49.259 --> 00:18:53.669 align:start position:0%
+ 
+ 
+
+00:18:53.669 --> 00:18:55.249 align:start position:0%
+ 
+ 
+
+00:18:55.249 --> 00:19:01.440 align:start position:0%
+ 
+ 
+
+00:19:01.440 --> 00:19:03.779 align:start position:0%
+ 
+ 
+
+00:19:03.779 --> 00:19:05.639 align:start position:0%
+ 
+ 
+
+00:19:05.639 --> 00:19:07.710 align:start position:0%
+ 
+ 
+
+00:19:07.710 --> 00:19:08.940 align:start position:0%
+ 
+ 
+
+00:19:08.940 --> 00:19:10.289 align:start position:0%
+ 
+ 
+
+00:19:10.289 --> 00:19:11.399 align:start position:0%
+ 
+ 
+
+00:19:11.399 --> 00:19:13.859 align:start position:0%
+ 
+ 
+
+00:19:13.859 --> 00:19:16.379 align:start position:0%
+ 
+ 
+
+00:19:16.379 --> 00:19:17.700 align:start position:0%
+ 
+ 
+
+00:19:17.700 --> 00:19:20.909 align:start position:0%
+ 
+ 
+
+00:19:20.909 --> 00:19:22.379 align:start position:0%
+ 
+ 
+
+00:19:22.379 --> 00:19:25.619 align:start position:0%
+ 
+ 
+
+00:19:25.619 --> 00:19:27.119 align:start position:0%
+ 
+ 
+
+00:19:27.119 --> 00:19:29.009 align:start position:0%
+ 
+ 
+
+00:19:29.009 --> 00:19:31.649 align:start position:0%
+ 
+ 
+
+00:19:31.649 --> 00:19:33.840 align:start position:0%
+ 
+ 
+
+00:19:33.840 --> 00:19:35.249 align:start position:0%
+ 
+ 
+
+00:19:35.249 --> 00:19:38.489 align:start position:0%
+ 
+ 
+
+00:19:38.489 --> 00:19:39.989 align:start position:0%
+ 
+ 
+
+00:19:39.989 --> 00:19:41.489 align:start position:0%
+ 
+ 
+
+00:19:41.489 --> 00:19:43.019 align:start position:0%
+ 
+ 
+
+00:19:43.019 --> 00:19:45.960 align:start position:0%
+ 
+ 
+
+00:19:45.960 --> 00:19:48.060 align:start position:0%
+ 
+ 
+
+00:19:48.060 --> 00:19:50.279 align:start position:0%
+ 
+ 
+
+00:19:50.279 --> 00:19:52.619 align:start position:0%
+ 
+ 
+
+00:19:52.619 --> 00:19:56.460 align:start position:0%
+ 
+ 
+
+00:19:56.460 --> 00:19:57.810 align:start position:0%
+ 
+ 
+
+00:19:57.810 --> 00:19:59.639 align:start position:0%
+ 
+ 
+
+00:19:59.639 --> 00:20:01.919 align:start position:0%
+ 
+ 
+
+00:20:01.919 --> 00:20:04.140 align:start position:0%
+ 
+ 
+
+00:20:04.140 --> 00:20:06.960 align:start position:0%
+ 
+ 
+
+00:20:06.960 --> 00:20:09.000 align:start position:0%
+ 
+ 
+
+00:20:09.000 --> 00:20:13.230 align:start position:0%
+ 
+ 
+
+00:20:13.230 --> 00:20:14.790 align:start position:0%
+ 
+ 
+
+00:20:14.790 --> 00:20:16.920 align:start position:0%
+ 
+ 
+
+00:20:16.920 --> 00:20:19.110 align:start position:0%
+ 
+ 
+
+00:20:19.110 --> 00:20:21.510 align:start position:0%
+ 
+ 
+
+00:20:21.510 --> 00:20:23.520 align:start position:0%
+ 
+ 
+
+00:20:23.520 --> 00:20:25.890 align:start position:0%
+ 
+ 
+
+00:20:25.890 --> 00:20:26.970 align:start position:0%
+ 
+ 
+
+00:20:26.970 --> 00:20:28.710 align:start position:0%
+ 
+ 
+
+00:20:28.710 --> 00:20:30.690 align:start position:0%
+ 
+ 
+
+00:20:30.690 --> 00:20:31.950 align:start position:0%
+ 
+ 
+
+00:20:31.950 --> 00:20:33.360 align:start position:0%
+ 
+ 
+
+00:20:33.360 --> 00:20:34.650 align:start position:0%
+ 
+ 
+
+00:20:34.650 --> 00:20:40.410 align:start position:0%
+ 
+ 
+
+00:20:40.410 --> 00:20:43.740 align:start position:0%
+ 
+ 
+
+00:20:43.740 --> 00:20:45.300 align:start position:0%
+ 
+ 
+
+00:20:45.300 --> 00:20:47.160 align:start position:0%
+ 
+ 
+
+00:20:47.160 --> 00:20:51.270 align:start position:0%
+ 
+ 
+
+00:20:51.270 --> 00:20:53.040 align:start position:0%
+ 
+ 
+
+00:20:53.040 --> 00:20:55.290 align:start position:0%
+ 
+ 
+
+00:20:55.290 --> 00:20:57.060 align:start position:0%
+ 
+ 
+
+00:20:57.060 --> 00:20:58.500 align:start position:0%
+ 
+ 
+
+00:20:58.500 --> 00:20:59.820 align:start position:0%
+ 
+ 
+
+00:20:59.820 --> 00:21:01.050 align:start position:0%
+ 
+ 
+
+00:21:01.050 --> 00:21:02.940 align:start position:0%
+ 
+ 
+
+00:21:02.940 --> 00:21:04.770 align:start position:0%
+ 
+ 
+
+00:21:04.770 --> 00:21:07.740 align:start position:0%
+ 
+ 
+
+00:21:07.740 --> 00:21:09.780 align:start position:0%
+ 
+ 
+
+00:21:09.780 --> 00:21:11.820 align:start position:0%
+ 
+ 
+
+00:21:11.820 --> 00:21:13.290 align:start position:0%
+ 
+ 
+
+00:21:13.290 --> 00:21:15.660 align:start position:0%
+ 
+ 
+
+00:21:15.660 --> 00:21:16.770 align:start position:0%
+ 
+ 
+
+00:21:16.770 --> 00:21:18.090 align:start position:0%
+ 
+ 
+
+00:21:18.090 --> 00:21:21.240 align:start position:0%
+ 
+ 
+
+00:21:21.240 --> 00:21:22.800 align:start position:0%
+ 
+ 
+
+00:21:22.800 --> 00:21:26.880 align:start position:0%
+ 
+ 
+
+00:21:26.880 --> 00:21:28.320 align:start position:0%
+ 
+ 
+
+00:21:28.320 --> 00:21:31.020 align:start position:0%
+ 
+ 
+
+00:21:31.020 --> 00:21:32.970 align:start position:0%
+ 
+ 
+
+00:21:32.970 --> 00:21:34.560 align:start position:0%
+ 
+ 
+
+00:21:34.560 --> 00:21:36.360 align:start position:0%
+ 
+ 
+
+00:21:36.360 --> 00:21:37.470 align:start position:0%
+ 
+ 
+
+00:21:37.470 --> 00:21:38.640 align:start position:0%
+ 
+ 
+
+00:21:38.640 --> 00:21:40.860 align:start position:0%
+ 
+ 
+
+00:21:40.860 --> 00:21:42.720 align:start position:0%
+ 
+ 
+
+00:21:42.720 --> 00:21:44.730 align:start position:0%
+ 
+ 
+
+00:21:44.730 --> 00:21:47.220 align:start position:0%
+ 
+ 
+
+00:21:47.220 --> 00:21:49.620 align:start position:0%
+ 
+ 
+
+00:21:49.620 --> 00:21:50.670 align:start position:0%
+ 
+ 
+
+00:21:50.670 --> 00:21:51.930 align:start position:0%
+ 
+ 
+
+00:21:51.930 --> 00:21:53.580 align:start position:0%
+ 
+ 
+
+00:21:53.580 --> 00:21:55.170 align:start position:0%
+ 
+ 
+
+00:21:55.170 --> 00:21:57.090 align:start position:0%
+ 
+ 
+
+00:21:57.090 --> 00:21:58.890 align:start position:0%
+ 
+ 
+
+00:21:58.890 --> 00:22:02.610 align:start position:0%
+ 
+ 
+
+00:22:02.610 --> 00:22:04.920 align:start position:0%
+ 
+ 
+
+00:22:04.920 --> 00:22:07.770 align:start position:0%
+ 
+ 
+
+00:22:07.770 --> 00:22:10.230 align:start position:0%
+ 
+ 
+
+00:22:10.230 --> 00:22:12.120 align:start position:0%
+ 
+ 
+
+00:22:12.120 --> 00:22:15.600 align:start position:0%
+ 
+ 
+
+00:22:15.600 --> 00:22:16.950 align:start position:0%
+ 
+ 
+
+00:22:16.950 --> 00:22:17.800 align:start position:0%
+ 
+ 
+
+00:22:17.800 --> 00:22:19.330 align:start position:0%
+ 
+ 
+
+00:22:19.330 --> 00:22:21.250 align:start position:0%
+ 
+ 
+
+00:22:21.250 --> 00:22:22.690 align:start position:0%
+ 
+ 
+
+00:22:22.690 --> 00:22:24.250 align:start position:0%
+ 
+ 
+
+00:22:24.250 --> 00:22:25.570 align:start position:0%
+ 
+ 
+
+00:22:25.570 --> 00:22:27.130 align:start position:0%
+ 
+ 
+
+00:22:27.130 --> 00:22:28.510 align:start position:0%
+ 
+ 
+
+00:22:28.510 --> 00:22:29.770 align:start position:0%
+ 
+ 
+
+00:22:29.770 --> 00:22:32.410 align:start position:0%
+ 
+ 
+
+00:22:32.410 --> 00:22:34.090 align:start position:0%
+ 
+ 
+
+00:22:34.090 --> 00:22:35.800 align:start position:0%
+ 
+ 
+
+00:22:35.800 --> 00:22:37.750 align:start position:0%
+ 
+ 
+
+00:22:37.750 --> 00:22:40.180 align:start position:0%
+ 
+ 
+
+00:22:40.180 --> 00:22:43.560 align:start position:0%
+ 
+ 
+
+00:22:43.560 --> 00:22:45.910 align:start position:0%
+ 
+ 
+
+00:22:45.910 --> 00:22:48.820 align:start position:0%
+ 
+ 
+
+00:22:48.820 --> 00:22:50.980 align:start position:0%
+ 
+ 
+
+00:22:50.980 --> 00:22:54.370 align:start position:0%
+ 
+ 
+
+00:22:54.370 --> 00:22:56.350 align:start position:0%
+ 
+ 
+
+00:22:56.350 --> 00:22:59.410 align:start position:0%
+ 
+ 
+
+00:22:59.410 --> 00:23:01.570 align:start position:0%
+ 
+ 
+
+00:23:01.570 --> 00:23:03.310 align:start position:0%
+ 
+ 
+
+00:23:03.310 --> 00:23:04.720 align:start position:0%
+ 
+ 
+
+00:23:04.720 --> 00:23:06.280 align:start position:0%
+ 
+ 
+
+00:23:06.280 --> 00:23:10.090 align:start position:0%
+ 
+ 
+
+00:23:10.090 --> 00:23:12.820 align:start position:0%
+ 
+ 
+
+00:23:12.820 --> 00:23:14.710 align:start position:0%
+ 
+ 
+
+00:23:14.710 --> 00:23:16.420 align:start position:0%
+ 
+ 
+
+00:23:16.420 --> 00:23:18.160 align:start position:0%
+ 
+ 
+
+00:23:18.160 --> 00:23:20.830 align:start position:0%
+ 
+ 
+
+00:23:20.830 --> 00:23:22.150 align:start position:0%
+ 
+ 
+
+00:23:22.150 --> 00:23:23.920 align:start position:0%
+ 
+ 
+
+00:23:23.920 --> 00:23:25.510 align:start position:0%
+ 
+ 
+
+00:23:25.510 --> 00:23:27.910 align:start position:0%
+ 
+ 
+
+00:23:27.910 --> 00:23:29.770 align:start position:0%
+ 
+ 
+
+00:23:29.770 --> 00:23:31.750 align:start position:0%
+ 
+ 
+
+00:23:31.750 --> 00:23:35.920 align:start position:0%
+ 
+ 
+
+00:23:35.920 --> 00:23:40.600 align:start position:0%
+ 
+ 
+
+00:23:40.600 --> 00:23:42.430 align:start position:0%
+ 
+ 
+
+00:23:42.430 --> 00:23:43.870 align:start position:0%
+ 
+ 
+
+00:23:43.870 --> 00:23:46.510 align:start position:0%
+ 
+ 
+
+00:23:46.510 --> 00:23:47.830 align:start position:0%
+ 
+ 
+
+00:23:47.830 --> 00:23:49.900 align:start position:0%
+ 
+ 
+
+00:23:49.900 --> 00:23:52.570 align:start position:0%
+ 
+ 
+
+00:23:52.570 --> 00:23:54.880 align:start position:0%
+ 
+ 
+
+00:23:54.880 --> 00:23:56.560 align:start position:0%
+ 
+ 
+
+00:23:56.560 --> 00:23:58.360 align:start position:0%
+ 
+ 
+
+00:23:58.360 --> 00:24:00.130 align:start position:0%
+ 
+ 
+
+00:24:00.130 --> 00:24:01.930 align:start position:0%
+ 
+ 
+
+00:24:01.930 --> 00:24:03.220 align:start position:0%
+ 
+ 
+
+00:24:03.220 --> 00:24:04.630 align:start position:0%
+ 
+ 
+
+00:24:04.630 --> 00:24:06.550 align:start position:0%
+ 
+ 
+
+00:24:06.550 --> 00:24:08.170 align:start position:0%
+ 
+ 
+
+00:24:08.170 --> 00:24:10.840 align:start position:0%
+ 
+ 
+
+00:24:10.840 --> 00:24:11.920 align:start position:0%
+ 
+ 
+
+00:24:11.920 --> 00:24:14.590 align:start position:0%
+ 
+ 
+
+00:24:14.590 --> 00:24:16.120 align:start position:0%
+ 
+ 
+
+00:24:16.120 --> 00:24:18.070 align:start position:0%
+ 
+ 
+
+00:24:18.070 --> 00:24:20.320 align:start position:0%
+ 
+ 
+
+00:24:20.320 --> 00:24:22.270 align:start position:0%
+ 
+ 
+
+00:24:22.270 --> 00:24:23.410 align:start position:0%
+ 
+ 
+
+00:24:23.410 --> 00:24:24.810 align:start position:0%
+ 
+ 
+
+00:24:24.810 --> 00:24:28.870 align:start position:0%
+ 
+ 
+
+00:24:28.870 --> 00:24:31.090 align:start position:0%
+ 
+ 
+
+00:24:31.090 --> 00:24:31.869 align:start position:0%
+ 
+ 
+
+00:24:31.869 --> 00:24:33.159 align:start position:0%
+ 
+ 
+
+00:24:33.159 --> 00:24:35.680 align:start position:0%
+ 
+ 
+
+00:24:35.680 --> 00:24:37.509 align:start position:0%
+ 
+ 
+
+00:24:37.509 --> 00:24:38.199 align:start position:0%
+ 
+ 
+
+00:24:38.199 --> 00:24:41.169 align:start position:0%
+ 
+ 
+
+00:24:41.169 --> 00:24:42.309 align:start position:0%
+ 
+ 
+
+00:24:42.309 --> 00:24:44.949 align:start position:0%
+ 
+ 
+
+00:24:44.949 --> 00:24:46.599 align:start position:0%
+ 
+ 
+
+00:24:46.599 --> 00:24:48.129 align:start position:0%
+ 
+ 
+
+00:24:48.129 --> 00:24:50.049 align:start position:0%
+ 
+ 
+
+00:24:50.049 --> 00:24:51.699 align:start position:0%
+ 
+ 
+
+00:24:51.699 --> 00:24:53.199 align:start position:0%
+ 
+ 
+
+00:24:53.199 --> 00:24:57.209 align:start position:0%
+ 
+ 
+
+00:24:57.209 --> 00:24:59.699 align:start position:0%
+ 
+ 
+
+00:24:59.699 --> 00:25:01.599 align:start position:0%
+ 
+ 
+
+00:25:01.599 --> 00:25:05.049 align:start position:0%
+ 
+ 
+
+00:25:05.049 --> 00:25:06.699 align:start position:0%
+ 
+ 
+
+00:25:06.699 --> 00:25:08.439 align:start position:0%
+ 
+ 
+
+00:25:08.439 --> 00:25:11.079 align:start position:0%
+ 
+ 
+
+00:25:11.079 --> 00:25:12.729 align:start position:0%
+ 
+ 
+
+00:25:12.729 --> 00:25:17.079 align:start position:0%
+ 
+ 
+
+00:25:17.079 --> 00:25:18.159 align:start position:0%
+ 
+ 
+
+00:25:18.159 --> 00:25:19.930 align:start position:0%
+ 
+ 
+
+00:25:19.930 --> 00:25:22.059 align:start position:0%
+ 
+ 
+
+00:25:22.059 --> 00:25:24.339 align:start position:0%
+ 
+ 
+
+00:25:24.339 --> 00:25:25.779 align:start position:0%
+ 
+ 
+
+00:25:25.779 --> 00:25:27.459 align:start position:0%
+ 
+ 
+
+00:25:27.459 --> 00:25:29.019 align:start position:0%
+ 
+ 
+
+00:25:29.019 --> 00:25:31.059 align:start position:0%
+ 
+ 
+
+00:25:31.059 --> 00:25:32.739 align:start position:0%
+ 
+ 
+
+00:25:32.739 --> 00:25:34.089 align:start position:0%
+ 
+ 
+
+00:25:34.089 --> 00:25:35.769 align:start position:0%
+ 
+ 
+
+00:25:35.769 --> 00:25:40.299 align:start position:0%
+ 
+ 
+
+00:25:40.299 --> 00:25:42.039 align:start position:0%
+ 
+ 
+
+00:25:42.039 --> 00:25:43.149 align:start position:0%
+ 
+ 
+
+00:25:43.149 --> 00:25:46.419 align:start position:0%
+ 
+ 
+
+00:25:46.419 --> 00:25:50.529 align:start position:0%
+ 
+ 
+
+00:25:50.529 --> 00:25:52.779 align:start position:0%
+ 
+ 
+
+00:25:52.779 --> 00:25:54.069 align:start position:0%
+ 
+ 
+
+00:25:54.069 --> 00:25:55.389 align:start position:0%
+ 
+ 
+
+00:25:55.389 --> 00:25:58.180 align:start position:0%
+ 
+ 
+
+00:25:58.180 --> 00:26:00.099 align:start position:0%
+ 
+ 
+
+00:26:00.099 --> 00:26:01.329 align:start position:0%
+ 
+ 
+
+00:26:01.329 --> 00:26:04.209 align:start position:0%
+ 
+ 
+
+00:26:04.209 --> 00:26:05.919 align:start position:0%
+ 
+ 
+
+00:26:05.919 --> 00:26:07.599 align:start position:0%
+ 
+ 
+
+00:26:07.599 --> 00:26:10.089 align:start position:0%
+ 
+ 
+
+00:26:10.089 --> 00:26:12.759 align:start position:0%
+ 
+ 
+
+00:26:12.759 --> 00:26:17.289 align:start position:0%
+ 
+ 
+
+00:26:17.289 --> 00:26:19.089 align:start position:0%
+ 
+ 
+
+00:26:19.089 --> 00:26:21.369 align:start position:0%
+ 
+ 
+
+00:26:21.369 --> 00:26:23.289 align:start position:0%
+ 
+ 
+
+00:26:23.289 --> 00:26:24.789 align:start position:0%
+ 
+ 
+
+00:26:24.789 --> 00:26:27.819 align:start position:0%
+ 
+ 
+
+00:26:27.819 --> 00:26:29.259 align:start position:0%
+ 
+ 
+
+00:26:29.259 --> 00:26:32.319 align:start position:0%
+ 
+ 
+
+00:26:32.319 --> 00:26:34.269 align:start position:0%
+ 
+ 
+
+00:26:34.269 --> 00:26:35.649 align:start position:0%
+ 
+ 
+
+00:26:35.649 --> 00:26:37.689 align:start position:0%
+ 
+ 
+
+00:26:37.689 --> 00:26:40.209 align:start position:0%
+ 
+ 
+
+00:26:40.209 --> 00:26:43.479 align:start position:0%
+ 
+ 
+
+00:26:43.479 --> 00:26:45.690 align:start position:0%
+ 
+ 
+
+00:26:45.690 --> 00:26:48.279 align:start position:0%
+ 
+ 
+
+00:26:48.279 --> 00:26:51.009 align:start position:0%
+ 
+ 
+
+00:26:51.009 --> 00:26:53.409 align:start position:0%
+ 
+ 
+
+00:26:53.409 --> 00:26:55.119 align:start position:0%
+ 
+ 
+
+00:26:55.119 --> 00:26:58.210 align:start position:0%
+ 
+ 
+
+00:26:58.210 --> 00:27:00.220 align:start position:0%
+ 
+ 
+
+00:27:00.220 --> 00:27:02.409 align:start position:0%
+ 
+ 
+
+00:27:02.409 --> 00:27:04.210 align:start position:0%
+ 
+ 
+
+00:27:04.210 --> 00:27:07.090 align:start position:0%
+ 
+ 
+
+00:27:07.090 --> 00:27:09.879 align:start position:0%
+ 
+ 
+
+00:27:09.879 --> 00:27:11.889 align:start position:0%
+ 
+ 
+
+00:27:11.889 --> 00:27:13.899 align:start position:0%
+ 
+ 
+
+00:27:13.899 --> 00:27:17.379 align:start position:0%
+ 
+ 
+
+00:27:17.379 --> 00:27:19.509 align:start position:0%
+ 
+ 
+
+00:27:19.509 --> 00:27:21.690 align:start position:0%
+ 
+ 
+
+00:27:21.690 --> 00:27:23.919 align:start position:0%
+ 
+ 
+
+00:27:23.919 --> 00:27:25.960 align:start position:0%
+ 
+ 
+
+00:27:25.960 --> 00:27:30.759 align:start position:0%
+ 
+ 
+
+00:27:30.759 --> 00:27:33.100 align:start position:0%
+ 
+ 
+
+00:27:33.100 --> 00:27:35.560 align:start position:0%
+ 
+ 
+
+00:27:35.560 --> 00:27:37.149 align:start position:0%
+ 
+ 
+
+00:27:37.149 --> 00:27:38.649 align:start position:0%
+ 
+ 
+
+00:27:38.649 --> 00:27:40.570 align:start position:0%
+ 
+ 
+
+00:27:40.570 --> 00:27:42.340 align:start position:0%
+ 
+ 
+
+00:27:42.340 --> 00:27:43.749 align:start position:0%
+ 
+ 
+
+00:27:43.749 --> 00:27:46.389 align:start position:0%
+ 
+ 
+
+00:27:46.389 --> 00:27:48.249 align:start position:0%
+ 
+ 
+
+00:27:48.249 --> 00:27:49.990 align:start position:0%
+ 
+ 
+
+00:27:49.990 --> 00:27:51.310 align:start position:0%
+ 
+ 
+
+00:27:51.310 --> 00:27:53.799 align:start position:0%
+ 
+ 
+
+00:27:53.799 --> 00:27:55.570 align:start position:0%
+ 
+ 
+
+00:27:55.570 --> 00:27:56.919 align:start position:0%
+ 
+ 
+
+00:27:56.919 --> 00:28:04.289 align:start position:0%
+ 
+ 
+
+00:28:04.289 --> 00:28:08.799 align:start position:0%
+ 
+ 
+
+00:28:08.799 --> 00:28:12.519 align:start position:0%
+ 
+ 
+
+00:28:12.519 --> 00:28:14.740 align:start position:0%
+ 
+ 
+
+00:28:14.740 --> 00:28:16.119 align:start position:0%
+ 
+ 
+
+00:28:16.119 --> 00:28:17.769 align:start position:0%
+ 
+ 
+
+00:28:17.769 --> 00:28:19.119 align:start position:0%
+ 
+ 
+
+00:28:19.119 --> 00:28:20.830 align:start position:0%
+ 
+ 
+
+00:28:20.830 --> 00:28:22.210 align:start position:0%
+ 
+ 
+
+00:28:22.210 --> 00:28:24.310 align:start position:0%
+ 
+ 
+
+00:28:24.310 --> 00:28:26.499 align:start position:0%
+ 
+ 
+
+00:28:26.499 --> 00:28:27.940 align:start position:0%
+ 
+ 
+
+00:28:27.940 --> 00:28:31.299 align:start position:0%
+ 
+ 
+
+00:28:31.299 --> 00:28:33.999 align:start position:0%
+ 
+ 
+
+00:28:33.999 --> 00:28:36.460 align:start position:0%
+ 
+ 
+
+00:28:36.460 --> 00:28:38.139 align:start position:0%
+ 
+ 
+
+00:28:38.139 --> 00:28:40.570 align:start position:0%
+ 
+ 
+
+00:28:40.570 --> 00:28:42.909 align:start position:0%
+ 
+ 
+
+00:28:42.909 --> 00:28:44.200 align:start position:0%
+ 
+ 
+
+00:28:44.200 --> 00:28:45.909 align:start position:0%
+ 
+ 
+
+00:28:45.909 --> 00:28:48.460 align:start position:0%
+ 
+ 
+
+00:28:48.460 --> 00:28:50.259 align:start position:0%
+ 
+ 
+
+00:28:50.259 --> 00:28:52.810 align:start position:0%
+ 
+ 
+
+00:28:52.810 --> 00:28:55.690 align:start position:0%
+ 
+ 
+
+00:28:55.690 --> 00:28:57.279 align:start position:0%
+ 
+ 
+
+00:28:57.279 --> 00:28:58.870 align:start position:0%
+ 
+ 
+
+00:28:58.870 --> 00:29:02.640 align:start position:0%
+ 
+ 
+
+00:29:02.640 --> 00:29:04.900 align:start position:0%
+ 
+ 
+
+00:29:04.900 --> 00:29:06.070 align:start position:0%
+ 
+ 
+
+00:29:06.070 --> 00:29:08.590 align:start position:0%
+ 
+ 
+
+00:29:08.590 --> 00:29:11.140 align:start position:0%
+ 
+ 
+
+00:29:11.140 --> 00:29:13.360 align:start position:0%
+ 
+ 
+
+00:29:13.360 --> 00:29:15.250 align:start position:0%
+ 
+ 
+
+00:29:15.250 --> 00:29:16.780 align:start position:0%
+ 
+ 
+
+00:29:16.780 --> 00:29:18.730 align:start position:0%
+ 
+ 
+
+00:29:18.730 --> 00:29:20.980 align:start position:0%
+ 
+ 
+
+00:29:20.980 --> 00:29:24.340 align:start position:0%
+ 
+ 
+
+00:29:24.340 --> 00:29:26.440 align:start position:0%
+ 
+ 
+
+00:29:26.440 --> 00:29:28.030 align:start position:0%
+ 
+ 
+
+00:29:28.030 --> 00:29:29.230 align:start position:0%
+ 
+ 
+
+00:29:29.230 --> 00:29:30.460 align:start position:0%
+ 
+ 
+
+00:29:30.460 --> 00:29:32.200 align:start position:0%
+ 
+ 
+
+00:29:32.200 --> 00:29:33.820 align:start position:0%
+ 
+ 
+
+00:29:33.820 --> 00:29:35.170 align:start position:0%
+ 
+ 
+
+00:29:35.170 --> 00:29:36.610 align:start position:0%
+ 
+ 
+
+00:29:36.610 --> 00:29:38.590 align:start position:0%
+ 
+ 
+
+00:29:38.590 --> 00:29:40.180 align:start position:0%
+ 
+ 
+
+00:29:40.180 --> 00:29:43.240 align:start position:0%
+ 
+ 
+
+00:29:43.240 --> 00:29:45.400 align:start position:0%
+ 
+ 
+
+00:29:45.400 --> 00:29:48.100 align:start position:0%
+ 
+ 
+
+00:29:48.100 --> 00:29:49.360 align:start position:0%
+ 
+ 
+
+00:29:49.360 --> 00:29:51.100 align:start position:0%
+ 
+ 
+
+00:29:51.100 --> 00:29:54.220 align:start position:0%
+ 
+ 
+
+00:29:54.220 --> 00:29:56.350 align:start position:0%
+ 
+ 
+
+00:29:56.350 --> 00:29:58.060 align:start position:0%
+ 
+ 
+
+00:29:58.060 --> 00:29:59.590 align:start position:0%
+ 
+ 
+
+00:29:59.590 --> 00:30:02.170 align:start position:0%
+ 
+ 
+
+00:30:02.170 --> 00:30:04.630 align:start position:0%
+ 
+ 
+
+00:30:04.630 --> 00:30:06.130 align:start position:0%
+ 
+ 
+
+00:30:06.130 --> 00:30:08.440 align:start position:0%
+ 
+ 
+
+00:30:08.440 --> 00:30:10.780 align:start position:0%
+ 
+ 
+
+00:30:10.780 --> 00:30:12.610 align:start position:0%
+ 
+ 
+
+00:30:12.610 --> 00:30:15.130 align:start position:0%
+ 
+ 
+
+00:30:15.130 --> 00:30:17.590 align:start position:0%
+ 
+ 
+
+00:30:17.590 --> 00:30:19.600 align:start position:0%
+ 
+ 
+
+00:30:19.600 --> 00:30:24.760 align:start position:0%
+ 
+ 
+
+00:30:24.760 --> 00:30:25.990 align:start position:0%
+ 
+ 
+
+00:30:25.990 --> 00:30:28.270 align:start position:0%
+ 
+ 
+
+00:30:28.270 --> 00:30:30.610 align:start position:0%
+ 
+ 
+
+00:30:30.610 --> 00:30:32.680 align:start position:0%
+ 
+ 
+
+00:30:32.680 --> 00:30:37.570 align:start position:0%
+ 
+ 
+
+00:30:37.570 --> 00:30:41.380 align:start position:0%
+ 
+ 
+
+00:30:41.380 --> 00:30:43.150 align:start position:0%
+ 
+ 
+
+00:30:43.150 --> 00:30:45.660 align:start position:0%
+ 
+ 
+
+00:30:45.660 --> 00:30:48.850 align:start position:0%
+ 
+ 
+
+00:30:48.850 --> 00:30:51.100 align:start position:0%
+ 
+ 
+
+00:30:51.100 --> 00:30:54.430 align:start position:0%
+ 
+ 
+
+00:30:54.430 --> 00:30:55.990 align:start position:0%
+ 
+ 
+
+00:30:55.990 --> 00:30:57.850 align:start position:0%
+ 
+ 
+
+00:30:57.850 --> 00:30:59.080 align:start position:0%
+ 
+ 
+
+00:30:59.080 --> 00:31:00.700 align:start position:0%
+ 
+ 
+
+00:31:00.700 --> 00:31:02.290 align:start position:0%
+ 
+ 
+
+00:31:02.290 --> 00:31:04.120 align:start position:0%
+ 
+ 
+
+00:31:04.120 --> 00:31:06.340 align:start position:0%
+ 
+ 
+
+00:31:06.340 --> 00:31:08.380 align:start position:0%
+ 
+ 
+
+00:31:08.380 --> 00:31:10.660 align:start position:0%
+ 
+ 
+
+00:31:10.660 --> 00:31:12.430 align:start position:0%
+ 
+ 
+
+00:31:12.430 --> 00:31:14.920 align:start position:0%
+ 
+ 
+
+00:31:14.920 --> 00:31:16.570 align:start position:0%
+ 
+ 
+
+00:31:16.570 --> 00:31:17.980 align:start position:0%
+ 
+ 
+
+00:31:17.980 --> 00:31:19.990 align:start position:0%
+ 
+ 
+
+00:31:19.990 --> 00:31:21.430 align:start position:0%
+ 
+ 
+
+00:31:21.430 --> 00:31:23.800 align:start position:0%
+ 
+ 
+
+00:31:23.800 --> 00:31:26.740 align:start position:0%
+ 
+ 
+
+00:31:26.740 --> 00:31:28.300 align:start position:0%
+ 
+ 
+
+00:31:28.300 --> 00:31:34.180 align:start position:0%
+ 
+ 
+
+00:31:34.180 --> 00:31:36.520 align:start position:0%
+ 
+ 
+
+00:31:36.520 --> 00:31:38.230 align:start position:0%
+ 
+ 
+
+00:31:38.230 --> 00:31:40.900 align:start position:0%
+ 
+ 
+
+00:31:40.900 --> 00:31:43.900 align:start position:0%
+ 
+ 
+
+00:31:43.900 --> 00:31:45.760 align:start position:0%
+ 
+ 
+
+00:31:45.760 --> 00:31:47.560 align:start position:0%
+ 
+ 
+
+00:31:47.560 --> 00:31:49.660 align:start position:0%
+ 
+ 
+
+00:31:49.660 --> 00:31:51.730 align:start position:0%
+ 
+ 
+
+00:31:51.730 --> 00:31:54.460 align:start position:0%
+ 
+ 
+
+00:31:54.460 --> 00:31:56.350 align:start position:0%
+ 
+ 
+
+00:31:56.350 --> 00:31:58.990 align:start position:0%
+ 
+ 
+
+00:31:58.990 --> 00:32:01.180 align:start position:0%
+ 
+ 
+
+00:32:01.180 --> 00:32:03.430 align:start position:0%
+ 
+ 
+
+00:32:03.430 --> 00:32:04.870 align:start position:0%
+ 
+ 
+
+00:32:04.870 --> 00:32:07.780 align:start position:0%
+ 
+ 
+
+00:32:07.780 --> 00:32:10.360 align:start position:0%
+ 
+ 
+
+00:32:10.360 --> 00:32:11.380 align:start position:0%
+ 
+ 
+
+00:32:11.380 --> 00:32:13.630 align:start position:0%
+ 
+ 
+
+00:32:13.630 --> 00:32:16.300 align:start position:0%
+ 
+ 
+
+00:32:16.300 --> 00:32:19.060 align:start position:0%
+ 
+ 
+
+00:32:19.060 --> 00:32:21.940 align:start position:0%
+ 
+ 
+
+00:32:21.940 --> 00:32:27.940 align:start position:0%
+ 
+ 
+
+00:32:27.940 --> 00:32:29.290 align:start position:0%
+ 
+ 
+
+00:32:29.290 --> 00:32:31.780 align:start position:0%
+ 
+ 
+
+00:32:31.780 --> 00:32:36.100 align:start position:0%
+ 
+ 
+
+00:32:36.100 --> 00:32:39.160 align:start position:0%
+ 
+ 
+
+00:32:39.160 --> 00:32:41.440 align:start position:0%
+ 
+ 
+
+00:32:41.440 --> 00:32:45.040 align:start position:0%
+ 
+ 
+
+00:32:45.040 --> 00:32:46.720 align:start position:0%
+ 
+ 
+
+00:32:46.720 --> 00:32:49.060 align:start position:0%
+ 
+ 
+
+00:32:49.060 --> 00:32:52.870 align:start position:0%
+ 
+ 
+
+00:32:52.870 --> 00:32:54.130 align:start position:0%
+ 
+ 
+
+00:32:54.130 --> 00:32:55.420 align:start position:0%
+ 
+ 
+
+00:32:55.420 --> 00:32:57.790 align:start position:0%
+ 
+ 
+
+00:32:57.790 --> 00:32:59.260 align:start position:0%
+ 
+ 
+
+00:32:59.260 --> 00:33:01.420 align:start position:0%
+ 
+ 
+
+00:33:01.420 --> 00:33:01.430 align:start position:0%
+ 
+ 
+
+00:33:01.430 --> 00:33:09.370 align:start position:0%
+ 
+
+
+00:33:09.370 --> 00:33:11.990 align:start position:0%
+ 
+ 
+
+00:33:11.990 --> 00:33:13.490 align:start position:0%
+ 
+ 
+
+00:33:13.490 --> 00:33:15.050 align:start position:0%
+ 
+ 
+
+00:33:15.050 --> 00:33:16.610 align:start position:0%
+ 
+ 
+
+00:33:16.610 --> 00:33:19.580 align:start position:0%
+ 
+ 
+
+00:33:19.580 --> 00:33:23.950 align:start position:0%
+ 
+ 
+
+00:33:23.950 --> 00:33:36.320 align:start position:0%
+ 
+ 
+
+00:33:36.320 --> 00:33:37.970 align:start position:0%
+ 
+ 
+
+00:33:37.970 --> 00:33:39.560 align:start position:0%
+ 
+ 
+
+00:33:39.560 --> 00:33:40.940 align:start position:0%
+ 
+ 
+
+00:33:40.940 --> 00:33:42.980 align:start position:0%
+ 
+ 
+
+00:33:42.980 --> 00:33:45.200 align:start position:0%
+ 
+ 
+
+00:33:45.200 --> 00:33:46.790 align:start position:0%
+ 
+ 
+
+00:33:46.790 --> 00:33:48.650 align:start position:0%
+ 
+ 
+
+00:33:48.650 --> 00:33:50.840 align:start position:0%
+ 
+ 
+
+00:33:50.840 --> 00:33:52.550 align:start position:0%
+ 
+ 
+
+00:33:52.550 --> 00:33:54.050 align:start position:0%
+ 
+ 
+
+00:33:54.050 --> 00:33:55.790 align:start position:0%
+ 
+ 
+
+00:33:55.790 --> 00:33:57.310 align:start position:0%
+ 
+ 
+
+00:33:57.310 --> 00:34:00.620 align:start position:0%
+ 
+ 
+
+00:34:00.620 --> 00:34:03.020 align:start position:0%
+ 
+ 
+
+00:34:03.020 --> 00:34:05.300 align:start position:0%
+ 
+ 
+
+00:34:05.300 --> 00:34:06.770 align:start position:0%
+ 
+ 
+
+00:34:06.770 --> 00:34:08.120 align:start position:0%
+ 
+ 
+
+00:34:08.120 --> 00:34:13.360 align:start position:0%
+ 
+ 
+
+00:34:13.360 --> 00:34:41.560 align:start position:0%
+ 
+ 
+
+00:34:41.560 --> 00:34:43.240 align:start position:0%
+ 
+ 
+
+00:34:43.240 --> 00:34:44.500 align:start position:0%
+ 
+ 
+
+00:34:44.500 --> 00:34:46.419 align:start position:0%
+ 
+ 
+
+00:34:46.419 --> 00:34:47.950 align:start position:0%
+ 
+ 
+
+00:34:47.950 --> 00:34:50.260 align:start position:0%
+ 
+ 
+
+00:34:50.260 --> 00:34:52.980 align:start position:0%
+ 
+ 
+
+00:34:52.980 --> 00:34:54.909 align:start position:0%
+ 
+ 
+
+00:34:54.909 --> 00:34:56.290 align:start position:0%
+ 
+ 
+
+00:34:56.290 --> 00:34:58.830 align:start position:0%
+ 
+ 
+
+00:34:58.830 --> 00:35:01.330 align:start position:0%
+ 
+ 
+
+00:35:01.330 --> 00:35:03.340 align:start position:0%
+ 
+ 
+
+00:35:03.340 --> 00:35:05.470 align:start position:0%
+ 
+ 
+
+00:35:05.470 --> 00:35:06.760 align:start position:0%
+ 
+ 
+
+00:35:06.760 --> 00:35:08.530 align:start position:0%
+ 
+ 
+
+00:35:08.530 --> 00:35:10.810 align:start position:0%
+ 
+ 
+
+00:35:10.810 --> 00:35:12.370 align:start position:0%
+ 
+ 
+
+00:35:12.370 --> 00:35:14.320 align:start position:0%
+ 
+ 
+
+00:35:14.320 --> 00:35:15.970 align:start position:0%
+ 
+ 
+
+00:35:15.970 --> 00:35:17.830 align:start position:0%
+ 
+ 
+
+00:35:17.830 --> 00:35:19.420 align:start position:0%
+ 
+ 
+
+00:35:19.420 --> 00:35:21.040 align:start position:0%
+ 
+ 
+
+00:35:21.040 --> 00:35:23.200 align:start position:0%
+ 
+ 
+
+00:35:23.200 --> 00:35:25.330 align:start position:0%
+ 
+ 
+
+00:35:25.330 --> 00:35:26.470 align:start position:0%
+ 
+ 
+
+00:35:26.470 --> 00:35:27.880 align:start position:0%
+ 
+ 
+
+00:35:27.880 --> 00:35:33.400 align:start position:0%
+ 
+ 
+
+00:35:33.400 --> 00:35:33.410 align:start position:0%
+ 
+ 
+
+00:35:33.410 --> 00:35:42.610 align:start position:0%
+ 
+
+
+00:35:42.610 --> 00:35:45.140 align:start position:0%
+ 
+ 
+
+00:35:45.140 --> 00:35:47.180 align:start position:0%
+ 
+ 
+
+00:35:47.180 --> 00:35:48.440 align:start position:0%
+ 
+ 
+
+00:35:48.440 --> 00:35:49.970 align:start position:0%
+ 
+ 
+
+00:35:49.970 --> 00:35:51.560 align:start position:0%
+ 
+ 
+
+00:35:51.560 --> 00:35:56.210 align:start position:0%
+ 
+ 
+
+00:35:56.210 --> 00:35:57.950 align:start position:0%
+ 
+ 
+
+00:35:57.950 --> 00:35:59.930 align:start position:0%
+ 
+ 
+
+00:35:59.930 --> 00:36:01.880 align:start position:0%
+ 
+ 
+
+00:36:01.880 --> 00:36:03.770 align:start position:0%
+ 
+ 
+
+00:36:03.770 --> 00:36:05.690 align:start position:0%
+ 
+ 
+
+00:36:05.690 --> 00:36:07.100 align:start position:0%
+ 
+ 
+
+00:36:07.100 --> 00:36:08.510 align:start position:0%
+ 
+ 
+
+00:36:08.510 --> 00:36:09.230 align:start position:0%
+ 
+ 
+
+00:36:09.230 --> 00:36:11.420 align:start position:0%
+ 
+ 
+
+00:36:11.420 --> 00:36:12.920 align:start position:0%
+ 
+ 
+
+00:36:12.920 --> 00:36:14.300 align:start position:0%
+ 
+ 
+
+00:36:14.300 --> 00:36:15.920 align:start position:0%
+ 
+ 
+
+00:36:15.920 --> 00:36:25.670 align:start position:0%
+ 
+ 
+
+00:36:25.670 --> 00:36:27.470 align:start position:0%
+ 
+ 
+
+00:36:27.470 --> 00:36:29.870 align:start position:0%
+ 
+ 
+
+00:36:29.870 --> 00:36:31.550 align:start position:0%
+ 
+ 
+
+00:36:31.550 --> 00:36:41.750 align:start position:0%
+ 
+ 
+
+00:36:41.750 --> 00:36:42.860 align:start position:0%
+ 
+ 
+
+00:36:42.860 --> 00:36:44.810 align:start position:0%
+ 
+ 
+
+00:36:44.810 --> 00:36:46.910 align:start position:0%
+ 
+ 
+
+00:36:46.910 --> 00:36:46.920 align:start position:0%
+ 
+ 
+
+00:36:46.920 --> 00:36:54.490 align:start position:0%
+ 
+
+
+00:36:54.490 --> 00:36:56.400 align:start position:0%
+ 
+ 
+
+00:36:56.400 --> 00:37:00.370 align:start position:0%
+ 
+ 
+
+00:37:00.370 --> 00:37:02.620 align:start position:0%
+ 
+ 
+
+00:37:02.620 --> 00:37:05.050 align:start position:0%
+ 
+ 
+
+00:37:05.050 --> 00:37:06.400 align:start position:0%
+ 
+ 
+
+00:37:06.400 --> 00:37:08.020 align:start position:0%
+ 
+ 
+
+00:37:08.020 --> 00:37:14.890 align:start position:0%
+ 
+ 
+
+00:37:14.890 --> 00:37:16.300 align:start position:0%
+ 
+ 
+
+00:37:16.300 --> 00:37:17.800 align:start position:0%
+ 
+ 
+
+00:37:17.800 --> 00:37:21.220 align:start position:0%
+ 
+ 
+
+00:37:21.220 --> 00:37:23.380 align:start position:0%
+ 
+ 
+
+00:37:23.380 --> 00:37:25.030 align:start position:0%
+ 
+ 
+
+00:37:25.030 --> 00:37:27.790 align:start position:0%
+ 
+ 
+
+00:37:27.790 --> 00:37:30.250 align:start position:0%
+ 
+ 
+
+00:37:30.250 --> 00:37:32.200 align:start position:0%
+ 
+ 
+
+00:37:32.200 --> 00:37:35.650 align:start position:0%
+ 
+ 
+
+00:37:35.650 --> 00:37:46.390 align:start position:0%
+ 
+ 
+
+00:37:46.390 --> 00:37:47.650 align:start position:0%
+ 
+ 
+
+00:37:47.650 --> 00:37:49.420 align:start position:0%
+ 
+ 
+
+00:37:49.420 --> 00:37:53.410 align:start position:0%
+ 
+ 
+
+00:37:53.410 --> 00:37:55.090 align:start position:0%
+ 
+ 
+
+00:37:55.090 --> 00:37:56.530 align:start position:0%
+ 
+ 
+
+00:37:56.530 --> 00:37:59.350 align:start position:0%
+ 
+ 
+
+00:37:59.350 --> 00:38:02.170 align:start position:0%
+ 
+ 
+
+00:38:02.170 --> 00:38:04.870 align:start position:0%
+ 
+ 
+
+00:38:04.870 --> 00:38:05.770 align:start position:0%
+ 
+ 
+
+00:38:05.770 --> 00:38:07.210 align:start position:0%
+ 
+ 
+
+00:38:07.210 --> 00:38:09.040 align:start position:0%
+ 
+ 
+
+00:38:09.040 --> 00:38:10.780 align:start position:0%
+ 
+ 
+
+00:38:10.780 --> 00:38:12.190 align:start position:0%
+ 
+ 
+
+00:38:12.190 --> 00:38:14.380 align:start position:0%
+ 
+ 
+
+00:38:14.380 --> 00:38:15.940 align:start position:0%
+ 
+ 
+
+00:38:15.940 --> 00:38:17.440 align:start position:0%
+ 
+ 
+
+00:38:17.440 --> 00:38:19.090 align:start position:0%
+ 
+ 
+
+00:38:19.090 --> 00:38:23.400 align:start position:0%
+ 
+ 
+
+00:38:23.400 --> 00:38:23.410 align:start position:0%
+ 
+ 
+
+00:38:23.410 --> 00:38:24.550 align:start position:0%
+ 
+
+
+00:38:24.550 --> 00:38:43.550 align:start position:0%
+ 
+ 
+
+00:38:43.550 --> 00:38:45.810 align:start position:0%
+ 
+ 
+
+00:38:45.810 --> 00:38:47.190 align:start position:0%
+ 
+ 
+
+00:38:47.190 --> 00:38:48.210 align:start position:0%
+ 
+ 
+
+00:38:48.210 --> 00:38:50.640 align:start position:0%
+ 
+ 
+
+00:38:50.640 --> 00:38:52.920 align:start position:0%
+ 
+ 
+
+00:38:52.920 --> 00:39:07.040 align:start position:0%
+ 
+ 
+
+00:39:07.040 --> 00:39:09.230 align:start position:0%
+ 
+ 
+
+00:39:09.230 --> 00:39:10.310 align:start position:0%
+ 
+ 
+
+00:39:10.310 --> 00:39:12.350 align:start position:0%
+ 
+ 
+
+00:39:12.350 --> 00:39:14.210 align:start position:0%
+ 
+ 
+
+00:39:14.210 --> 00:39:15.890 align:start position:0%
+ 
+ 
+
+00:39:15.890 --> 00:39:17.420 align:start position:0%
+ 
+ 
+
+00:39:17.420 --> 00:39:19.190 align:start position:0%
+ 
+ 
+
+00:39:19.190 --> 00:39:20.780 align:start position:0%
+ 
+ 
+
+00:39:20.780 --> 00:39:21.890 align:start position:0%
+ 
+ 
+
+00:39:21.890 --> 00:39:26.200 align:start position:0%
+ 
+ 
+
+00:39:26.200 --> 00:39:28.670 align:start position:0%
+ 
+ 
+
+00:39:28.670 --> 00:39:30.170 align:start position:0%
+ 
+ 
+
+00:39:30.170 --> 00:39:31.880 align:start position:0%
+ 
+ 
+
+00:39:31.880 --> 00:39:34.610 align:start position:0%
+ 
+ 
+

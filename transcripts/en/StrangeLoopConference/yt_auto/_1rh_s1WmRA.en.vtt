@@ -1,0 +1,5208 @@
+WEBVTT
+Kind: captions
+Language: en
+
+00:00:06.870 --> 00:00:11.220 align:start position:0%
+ 
+so Fitbit has monolith and I think that  most you can probably guess how he got  here about nine years ago our CEO made  the first commit and we've been building  on it ever since  and at every step that kind of was a  pragmatic decision right because we had  all of our operational stuff figured out  we had all the deploy all of the metrics  all the alerting it was all there and  for each incremental change we made it  didn't really make sense to reinvent  that from scratch so we kept building  and building and so now we have this  million lines of code that just kind of  sits there and we want to fix this we  want to make this better and I joined  about a year ago to help with that  effort and the project that I was  working on was sort of one of the  initial steps that you take when you're  breaking apart a monolith which is  writing a front-end server and I use the  term front-end server because in tiered  service sort of deployments anything  which is upstream of you which calls  into you as a front-end and anything  that you call into is a back-end and of  course that's relative you are a  back-end to your front-end but in the  sort of entire system there is one  server which is the front-end East right  and that is the front-end server and  you've also heard this call the Gateway  server maybe some other things but I  like front end so the front end server  exists so that when we start to cordon  off pieces of code and we start to kind  of pull them out into their own little  piece we can route traffic to it right  this allows us to start to kind of think  about these things a little bit more  modularly and the role of our server is  to route the traffic right make sure  that it goes to the right place the  right services receiving requests it's  to validate traffic make sure that the  traffic that the requests are  well-formed and this can mean that you  know they conform to the HTTP spec but  also that they are authenticated that  they aren't kind of pathological in some  way it also will shape or prioritize  traffic right if our back-end is sort of  under load is not able to handle all the  requests it's our job to decide which  requests go overboard first and so the  way to think about the server which is a  very small focused piece of code  is that it's fulcrum right it is  positioned very advantageous Li with  respect to the rest of our code in a way  that can sort of affect great change and  when building the server we really want  to have four properties sort of in order  of importance that'll be transparent  stable fast and extensible and by  transparent what I mean is that we can  see what's going on inside of it while  it's running in production that means  that we need to have a lot of metrics  it also means we need to have a small  number of metrics that we need to pay  attention to regularly and it also needs  to have a structure that allows us to  map the code onto these metrics right if  something is going wrong we need to be  able to look at the code and understand  or at least build a hypothesis is what's  going on quite quickly we want it to be  stable right if we deploy it and  everything seems to be okay that should  remain true even if we look away for a  bit we want it to be robust to  pathological requests right we want it  to reject malformed requests we wanted  to reject sort of malicious requests  like a slow loris attack where someone  sends us one byte every minute  we want it to also be robust to lots of  well-formed traffic right we want it to  be able to shed load if the back-end is  unable to deal with the sheer volume of  requests and still stay up itself we  want it to be fast right we want it to  add as little overhead as possible  and we want it to be predictably so if  something is fast 99% of the time but  slow the other 1% that is far worse than  being slightly slower on average and  where possible we want it to be able to  detect issues on the backend and route  around it right we want it to actually  make the system faster as a whole than  it would be on its own lastly we want it  to be extensible this is a project which  again is very advantageous Lee  positioned it allows us to do things we  couldn't do otherwise in other parts of  the system and so it should be a Commons  it should be something that other people  and the company feel that they have sort  of the right and ability to change to  sort of fix their problems and that  means it need to be small needs to be  easy to understand  it also means though that we need to  make sure that it is inflexible right it  is rigid with respect to the other  properties which outweigh this right  don't want it to be easy for them to  make it unstable or slow or opaque but  for everything else we want it to be  relatively flexible right it should be  something that sort of indicates how  it's meant to be changed and when we're  thinking about all these properties the  sort of key thing that we should keep in  mind is that designing systems we don't  just look at what sort of the day-to-day  traffic levels are and say we need  something that can handle this right we  need to actually think very carefully  about what is the utmost craziest  situation that we want to be able to  handle right and in that crazy situation  what do we expect it to do and what we  expect it to do if we go just over the  edge right does it fall over are we dead  are we going and just rejecting all the  traffic like what are these scenarios  and these are the questions that shape  the code not be you know we have X  number requests a second on average  every day and so one of the first  decisions that we made which is shaped  again by this sort of question of  extremes is to make it an async server  right this is sort of a bit of a  religious issue in the Java ecosystem  because you can do that with or you can  have a Freddy request you can have you  know this sort of more complex async  model which has sort of less costs  associated with each in-flight request  that is handling and we chose us here  not because it's the one true approach  we chose it because we don't control the  application boundaries either now or in  the future right we are providing a  service to the other parts of the  company and it's not our job to dictate  to them what they can and can't do right  how many requests in flight they  actually get to have and you know the  deck was a little bit stacked here  because when I joined they'd already  written a prototype using Eddie and they  hired me in fact because I have years of  experience using Nettie and so it's  again not necessarily the most objective  set of decisions that we made here but  it is I think a reasonable one right  most high-performance networking sort of  projects processes sort of frameworks  are all built on top of Nettie within  the sort of JVM ecosystem and so this  helps us in some ways right it makes us  fast because Nettie is a  high-performance networking layer and it  makes us stable because  able to handle greater extremes of  traffic  unfortunately it makes us quite a bit  less easy to understand right stack  traces are the foundation of the JVM  sort of ecosystem in terms of  understanding what's going on you have  the ability to stack dumps using J stack  you have a whole host of profiling tools  and all of these things sort of assume  that your threads mean something right  that they are a meaningful narrative  about what's going on inside your code  and the whole async callback mechanism  kind of just stomps that into nothing  and so that's a problem right maybe a  little bit less concerning is the fact  that the callback sort of model is  harder to reason about right someone  coming in from some other team who  hasn't internalized this sort of  approach will find this a little bit  difficult to reason about and so the  sort of first thing that we need to  think about is how do we get back the  sort of ease of understanding right the  the give back something that's sort of  like a stack trace and the approach that  we used was to create a finite state  machine and I want to be clear because  we use this sort of term to describe two  different things one of which is the  formal automata theory mechanism that  underlies regular expressions and then  there's another sort of much more  informal thing where we draw a bunch of  boxes and lines and use that as sort of  a broad spec and we're talking about the  latter and so this is a complete finite  state machine all right you start a  request and then we either succeed or we  fail this is complete this covers all  possible you know outcomes but again  what we want to do is capture sort of  the nuances right if something fails you  want to know why fails if something  succeeded we want to know how it  succeeded and so we can expand this out  a little bit right in the course of  handling requests we first call out to  an auth service which tells us whether  or not the request is allowed to be let  into the rest of our system if that's  exceeds when we make a call to the  back-end service if F succeeds then we  succeed and so in each of these cases  these can fail though right we may not  actually get a request we may not get a  successful outcome from or call the off  servers when I get a successful outcome  from the back-end service right and so  now we have more failures and more sort  of intermediate nodes on our way to  success  but then failure is sort of a broad term  right  maybe we actually want to know why we  failed how we failed so we can actually  start talking about like timeouts right  either the service of recalling didn't  actually respond or something else  happened we don't know what but you know  something that's sort of the catch-all  case and so you can keep on expanding  this out  you know and sort of further refining  and being further sort of granular in  terms of all the possible contingencies  and that's what we did and you know you  can't quite read this I think from here  but you can see here that along the left  there is this sort of box of the happy  path right all the things that we do on  our way towards success and hanging off  to the rider a bunch of red boxes which  represent all the ways that we can go  wrong and I'm just going to kind of step  through this very quickly because I  think you know it's worth sort of  understanding exactly how granular we  were so at first we have just a  connection waiting right for a request  to come in and then the request comes in  or doesn't because we time out or  because the connection closes before we  receive one and once we have a  connection we try to figure out which  machine within the off service should we  call we get a route if we're able to get  a route then we try to get a connection  to that particular machine through our  connection pool if we get that  connection then we go and actually send  the request once we've sent the requests  we wait for the response once we get the  response we check to see whether or not  it was authorized if it was and we  continue on to make a call to our  back-end service and we go through the  same sort of song and dance again right  we get a route to a particular machine  we get a connection to that machine and  then we send the request but here things  get a little bit tricky because we've  sent the request which is just the first  part right it's the thing that has a URI  has the headers we haven't said the body  yet and so now we have this sort of  issue where we need to first send the  body up to the back-end server right it  needs actually get the full request but  it has enough information to start  sending us a response and in fact some  api's are structured such that it will  take pieces chunks of the request and  start sending back chunks of the  response in line and so if we don't  allow these two things to happen  concurrently we can deadlock right we're  trying to send more of the body back to  up to the back  server and is trying to send more  response back to us if we were to order  these right upload the entire body  before we start to handle the response  things to go very badly and we again  don't know what the application might  want to do this is not something that we  do anywhere within Fitbit but we have to  allow it or years later someone's going  to be very confused so over here we have  the sort of sidelined upload of the body  and then back here we're waiting back  for the response once you get the  response we forward it back to the  client  we then forward the response body and  finally we're done right so easy and so  again this is a very informal thing this  has no ability to go and generate code  this is no real mapping into our code  base and so we have to sort of invent  one and the way that we did this is  using what we call a passport and a  passport basically allows us to mark  each time we advance within our state  machine right we stamp it each time with  the states and the time stamp and that's  literally what we do within the code we  have a thing that says we're marking  that we are sending the back-end request  body and then still later within a  callback we say we have sent the  back-end request body and so this is not  something which is sort of a provable  implementation of this right again this  is very informal but we have now this  sort of one-to-one mapping right  something that we can go and sort of  trace through the diagram that we  generated and sort of map it to what's  going on inside the code and there are  few other sort of abstractions that we  need to look at to sort of understand  all the pieces that they fit together we  have a thing called a router which  routes given a request it tells us which  machine we should actually send that  request to you'll notice here that  there's also a parameter called an event  loop this is sort of a nutty thing where  Neddie does parallelism by creating an  many single threaded event loops and we  want to make sure that our requests for  all the various sort of network traffic  does stays on that event loop and so we  have to provide this as an additional  piece of information we also have a  thing called a channel pool we call it a  channel pool because many calls  connections channels you see here that  we have an acquire call the acquire call  has given a service route and returns a  future that will yield an HTTP socket we  also have a release which gives a socket  back to the pool for  in HTTP socket is basically what you  would expect it is kind of like a TCP  connection except that it speaks at a  higher level sort of protocol we can get  to the next message off the connection  the message is sort of the first part of  that request everything but the body we  can forward the content for one socket  to another that is actually forwarding  the body and we can write an arbitrary  message into the socket and I want to  call out specifically here that we have  explicit mandatory parameters here that  give bounds to each of these methods it  says how long they're willing to take  and in the case of the Ford content how  much actual bandwidth we're willing to  use right these are not optional there's  no way to opt out of this you have to  define the boundaries of your system  because again that is what defines the  behavior of everything and so we have  this sort of life cycle right that uses  these sockets right we have a connection  that represents our incoming or client  connection we have the auth connection  we have the back-end connection we have  this thing that sort of threads them all  together and we call it a request state  machine and a cross state machine takes  this router and the channel pool in the  passport and then when we call a knit we  hand it the initial client connection it  just kind of goes from there right we  are no longer interacting with it it's  just sort of driving itself forward and  when it's finally done it tells request  passport that it is done and the request  passport is then responsible for sort of  generating all the metrics right this is  sort of a critical separation here  because I think that in a lot of code  which has sort of a rich set of metrics  which you want you end up in tree  leaving that with all your business  logic and oftentimes the metrics code is  much more verbose than your business  logic because you're trying to track a  bunch of different things that are in  flight and I think that this has sort of  problems for a lot of reasons we want to  be able to look at the business code and  not have to think about all of these  sort of side channel communications that  we're doing so also very hard to verify  that we're doing it right if we have  some sort of interval as we do where we  track for instance the amount of time  that elapsed between us trying to  acquire a connection to the back end  service and the between the time you  actually acquire it but we also want how  much time it allows between trying to  acquire and actually completing the  request these are both useful for  different reasons if we were to get this  if we were to measure the wrong interval  how would we know what is our baseline  right it's easy to get this wrong and  never realize it and so having this sort  of separation having something which has  a data representation of this state was  advanced to at this time and being able  to sort of reason about the intervals of  that just that pure data thing not this  sort of imperative generate this metric  right here in line with our business  object it's a really helpful thing both  in terms of simplicity of the code and  the correctness of our metrics so the  point of this talk is to kind of try to  give a slightly uncomfortably close look  at some of the aspects of this right not  because necessarily we think that what  we've done is amazing and you know  transcendent and you know you all should  take a look at this but because I think  that we don't talk about these things  enough right we don't actually have sort  of practical hands-on examples of you  know code that actually runs in  production and so I'm gonna show you a  bit of this code again with the caveat  that I don't think that this is anything  special and I think that there are  things which are trade-offs that I  wouldn't defend to you know the death  but here it is this is a function called  send back end request this is what  happens once we've actually received the  authentication we want to forward that  request and so it'll go and it will  acquire connection to the back end and  it will write it so first at the top  here we check to see that the client is  actually connected if it isn't we go and  we just clean everything up and get up  because what's the point if we are still  connected though we go and we mark that  we're going to get the route and we get  the route if there is no route then we  really can't do much and so we return  that we can't proceed and bail out but  otherwise we tell the past for what the  route is that we selected we then check  to see whether or not the request to the  client was keep alive so we know whether  or not to close the connection once we  actually have completed all this and  once you've done that we go in the  overwrite parts of the request because  there are things that are specific to  our connection to the client that we  don't want to transitively sort of carry  over to our back-end connection we don't  want upgrade headers and other sorts of  things to carry through there and we  don't want it to ever be anything but a  keepalive connection right we want to  reuse our connections that's how we get  sort of better performance then we  define a  back which will take a future  representing these sort of connection  that we're going to get to this server  if it succeeds then we go and we mark  that we've acquired the connection we  then start to write to that we send the  request and we register another callback  which marks the success of sending that  request if we are successful then we  mark again on the password that we have  and then we fire off these two different  parts of our state machine recall that  we are now both sending the body up to  the back-end service and receiving the  response from the back-end service and  so we do each of those in turn if we  failed to write then we have to return  an error and sort of bail out and then  finally if we failed to get a connection  at all we have to handle that and all  those sort of different ways we could  fail to get that having to find that  callback we now mark that we are about  to get the connection and then we  acquire it and add our callback and you  know the request state machine is a  number of those sorts of functions about  300 lines of stuff that looks roughly  like this and you know this code is not  I think the prettiest that you've seen  right there is a thing well publicized I  think within the node community called  callback hell and it roughly goes like  this we have a callback and we have to  handle the error case in the success  case but if we do succeed then we have  to handle some other nested thing which  you know has an error case in the  success case and inside that success  outcome we have another callback and you  know this can go arbitrarily deep right  you can have arbitrarily an arbitrary  number of closing curly and round braces  at the end of this big scope and it's  not nice it's hard to reason about it's  hard to know what kind of context you're  in when you're looking at the code  indentation is not really all that  helpful here and so there exists a dozen  or more libraries that try to make this  better  right you have these sorts of promise  Combinator's which rides some sort of  method like then which allows you to DNS  them allows you to linearize all these  callbacks and it makes it cleaner right  by having just a single success callback  and it treats the air as as sort of this  implicit thing where if anything air is  out it will just short-circuit and pass  that through to the bottom and this  makes it simpler undeniably but what it  also does is it sort of  conflates it munches together all the  possible errors it says either we  succeed or we failed for some reason  right and that runs could entirely  counter to our desire to understand  specifically why something failed and so  if we were to try to reproduce this we  would have something that more looks  like this right because there is an  inherent complexity here inherent branch  enos that we have to capture we can't  just sort of elide that we can't just  sort of you know cover over it because  it makes our code more complex and this  is not to say that we couldn't create  something that still looks like this  something that sort of makes us a little  bit cleaner makes us a little bit less  sort of you know callback hellish and I  stand before you as someone who's  actually written a number of  abstractions over sort of async things  within the closure ecosystem and so by  all rights I should be the one sort of  you know triumphantly showing you these  abstractions that I've made here that  make the code very beautiful but again  this is about 300 lines of callback code  and the abstractions if they're going to  make that cleaner they have to make it  really clean and they have to be really  really simple to understand because it's  just not that much code right you know  we don't want to build a tower of  abstraction to just you know make this  tiny little surface area of our code a  little bit easier to understand that's a  poor use of my time as an engineer's a  poor use of anyone's times trying to  understand the code because they see  this code and they're like okay I kind  of get what's going on but how does this  look under the covers and all of a  sudden there's this enormous new set of  kind of terms and concepts and  implementations that they have to  understand it so we decided to sort of  leave it as is write the request state  machine is you know about 300 lines of  callback e stuff and some other  supporting code I'm it's messy but  pragmatically so right we you know kind  of decided that that was a worthwhile  trade-off to make and it's informally  specified by a graphics file a dot file  which we use a generative image which  you know we try to keep sort of more or  less in sync with each other  and so thus far I've kind of talked to  you about how a single request threads  to our system right but that's really  not the entire story because we have  tons of these requests flowing through  us all the time all the time and we have  to understand how these things work  together right how they  sort of shape the system in tandem and  there is a thing called queueing theory  it's a branch of Statistics it is  largely concerned with sort of proving  formal properties about systems that do  not resemble the systems that we build  but there are some insights that can be  sort of gleaned from this and rather  than talk about queuing theory I want to  tell you about a pumpkin Carver at a  State Fair and in deference to my lack  of any sort of artistic ability we're  going to be pretty abstract here so the  pumpkin carvers are the X pumpkins are  the O's lines of the queues and here we  have a pumpkin Carver doing their work  someone is standing there with a pumpkin  in line they go and you know start  handling one of those pumpkins they  finish that pumpkin and then handle the  next right easy very reasonable to sort  of think about a problem arises though  when someone realizes that there is no  upper boundary on how big the pumpkins  can be and so someone goes and drives up  and they're caged forklift and patiently  waits in line for their turn so  so then you know the pumpkin Carver goes  and starts to carve it out and scoop out  all the innards and you know slowly  starts to make forward progress and  while this is happening people keep  showing up and the problem here is not  just the people who are waiting behind  while the pumpkin is being carved the  problem is that once the pumpkin is gone  there's still this enormous line right  there's still this after effect and this  after factor can last for quite some  time and how long it lasts depends on  how much sort of excess capacity is  right how much utilization we were  having because we have to pay down this  debt now right so if our pumpkin Carver  was quite busy if they were busy 90% of  the time however long that giant pumpkin  took to carve that line that sort of you  know excess latency that has been sort  of put into this queue will last 10  times longer which you know will  probably be the rest of the day right  people will show up and they won't know  why the line is so long they won't know  that there was a giant pumpkin here but  they will know that it's taking an awful  long time to get their pumpkin carved  and you'll see this in traffic jams  right even when the accident is sort of  cleared out it still takes a while for  the you know traffic to normalize and so  one way that we can mitigate this is we  can have many pumpkin carvers handling  the same queue in this case when a giant  pumpkin shows up one of these carvers is  going to have a really you know big job  to do but the other one is able to still  keep things going right they're still  able to make forward progress the line  is not just going to kind of grow  unbounded behind that single Carver and  I want to contrast this with a different  approach where we have sort of multiple  queues right and in this case everyone  has sort of like a 1 in n chance of you  know getting behind a giant pumpkin and  pour them but the other people won't but  this still means that some people are  going to have a really bad time right it  makes the sort of average case better  but it still isn't quite as optimal  right you will find that in every case  having many many people servicing one  queue will give you the best behavior  under adverse conditions unfortunately  that's not always possible right we  can't necessarily an unbounded number of  pumpkin carvers around this single line  and so you know in our County Fair we  try to get as much space as possible  they tell us that we actually  have two spaces available one at each  end of the State Fairgrounds so we set  up different Carver's there and we set  up a line somewhere towards the entrance  to try to make sure that we're getting  an even distribution across there and so  in this particular case we can assume  that you know we have taken to heart the  fact that we won't have many consumers  for a single queue and so all of our  Carver's are busy if one of them  actually finishes they radio in that  they are ready for a new pumpkin and you  then begin the long trek across the  fairgrounds to actually get our pumpkin  carved and this is a problem right  because we have the situation where we  have a pumpkin Carver who's not doing  any work and we have a person who wants  their pumpkin carved and yet nothing's  happening right there's something that  is sort of preventing us for doing this  and this is lost through point this is  loss efficiency right you're not making  good use of our resources here and so  this is maybe optimal for the customers  for the people with the pumpkins but  it's not optimal for us it's not optimal  in terms of you know our sort of you  know money-making endeavors and so we  might sort of compromise a little bit  right we might set up a couple of queues  so that we always have at least you know  one pumpkin on deck when we want to you  know do some more work right and so now  the guy with the radio at the entrance  is in the job of just sending a small  bounded number of pumpkins to each of  these pieces at the end of the State  Fair so if someone comes in they'll be  sent to one and then sent to one of the  pumpkin carvers and so I just want to  contrast this with a different scenario  where we have a pumpkin carving factory  and in this particular case all we're  concerned about is throughput all we're  concerned about is the overall  efficiency in terms of how we're using  our resources right our workers and in  that case we love queues right we love a  big ole like sort of you know collection  of pumpkins that we can work on and if  we get too many right if you know 10  giant pumpkins show up in a night we can  go and we can you know call people and  we can spin up new workers right all we  are concerned about here is are we  making good use of our pumpkin carving  resources but the State Fair or you know  carnival sort of situation here is more  nuance right we're trying to bow  these things because there are real  people waiting for us to do the work  right they're gonna get bored they're  gonna get pissed they're gonna leave bad  reviews on Yelp and so we need to  balance their need to get the pumpkins  carved quickly where if we were just  trying to optimize that we would just  have a thousand pumpkin Carver sitting  around all the time on the off chance  that a thousand people show up at once  with our needs to make efficient use of  our resources where we are trying to  make sure that you know no one's just  kind of sitting around twiddling their  thumbs and so it's harder and it's much  more contextual right there is no one  right answer here and so just to kind of  you know break down this metaphor a  little bit the different sort of  collections of these pumpkin carvers  there are backends right these are  Hardware cores and they're servicing  sort of a queue which is generated by a  web server you know handling all the  incoming requests the entry queue and  the guy with the radio who's directing  them that's us that's the front-end  server and this thing that is deciding  where we actually want to send our each  pumpkin right each request is our load  balancing algorithm and you might wonder  what is you know the giant pumpkin a  metaphor for right and you might think  oh it's just a really expensive request  right someone just uploads a gigabyte of  data or something like that but in  practice it's not that simple because we  from our position right where we are  sort of you know sending these pumpkins  into things into these places we don't  know the difference between a pumpkin  which is really difficult to carve and a  Carver who's having a really difficult  time right there's no difference from a  pumpkin which is really really hard to  carve and someone who is just like you  know talking on their phone the entire  time or someone who's taken a coffee  break right we don't have a position to  really differentiate between those two  and so when we have these load balancing  algorithms we need distribute the work  fairly and our goal is to send work  where it can be done the most quickly  right we are only in the business of  minimizing latency all the decisions at  optimized for throughput those who've  you made elsewhere those are sort of  properties of the infrastructure that  we've already built and a load balancing  algorithm is only concerned with where  do we send the work to get done quickly  and sometimes the work the nodes we send  this work to will be slow and we won't  know why right we the engineers might be  able to look into that but we the  algorithm that is going on again this  decision does not have that sort of  perspective  and so we just have to kind of deal with  this as it comes and so when we talk  about load balancing algorithms one of  the most common ones that were you know  all sort of familiar with is round robin  and round robin is very simple we have a  counter for each request that comes in  we increment it we then take the modulus  of that and the number of servers that  we have and if it's zero we send it to  the zeroth node if it's one we sum is  the first node and so on the problem  here is that round robin is in the  business of evenly distributing request  volume and so if one of our nodes is  slow we don't really care right we just  keep on sending it the same number  requested everyone is giving and we get  this backup right and again even once  that node recovers there's now this  backlog which is going too far out last  that sort of duration of you know  whatever issue was going through and so  round-robin is very simple use a single  piece of state it has predictable  request volume we can verify that it's  sort of doing what it should but it  amplifies issues within the system  whenever there's a slowdown it makes it  worse so an alternate approach we can  use is sort of the least connection  strategy or at least in flight requests  right which tracks how many requests  each node is currently handling and  sends the next request to whichever one  is handling the least so in this  particular case if we you know have two  on each of these nodes and one on the  last then we send the next request to  that one if all of them are handling an  equal number requests and we randomly  select one of them and so the nice  property here is that if one of our node  slows down then it just stops making  forward progress and so while the other  nodes around it our handling you know  requests are opening up capacity we will  go and we will just sort of route around  naturally right we'll send work to where  work is actually happening and so the  two or more requests which are sort of  waiting on this node which is having a  bad day there's sort of a lost cause  right we sent them already right we  don't get to unring that Bell but at the  very least we're minimizing the number  of requests which are going to sort of  suffer as a result of that and so least  in-flight is a significantly better  approach at the cost of some additional  sort of complexity right we have a  little bit more state now and it's also  a little bit harder to verify that it's  doing its job because we're no longer  looking at the requests per second we  have to  get what is he concurrent load on each  of these machines how many requests to  each of them have but it does you know  minimize the impact of slowdowns but  there's a problem here actually which is  that if one of our machines is in a bad  state where it's not slow but in fact  very quick to error out right just very  quickly returns a 503 I'm too busy then  this heuristic as described would go and  just start funneling all the traffic  there which amplifies again this sort of  problem we don't want to do that and so  we want to or have to really make this a  slightly more or maybe even if n't lis  more complicated we have we have to  track both the in-flight requests you  also have to track the historical  failure rate of each of the nodes and to  track that we use an exponentially  weighted moving average which sort of  biases our value of sort of success rate  to the last one or two minutes and we  have to make sure that no matter what's  going wrong no matter how bad any  particular node is doing we're always  have at least one in-flight request  because we have to know once recovers  right we can't just you know ban it for  life because I had a bad day and this  means that we have a predictable  concurrent load but only if there  weren't recent failures and so again  this makes it even harder for us to sort  of verify that it's doing what we expect  but at the end of the day it does what  we wanted to do it minimizes the impact  of those slowdowns and outages on our  back-end so to kind of concrete ly talk  about what you know the impact of this  thing would be we have an issue with our  deploys which I think many people do  especially in sort of the Java land  where you know when you restart the  server it's slow right the caches are  cold it has to JIT and the round robin  approach again is exactly the opposite  of what we want try because we keep on  throwing more and more traffic at it and  so what we were seeing with the round  robin approach which was being used by H  a proxy previously whenever he would do  deploys are sort of P 999 latency right  or 99.9 percent I'll was nine seconds we  get these big ole spikes and we would  see that about a thousand requests over  the course of deploy would actually  timeout would be greater than 10 seconds  when we moved to least in  he went down to about 1.5 seconds we had  you know give or take no timeouts and so  this is a significant change right this  is a meaningful impact on our customers  and of course this is exaggerated by the  fact that we're looking at the top end  of this distribution we're looking at  the median values this would not be  nearly as important but this sort of  brings me to a point about metrics in  general which is you improve what you  measure right this is sort of a truism I  probably have heard this before but like  if we're if we say that we're looking at  the median latency that's basically  saying that you know the 49% of our  customers can you know just you know do  whatever they want they suck we don't  care about them right as long as we are  going and giving the majority of our  customers a good experience like we just  don't really care and obviously that's  not true right but I actually much  prefer the converse version of this  because I think that this sort of  captures it a little bit more accurately  which is everything that you ignore will  get worse right and this is important  because it's not enough just to measure  something right we can have thousands of  metrics that doesn't mean that thousands  of things are consistently getting  better in our system what's consistently  gets better or at least what  consistently does not get worse is the  metrics that we actually look at  regularly the metrics that we examine  every time we do a deploy the metrics  that we look at every day just in case  right otherwise these things will slowly  inevitably get worse and so when we were  building our you know front-end server  we had to sort of decide what are our  key metrics right and it can't be  latency because latency is not a really  a factor of what we're doing is a factor  of whatever back-end service were  calling into and so the one that we  decided on was overhead overhead and I  when I showed this initial state machine  you might have noticed that some of the  edges were blue I've bolded them here to  make it a little more obvious the blue  transitions here are where we are  waiting for someone else to do something  right we have sent requests out into the  ether we are waiting for a response and  these are not intervals that we have any  real control over  conversely everything else we do right  if there's a connection pool sort of  back up because too many people are  trying to get a connection to a  particular back-end that's time that we  are adding right we that is overhead  that we are  leading to the request if you're taking  too long to compute something that is  overhead if we have GC pauses that's  overhead right and so we want to keep a  very close eye on this because this is a  proxy for a wide variety of things that  we can do wrong and so our key metrics  are our p 999 overhead which is about  0.4 milliseconds right now and  unfortunately it's not enough by itself  because we could have a very low  overhead because we have very few  requests right so we have to look at  that we have to make sure that we're  actually getting a reasonable volume of  traffic and we could also get a low  overhead because we are just airing out  very quickly so we have to look at our  error rate but these three things  together these are what we alert on  right these are what we are paying  attention to you these are what we've  thought very carefully about what the  thresholds should be we are not just  adding random thresholds to dozens or  hundreds of metrics it's just these  three now we have many many other  metrics that we you know keep track of  but these exist so that if one of these  key metrics looks weird we can  understand why right having high  overhead does not describe what's going  on in the system it just indicates that  there's something that we should be  paying attention to and so that's really  it you know the things that I want to  you know how do you take away from this  is that if you're building a system like  this articulate what your goals are and  put them in order of importance right as  I said you know before we had all these  things that we wanted and extensibility  right the ability of some random person  to come up and start contributing is  something that we really want to allow  for but it cannot trump all the other  things we care about right it cannot  trump the stability of the system we  don't want someone to be able to kind of  come in and do that and so we have to  think about these things and make our  trade-offs and judge our trade-offs on  the basis of our goals and when we're  building a system like this we have to  understand and describe what the  extremities are what are the things that  we are willing to do and what is our  expected behavior when we sort of go  over the edge and choose your metrics  carefully because once you put something  in production this is what guides the  evolution of your system right this is  what informs what you change what you  tweak what you try to improve and above  all what you allow to get worse and so  that's it thank you  so I believe we have some time for  questions yes yes so the question was  are we using the passport as a way to  sort of model the correctness of the  system unfortunately I had to cut out  quite a bit of this talk yesterday  because I realize it was gonna go away  over time so one of the things I didn't  really talk about was how he uses to  test right because the state machine is  basically a mechanism for defining  coverage right in a more meaningful way  of interest like how many code branches  are we dealing with and so what we do is  we basically set up a test harness where  we have all the back ends and have some  proxies and simulate Network failures  and sort of tweak them and make sure  that we are following the path that we  expect we also in every log expose that  log that sort of you know passport and  what the intervals were between each  state and so that gives us a very sort  of clear understanding of you know  what's fast what's slow you know what  exactly you know how did we get where we  got yes  so the question was why do we roll our  own rather than use something like a che  proxy so this is something that I think  I meant to sort of discuss we're talking  about the goals right we route we  validate and we shape the traffic so HT  proxy and nginx and other things like  that are great at routing right they're  less good at sort of capturing the  specifics of what it is that we need  what validation means for Fitbit what  shaping means for Fitbit and there is  some extensibility there that you know  exists you can do Lua scripting and  nginx and stuff like that but like at  the end of the day you really want it's  not a big piece of code and it makes  sense to have it be very very flexible  and very sort of custom fit to what you  need because it is again in such a sort  of powerful position within the system  and if you look at you know Google  Google has the Google web server Twitter  has a Twitter front-end Netflix has Zuul  each of them has sort of rolled their  own and then except in the case of  Netflix and none of them have open  sourced it because it's not a useful  thing to open-source right it's it's a  solution to their problem and will be  developed to fit their needs and isn't  sort of an attempt at a general form of  you know the problem because that's  quite complex whereas the sort of very  narrow needs of a particular company are  more tractable yes we do so those are  where our alert thresholds are there are  other sorts of metrics you know that are  for the surrounding systems and but you  know those sorts have captured all these  sort of bad things right if there's an  error then that will capture all the  sorts of things that you would normally  sort of bundle under like how high are  500 sort of you know or 5 xx responses  and you know late and seeing other  things are there so we kind of have  looked at it and it does seem to capture  all the things that we care about we  have run books which say if you see this  then here are the other sort of  ancillary metrics that you should look  at to kind of determine what's going on  here we don't have it quite as like a  flow chart but that's sort of the  eventual place we would like to be there  right it's a very sort of you know  checklist sort of you know here's what  could be going wrong sort of deal yes  ah okay so the question was is there any  reason that we would want to use an eddy  directly rather than a higher level  rapper he used a mentioned my rapper  fornetti which is written in closure and  so we don't use closure at Fitbit and so  that is the main reason that you  wouldn't use that there are other Javal  and sort of extensions on top of that  the short answer is it's just not a big  piece of code right if you're trying to  write tons of async logic it might make  sense to kind you might get more  leverage out of these sort of  higher-order abstractions that are there  but the parts of interact directly with  Neddy are not that many and so at the  end of the day having an additional  layer of indirection that makes it  harder to reason out what's going on  into the covers doesn't give you much  like it costs a lot more than it you  know sort of benefits you yes we the  question was what do we use for service  discovery we use the the zookeeper  server set mechanism which you know is  part of the Twitter sort of you know  ecosystem of things yes so the worst  failure that we've observed I believe  was and so this is again something that  I would have loved to have talked about  it we're going slightly over time here  if people want to start going to lunch  by the way it sits outside please I  won't be offended but uh so the worst  failure was when we actually were having  out of memory exceptions so nettie uses  off heap memory to make it more  efficient to sort of talk to the  networking stack and it uses slab  allocation which has reference counting  which you know can go wrong for all the  obvious reasons and so we were trying to  track that pretty well but we have we  had this one sort of case of sourcing  and production that we hadn't tested for  and the problem was that we were using  sort of out-of-the-box metrics using the  Dakota Hale metrics library which is  getting from JMX and there was a metric  it provided there that was called off  heap memory right so we're like oh we're  tracking this turns out that that  doesn't actually do what you would think  which is tell you how much coffee memory  there is and so that value actually  happens to be like a private field under  Java ni obits and you have to use  reflection to kind of make it accessible  and then you know track that so the  worst failure that we had was that after  a fixed amount of time the Machine  started all toppling over without a  memory exceptions and luckily we have  some redundancy and one of these  machines is able to handle roughly about  50,000 requests per second and so we  caught it before enough of them fell  over that it actually impacted  production but it was a very very new  thing and then we spent a number of very  confusing days try to figure out what  was going on and like examining the  memory dumps to kinda understand what's  going on and you know another part of  this that I wanted to kind of talk about  is that you should really validate your  metrics right like if you have this sort  of thing that's telling you something  and there's some way for you to get  external validation and it's telling you  the right thing like do that it's going  to you know be worthwhile I think yes  the question was as a server do circuit  braking or bulk heading we rely on the  service discovery to do that for us if a  server goes and takes us out of the  service of the server set then we  basically stop sending a traffic and we  rely on it or some sort of other  external mechanism to tell us that that  servers off limits alright I don't think  that there's anyone thank you so much
+
+00:00:11.220 --> 00:00:12.510 align:start position:0%
+so Fitbit has monolith and I think that  most you can probably guess how he got  here about nine years ago our CEO made  the first commit and we've been building  on it ever since  and at every step that kind of was a  pragmatic decision right because we had  all of our operational stuff figured out  we had all the deploy all of the metrics  all the alerting it was all there and  for each incremental change we made it  didn't really make sense to reinvent  that from scratch so we kept building  and building and so now we have this  million lines of code that just kind of  sits there and we want to fix this we  want to make this better and I joined  about a year ago to help with that  effort and the project that I was  working on was sort of one of the  initial steps that you take when you're  breaking apart a monolith which is  writing a front-end server and I use the  term front-end server because in tiered  service sort of deployments anything  which is upstream of you which calls  into you as a front-end and anything  that you call into is a back-end and of  course that's relative you are a  back-end to your front-end but in the  sort of entire system there is one  server which is the front-end East right  and that is the front-end server and  you've also heard this call the Gateway  server maybe some other things but I  like front end so the front end server  exists so that when we start to cordon  off pieces of code and we start to kind  of pull them out into their own little  piece we can route traffic to it right  this allows us to start to kind of think  about these things a little bit more  modularly and the role of our server is  to route the traffic right make sure  that it goes to the right place the  right services receiving requests it's  to validate traffic make sure that the  traffic that the requests are  well-formed and this can mean that you  know they conform to the HTTP spec but  also that they are authenticated that  they aren't kind of pathological in some  way it also will shape or prioritize  traffic right if our back-end is sort of  under load is not able to handle all the  requests it's our job to decide which  requests go overboard first and so the  way to think about the server which is a  very small focused piece of code  is that it's fulcrum right it is  positioned very advantageous Li with  respect to the rest of our code in a way  that can sort of affect great change and  when building the server we really want  to have four properties sort of in order  of importance that'll be transparent  stable fast and extensible and by  transparent what I mean is that we can  see what's going on inside of it while  it's running in production that means  that we need to have a lot of metrics  it also means we need to have a small  number of metrics that we need to pay  attention to regularly and it also needs  to have a structure that allows us to  map the code onto these metrics right if  something is going wrong we need to be  able to look at the code and understand  or at least build a hypothesis is what's  going on quite quickly we want it to be  stable right if we deploy it and  everything seems to be okay that should  remain true even if we look away for a  bit we want it to be robust to  pathological requests right we want it  to reject malformed requests we wanted  to reject sort of malicious requests  like a slow loris attack where someone  sends us one byte every minute  we want it to also be robust to lots of  well-formed traffic right we want it to  be able to shed load if the back-end is  unable to deal with the sheer volume of  requests and still stay up itself we  want it to be fast right we want it to  add as little overhead as possible  and we want it to be predictably so if  something is fast 99% of the time but  slow the other 1% that is far worse than  being slightly slower on average and  where possible we want it to be able to  detect issues on the backend and route  around it right we want it to actually  make the system faster as a whole than  it would be on its own lastly we want it  to be extensible this is a project which  again is very advantageous Lee  positioned it allows us to do things we  couldn't do otherwise in other parts of  the system and so it should be a Commons  it should be something that other people  and the company feel that they have sort  of the right and ability to change to  sort of fix their problems and that  means it need to be small needs to be  easy to understand  it also means though that we need to  make sure that it is inflexible right it  is rigid with respect to the other  properties which outweigh this right  don't want it to be easy for them to  make it unstable or slow or opaque but  for everything else we want it to be  relatively flexible right it should be  something that sort of indicates how  it's meant to be changed and when we're  thinking about all these properties the  sort of key thing that we should keep in  mind is that designing systems we don't  just look at what sort of the day-to-day  traffic levels are and say we need  something that can handle this right we  need to actually think very carefully  about what is the utmost craziest  situation that we want to be able to  handle right and in that crazy situation  what do we expect it to do and what we  expect it to do if we go just over the  edge right does it fall over are we dead  are we going and just rejecting all the  traffic like what are these scenarios  and these are the questions that shape  the code not be you know we have X  number requests a second on average  every day and so one of the first  decisions that we made which is shaped  again by this sort of question of  extremes is to make it an async server  right this is sort of a bit of a  religious issue in the Java ecosystem  because you can do that with or you can  have a Freddy request you can have you  know this sort of more complex async  model which has sort of less costs  associated with each in-flight request  that is handling and we chose us here  not because it's the one true approach  we chose it because we don't control the  application boundaries either now or in  the future right we are providing a  service to the other parts of the  company and it's not our job to dictate  to them what they can and can't do right  how many requests in flight they  actually get to have and you know the  deck was a little bit stacked here  because when I joined they'd already  written a prototype using Eddie and they  hired me in fact because I have years of  experience using Nettie and so it's  again not necessarily the most objective  set of decisions that we made here but  it is I think a reasonable one right  most high-performance networking sort of  projects processes sort of frameworks  are all built on top of Nettie within  the sort of JVM ecosystem and so this  helps us in some ways right it makes us  fast because Nettie is a  high-performance networking layer and it  makes us stable because  able to handle greater extremes of  traffic  unfortunately it makes us quite a bit  less easy to understand right stack  traces are the foundation of the JVM  sort of ecosystem in terms of  understanding what's going on you have  the ability to stack dumps using J stack  you have a whole host of profiling tools  and all of these things sort of assume  that your threads mean something right  that they are a meaningful narrative  about what's going on inside your code  and the whole async callback mechanism  kind of just stomps that into nothing  and so that's a problem right maybe a  little bit less concerning is the fact  that the callback sort of model is  harder to reason about right someone  coming in from some other team who  hasn't internalized this sort of  approach will find this a little bit  difficult to reason about and so the  sort of first thing that we need to  think about is how do we get back the  sort of ease of understanding right the  the give back something that's sort of  like a stack trace and the approach that  we used was to create a finite state  machine and I want to be clear because  we use this sort of term to describe two  different things one of which is the  formal automata theory mechanism that  underlies regular expressions and then  there's another sort of much more  informal thing where we draw a bunch of  boxes and lines and use that as sort of  a broad spec and we're talking about the  latter and so this is a complete finite  state machine all right you start a  request and then we either succeed or we  fail this is complete this covers all  possible you know outcomes but again  what we want to do is capture sort of  the nuances right if something fails you  want to know why fails if something  succeeded we want to know how it  succeeded and so we can expand this out  a little bit right in the course of  handling requests we first call out to  an auth service which tells us whether  or not the request is allowed to be let  into the rest of our system if that's  exceeds when we make a call to the  back-end service if F succeeds then we  succeed and so in each of these cases  these can fail though right we may not  actually get a request we may not get a  successful outcome from or call the off  servers when I get a successful outcome  from the back-end service right and so  now we have more failures and more sort  of intermediate nodes on our way to  success  but then failure is sort of a broad term  right  maybe we actually want to know why we  failed how we failed so we can actually  start talking about like timeouts right  either the service of recalling didn't  actually respond or something else  happened we don't know what but you know  something that's sort of the catch-all  case and so you can keep on expanding  this out  you know and sort of further refining  and being further sort of granular in  terms of all the possible contingencies  and that's what we did and you know you  can't quite read this I think from here  but you can see here that along the left  there is this sort of box of the happy  path right all the things that we do on  our way towards success and hanging off  to the rider a bunch of red boxes which  represent all the ways that we can go  wrong and I'm just going to kind of step  through this very quickly because I  think you know it's worth sort of  understanding exactly how granular we  were so at first we have just a  connection waiting right for a request  to come in and then the request comes in  or doesn't because we time out or  because the connection closes before we  receive one and once we have a  connection we try to figure out which  machine within the off service should we  call we get a route if we're able to get  a route then we try to get a connection  to that particular machine through our  connection pool if we get that  connection then we go and actually send  the request once we've sent the requests  we wait for the response once we get the  response we check to see whether or not  it was authorized if it was and we  continue on to make a call to our  back-end service and we go through the  same sort of song and dance again right  we get a route to a particular machine  we get a connection to that machine and  then we send the request but here things  get a little bit tricky because we've  sent the request which is just the first  part right it's the thing that has a URI  has the headers we haven't said the body  yet and so now we have this sort of  issue where we need to first send the  body up to the back-end server right it  needs actually get the full request but  it has enough information to start  sending us a response and in fact some  api's are structured such that it will  take pieces chunks of the request and  start sending back chunks of the  response in line and so if we don't  allow these two things to happen  concurrently we can deadlock right we're  trying to send more of the body back to  up to the back  server and is trying to send more  response back to us if we were to order  these right upload the entire body  before we start to handle the response  things to go very badly and we again  don't know what the application might  want to do this is not something that we  do anywhere within Fitbit but we have to  allow it or years later someone's going  to be very confused so over here we have  the sort of sidelined upload of the body  and then back here we're waiting back  for the response once you get the  response we forward it back to the  client  we then forward the response body and  finally we're done right so easy and so  again this is a very informal thing this  has no ability to go and generate code  this is no real mapping into our code  base and so we have to sort of invent  one and the way that we did this is  using what we call a passport and a  passport basically allows us to mark  each time we advance within our state  machine right we stamp it each time with  the states and the time stamp and that's  literally what we do within the code we  have a thing that says we're marking  that we are sending the back-end request  body and then still later within a  callback we say we have sent the  back-end request body and so this is not  something which is sort of a provable  implementation of this right again this  is very informal but we have now this  sort of one-to-one mapping right  something that we can go and sort of  trace through the diagram that we  generated and sort of map it to what's  going on inside the code and there are  few other sort of abstractions that we  need to look at to sort of understand  all the pieces that they fit together we  have a thing called a router which  routes given a request it tells us which  machine we should actually send that  request to you'll notice here that  there's also a parameter called an event  loop this is sort of a nutty thing where  Neddie does parallelism by creating an  many single threaded event loops and we  want to make sure that our requests for  all the various sort of network traffic  does stays on that event loop and so we  have to provide this as an additional  piece of information we also have a  thing called a channel pool we call it a  channel pool because many calls  connections channels you see here that  we have an acquire call the acquire call  has given a service route and returns a  future that will yield an HTTP socket we  also have a release which gives a socket  back to the pool for  in HTTP socket is basically what you  would expect it is kind of like a TCP  connection except that it speaks at a  higher level sort of protocol we can get  to the next message off the connection  the message is sort of the first part of  that request everything but the body we  can forward the content for one socket  to another that is actually forwarding  the body and we can write an arbitrary  message into the socket and I want to  call out specifically here that we have  explicit mandatory parameters here that  give bounds to each of these methods it  says how long they're willing to take  and in the case of the Ford content how  much actual bandwidth we're willing to  use right these are not optional there's  no way to opt out of this you have to  define the boundaries of your system  because again that is what defines the  behavior of everything and so we have  this sort of life cycle right that uses  these sockets right we have a connection  that represents our incoming or client  connection we have the auth connection  we have the back-end connection we have  this thing that sort of threads them all  together and we call it a request state  machine and a cross state machine takes  this router and the channel pool in the  passport and then when we call a knit we  hand it the initial client connection it  just kind of goes from there right we  are no longer interacting with it it's  just sort of driving itself forward and  when it's finally done it tells request  passport that it is done and the request  passport is then responsible for sort of  generating all the metrics right this is  sort of a critical separation here  because I think that in a lot of code  which has sort of a rich set of metrics  which you want you end up in tree  leaving that with all your business  logic and oftentimes the metrics code is  much more verbose than your business  logic because you're trying to track a  bunch of different things that are in  flight and I think that this has sort of  problems for a lot of reasons we want to  be able to look at the business code and  not have to think about all of these  sort of side channel communications that  we're doing so also very hard to verify  that we're doing it right if we have  some sort of interval as we do where we  track for instance the amount of time  that elapsed between us trying to  acquire a connection to the back end  service and the between the time you  actually acquire it but we also want how  much time it allows between trying to  acquire and actually completing the  request these are both useful for  different reasons if we were to get this  if we were to measure the wrong interval  how would we know what is our baseline  right it's easy to get this wrong and  never realize it and so having this sort  of separation having something which has  a data representation of this state was  advanced to at this time and being able  to sort of reason about the intervals of  that just that pure data thing not this  sort of imperative generate this metric  right here in line with our business  object it's a really helpful thing both  in terms of simplicity of the code and  the correctness of our metrics so the  point of this talk is to kind of try to  give a slightly uncomfortably close look  at some of the aspects of this right not  because necessarily we think that what  we've done is amazing and you know  transcendent and you know you all should  take a look at this but because I think  that we don't talk about these things  enough right we don't actually have sort  of practical hands-on examples of you  know code that actually runs in  production and so I'm gonna show you a  bit of this code again with the caveat  that I don't think that this is anything  special and I think that there are  things which are trade-offs that I  wouldn't defend to you know the death  but here it is this is a function called  send back end request this is what  happens once we've actually received the  authentication we want to forward that  request and so it'll go and it will  acquire connection to the back end and  it will write it so first at the top  here we check to see that the client is  actually connected if it isn't we go and  we just clean everything up and get up  because what's the point if we are still  connected though we go and we mark that  we're going to get the route and we get  the route if there is no route then we  really can't do much and so we return  that we can't proceed and bail out but  otherwise we tell the past for what the  route is that we selected we then check  to see whether or not the request to the  client was keep alive so we know whether  or not to close the connection once we  actually have completed all this and  once you've done that we go in the  overwrite parts of the request because  there are things that are specific to  our connection to the client that we  don't want to transitively sort of carry  over to our back-end connection we don't  want upgrade headers and other sorts of  things to carry through there and we  don't want it to ever be anything but a  keepalive connection right we want to  reuse our connections that's how we get  sort of better performance then we  define a  back which will take a future  representing these sort of connection  that we're going to get to this server  if it succeeds then we go and we mark  that we've acquired the connection we  then start to write to that we send the  request and we register another callback  which marks the success of sending that  request if we are successful then we  mark again on the password that we have  and then we fire off these two different  parts of our state machine recall that  we are now both sending the body up to  the back-end service and receiving the  response from the back-end service and  so we do each of those in turn if we  failed to write then we have to return  an error and sort of bail out and then  finally if we failed to get a connection  at all we have to handle that and all  those sort of different ways we could  fail to get that having to find that  callback we now mark that we are about  to get the connection and then we  acquire it and add our callback and you  know the request state machine is a  number of those sorts of functions about  300 lines of stuff that looks roughly  like this and you know this code is not  I think the prettiest that you've seen  right there is a thing well publicized I  think within the node community called  callback hell and it roughly goes like  this we have a callback and we have to  handle the error case in the success  case but if we do succeed then we have  to handle some other nested thing which  you know has an error case in the  success case and inside that success  outcome we have another callback and you  know this can go arbitrarily deep right  you can have arbitrarily an arbitrary  number of closing curly and round braces  at the end of this big scope and it's  not nice it's hard to reason about it's  hard to know what kind of context you're  in when you're looking at the code  indentation is not really all that  helpful here and so there exists a dozen  or more libraries that try to make this  better  right you have these sorts of promise  Combinator's which rides some sort of  method like then which allows you to DNS  them allows you to linearize all these  callbacks and it makes it cleaner right  by having just a single success callback  and it treats the air as as sort of this  implicit thing where if anything air is  out it will just short-circuit and pass  that through to the bottom and this  makes it simpler undeniably but what it  also does is it sort of  conflates it munches together all the  possible errors it says either we  succeed or we failed for some reason  right and that runs could entirely  counter to our desire to understand  specifically why something failed and so  if we were to try to reproduce this we  would have something that more looks  like this right because there is an  inherent complexity here inherent branch  enos that we have to capture we can't  just sort of elide that we can't just  sort of you know cover over it because  it makes our code more complex and this  is not to say that we couldn't create  something that still looks like this  something that sort of makes us a little  bit cleaner makes us a little bit less  sort of you know callback hellish and I  stand before you as someone who's  actually written a number of  abstractions over sort of async things  within the closure ecosystem and so by  all rights I should be the one sort of  you know triumphantly showing you these  abstractions that I've made here that  make the code very beautiful but again  this is about 300 lines of callback code  and the abstractions if they're going to  make that cleaner they have to make it  really clean and they have to be really  really simple to understand because it's  just not that much code right you know  we don't want to build a tower of  abstraction to just you know make this  tiny little surface area of our code a  little bit easier to understand that's a  poor use of my time as an engineer's a  poor use of anyone's times trying to  understand the code because they see  this code and they're like okay I kind  of get what's going on but how does this  look under the covers and all of a  sudden there's this enormous new set of  kind of terms and concepts and  implementations that they have to  understand it so we decided to sort of  leave it as is write the request state  machine is you know about 300 lines of  callback e stuff and some other  supporting code I'm it's messy but  pragmatically so right we you know kind  of decided that that was a worthwhile  trade-off to make and it's informally  specified by a graphics file a dot file  which we use a generative image which  you know we try to keep sort of more or  less in sync with each other  and so thus far I've kind of talked to  you about how a single request threads  to our system right but that's really  not the entire story because we have  tons of these requests flowing through  us all the time all the time and we have  to understand how these things work  together right how they  sort of shape the system in tandem and  there is a thing called queueing theory  it's a branch of Statistics it is  largely concerned with sort of proving  formal properties about systems that do  not resemble the systems that we build  but there are some insights that can be  sort of gleaned from this and rather  than talk about queuing theory I want to  tell you about a pumpkin Carver at a  State Fair and in deference to my lack  of any sort of artistic ability we're  going to be pretty abstract here so the  pumpkin carvers are the X pumpkins are  the O's lines of the queues and here we  have a pumpkin Carver doing their work  someone is standing there with a pumpkin  in line they go and you know start  handling one of those pumpkins they  finish that pumpkin and then handle the  next right easy very reasonable to sort  of think about a problem arises though  when someone realizes that there is no  upper boundary on how big the pumpkins  can be and so someone goes and drives up  and they're caged forklift and patiently  waits in line for their turn so  so then you know the pumpkin Carver goes  and starts to carve it out and scoop out  all the innards and you know slowly  starts to make forward progress and  while this is happening people keep  showing up and the problem here is not  just the people who are waiting behind  while the pumpkin is being carved the  problem is that once the pumpkin is gone  there's still this enormous line right  there's still this after effect and this  after factor can last for quite some  time and how long it lasts depends on  how much sort of excess capacity is  right how much utilization we were  having because we have to pay down this  debt now right so if our pumpkin Carver  was quite busy if they were busy 90% of  the time however long that giant pumpkin  took to carve that line that sort of you  know excess latency that has been sort  of put into this queue will last 10  times longer which you know will  probably be the rest of the day right  people will show up and they won't know  why the line is so long they won't know  that there was a giant pumpkin here but  they will know that it's taking an awful  long time to get their pumpkin carved  and you'll see this in traffic jams  right even when the accident is sort of  cleared out it still takes a while for  the you know traffic to normalize and so  one way that we can mitigate this is we  can have many pumpkin carvers handling  the same queue in this case when a giant  pumpkin shows up one of these carvers is  going to have a really you know big job  to do but the other one is able to still  keep things going right they're still  able to make forward progress the line  is not just going to kind of grow  unbounded behind that single Carver and  I want to contrast this with a different  approach where we have sort of multiple  queues right and in this case everyone  has sort of like a 1 in n chance of you  know getting behind a giant pumpkin and  pour them but the other people won't but  this still means that some people are  going to have a really bad time right it  makes the sort of average case better  but it still isn't quite as optimal  right you will find that in every case  having many many people servicing one  queue will give you the best behavior  under adverse conditions unfortunately  that's not always possible right we  can't necessarily an unbounded number of  pumpkin carvers around this single line  and so you know in our County Fair we  try to get as much space as possible  they tell us that we actually  have two spaces available one at each  end of the State Fairgrounds so we set  up different Carver's there and we set  up a line somewhere towards the entrance  to try to make sure that we're getting  an even distribution across there and so  in this particular case we can assume  that you know we have taken to heart the  fact that we won't have many consumers  for a single queue and so all of our  Carver's are busy if one of them  actually finishes they radio in that  they are ready for a new pumpkin and you  then begin the long trek across the  fairgrounds to actually get our pumpkin  carved and this is a problem right  because we have the situation where we  have a pumpkin Carver who's not doing  any work and we have a person who wants  their pumpkin carved and yet nothing's  happening right there's something that  is sort of preventing us for doing this  and this is lost through point this is  loss efficiency right you're not making  good use of our resources here and so  this is maybe optimal for the customers  for the people with the pumpkins but  it's not optimal for us it's not optimal  in terms of you know our sort of you  know money-making endeavors and so we  might sort of compromise a little bit  right we might set up a couple of queues  so that we always have at least you know  one pumpkin on deck when we want to you  know do some more work right and so now  the guy with the radio at the entrance  is in the job of just sending a small  bounded number of pumpkins to each of  these pieces at the end of the State  Fair so if someone comes in they'll be  sent to one and then sent to one of the  pumpkin carvers and so I just want to  contrast this with a different scenario  where we have a pumpkin carving factory  and in this particular case all we're  concerned about is throughput all we're  concerned about is the overall  efficiency in terms of how we're using  our resources right our workers and in  that case we love queues right we love a  big ole like sort of you know collection  of pumpkins that we can work on and if  we get too many right if you know 10  giant pumpkins show up in a night we can  go and we can you know call people and  we can spin up new workers right all we  are concerned about here is are we  making good use of our pumpkin carving  resources but the State Fair or you know  carnival sort of situation here is more  nuance right we're trying to bow  these things because there are real  people waiting for us to do the work  right they're gonna get bored they're  gonna get pissed they're gonna leave bad  reviews on Yelp and so we need to  balance their need to get the pumpkins  carved quickly where if we were just  trying to optimize that we would just  have a thousand pumpkin Carver sitting  around all the time on the off chance  that a thousand people show up at once  with our needs to make efficient use of  our resources where we are trying to  make sure that you know no one's just  kind of sitting around twiddling their  thumbs and so it's harder and it's much  more contextual right there is no one  right answer here and so just to kind of  you know break down this metaphor a  little bit the different sort of  collections of these pumpkin carvers  there are backends right these are  Hardware cores and they're servicing  sort of a queue which is generated by a  web server you know handling all the  incoming requests the entry queue and  the guy with the radio who's directing  them that's us that's the front-end  server and this thing that is deciding  where we actually want to send our each  pumpkin right each request is our load  balancing algorithm and you might wonder  what is you know the giant pumpkin a  metaphor for right and you might think  oh it's just a really expensive request  right someone just uploads a gigabyte of  data or something like that but in  practice it's not that simple because we  from our position right where we are  sort of you know sending these pumpkins  into things into these places we don't  know the difference between a pumpkin  which is really difficult to carve and a  Carver who's having a really difficult  time right there's no difference from a  pumpkin which is really really hard to  carve and someone who is just like you  know talking on their phone the entire  time or someone who's taken a coffee  break right we don't have a position to  really differentiate between those two  and so when we have these load balancing  algorithms we need distribute the work  fairly and our goal is to send work  where it can be done the most quickly  right we are only in the business of  minimizing latency all the decisions at  optimized for throughput those who've  you made elsewhere those are sort of  properties of the infrastructure that  we've already built and a load balancing  algorithm is only concerned with where  do we send the work to get done quickly  and sometimes the work the nodes we send  this work to will be slow and we won't  know why right we the engineers might be  able to look into that but we the  algorithm that is going on again this  decision does not have that sort of  perspective  and so we just have to kind of deal with  this as it comes and so when we talk  about load balancing algorithms one of  the most common ones that were you know  all sort of familiar with is round robin  and round robin is very simple we have a  counter for each request that comes in  we increment it we then take the modulus  of that and the number of servers that  we have and if it's zero we send it to  the zeroth node if it's one we sum is  the first node and so on the problem  here is that round robin is in the  business of evenly distributing request  volume and so if one of our nodes is  slow we don't really care right we just  keep on sending it the same number  requested everyone is giving and we get  this backup right and again even once  that node recovers there's now this  backlog which is going too far out last  that sort of duration of you know  whatever issue was going through and so  round-robin is very simple use a single  piece of state it has predictable  request volume we can verify that it's  sort of doing what it should but it  amplifies issues within the system  whenever there's a slowdown it makes it  worse so an alternate approach we can  use is sort of the least connection  strategy or at least in flight requests  right which tracks how many requests  each node is currently handling and  sends the next request to whichever one  is handling the least so in this  particular case if we you know have two  on each of these nodes and one on the  last then we send the next request to  that one if all of them are handling an  equal number requests and we randomly  select one of them and so the nice  property here is that if one of our node  slows down then it just stops making  forward progress and so while the other  nodes around it our handling you know  requests are opening up capacity we will  go and we will just sort of route around  naturally right we'll send work to where  work is actually happening and so the  two or more requests which are sort of  waiting on this node which is having a  bad day there's sort of a lost cause  right we sent them already right we  don't get to unring that Bell but at the  very least we're minimizing the number  of requests which are going to sort of  suffer as a result of that and so least  in-flight is a significantly better  approach at the cost of some additional  sort of complexity right we have a  little bit more state now and it's also  a little bit harder to verify that it's  doing its job because we're no longer  looking at the requests per second we  have to  get what is he concurrent load on each  of these machines how many requests to  each of them have but it does you know  minimize the impact of slowdowns but  there's a problem here actually which is  that if one of our machines is in a bad  state where it's not slow but in fact  very quick to error out right just very  quickly returns a 503 I'm too busy then  this heuristic as described would go and  just start funneling all the traffic  there which amplifies again this sort of  problem we don't want to do that and so  we want to or have to really make this a  slightly more or maybe even if n't lis  more complicated we have we have to  track both the in-flight requests you  also have to track the historical  failure rate of each of the nodes and to  track that we use an exponentially  weighted moving average which sort of  biases our value of sort of success rate  to the last one or two minutes and we  have to make sure that no matter what's  going wrong no matter how bad any  particular node is doing we're always  have at least one in-flight request  because we have to know once recovers  right we can't just you know ban it for  life because I had a bad day and this  means that we have a predictable  concurrent load but only if there  weren't recent failures and so again  this makes it even harder for us to sort  of verify that it's doing what we expect  but at the end of the day it does what  we wanted to do it minimizes the impact  of those slowdowns and outages on our  back-end so to kind of concrete ly talk  about what you know the impact of this  thing would be we have an issue with our  deploys which I think many people do  especially in sort of the Java land  where you know when you restart the  server it's slow right the caches are  cold it has to JIT and the round robin  approach again is exactly the opposite  of what we want try because we keep on  throwing more and more traffic at it and  so what we were seeing with the round  robin approach which was being used by H  a proxy previously whenever he would do  deploys are sort of P 999 latency right  or 99.9 percent I'll was nine seconds we  get these big ole spikes and we would  see that about a thousand requests over  the course of deploy would actually  timeout would be greater than 10 seconds  when we moved to least in  he went down to about 1.5 seconds we had  you know give or take no timeouts and so  this is a significant change right this  is a meaningful impact on our customers  and of course this is exaggerated by the  fact that we're looking at the top end  of this distribution we're looking at  the median values this would not be  nearly as important but this sort of  brings me to a point about metrics in  general which is you improve what you  measure right this is sort of a truism I  probably have heard this before but like  if we're if we say that we're looking at  the median latency that's basically  saying that you know the 49% of our  customers can you know just you know do  whatever they want they suck we don't  care about them right as long as we are  going and giving the majority of our  customers a good experience like we just  don't really care and obviously that's  not true right but I actually much  prefer the converse version of this  because I think that this sort of  captures it a little bit more accurately  which is everything that you ignore will  get worse right and this is important  because it's not enough just to measure  something right we can have thousands of  metrics that doesn't mean that thousands  of things are consistently getting  better in our system what's consistently  gets better or at least what  consistently does not get worse is the  metrics that we actually look at  regularly the metrics that we examine  every time we do a deploy the metrics  that we look at every day just in case  right otherwise these things will slowly  inevitably get worse and so when we were  building our you know front-end server  we had to sort of decide what are our  key metrics right and it can't be  latency because latency is not a really  a factor of what we're doing is a factor  of whatever back-end service were  calling into and so the one that we  decided on was overhead overhead and I  when I showed this initial state machine  you might have noticed that some of the  edges were blue I've bolded them here to  make it a little more obvious the blue  transitions here are where we are  waiting for someone else to do something  right we have sent requests out into the  ether we are waiting for a response and  these are not intervals that we have any  real control over  conversely everything else we do right  if there's a connection pool sort of  back up because too many people are  trying to get a connection to a  particular back-end that's time that we  are adding right we that is overhead  that we are  leading to the request if you're taking  too long to compute something that is  overhead if we have GC pauses that's  overhead right and so we want to keep a  very close eye on this because this is a  proxy for a wide variety of things that  we can do wrong and so our key metrics  are our p 999 overhead which is about  0.4 milliseconds right now and  unfortunately it's not enough by itself  because we could have a very low  overhead because we have very few  requests right so we have to look at  that we have to make sure that we're  actually getting a reasonable volume of  traffic and we could also get a low  overhead because we are just airing out  very quickly so we have to look at our  error rate but these three things  together these are what we alert on  right these are what we are paying  attention to you these are what we've  thought very carefully about what the  thresholds should be we are not just  adding random thresholds to dozens or  hundreds of metrics it's just these  three now we have many many other  metrics that we you know keep track of  but these exist so that if one of these  key metrics looks weird we can  understand why right having high  overhead does not describe what's going  on in the system it just indicates that  there's something that we should be  paying attention to and so that's really  it you know the things that I want to  you know how do you take away from this  is that if you're building a system like  this articulate what your goals are and  put them in order of importance right as  I said you know before we had all these  things that we wanted and extensibility  right the ability of some random person  to come up and start contributing is  something that we really want to allow  for but it cannot trump all the other  things we care about right it cannot  trump the stability of the system we  don't want someone to be able to kind of  come in and do that and so we have to  think about these things and make our  trade-offs and judge our trade-offs on  the basis of our goals and when we're  building a system like this we have to  understand and describe what the  extremities are what are the things that  we are willing to do and what is our  expected behavior when we sort of go  over the edge and choose your metrics  carefully because once you put something  in production this is what guides the  evolution of your system right this is  what informs what you change what you  tweak what you try to improve and above  all what you allow to get worse and so  that's it thank you  so I believe we have some time for  questions yes yes so the question was  are we using the passport as a way to  sort of model the correctness of the  system unfortunately I had to cut out  quite a bit of this talk yesterday  because I realize it was gonna go away  over time so one of the things I didn't  really talk about was how he uses to  test right because the state machine is  basically a mechanism for defining  coverage right in a more meaningful way  of interest like how many code branches  are we dealing with and so what we do is  we basically set up a test harness where  we have all the back ends and have some  proxies and simulate Network failures  and sort of tweak them and make sure  that we are following the path that we  expect we also in every log expose that  log that sort of you know passport and  what the intervals were between each  state and so that gives us a very sort  of clear understanding of you know  what's fast what's slow you know what  exactly you know how did we get where we  got yes  so the question was why do we roll our  own rather than use something like a che  proxy so this is something that I think  I meant to sort of discuss we're talking  about the goals right we route we  validate and we shape the traffic so HT  proxy and nginx and other things like  that are great at routing right they're  less good at sort of capturing the  specifics of what it is that we need  what validation means for Fitbit what  shaping means for Fitbit and there is  some extensibility there that you know  exists you can do Lua scripting and  nginx and stuff like that but like at  the end of the day you really want it's  not a big piece of code and it makes  sense to have it be very very flexible  and very sort of custom fit to what you  need because it is again in such a sort  of powerful position within the system  and if you look at you know Google  Google has the Google web server Twitter  has a Twitter front-end Netflix has Zuul  each of them has sort of rolled their  own and then except in the case of  Netflix and none of them have open  sourced it because it's not a useful  thing to open-source right it's it's a  solution to their problem and will be  developed to fit their needs and isn't  sort of an attempt at a general form of  you know the problem because that's  quite complex whereas the sort of very  narrow needs of a particular company are  more tractable yes we do so those are  where our alert thresholds are there are  other sorts of metrics you know that are  for the surrounding systems and but you  know those sorts have captured all these  sort of bad things right if there's an  error then that will capture all the  sorts of things that you would normally  sort of bundle under like how high are  500 sort of you know or 5 xx responses  and you know late and seeing other  things are there so we kind of have  looked at it and it does seem to capture  all the things that we care about we  have run books which say if you see this  then here are the other sort of  ancillary metrics that you should look  at to kind of determine what's going on  here we don't have it quite as like a  flow chart but that's sort of the  eventual place we would like to be there  right it's a very sort of you know  checklist sort of you know here's what  could be going wrong sort of deal yes  ah okay so the question was is there any  reason that we would want to use an eddy  directly rather than a higher level  rapper he used a mentioned my rapper  fornetti which is written in closure and  so we don't use closure at Fitbit and so  that is the main reason that you  wouldn't use that there are other Javal  and sort of extensions on top of that  the short answer is it's just not a big  piece of code right if you're trying to  write tons of async logic it might make  sense to kind you might get more  leverage out of these sort of  higher-order abstractions that are there  but the parts of interact directly with  Neddy are not that many and so at the  end of the day having an additional  layer of indirection that makes it  harder to reason out what's going on  into the covers doesn't give you much  like it costs a lot more than it you  know sort of benefits you yes we the  question was what do we use for service  discovery we use the the zookeeper  server set mechanism which you know is  part of the Twitter sort of you know  ecosystem of things yes so the worst  failure that we've observed I believe  was and so this is again something that  I would have loved to have talked about  it we're going slightly over time here  if people want to start going to lunch  by the way it sits outside please I  won't be offended but uh so the worst  failure was when we actually were having  out of memory exceptions so nettie uses  off heap memory to make it more  efficient to sort of talk to the  networking stack and it uses slab  allocation which has reference counting  which you know can go wrong for all the  obvious reasons and so we were trying to  track that pretty well but we have we  had this one sort of case of sourcing  and production that we hadn't tested for  and the problem was that we were using  sort of out-of-the-box metrics using the  Dakota Hale metrics library which is  getting from JMX and there was a metric  it provided there that was called off  heap memory right so we're like oh we're  tracking this turns out that that  doesn't actually do what you would think  which is tell you how much coffee memory  there is and so that value actually  happens to be like a private field under  Java ni obits and you have to use  reflection to kind of make it accessible  and then you know track that so the  worst failure that we had was that after  a fixed amount of time the Machine  started all toppling over without a  memory exceptions and luckily we have  some redundancy and one of these  machines is able to handle roughly about  50,000 requests per second and so we  caught it before enough of them fell  over that it actually impacted  production but it was a very very new  thing and then we spent a number of very  confusing days try to figure out what  was going on and like examining the  memory dumps to kinda understand what's  going on and you know another part of  this that I wanted to kind of talk about  is that you should really validate your  metrics right like if you have this sort  of thing that's telling you something  and there's some way for you to get  external validation and it's telling you  the right thing like do that it's going  to you know be worthwhile I think yes  the question was as a server do circuit  braking or bulk heading we rely on the  service discovery to do that for us if a  server goes and takes us out of the  service of the server set then we  basically stop sending a traffic and we  rely on it or some sort of other  external mechanism to tell us that that  servers off limits alright I don't think  that there's anyone thank you so much
+ 
+
+00:00:12.510 --> 00:00:14.400 align:start position:0%
+ 
+ 
+
+00:00:14.400 --> 00:00:16.289 align:start position:0%
+ 
+ 
+
+00:00:16.289 --> 00:00:17.190 align:start position:0%
+ 
+ 
+
+00:00:17.190 --> 00:00:21.180 align:start position:0%
+ 
+ 
+
+00:00:21.180 --> 00:00:24.029 align:start position:0%
+ 
+ 
+
+00:00:24.029 --> 00:00:25.920 align:start position:0%
+ 
+ 
+
+00:00:25.920 --> 00:00:28.740 align:start position:0%
+ 
+ 
+
+00:00:28.740 --> 00:00:30.599 align:start position:0%
+ 
+ 
+
+00:00:30.599 --> 00:00:32.670 align:start position:0%
+ 
+ 
+
+00:00:32.670 --> 00:00:33.810 align:start position:0%
+ 
+ 
+
+00:00:33.810 --> 00:00:36.540 align:start position:0%
+ 
+ 
+
+00:00:36.540 --> 00:00:40.040 align:start position:0%
+ 
+ 
+
+00:00:40.040 --> 00:00:42.090 align:start position:0%
+ 
+ 
+
+00:00:42.090 --> 00:00:44.370 align:start position:0%
+ 
+ 
+
+00:00:44.370 --> 00:00:46.979 align:start position:0%
+ 
+ 
+
+00:00:46.979 --> 00:00:48.360 align:start position:0%
+ 
+ 
+
+00:00:48.360 --> 00:00:50.220 align:start position:0%
+ 
+ 
+
+00:00:50.220 --> 00:00:51.360 align:start position:0%
+ 
+ 
+
+00:00:51.360 --> 00:00:53.130 align:start position:0%
+ 
+ 
+
+00:00:53.130 --> 00:00:54.330 align:start position:0%
+ 
+ 
+
+00:00:54.330 --> 00:00:58.529 align:start position:0%
+ 
+ 
+
+00:00:58.529 --> 00:01:01.380 align:start position:0%
+ 
+ 
+
+00:01:01.380 --> 00:01:04.139 align:start position:0%
+ 
+ 
+
+00:01:04.139 --> 00:01:05.400 align:start position:0%
+ 
+ 
+
+00:01:05.400 --> 00:01:06.749 align:start position:0%
+ 
+ 
+
+00:01:06.749 --> 00:01:08.550 align:start position:0%
+ 
+ 
+
+00:01:08.550 --> 00:01:09.779 align:start position:0%
+ 
+ 
+
+00:01:09.779 --> 00:01:13.219 align:start position:0%
+ 
+ 
+
+00:01:13.219 --> 00:01:16.320 align:start position:0%
+ 
+ 
+
+00:01:16.320 --> 00:01:18.779 align:start position:0%
+ 
+ 
+
+00:01:18.779 --> 00:01:21.480 align:start position:0%
+ 
+ 
+
+00:01:21.480 --> 00:01:22.830 align:start position:0%
+ 
+ 
+
+00:01:22.830 --> 00:01:24.480 align:start position:0%
+ 
+ 
+
+00:01:24.480 --> 00:01:26.730 align:start position:0%
+ 
+ 
+
+00:01:26.730 --> 00:01:28.740 align:start position:0%
+ 
+ 
+
+00:01:28.740 --> 00:01:32.219 align:start position:0%
+ 
+ 
+
+00:01:32.219 --> 00:01:34.230 align:start position:0%
+ 
+ 
+
+00:01:34.230 --> 00:01:36.469 align:start position:0%
+ 
+ 
+
+00:01:36.469 --> 00:01:39.690 align:start position:0%
+ 
+ 
+
+00:01:39.690 --> 00:01:40.559 align:start position:0%
+ 
+ 
+
+00:01:40.559 --> 00:01:43.400 align:start position:0%
+ 
+ 
+
+00:01:43.400 --> 00:01:45.809 align:start position:0%
+ 
+ 
+
+00:01:45.809 --> 00:01:47.580 align:start position:0%
+ 
+ 
+
+00:01:47.580 --> 00:01:50.370 align:start position:0%
+ 
+ 
+
+00:01:50.370 --> 00:01:51.600 align:start position:0%
+ 
+ 
+
+00:01:51.600 --> 00:01:52.650 align:start position:0%
+ 
+ 
+
+00:01:52.650 --> 00:01:54.210 align:start position:0%
+ 
+ 
+
+00:01:54.210 --> 00:01:56.190 align:start position:0%
+ 
+ 
+
+00:01:56.190 --> 00:01:57.779 align:start position:0%
+ 
+ 
+
+00:01:57.779 --> 00:02:00.809 align:start position:0%
+ 
+ 
+
+00:02:00.809 --> 00:02:04.199 align:start position:0%
+ 
+ 
+
+00:02:04.199 --> 00:02:06.540 align:start position:0%
+ 
+ 
+
+00:02:06.540 --> 00:02:08.219 align:start position:0%
+ 
+ 
+
+00:02:08.219 --> 00:02:11.760 align:start position:0%
+ 
+ 
+
+00:02:11.760 --> 00:02:14.880 align:start position:0%
+ 
+ 
+
+00:02:14.880 --> 00:02:16.949 align:start position:0%
+ 
+ 
+
+00:02:16.949 --> 00:02:18.670 align:start position:0%
+ 
+ 
+
+00:02:18.670 --> 00:02:21.339 align:start position:0%
+ 
+ 
+
+00:02:21.339 --> 00:02:23.199 align:start position:0%
+ 
+ 
+
+00:02:23.199 --> 00:02:26.170 align:start position:0%
+ 
+ 
+
+00:02:26.170 --> 00:02:28.979 align:start position:0%
+ 
+ 
+
+00:02:28.979 --> 00:02:31.209 align:start position:0%
+ 
+ 
+
+00:02:31.209 --> 00:02:33.459 align:start position:0%
+ 
+ 
+
+00:02:33.459 --> 00:02:35.009 align:start position:0%
+ 
+ 
+
+00:02:35.009 --> 00:02:39.759 align:start position:0%
+ 
+ 
+
+00:02:39.759 --> 00:02:40.929 align:start position:0%
+ 
+ 
+
+00:02:40.929 --> 00:02:42.520 align:start position:0%
+ 
+ 
+
+00:02:42.520 --> 00:02:44.140 align:start position:0%
+ 
+ 
+
+00:02:44.140 --> 00:02:45.550 align:start position:0%
+ 
+ 
+
+00:02:45.550 --> 00:02:46.990 align:start position:0%
+ 
+ 
+
+00:02:46.990 --> 00:02:48.160 align:start position:0%
+ 
+ 
+
+00:02:48.160 --> 00:02:50.979 align:start position:0%
+ 
+ 
+
+00:02:50.979 --> 00:02:52.360 align:start position:0%
+ 
+ 
+
+00:02:52.360 --> 00:02:55.599 align:start position:0%
+ 
+ 
+
+00:02:55.599 --> 00:02:56.830 align:start position:0%
+ 
+ 
+
+00:02:56.830 --> 00:02:58.259 align:start position:0%
+ 
+ 
+
+00:02:58.259 --> 00:03:00.789 align:start position:0%
+ 
+ 
+
+00:03:00.789 --> 00:03:04.000 align:start position:0%
+ 
+ 
+
+00:03:04.000 --> 00:03:05.530 align:start position:0%
+ 
+ 
+
+00:03:05.530 --> 00:03:07.509 align:start position:0%
+ 
+ 
+
+00:03:07.509 --> 00:03:09.640 align:start position:0%
+ 
+ 
+
+00:03:09.640 --> 00:03:11.890 align:start position:0%
+ 
+ 
+
+00:03:11.890 --> 00:03:13.990 align:start position:0%
+ 
+ 
+
+00:03:13.990 --> 00:03:16.390 align:start position:0%
+ 
+ 
+
+00:03:16.390 --> 00:03:19.330 align:start position:0%
+ 
+ 
+
+00:03:19.330 --> 00:03:20.890 align:start position:0%
+ 
+ 
+
+00:03:20.890 --> 00:03:23.110 align:start position:0%
+ 
+ 
+
+00:03:23.110 --> 00:03:26.319 align:start position:0%
+ 
+ 
+
+00:03:26.319 --> 00:03:28.379 align:start position:0%
+ 
+ 
+
+00:03:28.379 --> 00:03:32.680 align:start position:0%
+ 
+ 
+
+00:03:32.680 --> 00:03:34.569 align:start position:0%
+ 
+ 
+
+00:03:34.569 --> 00:03:38.379 align:start position:0%
+ 
+ 
+
+00:03:38.379 --> 00:03:39.879 align:start position:0%
+ 
+ 
+
+00:03:39.879 --> 00:03:41.920 align:start position:0%
+ 
+ 
+
+00:03:41.920 --> 00:03:44.530 align:start position:0%
+ 
+ 
+
+00:03:44.530 --> 00:03:46.599 align:start position:0%
+ 
+ 
+
+00:03:46.599 --> 00:03:49.420 align:start position:0%
+ 
+ 
+
+00:03:49.420 --> 00:03:52.920 align:start position:0%
+ 
+ 
+
+00:03:52.920 --> 00:03:55.270 align:start position:0%
+ 
+ 
+
+00:03:55.270 --> 00:03:57.309 align:start position:0%
+ 
+ 
+
+00:03:57.309 --> 00:03:58.689 align:start position:0%
+ 
+ 
+
+00:03:58.689 --> 00:04:00.729 align:start position:0%
+ 
+ 
+
+00:04:00.729 --> 00:04:04.030 align:start position:0%
+ 
+ 
+
+00:04:04.030 --> 00:04:06.879 align:start position:0%
+ 
+ 
+
+00:04:06.879 --> 00:04:08.229 align:start position:0%
+ 
+ 
+
+00:04:08.229 --> 00:04:10.479 align:start position:0%
+ 
+ 
+
+00:04:10.479 --> 00:04:12.069 align:start position:0%
+ 
+ 
+
+00:04:12.069 --> 00:04:14.140 align:start position:0%
+ 
+ 
+
+00:04:14.140 --> 00:04:15.429 align:start position:0%
+ 
+ 
+
+00:04:15.429 --> 00:04:18.520 align:start position:0%
+ 
+ 
+
+00:04:18.520 --> 00:04:20.860 align:start position:0%
+ 
+ 
+
+00:04:20.860 --> 00:04:22.510 align:start position:0%
+ 
+ 
+
+00:04:22.510 --> 00:04:23.589 align:start position:0%
+ 
+ 
+
+00:04:23.589 --> 00:04:24.580 align:start position:0%
+ 
+ 
+
+00:04:24.580 --> 00:04:26.439 align:start position:0%
+ 
+ 
+
+00:04:26.439 --> 00:04:29.290 align:start position:0%
+ 
+ 
+
+00:04:29.290 --> 00:04:30.670 align:start position:0%
+ 
+ 
+
+00:04:30.670 --> 00:04:32.510 align:start position:0%
+ 
+ 
+
+00:04:32.510 --> 00:04:34.100 align:start position:0%
+ 
+ 
+
+00:04:34.100 --> 00:04:38.719 align:start position:0%
+ 
+ 
+
+00:04:38.719 --> 00:04:39.890 align:start position:0%
+ 
+ 
+
+00:04:39.890 --> 00:04:41.839 align:start position:0%
+ 
+ 
+
+00:04:41.839 --> 00:04:43.820 align:start position:0%
+ 
+ 
+
+00:04:43.820 --> 00:04:47.779 align:start position:0%
+ 
+ 
+
+00:04:47.779 --> 00:04:50.300 align:start position:0%
+ 
+ 
+
+00:04:50.300 --> 00:04:52.070 align:start position:0%
+ 
+ 
+
+00:04:52.070 --> 00:04:54.950 align:start position:0%
+ 
+ 
+
+00:04:54.950 --> 00:04:56.170 align:start position:0%
+ 
+ 
+
+00:04:56.170 --> 00:04:58.370 align:start position:0%
+ 
+ 
+
+00:04:58.370 --> 00:04:59.930 align:start position:0%
+ 
+ 
+
+00:04:59.930 --> 00:05:01.100 align:start position:0%
+ 
+ 
+
+00:05:01.100 --> 00:05:04.219 align:start position:0%
+ 
+ 
+
+00:05:04.219 --> 00:05:06.740 align:start position:0%
+ 
+ 
+
+00:05:06.740 --> 00:05:09.559 align:start position:0%
+ 
+ 
+
+00:05:09.559 --> 00:05:11.330 align:start position:0%
+ 
+ 
+
+00:05:11.330 --> 00:05:13.129 align:start position:0%
+ 
+ 
+
+00:05:13.129 --> 00:05:15.620 align:start position:0%
+ 
+ 
+
+00:05:15.620 --> 00:05:17.990 align:start position:0%
+ 
+ 
+
+00:05:17.990 --> 00:05:19.700 align:start position:0%
+ 
+ 
+
+00:05:19.700 --> 00:05:21.499 align:start position:0%
+ 
+ 
+
+00:05:21.499 --> 00:05:24.830 align:start position:0%
+ 
+ 
+
+00:05:24.830 --> 00:05:26.390 align:start position:0%
+ 
+ 
+
+00:05:26.390 --> 00:05:30.409 align:start position:0%
+ 
+ 
+
+00:05:30.409 --> 00:05:32.240 align:start position:0%
+ 
+ 
+
+00:05:32.240 --> 00:05:34.010 align:start position:0%
+ 
+ 
+
+00:05:34.010 --> 00:05:37.490 align:start position:0%
+ 
+ 
+
+00:05:37.490 --> 00:05:38.749 align:start position:0%
+ 
+ 
+
+00:05:38.749 --> 00:05:40.520 align:start position:0%
+ 
+ 
+
+00:05:40.520 --> 00:05:41.450 align:start position:0%
+ 
+ 
+
+00:05:41.450 --> 00:05:44.839 align:start position:0%
+ 
+ 
+
+00:05:44.839 --> 00:05:47.390 align:start position:0%
+ 
+ 
+
+00:05:47.390 --> 00:05:49.610 align:start position:0%
+ 
+ 
+
+00:05:49.610 --> 00:05:51.350 align:start position:0%
+ 
+ 
+
+00:05:51.350 --> 00:05:53.839 align:start position:0%
+ 
+ 
+
+00:05:53.839 --> 00:05:55.969 align:start position:0%
+ 
+ 
+
+00:05:55.969 --> 00:05:58.909 align:start position:0%
+ 
+ 
+
+00:05:58.909 --> 00:06:00.589 align:start position:0%
+ 
+ 
+
+00:06:00.589 --> 00:06:02.390 align:start position:0%
+ 
+ 
+
+00:06:02.390 --> 00:06:04.399 align:start position:0%
+ 
+ 
+
+00:06:04.399 --> 00:06:06.170 align:start position:0%
+ 
+ 
+
+00:06:06.170 --> 00:06:08.540 align:start position:0%
+ 
+ 
+
+00:06:08.540 --> 00:06:09.620 align:start position:0%
+ 
+ 
+
+00:06:09.620 --> 00:06:12.709 align:start position:0%
+ 
+ 
+
+00:06:12.709 --> 00:06:14.300 align:start position:0%
+ 
+ 
+
+00:06:14.300 --> 00:06:15.529 align:start position:0%
+ 
+ 
+
+00:06:15.529 --> 00:06:17.059 align:start position:0%
+ 
+ 
+
+00:06:17.059 --> 00:06:18.770 align:start position:0%
+ 
+ 
+
+00:06:18.770 --> 00:06:20.480 align:start position:0%
+ 
+ 
+
+00:06:20.480 --> 00:06:23.689 align:start position:0%
+ 
+ 
+
+00:06:23.689 --> 00:06:24.980 align:start position:0%
+ 
+ 
+
+00:06:24.980 --> 00:06:27.290 align:start position:0%
+ 
+ 
+
+00:06:27.290 --> 00:06:30.350 align:start position:0%
+ 
+ 
+
+00:06:30.350 --> 00:06:32.540 align:start position:0%
+ 
+ 
+
+00:06:32.540 --> 00:06:34.850 align:start position:0%
+ 
+ 
+
+00:06:34.850 --> 00:06:38.809 align:start position:0%
+ 
+ 
+
+00:06:38.809 --> 00:06:40.610 align:start position:0%
+ 
+ 
+
+00:06:40.610 --> 00:06:42.500 align:start position:0%
+ 
+ 
+
+00:06:42.500 --> 00:06:45.320 align:start position:0%
+ 
+ 
+
+00:06:45.320 --> 00:06:46.380 align:start position:0%
+ 
+ 
+
+00:06:46.380 --> 00:06:48.810 align:start position:0%
+ 
+ 
+
+00:06:48.810 --> 00:06:48.820 align:start position:0%
+ 
+ 
+
+00:06:48.820 --> 00:06:50.270 align:start position:0%
+ 
+
+
+00:06:50.270 --> 00:06:52.770 align:start position:0%
+ 
+ 
+
+00:06:52.770 --> 00:06:55.020 align:start position:0%
+ 
+ 
+
+00:06:55.020 --> 00:06:58.140 align:start position:0%
+ 
+ 
+
+00:06:58.140 --> 00:06:59.730 align:start position:0%
+ 
+ 
+
+00:06:59.730 --> 00:07:01.080 align:start position:0%
+ 
+ 
+
+00:07:01.080 --> 00:07:02.850 align:start position:0%
+ 
+ 
+
+00:07:02.850 --> 00:07:05.280 align:start position:0%
+ 
+ 
+
+00:07:05.280 --> 00:07:06.480 align:start position:0%
+ 
+ 
+
+00:07:06.480 --> 00:07:07.860 align:start position:0%
+ 
+ 
+
+00:07:07.860 --> 00:07:10.010 align:start position:0%
+ 
+ 
+
+00:07:10.010 --> 00:07:12.390 align:start position:0%
+ 
+ 
+
+00:07:12.390 --> 00:07:15.210 align:start position:0%
+ 
+ 
+
+00:07:15.210 --> 00:07:16.950 align:start position:0%
+ 
+ 
+
+00:07:16.950 --> 00:07:19.470 align:start position:0%
+ 
+ 
+
+00:07:19.470 --> 00:07:20.820 align:start position:0%
+ 
+ 
+
+00:07:20.820 --> 00:07:22.890 align:start position:0%
+ 
+ 
+
+00:07:22.890 --> 00:07:24.360 align:start position:0%
+ 
+ 
+
+00:07:24.360 --> 00:07:25.740 align:start position:0%
+ 
+ 
+
+00:07:25.740 --> 00:07:27.480 align:start position:0%
+ 
+ 
+
+00:07:27.480 --> 00:07:29.600 align:start position:0%
+ 
+ 
+
+00:07:29.600 --> 00:07:33.720 align:start position:0%
+ 
+ 
+
+00:07:33.720 --> 00:07:34.500 align:start position:0%
+ 
+ 
+
+00:07:34.500 --> 00:07:37.170 align:start position:0%
+ 
+ 
+
+00:07:37.170 --> 00:07:39.060 align:start position:0%
+ 
+ 
+
+00:07:39.060 --> 00:07:40.530 align:start position:0%
+ 
+ 
+
+00:07:40.530 --> 00:07:42.930 align:start position:0%
+ 
+ 
+
+00:07:42.930 --> 00:07:45.120 align:start position:0%
+ 
+ 
+
+00:07:45.120 --> 00:07:46.890 align:start position:0%
+ 
+ 
+
+00:07:46.890 --> 00:07:49.890 align:start position:0%
+ 
+ 
+
+00:07:49.890 --> 00:07:51.120 align:start position:0%
+ 
+ 
+
+00:07:51.120 --> 00:07:52.890 align:start position:0%
+ 
+ 
+
+00:07:52.890 --> 00:07:55.620 align:start position:0%
+ 
+ 
+
+00:07:55.620 --> 00:07:56.400 align:start position:0%
+ 
+ 
+
+00:07:56.400 --> 00:07:58.080 align:start position:0%
+ 
+ 
+
+00:07:58.080 --> 00:08:00.390 align:start position:0%
+ 
+ 
+
+00:08:00.390 --> 00:08:02.880 align:start position:0%
+ 
+ 
+
+00:08:02.880 --> 00:08:07.770 align:start position:0%
+ 
+ 
+
+00:08:07.770 --> 00:08:09.060 align:start position:0%
+ 
+ 
+
+00:08:09.060 --> 00:08:10.830 align:start position:0%
+ 
+ 
+
+00:08:10.830 --> 00:08:13.080 align:start position:0%
+ 
+ 
+
+00:08:13.080 --> 00:08:17.970 align:start position:0%
+ 
+ 
+
+00:08:17.970 --> 00:08:21.870 align:start position:0%
+ 
+ 
+
+00:08:21.870 --> 00:08:23.520 align:start position:0%
+ 
+ 
+
+00:08:23.520 --> 00:08:24.690 align:start position:0%
+ 
+ 
+
+00:08:24.690 --> 00:08:26.040 align:start position:0%
+ 
+ 
+
+00:08:26.040 --> 00:08:27.960 align:start position:0%
+ 
+ 
+
+00:08:27.960 --> 00:08:30.300 align:start position:0%
+ 
+ 
+
+00:08:30.300 --> 00:08:32.460 align:start position:0%
+ 
+ 
+
+00:08:32.460 --> 00:08:34.020 align:start position:0%
+ 
+ 
+
+00:08:34.020 --> 00:08:36.900 align:start position:0%
+ 
+ 
+
+00:08:36.900 --> 00:08:39.000 align:start position:0%
+ 
+ 
+
+00:08:39.000 --> 00:08:40.200 align:start position:0%
+ 
+ 
+
+00:08:40.200 --> 00:08:42.330 align:start position:0%
+ 
+ 
+
+00:08:42.330 --> 00:08:45.930 align:start position:0%
+ 
+ 
+
+00:08:45.930 --> 00:08:47.130 align:start position:0%
+ 
+ 
+
+00:08:47.130 --> 00:08:48.960 align:start position:0%
+ 
+ 
+
+00:08:48.960 --> 00:08:50.850 align:start position:0%
+ 
+ 
+
+00:08:50.850 --> 00:08:51.990 align:start position:0%
+ 
+ 
+
+00:08:51.990 --> 00:08:54.030 align:start position:0%
+ 
+ 
+
+00:08:54.030 --> 00:08:55.530 align:start position:0%
+ 
+ 
+
+00:08:55.530 --> 00:08:57.660 align:start position:0%
+ 
+ 
+
+00:08:57.660 --> 00:08:57.670 align:start position:0%
+ 
+ 
+
+00:08:57.670 --> 00:08:58.809 align:start position:0%
+ 
+
+
+00:08:58.809 --> 00:09:03.429 align:start position:0%
+ 
+ 
+
+00:09:03.429 --> 00:09:03.439 align:start position:0%
+ 
+ 
+
+00:09:03.439 --> 00:09:04.119 align:start position:0%
+ 
+
+
+00:09:04.119 --> 00:09:05.439 align:start position:0%
+ 
+ 
+
+00:09:05.439 --> 00:09:06.669 align:start position:0%
+ 
+ 
+
+00:09:06.669 --> 00:09:08.139 align:start position:0%
+ 
+ 
+
+00:09:08.139 --> 00:09:10.809 align:start position:0%
+ 
+ 
+
+00:09:10.809 --> 00:09:12.460 align:start position:0%
+ 
+ 
+
+00:09:12.460 --> 00:09:13.809 align:start position:0%
+ 
+ 
+
+00:09:13.809 --> 00:09:15.849 align:start position:0%
+ 
+ 
+
+00:09:15.849 --> 00:09:18.039 align:start position:0%
+ 
+ 
+
+00:09:18.039 --> 00:09:19.239 align:start position:0%
+ 
+ 
+
+00:09:19.239 --> 00:09:21.369 align:start position:0%
+ 
+ 
+
+00:09:21.369 --> 00:09:22.809 align:start position:0%
+ 
+ 
+
+00:09:22.809 --> 00:09:25.329 align:start position:0%
+ 
+ 
+
+00:09:25.329 --> 00:09:30.009 align:start position:0%
+ 
+ 
+
+00:09:30.009 --> 00:09:32.379 align:start position:0%
+ 
+ 
+
+00:09:32.379 --> 00:09:34.749 align:start position:0%
+ 
+ 
+
+00:09:34.749 --> 00:09:36.460 align:start position:0%
+ 
+ 
+
+00:09:36.460 --> 00:09:37.779 align:start position:0%
+ 
+ 
+
+00:09:37.779 --> 00:09:40.269 align:start position:0%
+ 
+ 
+
+00:09:40.269 --> 00:09:41.949 align:start position:0%
+ 
+ 
+
+00:09:41.949 --> 00:09:43.239 align:start position:0%
+ 
+ 
+
+00:09:43.239 --> 00:09:44.619 align:start position:0%
+ 
+ 
+
+00:09:44.619 --> 00:09:46.960 align:start position:0%
+ 
+ 
+
+00:09:46.960 --> 00:09:48.669 align:start position:0%
+ 
+ 
+
+00:09:48.669 --> 00:09:50.529 align:start position:0%
+ 
+ 
+
+00:09:50.529 --> 00:09:52.569 align:start position:0%
+ 
+ 
+
+00:09:52.569 --> 00:09:54.279 align:start position:0%
+ 
+ 
+
+00:09:54.279 --> 00:09:55.599 align:start position:0%
+ 
+ 
+
+00:09:55.599 --> 00:09:57.519 align:start position:0%
+ 
+ 
+
+00:09:57.519 --> 00:09:58.719 align:start position:0%
+ 
+ 
+
+00:09:58.719 --> 00:10:00.369 align:start position:0%
+ 
+ 
+
+00:10:00.369 --> 00:10:01.629 align:start position:0%
+ 
+ 
+
+00:10:01.629 --> 00:10:03.789 align:start position:0%
+ 
+ 
+
+00:10:03.789 --> 00:10:06.309 align:start position:0%
+ 
+ 
+
+00:10:06.309 --> 00:10:07.629 align:start position:0%
+ 
+ 
+
+00:10:07.629 --> 00:10:09.099 align:start position:0%
+ 
+ 
+
+00:10:09.099 --> 00:10:10.719 align:start position:0%
+ 
+ 
+
+00:10:10.719 --> 00:10:12.879 align:start position:0%
+ 
+ 
+
+00:10:12.879 --> 00:10:15.340 align:start position:0%
+ 
+ 
+
+00:10:15.340 --> 00:10:18.609 align:start position:0%
+ 
+ 
+
+00:10:18.609 --> 00:10:20.049 align:start position:0%
+ 
+ 
+
+00:10:20.049 --> 00:10:22.629 align:start position:0%
+ 
+ 
+
+00:10:22.629 --> 00:10:24.609 align:start position:0%
+ 
+ 
+
+00:10:24.609 --> 00:10:27.729 align:start position:0%
+ 
+ 
+
+00:10:27.729 --> 00:10:29.079 align:start position:0%
+ 
+ 
+
+00:10:29.079 --> 00:10:30.609 align:start position:0%
+ 
+ 
+
+00:10:30.609 --> 00:10:33.399 align:start position:0%
+ 
+ 
+
+00:10:33.399 --> 00:10:35.499 align:start position:0%
+ 
+ 
+
+00:10:35.499 --> 00:10:38.319 align:start position:0%
+ 
+ 
+
+00:10:38.319 --> 00:10:40.210 align:start position:0%
+ 
+ 
+
+00:10:40.210 --> 00:10:41.529 align:start position:0%
+ 
+ 
+
+00:10:41.529 --> 00:10:42.969 align:start position:0%
+ 
+ 
+
+00:10:42.969 --> 00:10:46.059 align:start position:0%
+ 
+ 
+
+00:10:46.059 --> 00:10:48.579 align:start position:0%
+ 
+ 
+
+00:10:48.579 --> 00:10:50.859 align:start position:0%
+ 
+ 
+
+00:10:50.859 --> 00:10:52.779 align:start position:0%
+ 
+ 
+
+00:10:52.779 --> 00:10:53.739 align:start position:0%
+ 
+ 
+
+00:10:53.739 --> 00:10:56.379 align:start position:0%
+ 
+ 
+
+00:10:56.379 --> 00:10:58.749 align:start position:0%
+ 
+ 
+
+00:10:58.749 --> 00:11:01.059 align:start position:0%
+ 
+ 
+
+00:11:01.059 --> 00:11:02.679 align:start position:0%
+ 
+ 
+
+00:11:02.679 --> 00:11:05.109 align:start position:0%
+ 
+ 
+
+00:11:05.109 --> 00:11:06.309 align:start position:0%
+ 
+ 
+
+00:11:06.309 --> 00:11:08.979 align:start position:0%
+ 
+ 
+
+00:11:08.979 --> 00:11:10.590 align:start position:0%
+ 
+ 
+
+00:11:10.590 --> 00:11:12.249 align:start position:0%
+ 
+ 
+
+00:11:12.249 --> 00:11:13.150 align:start position:0%
+ 
+ 
+
+00:11:13.150 --> 00:11:14.949 align:start position:0%
+ 
+ 
+
+00:11:14.949 --> 00:11:16.479 align:start position:0%
+ 
+ 
+
+00:11:16.479 --> 00:11:18.579 align:start position:0%
+ 
+ 
+
+00:11:18.579 --> 00:11:20.549 align:start position:0%
+ 
+ 
+
+00:11:20.549 --> 00:11:22.689 align:start position:0%
+ 
+ 
+
+00:11:22.689 --> 00:11:23.979 align:start position:0%
+ 
+ 
+
+00:11:23.979 --> 00:11:25.419 align:start position:0%
+ 
+ 
+
+00:11:25.419 --> 00:11:27.819 align:start position:0%
+ 
+ 
+
+00:11:27.819 --> 00:11:30.699 align:start position:0%
+ 
+ 
+
+00:11:30.699 --> 00:11:34.749 align:start position:0%
+ 
+ 
+
+00:11:34.749 --> 00:11:37.359 align:start position:0%
+ 
+ 
+
+00:11:37.359 --> 00:11:38.619 align:start position:0%
+ 
+ 
+
+00:11:38.619 --> 00:11:39.759 align:start position:0%
+ 
+ 
+
+00:11:39.759 --> 00:11:39.769 align:start position:0%
+ 
+ 
+
+00:11:39.769 --> 00:11:40.239 align:start position:0%
+ 
+
+
+00:11:40.239 --> 00:11:43.259 align:start position:0%
+ 
+ 
+
+00:11:43.259 --> 00:11:49.809 align:start position:0%
+ 
+ 
+
+00:11:49.809 --> 00:11:51.699 align:start position:0%
+ 
+ 
+
+00:11:51.699 --> 00:11:54.460 align:start position:0%
+ 
+ 
+
+00:11:54.460 --> 00:11:56.949 align:start position:0%
+ 
+ 
+
+00:11:56.949 --> 00:11:58.119 align:start position:0%
+ 
+ 
+
+00:11:58.119 --> 00:12:00.039 align:start position:0%
+ 
+ 
+
+00:12:00.039 --> 00:12:02.799 align:start position:0%
+ 
+ 
+
+00:12:02.799 --> 00:12:05.289 align:start position:0%
+ 
+ 
+
+00:12:05.289 --> 00:12:06.699 align:start position:0%
+ 
+ 
+
+00:12:06.699 --> 00:12:08.559 align:start position:0%
+ 
+ 
+
+00:12:08.559 --> 00:12:11.469 align:start position:0%
+ 
+ 
+
+00:12:11.469 --> 00:12:12.969 align:start position:0%
+ 
+ 
+
+00:12:12.969 --> 00:12:15.429 align:start position:0%
+ 
+ 
+
+00:12:15.429 --> 00:12:16.989 align:start position:0%
+ 
+ 
+
+00:12:16.989 --> 00:12:18.400 align:start position:0%
+ 
+ 
+
+00:12:18.400 --> 00:12:19.779 align:start position:0%
+ 
+ 
+
+00:12:19.779 --> 00:12:23.409 align:start position:0%
+ 
+ 
+
+00:12:23.409 --> 00:12:25.379 align:start position:0%
+ 
+ 
+
+00:12:25.379 --> 00:12:27.369 align:start position:0%
+ 
+ 
+
+00:12:27.369 --> 00:12:29.739 align:start position:0%
+ 
+ 
+
+00:12:29.739 --> 00:12:30.819 align:start position:0%
+ 
+ 
+
+00:12:30.819 --> 00:12:31.929 align:start position:0%
+ 
+ 
+
+00:12:31.929 --> 00:12:33.279 align:start position:0%
+ 
+ 
+
+00:12:33.279 --> 00:12:34.989 align:start position:0%
+ 
+ 
+
+00:12:34.989 --> 00:12:37.479 align:start position:0%
+ 
+ 
+
+00:12:37.479 --> 00:12:39.039 align:start position:0%
+ 
+ 
+
+00:12:39.039 --> 00:12:40.929 align:start position:0%
+ 
+ 
+
+00:12:40.929 --> 00:12:43.269 align:start position:0%
+ 
+ 
+
+00:12:43.269 --> 00:12:44.590 align:start position:0%
+ 
+ 
+
+00:12:44.590 --> 00:12:48.009 align:start position:0%
+ 
+ 
+
+00:12:48.009 --> 00:12:49.210 align:start position:0%
+ 
+ 
+
+00:12:49.210 --> 00:12:50.799 align:start position:0%
+ 
+ 
+
+00:12:50.799 --> 00:12:52.269 align:start position:0%
+ 
+ 
+
+00:12:52.269 --> 00:12:54.489 align:start position:0%
+ 
+ 
+
+00:12:54.489 --> 00:12:57.220 align:start position:0%
+ 
+ 
+
+00:12:57.220 --> 00:13:00.340 align:start position:0%
+ 
+ 
+
+00:13:00.340 --> 00:13:01.899 align:start position:0%
+ 
+ 
+
+00:13:01.899 --> 00:13:03.039 align:start position:0%
+ 
+ 
+
+00:13:03.039 --> 00:13:04.809 align:start position:0%
+ 
+ 
+
+00:13:04.809 --> 00:13:06.009 align:start position:0%
+ 
+ 
+
+00:13:06.009 --> 00:13:08.619 align:start position:0%
+ 
+ 
+
+00:13:08.619 --> 00:13:09.999 align:start position:0%
+ 
+ 
+
+00:13:09.999 --> 00:13:11.109 align:start position:0%
+ 
+ 
+
+00:13:11.109 --> 00:13:15.579 align:start position:0%
+ 
+ 
+
+00:13:15.579 --> 00:13:18.069 align:start position:0%
+ 
+ 
+
+00:13:18.069 --> 00:13:20.169 align:start position:0%
+ 
+ 
+
+00:13:20.169 --> 00:13:23.619 align:start position:0%
+ 
+ 
+
+00:13:23.619 --> 00:13:25.210 align:start position:0%
+ 
+ 
+
+00:13:25.210 --> 00:13:26.970 align:start position:0%
+ 
+ 
+
+00:13:26.970 --> 00:13:29.829 align:start position:0%
+ 
+ 
+
+00:13:29.829 --> 00:13:32.679 align:start position:0%
+ 
+ 
+
+00:13:32.679 --> 00:13:34.090 align:start position:0%
+ 
+ 
+
+00:13:34.090 --> 00:13:36.670 align:start position:0%
+ 
+ 
+
+00:13:36.670 --> 00:13:38.439 align:start position:0%
+ 
+ 
+
+00:13:38.439 --> 00:13:40.780 align:start position:0%
+ 
+ 
+
+00:13:40.780 --> 00:13:43.329 align:start position:0%
+ 
+ 
+
+00:13:43.329 --> 00:13:45.460 align:start position:0%
+ 
+ 
+
+00:13:45.460 --> 00:13:46.840 align:start position:0%
+ 
+ 
+
+00:13:46.840 --> 00:13:49.780 align:start position:0%
+ 
+ 
+
+00:13:49.780 --> 00:13:53.259 align:start position:0%
+ 
+ 
+
+00:13:53.259 --> 00:13:55.259 align:start position:0%
+ 
+ 
+
+00:13:55.259 --> 00:13:58.780 align:start position:0%
+ 
+ 
+
+00:13:58.780 --> 00:14:00.489 align:start position:0%
+ 
+ 
+
+00:14:00.489 --> 00:14:01.509 align:start position:0%
+ 
+ 
+
+00:14:01.509 --> 00:14:04.749 align:start position:0%
+ 
+ 
+
+00:14:04.749 --> 00:14:06.460 align:start position:0%
+ 
+ 
+
+00:14:06.460 --> 00:14:08.259 align:start position:0%
+ 
+ 
+
+00:14:08.259 --> 00:14:09.579 align:start position:0%
+ 
+ 
+
+00:14:09.579 --> 00:14:11.230 align:start position:0%
+ 
+ 
+
+00:14:11.230 --> 00:14:12.999 align:start position:0%
+ 
+ 
+
+00:14:12.999 --> 00:14:16.420 align:start position:0%
+ 
+ 
+
+00:14:16.420 --> 00:14:18.280 align:start position:0%
+ 
+ 
+
+00:14:18.280 --> 00:14:19.509 align:start position:0%
+ 
+ 
+
+00:14:19.509 --> 00:14:21.460 align:start position:0%
+ 
+ 
+
+00:14:21.460 --> 00:14:23.259 align:start position:0%
+ 
+ 
+
+00:14:23.259 --> 00:14:24.280 align:start position:0%
+ 
+ 
+
+00:14:24.280 --> 00:14:25.569 align:start position:0%
+ 
+ 
+
+00:14:25.569 --> 00:14:28.389 align:start position:0%
+ 
+ 
+
+00:14:28.389 --> 00:14:31.030 align:start position:0%
+ 
+ 
+
+00:14:31.030 --> 00:14:32.590 align:start position:0%
+ 
+ 
+
+00:14:32.590 --> 00:14:35.139 align:start position:0%
+ 
+ 
+
+00:14:35.139 --> 00:14:37.150 align:start position:0%
+ 
+ 
+
+00:14:37.150 --> 00:14:38.439 align:start position:0%
+ 
+ 
+
+00:14:38.439 --> 00:14:39.699 align:start position:0%
+ 
+ 
+
+00:14:39.699 --> 00:14:41.410 align:start position:0%
+ 
+ 
+
+00:14:41.410 --> 00:14:43.749 align:start position:0%
+ 
+ 
+
+00:14:43.749 --> 00:14:46.389 align:start position:0%
+ 
+ 
+
+00:14:46.389 --> 00:14:49.179 align:start position:0%
+ 
+ 
+
+00:14:49.179 --> 00:14:51.939 align:start position:0%
+ 
+ 
+
+00:14:51.939 --> 00:14:53.710 align:start position:0%
+ 
+ 
+
+00:14:53.710 --> 00:14:55.600 align:start position:0%
+ 
+ 
+
+00:14:55.600 --> 00:14:58.329 align:start position:0%
+ 
+ 
+
+00:14:58.329 --> 00:15:00.220 align:start position:0%
+ 
+ 
+
+00:15:00.220 --> 00:15:01.179 align:start position:0%
+ 
+ 
+
+00:15:01.179 --> 00:15:02.829 align:start position:0%
+ 
+ 
+
+00:15:02.829 --> 00:15:04.269 align:start position:0%
+ 
+ 
+
+00:15:04.269 --> 00:15:05.650 align:start position:0%
+ 
+ 
+
+00:15:05.650 --> 00:15:06.910 align:start position:0%
+ 
+ 
+
+00:15:06.910 --> 00:15:09.519 align:start position:0%
+ 
+ 
+
+00:15:09.519 --> 00:15:12.549 align:start position:0%
+ 
+ 
+
+00:15:12.549 --> 00:15:14.799 align:start position:0%
+ 
+ 
+
+00:15:14.799 --> 00:15:16.030 align:start position:0%
+ 
+ 
+
+00:15:16.030 --> 00:15:17.679 align:start position:0%
+ 
+ 
+
+00:15:17.679 --> 00:15:19.389 align:start position:0%
+ 
+ 
+
+00:15:19.389 --> 00:15:21.340 align:start position:0%
+ 
+ 
+
+00:15:21.340 --> 00:15:23.319 align:start position:0%
+ 
+ 
+
+00:15:23.319 --> 00:15:25.150 align:start position:0%
+ 
+ 
+
+00:15:25.150 --> 00:15:26.739 align:start position:0%
+ 
+ 
+
+00:15:26.739 --> 00:15:28.660 align:start position:0%
+ 
+ 
+
+00:15:28.660 --> 00:15:30.910 align:start position:0%
+ 
+ 
+
+00:15:30.910 --> 00:15:32.739 align:start position:0%
+ 
+ 
+
+00:15:32.739 --> 00:15:34.240 align:start position:0%
+ 
+ 
+
+00:15:34.240 --> 00:15:35.860 align:start position:0%
+ 
+ 
+
+00:15:35.860 --> 00:15:37.660 align:start position:0%
+ 
+ 
+
+00:15:37.660 --> 00:15:40.030 align:start position:0%
+ 
+ 
+
+00:15:40.030 --> 00:15:41.830 align:start position:0%
+ 
+ 
+
+00:15:41.830 --> 00:15:43.330 align:start position:0%
+ 
+ 
+
+00:15:43.330 --> 00:15:45.220 align:start position:0%
+ 
+ 
+
+00:15:45.220 --> 00:15:48.010 align:start position:0%
+ 
+ 
+
+00:15:48.010 --> 00:15:50.080 align:start position:0%
+ 
+ 
+
+00:15:50.080 --> 00:15:53.350 align:start position:0%
+ 
+ 
+
+00:15:53.350 --> 00:15:54.730 align:start position:0%
+ 
+ 
+
+00:15:54.730 --> 00:15:57.280 align:start position:0%
+ 
+ 
+
+00:15:57.280 --> 00:15:59.110 align:start position:0%
+ 
+ 
+
+00:15:59.110 --> 00:16:01.510 align:start position:0%
+ 
+ 
+
+00:16:01.510 --> 00:16:03.010 align:start position:0%
+ 
+ 
+
+00:16:03.010 --> 00:16:05.410 align:start position:0%
+ 
+ 
+
+00:16:05.410 --> 00:16:06.730 align:start position:0%
+ 
+ 
+
+00:16:06.730 --> 00:16:10.630 align:start position:0%
+ 
+ 
+
+00:16:10.630 --> 00:16:12.880 align:start position:0%
+ 
+ 
+
+00:16:12.880 --> 00:16:15.610 align:start position:0%
+ 
+ 
+
+00:16:15.610 --> 00:16:17.440 align:start position:0%
+ 
+ 
+
+00:16:17.440 --> 00:16:19.300 align:start position:0%
+ 
+ 
+
+00:16:19.300 --> 00:16:21.490 align:start position:0%
+ 
+ 
+
+00:16:21.490 --> 00:16:23.050 align:start position:0%
+ 
+ 
+
+00:16:23.050 --> 00:16:24.940 align:start position:0%
+ 
+ 
+
+00:16:24.940 --> 00:16:26.500 align:start position:0%
+ 
+ 
+
+00:16:26.500 --> 00:16:29.140 align:start position:0%
+ 
+ 
+
+00:16:29.140 --> 00:16:31.810 align:start position:0%
+ 
+ 
+
+00:16:31.810 --> 00:16:33.250 align:start position:0%
+ 
+ 
+
+00:16:33.250 --> 00:16:34.660 align:start position:0%
+ 
+ 
+
+00:16:34.660 --> 00:16:36.640 align:start position:0%
+ 
+ 
+
+00:16:36.640 --> 00:16:38.710 align:start position:0%
+ 
+ 
+
+00:16:38.710 --> 00:16:39.760 align:start position:0%
+ 
+ 
+
+00:16:39.760 --> 00:16:41.770 align:start position:0%
+ 
+ 
+
+00:16:41.770 --> 00:16:43.930 align:start position:0%
+ 
+ 
+
+00:16:43.930 --> 00:16:47.920 align:start position:0%
+ 
+ 
+
+00:16:47.920 --> 00:16:49.600 align:start position:0%
+ 
+ 
+
+00:16:49.600 --> 00:16:51.370 align:start position:0%
+ 
+ 
+
+00:16:51.370 --> 00:16:52.950 align:start position:0%
+ 
+ 
+
+00:16:52.950 --> 00:16:55.270 align:start position:0%
+ 
+ 
+
+00:16:55.270 --> 00:16:56.980 align:start position:0%
+ 
+ 
+
+00:16:56.980 --> 00:16:59.560 align:start position:0%
+ 
+ 
+
+00:16:59.560 --> 00:17:00.910 align:start position:0%
+ 
+ 
+
+00:17:00.910 --> 00:17:03.250 align:start position:0%
+ 
+ 
+
+00:17:03.250 --> 00:17:04.660 align:start position:0%
+ 
+ 
+
+00:17:04.660 --> 00:17:08.770 align:start position:0%
+ 
+ 
+
+00:17:08.770 --> 00:17:11.380 align:start position:0%
+ 
+ 
+
+00:17:11.380 --> 00:17:13.390 align:start position:0%
+ 
+ 
+
+00:17:13.390 --> 00:17:16.510 align:start position:0%
+ 
+ 
+
+00:17:16.510 --> 00:17:18.310 align:start position:0%
+ 
+ 
+
+00:17:18.310 --> 00:17:20.530 align:start position:0%
+ 
+ 
+
+00:17:20.530 --> 00:17:22.120 align:start position:0%
+ 
+ 
+
+00:17:22.120 --> 00:17:25.150 align:start position:0%
+ 
+ 
+
+00:17:25.150 --> 00:17:26.650 align:start position:0%
+ 
+ 
+
+00:17:26.650 --> 00:17:28.060 align:start position:0%
+ 
+ 
+
+00:17:28.060 --> 00:17:30.100 align:start position:0%
+ 
+ 
+
+00:17:30.100 --> 00:17:31.360 align:start position:0%
+ 
+ 
+
+00:17:31.360 --> 00:17:33.190 align:start position:0%
+ 
+ 
+
+00:17:33.190 --> 00:17:35.170 align:start position:0%
+ 
+ 
+
+00:17:35.170 --> 00:17:36.430 align:start position:0%
+ 
+ 
+
+00:17:36.430 --> 00:17:37.450 align:start position:0%
+ 
+ 
+
+00:17:37.450 --> 00:17:38.800 align:start position:0%
+ 
+ 
+
+00:17:38.800 --> 00:17:40.210 align:start position:0%
+ 
+ 
+
+00:17:40.210 --> 00:17:42.010 align:start position:0%
+ 
+ 
+
+00:17:42.010 --> 00:17:43.000 align:start position:0%
+ 
+ 
+
+00:17:43.000 --> 00:17:46.000 align:start position:0%
+ 
+ 
+
+00:17:46.000 --> 00:17:47.440 align:start position:0%
+ 
+ 
+
+00:17:47.440 --> 00:17:48.850 align:start position:0%
+ 
+ 
+
+00:17:48.850 --> 00:17:52.330 align:start position:0%
+ 
+ 
+
+00:17:52.330 --> 00:17:53.490 align:start position:0%
+ 
+ 
+
+00:17:53.490 --> 00:17:55.710 align:start position:0%
+ 
+ 
+
+00:17:55.710 --> 00:17:56.970 align:start position:0%
+ 
+ 
+
+00:17:56.970 --> 00:17:58.430 align:start position:0%
+ 
+ 
+
+00:17:58.430 --> 00:18:02.580 align:start position:0%
+ 
+ 
+
+00:18:02.580 --> 00:18:04.830 align:start position:0%
+ 
+ 
+
+00:18:04.830 --> 00:18:08.640 align:start position:0%
+ 
+ 
+
+00:18:08.640 --> 00:18:10.770 align:start position:0%
+ 
+ 
+
+00:18:10.770 --> 00:18:13.710 align:start position:0%
+ 
+ 
+
+00:18:13.710 --> 00:18:16.200 align:start position:0%
+ 
+ 
+
+00:18:16.200 --> 00:18:17.520 align:start position:0%
+ 
+ 
+
+00:18:17.520 --> 00:18:19.890 align:start position:0%
+ 
+ 
+
+00:18:19.890 --> 00:18:21.300 align:start position:0%
+ 
+ 
+
+00:18:21.300 --> 00:18:23.340 align:start position:0%
+ 
+ 
+
+00:18:23.340 --> 00:18:25.350 align:start position:0%
+ 
+ 
+
+00:18:25.350 --> 00:18:27.180 align:start position:0%
+ 
+ 
+
+00:18:27.180 --> 00:18:30.510 align:start position:0%
+ 
+ 
+
+00:18:30.510 --> 00:18:32.010 align:start position:0%
+ 
+ 
+
+00:18:32.010 --> 00:18:34.560 align:start position:0%
+ 
+ 
+
+00:18:34.560 --> 00:18:36.090 align:start position:0%
+ 
+ 
+
+00:18:36.090 --> 00:18:37.710 align:start position:0%
+ 
+ 
+
+00:18:37.710 --> 00:18:38.730 align:start position:0%
+ 
+ 
+
+00:18:38.730 --> 00:18:41.520 align:start position:0%
+ 
+ 
+
+00:18:41.520 --> 00:18:43.800 align:start position:0%
+ 
+ 
+
+00:18:43.800 --> 00:18:45.690 align:start position:0%
+ 
+ 
+
+00:18:45.690 --> 00:18:49.440 align:start position:0%
+ 
+ 
+
+00:18:49.440 --> 00:18:51.120 align:start position:0%
+ 
+ 
+
+00:18:51.120 --> 00:18:52.710 align:start position:0%
+ 
+ 
+
+00:18:52.710 --> 00:18:54.630 align:start position:0%
+ 
+ 
+
+00:18:54.630 --> 00:18:56.880 align:start position:0%
+ 
+ 
+
+00:18:56.880 --> 00:18:59.190 align:start position:0%
+ 
+ 
+
+00:18:59.190 --> 00:19:02.430 align:start position:0%
+ 
+ 
+
+00:19:02.430 --> 00:19:03.510 align:start position:0%
+ 
+ 
+
+00:19:03.510 --> 00:19:05.850 align:start position:0%
+ 
+ 
+
+00:19:05.850 --> 00:19:07.170 align:start position:0%
+ 
+ 
+
+00:19:07.170 --> 00:19:08.430 align:start position:0%
+ 
+ 
+
+00:19:08.430 --> 00:19:09.900 align:start position:0%
+ 
+ 
+
+00:19:09.900 --> 00:19:12.510 align:start position:0%
+ 
+ 
+
+00:19:12.510 --> 00:19:13.620 align:start position:0%
+ 
+ 
+
+00:19:13.620 --> 00:19:15.030 align:start position:0%
+ 
+ 
+
+00:19:15.030 --> 00:19:17.610 align:start position:0%
+ 
+ 
+
+00:19:17.610 --> 00:19:19.170 align:start position:0%
+ 
+ 
+
+00:19:19.170 --> 00:19:20.610 align:start position:0%
+ 
+ 
+
+00:19:20.610 --> 00:19:23.010 align:start position:0%
+ 
+ 
+
+00:19:23.010 --> 00:19:26.070 align:start position:0%
+ 
+ 
+
+00:19:26.070 --> 00:19:28.050 align:start position:0%
+ 
+ 
+
+00:19:28.050 --> 00:19:29.940 align:start position:0%
+ 
+ 
+
+00:19:29.940 --> 00:19:30.840 align:start position:0%
+ 
+ 
+
+00:19:30.840 --> 00:19:32.820 align:start position:0%
+ 
+ 
+
+00:19:32.820 --> 00:19:36.270 align:start position:0%
+ 
+ 
+
+00:19:36.270 --> 00:19:38.190 align:start position:0%
+ 
+ 
+
+00:19:38.190 --> 00:19:38.200 align:start position:0%
+ 
+ 
+
+00:19:38.200 --> 00:19:38.520 align:start position:0%
+ 
+
+
+00:19:38.520 --> 00:19:39.960 align:start position:0%
+ 
+ 
+
+00:19:39.960 --> 00:19:43.470 align:start position:0%
+ 
+ 
+
+00:19:43.470 --> 00:19:46.830 align:start position:0%
+ 
+ 
+
+00:19:46.830 --> 00:19:48.630 align:start position:0%
+ 
+ 
+
+00:19:48.630 --> 00:19:51.930 align:start position:0%
+ 
+ 
+
+00:19:51.930 --> 00:19:53.340 align:start position:0%
+ 
+ 
+
+00:19:53.340 --> 00:19:55.530 align:start position:0%
+ 
+ 
+
+00:19:55.530 --> 00:19:57.750 align:start position:0%
+ 
+ 
+
+00:19:57.750 --> 00:19:59.520 align:start position:0%
+ 
+ 
+
+00:19:59.520 --> 00:20:03.120 align:start position:0%
+ 
+ 
+
+00:20:03.120 --> 00:20:05.340 align:start position:0%
+ 
+ 
+
+00:20:05.340 --> 00:20:06.990 align:start position:0%
+ 
+ 
+
+00:20:06.990 --> 00:20:09.000 align:start position:0%
+ 
+ 
+
+00:20:09.000 --> 00:20:10.410 align:start position:0%
+ 
+ 
+
+00:20:10.410 --> 00:20:11.880 align:start position:0%
+ 
+ 
+
+00:20:11.880 --> 00:20:13.710 align:start position:0%
+ 
+ 
+
+00:20:13.710 --> 00:20:16.770 align:start position:0%
+ 
+ 
+
+00:20:16.770 --> 00:20:18.600 align:start position:0%
+ 
+ 
+
+00:20:18.600 --> 00:20:20.460 align:start position:0%
+ 
+ 
+
+00:20:20.460 --> 00:20:21.720 align:start position:0%
+ 
+ 
+
+00:20:21.720 --> 00:20:24.270 align:start position:0%
+ 
+ 
+
+00:20:24.270 --> 00:20:26.100 align:start position:0%
+ 
+ 
+
+00:20:26.100 --> 00:20:28.680 align:start position:0%
+ 
+ 
+
+00:20:28.680 --> 00:20:30.210 align:start position:0%
+ 
+ 
+
+00:20:30.210 --> 00:20:31.920 align:start position:0%
+ 
+ 
+
+00:20:31.920 --> 00:20:34.530 align:start position:0%
+ 
+ 
+
+00:20:34.530 --> 00:20:36.180 align:start position:0%
+ 
+ 
+
+00:20:36.180 --> 00:20:37.170 align:start position:0%
+ 
+ 
+
+00:20:37.170 --> 00:20:38.460 align:start position:0%
+ 
+ 
+
+00:20:38.460 --> 00:20:40.320 align:start position:0%
+ 
+ 
+
+00:20:40.320 --> 00:20:43.410 align:start position:0%
+ 
+ 
+
+00:20:43.410 --> 00:20:44.670 align:start position:0%
+ 
+ 
+
+00:20:44.670 --> 00:20:46.260 align:start position:0%
+ 
+ 
+
+00:20:46.260 --> 00:20:48.060 align:start position:0%
+ 
+ 
+
+00:20:48.060 --> 00:20:50.700 align:start position:0%
+ 
+ 
+
+00:20:50.700 --> 00:20:52.680 align:start position:0%
+ 
+ 
+
+00:20:52.680 --> 00:20:54.930 align:start position:0%
+ 
+ 
+
+00:20:54.930 --> 00:20:56.190 align:start position:0%
+ 
+ 
+
+00:20:56.190 --> 00:20:59.490 align:start position:0%
+ 
+ 
+
+00:20:59.490 --> 00:21:02.730 align:start position:0%
+ 
+ 
+
+00:21:02.730 --> 00:21:05.700 align:start position:0%
+ 
+ 
+
+00:21:05.700 --> 00:21:07.020 align:start position:0%
+ 
+ 
+
+00:21:07.020 --> 00:21:08.550 align:start position:0%
+ 
+ 
+
+00:21:08.550 --> 00:21:10.650 align:start position:0%
+ 
+ 
+
+00:21:10.650 --> 00:21:12.750 align:start position:0%
+ 
+ 
+
+00:21:12.750 --> 00:21:14.880 align:start position:0%
+ 
+ 
+
+00:21:14.880 --> 00:21:16.590 align:start position:0%
+ 
+ 
+
+00:21:16.590 --> 00:21:18.720 align:start position:0%
+ 
+ 
+
+00:21:18.720 --> 00:21:20.490 align:start position:0%
+ 
+ 
+
+00:21:20.490 --> 00:21:22.680 align:start position:0%
+ 
+ 
+
+00:21:22.680 --> 00:21:25.050 align:start position:0%
+ 
+ 
+
+00:21:25.050 --> 00:21:26.640 align:start position:0%
+ 
+ 
+
+00:21:26.640 --> 00:21:28.290 align:start position:0%
+ 
+ 
+
+00:21:28.290 --> 00:21:29.460 align:start position:0%
+ 
+ 
+
+00:21:29.460 --> 00:21:30.450 align:start position:0%
+ 
+ 
+
+00:21:30.450 --> 00:21:32.850 align:start position:0%
+ 
+ 
+
+00:21:32.850 --> 00:21:37.050 align:start position:0%
+ 
+ 
+
+00:21:37.050 --> 00:21:38.520 align:start position:0%
+ 
+ 
+
+00:21:38.520 --> 00:21:41.730 align:start position:0%
+ 
+ 
+
+00:21:41.730 --> 00:21:44.070 align:start position:0%
+ 
+ 
+
+00:21:44.070 --> 00:21:46.440 align:start position:0%
+ 
+ 
+
+00:21:46.440 --> 00:21:47.700 align:start position:0%
+ 
+ 
+
+00:21:47.700 --> 00:21:49.790 align:start position:0%
+ 
+ 
+
+00:21:49.790 --> 00:21:52.590 align:start position:0%
+ 
+ 
+
+00:21:52.590 --> 00:21:54.570 align:start position:0%
+ 
+ 
+
+00:21:54.570 --> 00:21:56.760 align:start position:0%
+ 
+ 
+
+00:21:56.760 --> 00:21:59.730 align:start position:0%
+ 
+ 
+
+00:21:59.730 --> 00:22:01.620 align:start position:0%
+ 
+ 
+
+00:22:01.620 --> 00:22:03.330 align:start position:0%
+ 
+ 
+
+00:22:03.330 --> 00:22:04.440 align:start position:0%
+ 
+ 
+
+00:22:04.440 --> 00:22:07.560 align:start position:0%
+ 
+ 
+
+00:22:07.560 --> 00:22:09.780 align:start position:0%
+ 
+ 
+
+00:22:09.780 --> 00:22:11.270 align:start position:0%
+ 
+ 
+
+00:22:11.270 --> 00:22:13.980 align:start position:0%
+ 
+ 
+
+00:22:13.980 --> 00:22:15.870 align:start position:0%
+ 
+ 
+
+00:22:15.870 --> 00:22:17.250 align:start position:0%
+ 
+ 
+
+00:22:17.250 --> 00:22:19.710 align:start position:0%
+ 
+ 
+
+00:22:19.710 --> 00:22:20.700 align:start position:0%
+ 
+ 
+
+00:22:20.700 --> 00:22:23.700 align:start position:0%
+ 
+ 
+
+00:22:23.700 --> 00:22:26.340 align:start position:0%
+ 
+ 
+
+00:22:26.340 --> 00:22:28.769 align:start position:0%
+ 
+ 
+
+00:22:28.769 --> 00:22:31.260 align:start position:0%
+ 
+ 
+
+00:22:31.260 --> 00:22:32.760 align:start position:0%
+ 
+ 
+
+00:22:32.760 --> 00:22:35.190 align:start position:0%
+ 
+ 
+
+00:22:35.190 --> 00:22:36.720 align:start position:0%
+ 
+ 
+
+00:22:36.720 --> 00:22:37.710 align:start position:0%
+ 
+ 
+
+00:22:37.710 --> 00:22:39.330 align:start position:0%
+ 
+ 
+
+00:22:39.330 --> 00:22:42.450 align:start position:0%
+ 
+ 
+
+00:22:42.450 --> 00:22:47.159 align:start position:0%
+ 
+ 
+
+00:22:47.159 --> 00:22:49.169 align:start position:0%
+ 
+ 
+
+00:22:49.169 --> 00:22:53.940 align:start position:0%
+ 
+ 
+
+00:22:53.940 --> 00:22:55.350 align:start position:0%
+ 
+ 
+
+00:22:55.350 --> 00:22:57.659 align:start position:0%
+ 
+ 
+
+00:22:57.659 --> 00:23:01.430 align:start position:0%
+ 
+ 
+
+00:23:01.430 --> 00:23:03.180 align:start position:0%
+ 
+ 
+
+00:23:03.180 --> 00:23:06.690 align:start position:0%
+ 
+ 
+
+00:23:06.690 --> 00:23:08.250 align:start position:0%
+ 
+ 
+
+00:23:08.250 --> 00:23:10.649 align:start position:0%
+ 
+ 
+
+00:23:10.649 --> 00:23:13.740 align:start position:0%
+ 
+ 
+
+00:23:13.740 --> 00:23:16.740 align:start position:0%
+ 
+ 
+
+00:23:16.740 --> 00:23:18.570 align:start position:0%
+ 
+ 
+
+00:23:18.570 --> 00:23:20.190 align:start position:0%
+ 
+ 
+
+00:23:20.190 --> 00:23:23.789 align:start position:0%
+ 
+ 
+
+00:23:23.789 --> 00:23:26.460 align:start position:0%
+ 
+ 
+
+00:23:26.460 --> 00:23:33.060 align:start position:0%
+ 
+ 
+
+00:23:33.060 --> 00:23:36.970 align:start position:0%
+ 
+ 
+
+00:23:36.970 --> 00:23:38.770 align:start position:0%
+ 
+ 
+
+00:23:38.770 --> 00:23:40.480 align:start position:0%
+ 
+ 
+
+00:23:40.480 --> 00:23:42.010 align:start position:0%
+ 
+ 
+
+00:23:42.010 --> 00:23:43.720 align:start position:0%
+ 
+ 
+
+00:23:43.720 --> 00:23:47.140 align:start position:0%
+ 
+ 
+
+00:23:47.140 --> 00:23:49.470 align:start position:0%
+ 
+ 
+
+00:23:49.470 --> 00:23:51.730 align:start position:0%
+ 
+ 
+
+00:23:51.730 --> 00:23:53.280 align:start position:0%
+ 
+ 
+
+00:23:53.280 --> 00:23:55.570 align:start position:0%
+ 
+ 
+
+00:23:55.570 --> 00:23:58.930 align:start position:0%
+ 
+ 
+
+00:23:58.930 --> 00:24:00.430 align:start position:0%
+ 
+ 
+
+00:24:00.430 --> 00:24:03.130 align:start position:0%
+ 
+ 
+
+00:24:03.130 --> 00:24:04.630 align:start position:0%
+ 
+ 
+
+00:24:04.630 --> 00:24:06.130 align:start position:0%
+ 
+ 
+
+00:24:06.130 --> 00:24:08.440 align:start position:0%
+ 
+ 
+
+00:24:08.440 --> 00:24:10.120 align:start position:0%
+ 
+ 
+
+00:24:10.120 --> 00:24:12.130 align:start position:0%
+ 
+ 
+
+00:24:12.130 --> 00:24:14.830 align:start position:0%
+ 
+ 
+
+00:24:14.830 --> 00:24:17.890 align:start position:0%
+ 
+ 
+
+00:24:17.890 --> 00:24:20.620 align:start position:0%
+ 
+ 
+
+00:24:20.620 --> 00:24:22.270 align:start position:0%
+ 
+ 
+
+00:24:22.270 --> 00:24:24.970 align:start position:0%
+ 
+ 
+
+00:24:24.970 --> 00:24:26.260 align:start position:0%
+ 
+ 
+
+00:24:26.260 --> 00:24:28.000 align:start position:0%
+ 
+ 
+
+00:24:28.000 --> 00:24:30.010 align:start position:0%
+ 
+ 
+
+00:24:30.010 --> 00:24:31.390 align:start position:0%
+ 
+ 
+
+00:24:31.390 --> 00:24:33.669 align:start position:0%
+ 
+ 
+
+00:24:33.669 --> 00:24:34.659 align:start position:0%
+ 
+ 
+
+00:24:34.659 --> 00:24:36.610 align:start position:0%
+ 
+ 
+
+00:24:36.610 --> 00:24:37.870 align:start position:0%
+ 
+ 
+
+00:24:37.870 --> 00:24:38.830 align:start position:0%
+ 
+ 
+
+00:24:38.830 --> 00:24:41.830 align:start position:0%
+ 
+ 
+
+00:24:41.830 --> 00:24:43.240 align:start position:0%
+ 
+ 
+
+00:24:43.240 --> 00:24:47.140 align:start position:0%
+ 
+ 
+
+00:24:47.140 --> 00:24:49.900 align:start position:0%
+ 
+ 
+
+00:24:49.900 --> 00:24:52.450 align:start position:0%
+ 
+ 
+
+00:24:52.450 --> 00:24:54.730 align:start position:0%
+ 
+ 
+
+00:24:54.730 --> 00:24:56.409 align:start position:0%
+ 
+ 
+
+00:24:56.409 --> 00:24:57.909 align:start position:0%
+ 
+ 
+
+00:24:57.909 --> 00:24:59.140 align:start position:0%
+ 
+ 
+
+00:24:59.140 --> 00:25:00.190 align:start position:0%
+ 
+ 
+
+00:25:00.190 --> 00:25:04.020 align:start position:0%
+ 
+ 
+
+00:25:04.020 --> 00:25:06.549 align:start position:0%
+ 
+ 
+
+00:25:06.549 --> 00:25:07.870 align:start position:0%
+ 
+ 
+
+00:25:07.870 --> 00:25:12.820 align:start position:0%
+ 
+ 
+
+00:25:12.820 --> 00:25:15.520 align:start position:0%
+ 
+ 
+
+00:25:15.520 --> 00:25:17.230 align:start position:0%
+ 
+ 
+
+00:25:17.230 --> 00:25:19.299 align:start position:0%
+ 
+ 
+
+00:25:19.299 --> 00:25:20.770 align:start position:0%
+ 
+ 
+
+00:25:20.770 --> 00:25:22.360 align:start position:0%
+ 
+ 
+
+00:25:22.360 --> 00:25:24.310 align:start position:0%
+ 
+ 
+
+00:25:24.310 --> 00:25:26.740 align:start position:0%
+ 
+ 
+
+00:25:26.740 --> 00:25:28.090 align:start position:0%
+ 
+ 
+
+00:25:28.090 --> 00:25:30.159 align:start position:0%
+ 
+ 
+
+00:25:30.159 --> 00:25:32.169 align:start position:0%
+ 
+ 
+
+00:25:32.169 --> 00:25:35.110 align:start position:0%
+ 
+ 
+
+00:25:35.110 --> 00:25:36.220 align:start position:0%
+ 
+ 
+
+00:25:36.220 --> 00:25:38.590 align:start position:0%
+ 
+ 
+
+00:25:38.590 --> 00:25:40.030 align:start position:0%
+ 
+ 
+
+00:25:40.030 --> 00:25:43.330 align:start position:0%
+ 
+ 
+
+00:25:43.330 --> 00:25:44.320 align:start position:0%
+ 
+ 
+
+00:25:44.320 --> 00:25:45.490 align:start position:0%
+ 
+ 
+
+00:25:45.490 --> 00:25:49.000 align:start position:0%
+ 
+ 
+
+00:25:49.000 --> 00:25:53.590 align:start position:0%
+ 
+ 
+
+00:25:53.590 --> 00:25:55.240 align:start position:0%
+ 
+ 
+
+00:25:55.240 --> 00:25:56.920 align:start position:0%
+ 
+ 
+
+00:25:56.920 --> 00:25:58.120 align:start position:0%
+ 
+ 
+
+00:25:58.120 --> 00:26:01.240 align:start position:0%
+ 
+ 
+
+00:26:01.240 --> 00:26:02.350 align:start position:0%
+ 
+ 
+
+00:26:02.350 --> 00:26:04.390 align:start position:0%
+ 
+ 
+
+00:26:04.390 --> 00:26:05.710 align:start position:0%
+ 
+ 
+
+00:26:05.710 --> 00:26:07.630 align:start position:0%
+ 
+ 
+
+00:26:07.630 --> 00:26:10.030 align:start position:0%
+ 
+ 
+
+00:26:10.030 --> 00:26:11.770 align:start position:0%
+ 
+ 
+
+00:26:11.770 --> 00:26:14.500 align:start position:0%
+ 
+ 
+
+00:26:14.500 --> 00:26:18.100 align:start position:0%
+ 
+ 
+
+00:26:18.100 --> 00:26:20.770 align:start position:0%
+ 
+ 
+
+00:26:20.770 --> 00:26:23.590 align:start position:0%
+ 
+ 
+
+00:26:23.590 --> 00:26:26.830 align:start position:0%
+ 
+ 
+
+00:26:26.830 --> 00:26:28.360 align:start position:0%
+ 
+ 
+
+00:26:28.360 --> 00:26:30.190 align:start position:0%
+ 
+ 
+
+00:26:30.190 --> 00:26:31.630 align:start position:0%
+ 
+ 
+
+00:26:31.630 --> 00:26:33.280 align:start position:0%
+ 
+ 
+
+00:26:33.280 --> 00:26:34.360 align:start position:0%
+ 
+ 
+
+00:26:34.360 --> 00:26:35.500 align:start position:0%
+ 
+ 
+
+00:26:35.500 --> 00:26:37.690 align:start position:0%
+ 
+ 
+
+00:26:37.690 --> 00:26:42.570 align:start position:0%
+ 
+ 
+
+00:26:42.570 --> 00:26:47.530 align:start position:0%
+ 
+ 
+
+00:26:47.530 --> 00:26:48.550 align:start position:0%
+ 
+ 
+
+00:26:48.550 --> 00:26:49.900 align:start position:0%
+ 
+ 
+
+00:26:49.900 --> 00:26:52.420 align:start position:0%
+ 
+ 
+
+00:26:52.420 --> 00:26:55.090 align:start position:0%
+ 
+ 
+
+00:26:55.090 --> 00:26:56.830 align:start position:0%
+ 
+ 
+
+00:26:56.830 --> 00:26:58.390 align:start position:0%
+ 
+ 
+
+00:26:58.390 --> 00:27:01.510 align:start position:0%
+ 
+ 
+
+00:27:01.510 --> 00:27:04.360 align:start position:0%
+ 
+ 
+
+00:27:04.360 --> 00:27:06.040 align:start position:0%
+ 
+ 
+
+00:27:06.040 --> 00:27:08.530 align:start position:0%
+ 
+ 
+
+00:27:08.530 --> 00:27:09.960 align:start position:0%
+ 
+ 
+
+00:27:09.960 --> 00:27:12.580 align:start position:0%
+ 
+ 
+
+00:27:12.580 --> 00:27:13.810 align:start position:0%
+ 
+ 
+
+00:27:13.810 --> 00:27:15.640 align:start position:0%
+ 
+ 
+
+00:27:15.640 --> 00:27:19.390 align:start position:0%
+ 
+ 
+
+00:27:19.390 --> 00:27:21.310 align:start position:0%
+ 
+ 
+
+00:27:21.310 --> 00:27:22.780 align:start position:0%
+ 
+ 
+
+00:27:22.780 --> 00:27:24.610 align:start position:0%
+ 
+ 
+
+00:27:24.610 --> 00:27:27.640 align:start position:0%
+ 
+ 
+
+00:27:27.640 --> 00:27:29.230 align:start position:0%
+ 
+ 
+
+00:27:29.230 --> 00:27:30.610 align:start position:0%
+ 
+ 
+
+00:27:30.610 --> 00:27:32.230 align:start position:0%
+ 
+ 
+
+00:27:32.230 --> 00:27:34.630 align:start position:0%
+ 
+ 
+
+00:27:34.630 --> 00:27:36.280 align:start position:0%
+ 
+ 
+
+00:27:36.280 --> 00:27:39.880 align:start position:0%
+ 
+ 
+
+00:27:39.880 --> 00:27:41.620 align:start position:0%
+ 
+ 
+
+00:27:41.620 --> 00:27:43.000 align:start position:0%
+ 
+ 
+
+00:27:43.000 --> 00:27:44.380 align:start position:0%
+ 
+ 
+
+00:27:44.380 --> 00:27:45.940 align:start position:0%
+ 
+ 
+
+00:27:45.940 --> 00:27:47.890 align:start position:0%
+ 
+ 
+
+00:27:47.890 --> 00:27:49.450 align:start position:0%
+ 
+ 
+
+00:27:49.450 --> 00:27:51.580 align:start position:0%
+ 
+ 
+
+00:27:51.580 --> 00:27:55.690 align:start position:0%
+ 
+ 
+
+00:27:55.690 --> 00:27:57.850 align:start position:0%
+ 
+ 
+
+00:27:57.850 --> 00:27:59.230 align:start position:0%
+ 
+ 
+
+00:27:59.230 --> 00:28:00.340 align:start position:0%
+ 
+ 
+
+00:28:00.340 --> 00:28:02.200 align:start position:0%
+ 
+ 
+
+00:28:02.200 --> 00:28:04.090 align:start position:0%
+ 
+ 
+
+00:28:04.090 --> 00:28:05.320 align:start position:0%
+ 
+ 
+
+00:28:05.320 --> 00:28:08.500 align:start position:0%
+ 
+ 
+
+00:28:08.500 --> 00:28:10.810 align:start position:0%
+ 
+ 
+
+00:28:10.810 --> 00:28:12.220 align:start position:0%
+ 
+ 
+
+00:28:12.220 --> 00:28:13.600 align:start position:0%
+ 
+ 
+
+00:28:13.600 --> 00:28:14.950 align:start position:0%
+ 
+ 
+
+00:28:14.950 --> 00:28:16.090 align:start position:0%
+ 
+ 
+
+00:28:16.090 --> 00:28:17.730 align:start position:0%
+ 
+ 
+
+00:28:17.730 --> 00:28:19.990 align:start position:0%
+ 
+ 
+
+00:28:19.990 --> 00:28:21.250 align:start position:0%
+ 
+ 
+
+00:28:21.250 --> 00:28:22.419 align:start position:0%
+ 
+ 
+
+00:28:22.419 --> 00:28:23.410 align:start position:0%
+ 
+ 
+
+00:28:23.410 --> 00:28:26.020 align:start position:0%
+ 
+ 
+
+00:28:26.020 --> 00:28:27.430 align:start position:0%
+ 
+ 
+
+00:28:27.430 --> 00:28:30.580 align:start position:0%
+ 
+ 
+
+00:28:30.580 --> 00:28:32.410 align:start position:0%
+ 
+ 
+
+00:28:32.410 --> 00:28:36.299 align:start position:0%
+ 
+ 
+
+00:28:36.299 --> 00:28:39.040 align:start position:0%
+ 
+ 
+
+00:28:39.040 --> 00:28:40.060 align:start position:0%
+ 
+ 
+
+00:28:40.060 --> 00:28:41.919 align:start position:0%
+ 
+ 
+
+00:28:41.919 --> 00:28:43.750 align:start position:0%
+ 
+ 
+
+00:28:43.750 --> 00:28:45.310 align:start position:0%
+ 
+ 
+
+00:28:45.310 --> 00:28:48.549 align:start position:0%
+ 
+ 
+
+00:28:48.549 --> 00:28:50.020 align:start position:0%
+ 
+ 
+
+00:28:50.020 --> 00:28:51.280 align:start position:0%
+ 
+ 
+
+00:28:51.280 --> 00:28:54.000 align:start position:0%
+ 
+ 
+
+00:28:54.000 --> 00:28:57.790 align:start position:0%
+ 
+ 
+
+00:28:57.790 --> 00:28:59.770 align:start position:0%
+ 
+ 
+
+00:28:59.770 --> 00:29:02.460 align:start position:0%
+ 
+ 
+
+00:29:02.460 --> 00:29:05.200 align:start position:0%
+ 
+ 
+
+00:29:05.200 --> 00:29:07.180 align:start position:0%
+ 
+ 
+
+00:29:07.180 --> 00:29:08.500 align:start position:0%
+ 
+ 
+
+00:29:08.500 --> 00:29:10.030 align:start position:0%
+ 
+ 
+
+00:29:10.030 --> 00:29:12.010 align:start position:0%
+ 
+ 
+
+00:29:12.010 --> 00:29:16.870 align:start position:0%
+ 
+ 
+
+00:29:16.870 --> 00:29:18.700 align:start position:0%
+ 
+ 
+
+00:29:18.700 --> 00:29:20.440 align:start position:0%
+ 
+ 
+
+00:29:20.440 --> 00:29:22.419 align:start position:0%
+ 
+ 
+
+00:29:22.419 --> 00:29:23.710 align:start position:0%
+ 
+ 
+
+00:29:23.710 --> 00:29:25.810 align:start position:0%
+ 
+ 
+
+00:29:25.810 --> 00:29:27.070 align:start position:0%
+ 
+ 
+
+00:29:27.070 --> 00:29:28.930 align:start position:0%
+ 
+ 
+
+00:29:28.930 --> 00:29:30.190 align:start position:0%
+ 
+ 
+
+00:29:30.190 --> 00:29:32.470 align:start position:0%
+ 
+ 
+
+00:29:32.470 --> 00:29:33.640 align:start position:0%
+ 
+ 
+
+00:29:33.640 --> 00:29:35.049 align:start position:0%
+ 
+ 
+
+00:29:35.049 --> 00:29:38.169 align:start position:0%
+ 
+ 
+
+00:29:38.169 --> 00:29:39.190 align:start position:0%
+ 
+ 
+
+00:29:39.190 --> 00:29:41.310 align:start position:0%
+ 
+ 
+
+00:29:41.310 --> 00:29:43.210 align:start position:0%
+ 
+ 
+
+00:29:43.210 --> 00:29:45.730 align:start position:0%
+ 
+ 
+
+00:29:45.730 --> 00:29:46.750 align:start position:0%
+ 
+ 
+
+00:29:46.750 --> 00:29:48.190 align:start position:0%
+ 
+ 
+
+00:29:48.190 --> 00:29:50.260 align:start position:0%
+ 
+ 
+
+00:29:50.260 --> 00:29:51.430 align:start position:0%
+ 
+ 
+
+00:29:51.430 --> 00:29:52.919 align:start position:0%
+ 
+ 
+
+00:29:52.919 --> 00:29:55.299 align:start position:0%
+ 
+ 
+
+00:29:55.299 --> 00:29:56.740 align:start position:0%
+ 
+ 
+
+00:29:56.740 --> 00:29:58.150 align:start position:0%
+ 
+ 
+
+00:29:58.150 --> 00:29:59.830 align:start position:0%
+ 
+ 
+
+00:29:59.830 --> 00:30:02.710 align:start position:0%
+ 
+ 
+
+00:30:02.710 --> 00:30:03.970 align:start position:0%
+ 
+ 
+
+00:30:03.970 --> 00:30:06.790 align:start position:0%
+ 
+ 
+
+00:30:06.790 --> 00:30:08.409 align:start position:0%
+ 
+ 
+
+00:30:08.409 --> 00:30:09.730 align:start position:0%
+ 
+ 
+
+00:30:09.730 --> 00:30:11.440 align:start position:0%
+ 
+ 
+
+00:30:11.440 --> 00:30:11.450 align:start position:0%
+ 
+ 
+
+00:30:11.450 --> 00:30:12.520 align:start position:0%
+ 
+
+
+00:30:12.520 --> 00:30:13.720 align:start position:0%
+ 
+ 
+
+00:30:13.720 --> 00:30:16.780 align:start position:0%
+ 
+ 
+
+00:30:16.780 --> 00:30:19.000 align:start position:0%
+ 
+ 
+
+00:30:19.000 --> 00:30:21.640 align:start position:0%
+ 
+ 
+
+00:30:21.640 --> 00:30:24.990 align:start position:0%
+ 
+ 
+
+00:30:24.990 --> 00:30:28.450 align:start position:0%
+ 
+ 
+
+00:30:28.450 --> 00:30:29.800 align:start position:0%
+ 
+ 
+
+00:30:29.800 --> 00:30:32.710 align:start position:0%
+ 
+ 
+
+00:30:32.710 --> 00:30:34.090 align:start position:0%
+ 
+ 
+
+00:30:34.090 --> 00:30:35.560 align:start position:0%
+ 
+ 
+
+00:30:35.560 --> 00:30:37.030 align:start position:0%
+ 
+ 
+
+00:30:37.030 --> 00:30:40.270 align:start position:0%
+ 
+ 
+
+00:30:40.270 --> 00:30:41.800 align:start position:0%
+ 
+ 
+
+00:30:41.800 --> 00:30:44.170 align:start position:0%
+ 
+ 
+
+00:30:44.170 --> 00:30:47.140 align:start position:0%
+ 
+ 
+
+00:30:47.140 --> 00:30:49.480 align:start position:0%
+ 
+ 
+
+00:30:49.480 --> 00:30:50.560 align:start position:0%
+ 
+ 
+
+00:30:50.560 --> 00:30:51.940 align:start position:0%
+ 
+ 
+
+00:30:51.940 --> 00:30:55.000 align:start position:0%
+ 
+ 
+
+00:30:55.000 --> 00:30:56.500 align:start position:0%
+ 
+ 
+
+00:30:56.500 --> 00:30:58.480 align:start position:0%
+ 
+ 
+
+00:30:58.480 --> 00:31:01.210 align:start position:0%
+ 
+ 
+
+00:31:01.210 --> 00:31:02.530 align:start position:0%
+ 
+ 
+
+00:31:02.530 --> 00:31:05.350 align:start position:0%
+ 
+ 
+
+00:31:05.350 --> 00:31:06.880 align:start position:0%
+ 
+ 
+
+00:31:06.880 --> 00:31:08.320 align:start position:0%
+ 
+ 
+
+00:31:08.320 --> 00:31:09.670 align:start position:0%
+ 
+ 
+
+00:31:09.670 --> 00:31:12.010 align:start position:0%
+ 
+ 
+
+00:31:12.010 --> 00:31:13.330 align:start position:0%
+ 
+ 
+
+00:31:13.330 --> 00:31:16.810 align:start position:0%
+ 
+ 
+
+00:31:16.810 --> 00:31:18.340 align:start position:0%
+ 
+ 
+
+00:31:18.340 --> 00:31:20.680 align:start position:0%
+ 
+ 
+
+00:31:20.680 --> 00:31:22.540 align:start position:0%
+ 
+ 
+
+00:31:22.540 --> 00:31:24.420 align:start position:0%
+ 
+ 
+
+00:31:24.420 --> 00:31:27.010 align:start position:0%
+ 
+ 
+
+00:31:27.010 --> 00:31:28.780 align:start position:0%
+ 
+ 
+
+00:31:28.780 --> 00:31:31.570 align:start position:0%
+ 
+ 
+
+00:31:31.570 --> 00:31:32.890 align:start position:0%
+ 
+ 
+
+00:31:32.890 --> 00:31:34.690 align:start position:0%
+ 
+ 
+
+00:31:34.690 --> 00:31:36.370 align:start position:0%
+ 
+ 
+
+00:31:36.370 --> 00:31:37.810 align:start position:0%
+ 
+ 
+
+00:31:37.810 --> 00:31:40.690 align:start position:0%
+ 
+ 
+
+00:31:40.690 --> 00:31:42.010 align:start position:0%
+ 
+ 
+
+00:31:42.010 --> 00:31:46.060 align:start position:0%
+ 
+ 
+
+00:31:46.060 --> 00:31:47.920 align:start position:0%
+ 
+ 
+
+00:31:47.920 --> 00:31:50.470 align:start position:0%
+ 
+ 
+
+00:31:50.470 --> 00:31:52.630 align:start position:0%
+ 
+ 
+
+00:31:52.630 --> 00:31:54.070 align:start position:0%
+ 
+ 
+
+00:31:54.070 --> 00:31:56.500 align:start position:0%
+ 
+ 
+
+00:31:56.500 --> 00:31:59.200 align:start position:0%
+ 
+ 
+
+00:31:59.200 --> 00:32:00.910 align:start position:0%
+ 
+ 
+
+00:32:00.910 --> 00:32:02.380 align:start position:0%
+ 
+ 
+
+00:32:02.380 --> 00:32:04.210 align:start position:0%
+ 
+ 
+
+00:32:04.210 --> 00:32:05.800 align:start position:0%
+ 
+ 
+
+00:32:05.800 --> 00:32:07.780 align:start position:0%
+ 
+ 
+
+00:32:07.780 --> 00:32:09.250 align:start position:0%
+ 
+ 
+
+00:32:09.250 --> 00:32:10.690 align:start position:0%
+ 
+ 
+
+00:32:10.690 --> 00:32:13.750 align:start position:0%
+ 
+ 
+
+00:32:13.750 --> 00:32:15.640 align:start position:0%
+ 
+ 
+
+00:32:15.640 --> 00:32:17.980 align:start position:0%
+ 
+ 
+
+00:32:17.980 --> 00:32:19.120 align:start position:0%
+ 
+ 
+
+00:32:19.120 --> 00:32:21.220 align:start position:0%
+ 
+ 
+
+00:32:21.220 --> 00:32:22.540 align:start position:0%
+ 
+ 
+
+00:32:22.540 --> 00:32:23.710 align:start position:0%
+ 
+ 
+
+00:32:23.710 --> 00:32:25.300 align:start position:0%
+ 
+ 
+
+00:32:25.300 --> 00:32:25.600 align:start position:0%
+ 
+ 
+
+00:32:25.600 --> 00:32:27.700 align:start position:0%
+ 
+ 
+
+00:32:27.700 --> 00:32:29.140 align:start position:0%
+ 
+ 
+
+00:32:29.140 --> 00:32:31.960 align:start position:0%
+ 
+ 
+
+00:32:31.960 --> 00:32:34.990 align:start position:0%
+ 
+ 
+
+00:32:34.990 --> 00:32:36.280 align:start position:0%
+ 
+ 
+
+00:32:36.280 --> 00:32:38.919 align:start position:0%
+ 
+ 
+
+00:32:38.919 --> 00:32:41.080 align:start position:0%
+ 
+ 
+
+00:32:41.080 --> 00:32:43.900 align:start position:0%
+ 
+ 
+
+00:32:43.900 --> 00:32:46.840 align:start position:0%
+ 
+ 
+
+00:32:46.840 --> 00:32:49.870 align:start position:0%
+ 
+ 
+
+00:32:49.870 --> 00:32:51.250 align:start position:0%
+ 
+ 
+
+00:32:51.250 --> 00:32:53.650 align:start position:0%
+ 
+ 
+
+00:32:53.650 --> 00:32:56.020 align:start position:0%
+ 
+ 
+
+00:32:56.020 --> 00:33:00.700 align:start position:0%
+ 
+ 
+
+00:33:00.700 --> 00:33:02.950 align:start position:0%
+ 
+ 
+
+00:33:02.950 --> 00:33:04.990 align:start position:0%
+ 
+ 
+
+00:33:04.990 --> 00:33:07.210 align:start position:0%
+ 
+ 
+
+00:33:07.210 --> 00:33:09.039 align:start position:0%
+ 
+ 
+
+00:33:09.039 --> 00:33:11.650 align:start position:0%
+ 
+ 
+
+00:33:11.650 --> 00:33:12.970 align:start position:0%
+ 
+ 
+
+00:33:12.970 --> 00:33:16.659 align:start position:0%
+ 
+ 
+
+00:33:16.659 --> 00:33:20.289 align:start position:0%
+ 
+ 
+
+00:33:20.289 --> 00:33:24.310 align:start position:0%
+ 
+ 
+
+00:33:24.310 --> 00:33:25.539 align:start position:0%
+ 
+ 
+
+00:33:25.539 --> 00:33:26.740 align:start position:0%
+ 
+ 
+
+00:33:26.740 --> 00:33:27.850 align:start position:0%
+ 
+ 
+
+00:33:27.850 --> 00:33:29.110 align:start position:0%
+ 
+ 
+
+00:33:29.110 --> 00:33:30.549 align:start position:0%
+ 
+ 
+
+00:33:30.549 --> 00:33:32.890 align:start position:0%
+ 
+ 
+
+00:33:32.890 --> 00:33:36.250 align:start position:0%
+ 
+ 
+
+00:33:36.250 --> 00:33:37.360 align:start position:0%
+ 
+ 
+
+00:33:37.360 --> 00:33:38.950 align:start position:0%
+ 
+ 
+
+00:33:38.950 --> 00:33:40.210 align:start position:0%
+ 
+ 
+
+00:33:40.210 --> 00:33:41.590 align:start position:0%
+ 
+ 
+
+00:33:41.590 --> 00:33:43.030 align:start position:0%
+ 
+ 
+
+00:33:43.030 --> 00:33:45.610 align:start position:0%
+ 
+ 
+
+00:33:45.610 --> 00:33:47.110 align:start position:0%
+ 
+ 
+
+00:33:47.110 --> 00:33:50.230 align:start position:0%
+ 
+ 
+
+00:33:50.230 --> 00:33:53.020 align:start position:0%
+ 
+ 
+
+00:33:53.020 --> 00:33:55.810 align:start position:0%
+ 
+ 
+
+00:33:55.810 --> 00:33:59.289 align:start position:0%
+ 
+ 
+
+00:33:59.289 --> 00:34:00.730 align:start position:0%
+ 
+ 
+
+00:34:00.730 --> 00:34:03.370 align:start position:0%
+ 
+ 
+
+00:34:03.370 --> 00:34:04.780 align:start position:0%
+ 
+ 
+
+00:34:04.780 --> 00:34:06.549 align:start position:0%
+ 
+ 
+
+00:34:06.549 --> 00:34:09.879 align:start position:0%
+ 
+ 
+
+00:34:09.879 --> 00:34:13.450 align:start position:0%
+ 
+ 
+
+00:34:13.450 --> 00:34:14.740 align:start position:0%
+ 
+ 
+
+00:34:14.740 --> 00:34:16.649 align:start position:0%
+ 
+ 
+
+00:34:16.649 --> 00:34:18.730 align:start position:0%
+ 
+ 
+
+00:34:18.730 --> 00:34:20.830 align:start position:0%
+ 
+ 
+
+00:34:20.830 --> 00:34:23.050 align:start position:0%
+ 
+ 
+
+00:34:23.050 --> 00:34:26.980 align:start position:0%
+ 
+ 
+
+00:34:26.980 --> 00:34:30.970 align:start position:0%
+ 
+ 
+
+00:34:30.970 --> 00:34:33.129 align:start position:0%
+ 
+ 
+
+00:34:33.129 --> 00:34:34.540 align:start position:0%
+ 
+ 
+
+00:34:34.540 --> 00:34:35.830 align:start position:0%
+ 
+ 
+
+00:34:35.830 --> 00:34:37.710 align:start position:0%
+ 
+ 
+
+00:34:37.710 --> 00:34:39.570 align:start position:0%
+ 
+ 
+
+00:34:39.570 --> 00:34:42.120 align:start position:0%
+ 
+ 
+
+00:34:42.120 --> 00:34:45.540 align:start position:0%
+ 
+ 
+
+00:34:45.540 --> 00:34:47.820 align:start position:0%
+ 
+ 
+
+00:34:47.820 --> 00:34:49.740 align:start position:0%
+ 
+ 
+
+00:34:49.740 --> 00:34:51.270 align:start position:0%
+ 
+ 
+
+00:34:51.270 --> 00:34:52.350 align:start position:0%
+ 
+ 
+
+00:34:52.350 --> 00:34:53.460 align:start position:0%
+ 
+ 
+
+00:34:53.460 --> 00:34:55.620 align:start position:0%
+ 
+ 
+
+00:34:55.620 --> 00:34:57.480 align:start position:0%
+ 
+ 
+
+00:34:57.480 --> 00:35:00.660 align:start position:0%
+ 
+ 
+
+00:35:00.660 --> 00:35:04.140 align:start position:0%
+ 
+ 
+
+00:35:04.140 --> 00:35:06.060 align:start position:0%
+ 
+ 
+
+00:35:06.060 --> 00:35:07.380 align:start position:0%
+ 
+ 
+
+00:35:07.380 --> 00:35:08.970 align:start position:0%
+ 
+ 
+
+00:35:08.970 --> 00:35:10.620 align:start position:0%
+ 
+ 
+
+00:35:10.620 --> 00:35:14.100 align:start position:0%
+ 
+ 
+
+00:35:14.100 --> 00:35:17.010 align:start position:0%
+ 
+ 
+
+00:35:17.010 --> 00:35:18.630 align:start position:0%
+ 
+ 
+
+00:35:18.630 --> 00:35:21.540 align:start position:0%
+ 
+ 
+
+00:35:21.540 --> 00:35:22.950 align:start position:0%
+ 
+ 
+
+00:35:22.950 --> 00:35:24.780 align:start position:0%
+ 
+ 
+
+00:35:24.780 --> 00:35:26.130 align:start position:0%
+ 
+ 
+
+00:35:26.130 --> 00:35:29.610 align:start position:0%
+ 
+ 
+
+00:35:29.610 --> 00:35:31.620 align:start position:0%
+ 
+ 
+
+00:35:31.620 --> 00:35:32.790 align:start position:0%
+ 
+ 
+
+00:35:32.790 --> 00:35:33.990 align:start position:0%
+ 
+ 
+
+00:35:33.990 --> 00:35:35.400 align:start position:0%
+ 
+ 
+
+00:35:35.400 --> 00:35:38.310 align:start position:0%
+ 
+ 
+
+00:35:38.310 --> 00:35:40.500 align:start position:0%
+ 
+ 
+
+00:35:40.500 --> 00:35:41.910 align:start position:0%
+ 
+ 
+
+00:35:41.910 --> 00:35:43.320 align:start position:0%
+ 
+ 
+
+00:35:43.320 --> 00:35:44.550 align:start position:0%
+ 
+ 
+
+00:35:44.550 --> 00:35:46.710 align:start position:0%
+ 
+ 
+
+00:35:46.710 --> 00:35:48.090 align:start position:0%
+ 
+ 
+
+00:35:48.090 --> 00:35:51.000 align:start position:0%
+ 
+ 
+
+00:35:51.000 --> 00:35:52.170 align:start position:0%
+ 
+ 
+
+00:35:52.170 --> 00:35:53.940 align:start position:0%
+ 
+ 
+
+00:35:53.940 --> 00:35:55.200 align:start position:0%
+ 
+ 
+
+00:35:55.200 --> 00:35:56.760 align:start position:0%
+ 
+ 
+
+00:35:56.760 --> 00:36:00.030 align:start position:0%
+ 
+ 
+
+00:36:00.030 --> 00:36:04.890 align:start position:0%
+ 
+ 
+
+00:36:04.890 --> 00:36:06.960 align:start position:0%
+ 
+ 
+
+00:36:06.960 --> 00:36:08.910 align:start position:0%
+ 
+ 
+
+00:36:08.910 --> 00:36:12.120 align:start position:0%
+ 
+ 
+
+00:36:12.120 --> 00:36:14.160 align:start position:0%
+ 
+ 
+
+00:36:14.160 --> 00:36:15.450 align:start position:0%
+ 
+ 
+
+00:36:15.450 --> 00:36:16.650 align:start position:0%
+ 
+ 
+
+00:36:16.650 --> 00:36:18.170 align:start position:0%
+ 
+ 
+
+00:36:18.170 --> 00:36:23.340 align:start position:0%
+ 
+ 
+
+00:36:23.340 --> 00:36:25.860 align:start position:0%
+ 
+ 
+
+00:36:25.860 --> 00:36:26.670 align:start position:0%
+ 
+ 
+
+00:36:26.670 --> 00:36:28.380 align:start position:0%
+ 
+ 
+
+00:36:28.380 --> 00:36:30.510 align:start position:0%
+ 
+ 
+
+00:36:30.510 --> 00:36:31.620 align:start position:0%
+ 
+ 
+
+00:36:31.620 --> 00:36:34.770 align:start position:0%
+ 
+ 
+
+00:36:34.770 --> 00:36:36.690 align:start position:0%
+ 
+ 
+
+00:36:36.690 --> 00:36:38.430 align:start position:0%
+ 
+ 
+
+00:36:38.430 --> 00:36:40.620 align:start position:0%
+ 
+ 
+
+00:36:40.620 --> 00:36:41.430 align:start position:0%
+ 
+ 
+
+00:36:41.430 --> 00:36:43.800 align:start position:0%
+ 
+ 
+
+00:36:43.800 --> 00:36:45.990 align:start position:0%
+ 
+ 
+
+00:36:45.990 --> 00:36:47.310 align:start position:0%
+ 
+ 
+
+00:36:47.310 --> 00:36:48.240 align:start position:0%
+ 
+ 
+
+00:36:48.240 --> 00:36:50.550 align:start position:0%
+ 
+ 
+
+00:36:50.550 --> 00:36:51.990 align:start position:0%
+ 
+ 
+
+00:36:51.990 --> 00:36:52.920 align:start position:0%
+ 
+ 
+
+00:36:52.920 --> 00:36:55.079 align:start position:0%
+ 
+ 
+
+00:36:55.079 --> 00:36:56.700 align:start position:0%
+ 
+ 
+
+00:36:56.700 --> 00:36:58.349 align:start position:0%
+ 
+ 
+
+00:36:58.349 --> 00:37:01.440 align:start position:0%
+ 
+ 
+
+00:37:01.440 --> 00:37:03.089 align:start position:0%
+ 
+ 
+
+00:37:03.089 --> 00:37:06.299 align:start position:0%
+ 
+ 
+
+00:37:06.299 --> 00:37:09.059 align:start position:0%
+ 
+ 
+
+00:37:09.059 --> 00:37:12.770 align:start position:0%
+ 
+ 
+
+00:37:12.770 --> 00:37:16.250 align:start position:0%
+ 
+ 
+
+00:37:16.250 --> 00:37:18.420 align:start position:0%
+ 
+ 
+
+00:37:18.420 --> 00:37:20.069 align:start position:0%
+ 
+ 
+
+00:37:20.069 --> 00:37:21.329 align:start position:0%
+ 
+ 
+
+00:37:21.329 --> 00:37:22.829 align:start position:0%
+ 
+ 
+
+00:37:22.829 --> 00:37:23.760 align:start position:0%
+ 
+ 
+
+00:37:23.760 --> 00:37:24.900 align:start position:0%
+ 
+ 
+
+00:37:24.900 --> 00:37:26.579 align:start position:0%
+ 
+ 
+
+00:37:26.579 --> 00:37:28.380 align:start position:0%
+ 
+ 
+
+00:37:28.380 --> 00:37:29.520 align:start position:0%
+ 
+ 
+
+00:37:29.520 --> 00:37:31.140 align:start position:0%
+ 
+ 
+
+00:37:31.140 --> 00:37:32.430 align:start position:0%
+ 
+ 
+
+00:37:32.430 --> 00:37:34.410 align:start position:0%
+ 
+ 
+
+00:37:34.410 --> 00:37:35.309 align:start position:0%
+ 
+ 
+
+00:37:35.309 --> 00:37:36.750 align:start position:0%
+ 
+ 
+
+00:37:36.750 --> 00:37:38.579 align:start position:0%
+ 
+ 
+
+00:37:38.579 --> 00:37:40.950 align:start position:0%
+ 
+ 
+
+00:37:40.950 --> 00:37:42.780 align:start position:0%
+ 
+ 
+
+00:37:42.780 --> 00:37:45.660 align:start position:0%
+ 
+ 
+
+00:37:45.660 --> 00:37:47.849 align:start position:0%
+ 
+ 
+
+00:37:47.849 --> 00:37:50.069 align:start position:0%
+ 
+ 
+
+00:37:50.069 --> 00:37:52.770 align:start position:0%
+ 
+ 
+
+00:37:52.770 --> 00:37:55.049 align:start position:0%
+ 
+ 
+
+00:37:55.049 --> 00:37:56.339 align:start position:0%
+ 
+ 
+
+00:37:56.339 --> 00:37:57.780 align:start position:0%
+ 
+ 
+
+00:37:57.780 --> 00:37:58.620 align:start position:0%
+ 
+ 
+
+00:37:58.620 --> 00:38:02.970 align:start position:0%
+ 
+ 
+
+00:38:02.970 --> 00:38:06.089 align:start position:0%
+ 
+ 
+
+00:38:06.089 --> 00:38:07.950 align:start position:0%
+ 
+ 
+
+00:38:07.950 --> 00:38:09.420 align:start position:0%
+ 
+ 
+
+00:38:09.420 --> 00:38:12.059 align:start position:0%
+ 
+ 
+
+00:38:12.059 --> 00:38:14.520 align:start position:0%
+ 
+ 
+
+00:38:14.520 --> 00:38:17.130 align:start position:0%
+ 
+ 
+
+00:38:17.130 --> 00:38:18.569 align:start position:0%
+ 
+ 
+
+00:38:18.569 --> 00:38:20.789 align:start position:0%
+ 
+ 
+
+00:38:20.789 --> 00:38:22.319 align:start position:0%
+ 
+ 
+
+00:38:22.319 --> 00:38:23.760 align:start position:0%
+ 
+ 
+
+00:38:23.760 --> 00:38:26.099 align:start position:0%
+ 
+ 
+
+00:38:26.099 --> 00:38:27.329 align:start position:0%
+ 
+ 
+
+00:38:27.329 --> 00:38:28.620 align:start position:0%
+ 
+ 
+
+00:38:28.620 --> 00:38:30.900 align:start position:0%
+ 
+ 
+
+00:38:30.900 --> 00:38:32.220 align:start position:0%
+ 
+ 
+
+00:38:32.220 --> 00:38:33.359 align:start position:0%
+ 
+ 
+
+00:38:33.359 --> 00:38:35.160 align:start position:0%
+ 
+ 
+
+00:38:35.160 --> 00:38:38.640 align:start position:0%
+ 
+ 
+
+00:38:38.640 --> 00:38:40.559 align:start position:0%
+ 
+ 
+
+00:38:40.559 --> 00:38:42.900 align:start position:0%
+ 
+ 
+
+00:38:42.900 --> 00:38:44.490 align:start position:0%
+ 
+ 
+
+00:38:44.490 --> 00:38:46.470 align:start position:0%
+ 
+ 
+
+00:38:46.470 --> 00:38:48.930 align:start position:0%
+ 
+ 
+
+00:38:48.930 --> 00:38:51.750 align:start position:0%
+ 
+ 
+
+00:38:51.750 --> 00:38:53.370 align:start position:0%
+ 
+ 
+
+00:38:53.370 --> 00:38:55.140 align:start position:0%
+ 
+ 
+
+00:38:55.140 --> 00:38:57.660 align:start position:0%
+ 
+ 
+
+00:38:57.660 --> 00:38:59.549 align:start position:0%
+ 
+ 
+
+00:38:59.549 --> 00:39:01.740 align:start position:0%
+ 
+ 
+
+00:39:01.740 --> 00:39:06.600 align:start position:0%
+ 
+ 
+
+00:39:06.600 --> 00:39:18.009 align:start position:0%
+ 
+ 
+
+00:39:18.009 --> 00:39:19.880 align:start position:0%
+ 
+ 
+
+00:39:19.880 --> 00:39:51.019 align:start position:0%
+ 
+ 
+
+00:39:51.019 --> 00:39:52.759 align:start position:0%
+ 
+ 
+
+00:39:52.759 --> 00:39:53.779 align:start position:0%
+ 
+ 
+
+00:39:53.779 --> 00:39:55.370 align:start position:0%
+ 
+ 
+
+00:39:55.370 --> 00:39:57.319 align:start position:0%
+ 
+ 
+
+00:39:57.319 --> 00:39:58.579 align:start position:0%
+ 
+ 
+
+00:39:58.579 --> 00:40:00.499 align:start position:0%
+ 
+ 
+
+00:40:00.499 --> 00:40:02.240 align:start position:0%
+ 
+ 
+
+00:40:02.240 --> 00:40:04.569 align:start position:0%
+ 
+ 
+
+00:40:04.569 --> 00:40:07.370 align:start position:0%
+ 
+ 
+
+00:40:07.370 --> 00:40:09.589 align:start position:0%
+ 
+ 
+
+00:40:09.589 --> 00:40:10.880 align:start position:0%
+ 
+ 
+
+00:40:10.880 --> 00:40:14.779 align:start position:0%
+ 
+ 
+
+00:40:14.779 --> 00:40:16.730 align:start position:0%
+ 
+ 
+
+00:40:16.730 --> 00:40:18.829 align:start position:0%
+ 
+ 
+
+00:40:18.829 --> 00:40:20.210 align:start position:0%
+ 
+ 
+
+00:40:20.210 --> 00:40:21.620 align:start position:0%
+ 
+ 
+
+00:40:21.620 --> 00:40:23.210 align:start position:0%
+ 
+ 
+
+00:40:23.210 --> 00:40:27.890 align:start position:0%
+ 
+ 
+
+00:40:27.890 --> 00:40:30.380 align:start position:0%
+ 
+ 
+
+00:40:30.380 --> 00:40:32.150 align:start position:0%
+ 
+ 
+
+00:40:32.150 --> 00:40:33.890 align:start position:0%
+ 
+ 
+
+00:40:33.890 --> 00:40:34.819 align:start position:0%
+ 
+ 
+
+00:40:34.819 --> 00:40:37.460 align:start position:0%
+ 
+ 
+
+00:40:37.460 --> 00:40:38.960 align:start position:0%
+ 
+ 
+
+00:40:38.960 --> 00:40:52.190 align:start position:0%
+ 
+ 
+
+00:40:52.190 --> 00:40:55.170 align:start position:0%
+ 
+ 
+
+00:40:55.170 --> 00:40:56.730 align:start position:0%
+ 
+ 
+
+00:40:56.730 --> 00:40:59.250 align:start position:0%
+ 
+ 
+
+00:40:59.250 --> 00:41:00.690 align:start position:0%
+ 
+ 
+
+00:41:00.690 --> 00:41:03.470 align:start position:0%
+ 
+ 
+
+00:41:03.470 --> 00:41:07.200 align:start position:0%
+ 
+ 
+
+00:41:07.200 --> 00:41:08.460 align:start position:0%
+ 
+ 
+
+00:41:08.460 --> 00:41:10.650 align:start position:0%
+ 
+ 
+
+00:41:10.650 --> 00:41:12.180 align:start position:0%
+ 
+ 
+
+00:41:12.180 --> 00:41:13.680 align:start position:0%
+ 
+ 
+
+00:41:13.680 --> 00:41:15.690 align:start position:0%
+ 
+ 
+
+00:41:15.690 --> 00:41:18.030 align:start position:0%
+ 
+ 
+
+00:41:18.030 --> 00:41:22.470 align:start position:0%
+ 
+ 
+
+00:41:22.470 --> 00:41:23.940 align:start position:0%
+ 
+ 
+
+00:41:23.940 --> 00:41:25.290 align:start position:0%
+ 
+ 
+
+00:41:25.290 --> 00:41:27.390 align:start position:0%
+ 
+ 
+
+00:41:27.390 --> 00:41:28.920 align:start position:0%
+ 
+ 
+
+00:41:28.920 --> 00:41:31.440 align:start position:0%
+ 
+ 
+
+00:41:31.440 --> 00:41:33.150 align:start position:0%
+ 
+ 
+
+00:41:33.150 --> 00:41:34.830 align:start position:0%
+ 
+ 
+
+00:41:34.830 --> 00:41:36.960 align:start position:0%
+ 
+ 
+
+00:41:36.960 --> 00:41:39.330 align:start position:0%
+ 
+ 
+
+00:41:39.330 --> 00:41:41.820 align:start position:0%
+ 
+ 
+
+00:41:41.820 --> 00:41:43.740 align:start position:0%
+ 
+ 
+
+00:41:43.740 --> 00:41:44.910 align:start position:0%
+ 
+ 
+
+00:41:44.910 --> 00:41:47.280 align:start position:0%
+ 
+ 
+
+00:41:47.280 --> 00:41:48.240 align:start position:0%
+ 
+ 
+
+00:41:48.240 --> 00:41:49.260 align:start position:0%
+ 
+ 
+
+00:41:49.260 --> 00:41:50.850 align:start position:0%
+ 
+ 
+
+00:41:50.850 --> 00:41:52.230 align:start position:0%
+ 
+ 
+
+00:41:52.230 --> 00:41:54.960 align:start position:0%
+ 
+ 
+
+00:41:54.960 --> 00:41:57.270 align:start position:0%
+ 
+ 
+
+00:41:57.270 --> 00:41:58.740 align:start position:0%
+ 
+ 
+
+00:41:58.740 --> 00:42:01.260 align:start position:0%
+ 
+ 
+
+00:42:01.260 --> 00:42:02.730 align:start position:0%
+ 
+ 
+
+00:42:02.730 --> 00:42:13.080 align:start position:0%
+ 
+ 
+
+00:42:13.080 --> 00:42:15.150 align:start position:0%
+ 
+ 
+
+00:42:15.150 --> 00:42:17.040 align:start position:0%
+ 
+ 
+
+00:42:17.040 --> 00:42:20.520 align:start position:0%
+ 
+ 
+
+00:42:20.520 --> 00:42:22.020 align:start position:0%
+ 
+ 
+
+00:42:22.020 --> 00:42:23.490 align:start position:0%
+ 
+ 
+
+00:42:23.490 --> 00:42:24.810 align:start position:0%
+ 
+ 
+
+00:42:24.810 --> 00:42:25.710 align:start position:0%
+ 
+ 
+
+00:42:25.710 --> 00:42:27.810 align:start position:0%
+ 
+ 
+
+00:42:27.810 --> 00:42:30.450 align:start position:0%
+ 
+ 
+
+00:42:30.450 --> 00:42:32.400 align:start position:0%
+ 
+ 
+
+00:42:32.400 --> 00:42:34.470 align:start position:0%
+ 
+ 
+
+00:42:34.470 --> 00:42:36.960 align:start position:0%
+ 
+ 
+
+00:42:36.960 --> 00:42:39.480 align:start position:0%
+ 
+ 
+
+00:42:39.480 --> 00:42:41.460 align:start position:0%
+ 
+ 
+
+00:42:41.460 --> 00:42:42.630 align:start position:0%
+ 
+ 
+
+00:42:42.630 --> 00:42:43.860 align:start position:0%
+ 
+ 
+
+00:42:43.860 --> 00:42:45.660 align:start position:0%
+ 
+ 
+
+00:42:45.660 --> 00:42:46.800 align:start position:0%
+ 
+ 
+
+00:42:46.800 --> 00:42:48.480 align:start position:0%
+ 
+ 
+
+00:42:48.480 --> 00:42:50.190 align:start position:0%
+ 
+ 
+
+00:42:50.190 --> 00:42:51.420 align:start position:0%
+ 
+ 
+
+00:42:51.420 --> 00:42:53.220 align:start position:0%
+ 
+ 
+
+00:42:53.220 --> 00:42:58.690 align:start position:0%
+ 
+ 
+
+00:42:58.690 --> 00:43:07.660 align:start position:0%
+ 
+ 
+
+00:43:07.660 --> 00:43:09.609 align:start position:0%
+ 
+ 
+
+00:43:09.609 --> 00:43:11.050 align:start position:0%
+ 
+ 
+
+00:43:11.050 --> 00:43:14.440 align:start position:0%
+ 
+ 
+
+00:43:14.440 --> 00:43:15.910 align:start position:0%
+ 
+ 
+
+00:43:15.910 --> 00:43:19.900 align:start position:0%
+ 
+ 
+
+00:43:19.900 --> 00:43:21.430 align:start position:0%
+ 
+ 
+
+00:43:21.430 --> 00:43:24.130 align:start position:0%
+ 
+ 
+
+00:43:24.130 --> 00:43:25.990 align:start position:0%
+ 
+ 
+
+00:43:25.990 --> 00:43:29.290 align:start position:0%
+ 
+ 
+
+00:43:29.290 --> 00:43:30.700 align:start position:0%
+ 
+ 
+
+00:43:30.700 --> 00:43:32.710 align:start position:0%
+ 
+ 
+
+00:43:32.710 --> 00:43:33.849 align:start position:0%
+ 
+ 
+
+00:43:33.849 --> 00:43:34.900 align:start position:0%
+ 
+ 
+
+00:43:34.900 --> 00:43:36.160 align:start position:0%
+ 
+ 
+
+00:43:36.160 --> 00:43:38.230 align:start position:0%
+ 
+ 
+
+00:43:38.230 --> 00:43:41.710 align:start position:0%
+ 
+ 
+
+00:43:41.710 --> 00:43:43.329 align:start position:0%
+ 
+ 
+
+00:43:43.329 --> 00:43:45.130 align:start position:0%
+ 
+ 
+
+00:43:45.130 --> 00:43:46.270 align:start position:0%
+ 
+ 
+
+00:43:46.270 --> 00:43:47.740 align:start position:0%
+ 
+ 
+
+00:43:47.740 --> 00:43:50.349 align:start position:0%
+ 
+ 
+
+00:43:50.349 --> 00:43:56.800 align:start position:0%
+ 
+ 
+
+00:43:56.800 --> 00:43:57.730 align:start position:0%
+ 
+ 
+
+00:43:57.730 --> 00:43:59.710 align:start position:0%
+ 
+ 
+
+00:43:59.710 --> 00:44:03.460 align:start position:0%
+ 
+ 
+
+00:44:03.460 --> 00:44:05.260 align:start position:0%
+ 
+ 
+
+00:44:05.260 --> 00:44:14.770 align:start position:0%
+ 
+ 
+
+00:44:14.770 --> 00:44:17.470 align:start position:0%
+ 
+ 
+
+00:44:17.470 --> 00:44:18.819 align:start position:0%
+ 
+ 
+
+00:44:18.819 --> 00:44:20.230 align:start position:0%
+ 
+ 
+
+00:44:20.230 --> 00:44:21.760 align:start position:0%
+ 
+ 
+
+00:44:21.760 --> 00:44:22.780 align:start position:0%
+ 
+ 
+
+00:44:22.780 --> 00:44:24.430 align:start position:0%
+ 
+ 
+
+00:44:24.430 --> 00:44:30.640 align:start position:0%
+ 
+ 
+
+00:44:30.640 --> 00:44:32.740 align:start position:0%
+ 
+ 
+
+00:44:32.740 --> 00:44:34.990 align:start position:0%
+ 
+ 
+
+00:44:34.990 --> 00:44:38.380 align:start position:0%
+ 
+ 
+
+00:44:38.380 --> 00:44:39.520 align:start position:0%
+ 
+ 
+
+00:44:39.520 --> 00:44:41.980 align:start position:0%
+ 
+ 
+
+00:44:41.980 --> 00:44:43.720 align:start position:0%
+ 
+ 
+
+00:44:43.720 --> 00:44:45.790 align:start position:0%
+ 
+ 
+
+00:44:45.790 --> 00:44:48.490 align:start position:0%
+ 
+ 
+
+00:44:48.490 --> 00:44:51.760 align:start position:0%
+ 
+ 
+
+00:44:51.760 --> 00:44:53.440 align:start position:0%
+ 
+ 
+
+00:44:53.440 --> 00:44:54.880 align:start position:0%
+ 
+ 
+
+00:44:54.880 --> 00:44:59.130 align:start position:0%
+ 
+ 
+
+00:44:59.130 --> 00:45:01.660 align:start position:0%
+ 
+ 
+
+00:45:01.660 --> 00:45:03.099 align:start position:0%
+ 
+ 
+
+00:45:03.099 --> 00:45:05.559 align:start position:0%
+ 
+ 
+
+00:45:05.559 --> 00:45:06.760 align:start position:0%
+ 
+ 
+
+00:45:06.760 --> 00:45:08.620 align:start position:0%
+ 
+ 
+
+00:45:08.620 --> 00:45:10.120 align:start position:0%
+ 
+ 
+
+00:45:10.120 --> 00:45:11.880 align:start position:0%
+ 
+ 
+
+00:45:11.880 --> 00:45:14.039 align:start position:0%
+ 
+ 
+
+00:45:14.039 --> 00:45:19.380 align:start position:0%
+ 
+ 
+
+00:45:19.380 --> 00:45:21.930 align:start position:0%
+ 
+ 
+
+00:45:21.930 --> 00:45:24.420 align:start position:0%
+ 
+ 
+
+00:45:24.420 --> 00:45:25.890 align:start position:0%
+ 
+ 
+
+00:45:25.890 --> 00:45:28.349 align:start position:0%
+ 
+ 
+
+00:45:28.349 --> 00:45:30.660 align:start position:0%
+ 
+ 
+
+00:45:30.660 --> 00:45:32.940 align:start position:0%
+ 
+ 
+
+00:45:32.940 --> 00:45:34.349 align:start position:0%
+ 
+ 
+
+00:45:34.349 --> 00:45:37.229 align:start position:0%
+ 
+ 
+
+00:45:37.229 --> 00:45:39.779 align:start position:0%
+ 
+ 
+
+00:45:39.779 --> 00:45:42.180 align:start position:0%
+ 
+ 
+
+00:45:42.180 --> 00:45:45.380 align:start position:0%
+ 
+ 
+
+00:45:45.380 --> 00:45:47.880 align:start position:0%
+ 
+ 
+
+00:45:47.880 --> 00:45:49.170 align:start position:0%
+ 
+ 
+
+00:45:49.170 --> 00:45:50.670 align:start position:0%
+ 
+ 
+
+00:45:50.670 --> 00:45:53.729 align:start position:0%
+ 
+ 
+
+00:45:53.729 --> 00:45:54.900 align:start position:0%
+ 
+ 
+
+00:45:54.900 --> 00:45:57.710 align:start position:0%
+ 
+ 
+
+00:45:57.710 --> 00:45:59.700 align:start position:0%
+ 
+ 
+
+00:45:59.700 --> 00:46:01.559 align:start position:0%
+ 
+ 
+
+00:46:01.559 --> 00:46:02.489 align:start position:0%
+ 
+ 
+
+00:46:02.489 --> 00:46:03.870 align:start position:0%
+ 
+ 
+
+00:46:03.870 --> 00:46:05.759 align:start position:0%
+ 
+ 
+
+00:46:05.759 --> 00:46:06.839 align:start position:0%
+ 
+ 
+
+00:46:06.839 --> 00:46:08.370 align:start position:0%
+ 
+ 
+
+00:46:08.370 --> 00:46:09.809 align:start position:0%
+ 
+ 
+
+00:46:09.809 --> 00:46:12.779 align:start position:0%
+ 
+ 
+
+00:46:12.779 --> 00:46:19.819 align:start position:0%
+ 
+ 
+
+00:46:19.819 --> 00:46:22.529 align:start position:0%
+ 
+ 
+
+00:46:22.529 --> 00:46:24.690 align:start position:0%
+ 
+ 
+
+00:46:24.690 --> 00:46:26.519 align:start position:0%
+ 
+ 
+
+00:46:26.519 --> 00:46:27.809 align:start position:0%
+ 
+ 
+
+00:46:27.809 --> 00:46:29.370 align:start position:0%
+ 
+ 
+
+00:46:29.370 --> 00:46:31.049 align:start position:0%
+ 
+ 
+
+00:46:31.049 --> 00:46:33.029 align:start position:0%
+ 
+ 
+
+00:46:33.029 --> 00:46:34.229 align:start position:0%
+ 
+ 
+
+00:46:34.229 --> 00:46:41.279 align:start position:0%
+ 
+ 
+
+00:46:41.279 --> 00:46:45.869 align:start position:0%
+ 
+ 
+

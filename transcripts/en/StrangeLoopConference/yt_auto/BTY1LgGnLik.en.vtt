@@ -1,0 +1,2936 @@
+WEBVTT
+Kind: captions
+Language: en
+
+00:00:05.730 --> 00:00:09.400 align:start position:0%
+ 
+everyone today I'll be talking about  deterministic docker images with Bill  microservices as you can tell by the  name of the talk first some fun facts my  name is john san miguel i also go by jsm  I'm on jsm on the slack strange loop  slack if you want to find me after or  talk to me currently working at samsara  and as part of that I'm working on  observability right now part of our core  infrastructure team and also I have a  cat I'd have like no social media  presence at all but my cat does have an  Instagram so if you want to follow my  cat go for it cool so first let's talk  about why this is even like valuable so  in our in our case what we wanted to do  was we want to make deploys as fast as  possible I'd say I'm sorry and there's a  few times there's a few reasons why we  Michael might want to do that there is  um some winds around developer velocity  being able to iterate on features as  quickly as possible and push things out  there's also a bunch of changes that  sometimes need to wait for other changes  to get deployed first before we can  actually roll them out and there's also  bug resolution time for customers just  if you find a bug and fix it it would be  great if we can get it out as quickly as  possible and so both of these things  kind of lead to happy engineers and  happy customers so before I get into it  I just want to talk a little bit about  what we do at samsara um just to get a  better idea of what we're what this is  for so we have a bunch of devices that  gather a bunch of data from a bunch of  various things trucks machinery  industrial plant applications and then  send that to our devices and send that  to our cloud platform where we do a  bunch of different things around like  analytics and stuff for those companies  I like to think of it I was like  basically data dog for the real world  metrics that you might find and so to do  this what we do for our stack is we have  a react react front ends for our mobile  and our website and those talk to our  servers via graph QL  which in turn talked to a bunch of micro  services via G RPC which are all built  in going and we push this all out with  build kite terraform onto ECS and  finally on docker containers and when I  say we use golang at samsara we use  going a lot we use it for services we  use it for our our deploy orchestration  we use it for generating terraform files  we use it for managing our teams and  like configuring our teams via going  struck so everything in our back-end is  go which has actually been pretty great  because everyone knows how to work in  that kind of codebase and it like makes  working and integrating with different  parts of our platform really easy and  when I say we have going micro services  we have a lot of those to go actually we  actually have more micro services and  then engineers right now and I know you  might be thinking our micro service is  really that good I'm not gonna go into  that kind of argument I belong thoughts  if you want to ask me about them but we  can talk about that another time  so instead here's some pictures of my  cat  anyways cool so before we dive into the  kind of pieces let's talk about what  determinism means in this context so  what we're talking about here is byte  for byte determinism where you compile  and package the same exact code and that  should lead to the same exact docker  digest and so the way this helps is for  a few things that strips out time from  having to move these darker layers  across the network from our CI systems  for different servers to new servers  that come up as we auto-scale it also  really helps when we for enabling no op  deploys for unchanged micro services  which saves a lot on basically like  shutdown and startup time of these  services and also there's less downtime  on singleton services that we have where  we can only run one  there's prevent the prevents a lot of  initialization outages like if you have  to talk to ec2 Matt a data service or  talk to a config system or talk to your  secret system once that gets started  then the services won't have to deal  with those kind of issues if you don't  have to take them down for no reason and  so overall you get a lot of speed and  reliability gains from doing this  cool so I want to also want to talk  about what deploying a service looks  like at samsara so basically we compile  go binary we build it into a docker  image and then we ship it to ECS so to  get there I'll be talking about three  different sections for this talk I'll be  talking about how to make go line  compilers deterministic I'll be talking  about how to make docker builds  deterministic and also how to reduce  large dependency graphs and I'll be  using reproducible and deterministic  kind of interchangeably in this talk so  they kind of essentially will mean the  same thing for what I'm talking about  here so the first thing like I said is a  building deterministic going binaries  that's the first thing that we need to  do to get anywhere and there are some  issues with this with going right now  going includes paths of standard  packages used in go route there's it  includes passive libraries using go  paths if you see go for importing  various see dependencies then the host  linker generally includes passive linked  objects into the binary as well and it  also includes an arbitrary build ID and  these binaries which make going right  now not deterministic even though it  doesn't tend to be and there's some  different strategies you can use to  tackle these different issues for the  going paths there's a few kind of very  vague or not well documented things that  you can do one of which is you there's  this go route final environment variable  where you can change the go with path  prefix to a static value there's also a  trim path flag that they added and I  think 1.9 or 10 that allow stripping  paths of libraries in the go path down  to just the import name we don't  actually do either of these at samsara  on what we do instead is we compile all  of our services inside of these kind of  identical build containers that we use  in our CA and CD pipelines so that kind  of strips out these issues for us and  there's also this a host linker thing  where we there's different linkers that  you can use there's a host linker  there's a you can use a go lines  internal linker and if you use going to  internal linker then it  doesn't include the pass of the linked  objects in the binary and also does not  include that build ID and so we use this  flag at samsara with some white listed  services that just don't work with the  internal linker for various reasons and  this gets us most of the way to going  determinism and what I want to talk  about next is kind of just to dive into  like some stuff that has happened with  this so going in 1.7 introduced a new  compiler back-end based on static single  assignment form where basically this is  a design principle of compilers where if  you represent a program in this form  then the it makes a lot of optimizations  it enables some optimizations that can't  exist without it and also makes a lot of  other optimizations a lot better and so  there's a lots of some big improvements  in the compiler and performance speed of  packaged binaries and this also  introduced a regression at some point  where essentially what would happen is  that by using this SSA divide  instructions within within the binary  rule requires values and specific  registers and so if you have two  subsequent divide instructions then the  result of those need to be moved  somewhere else before the second as  issued and so they made a fix to this at  some point or basically and this was  introduced in 1.8 beta where when  allocating registers before kicking out  the existing value they would copy it to  a spare register if there is one and so  as part of this kind of a performance  improvement they added this code and  I'll let you guys take a look at this  for a little bit and see if any anyone  who might be a compiler expert can see  what's wrong with this code essentially  what's happening here is that they have  this list of register copies and they're  going through them and finding if  they're they were never used and then if  they will if they weren't used then they  would basically free that register copy  and this was the code in case anyone  thought of something similar this is the  code that fixed that specific  determinism issue so what's happening  here is essentially that if you delete a  register copy that is unused that  actually might potentially leave another  register whose only use is pointing to  that other register that you just  deleted and so what you might end up  with if you just do this once is another  unused register after you do this clean  up and so what this what they added here  is basically a loop where they just keep  doing this until it gets to this if no  progress break and this progress thing  only happens if they actually execute  that inner block and so they'll  basically just keep going through all  the registered copies until they get to  a point where they happen to leave than  anything  and so this fixed the determinism issue  and 1.8 and so to kind of just let  highlight that a little bit more so you  have a registered copy pointing to  another register copy point to another  register copy you run the script it  deletes one but now you have another one  that's pointing to nothing and then so  what they did is they just kept doing  this where you would do this again and  again does anyone else have does anyone  have an idea what happens when they do  this for the last time you might be  thinking nothing but it's actually  another picture of my cat in a box but  yeah so eventually they get to this  point where they get rid of all these  unused register copies and that's how  they fix that determinism bug and go  cool so before I move on to the next  part about how to make docker build  deterministic I'm just gonna give you  guys old break play picture play video  of my cat  [Music]  alright now we've all been able to  refresh our minds let's talk about  deterministic dr. builds so the next  thing we want to do as part of this is  well make our dogger build for our going  but a binary is deterministic and so you  might be thinking some of you who are  more familiar with docker that doesn't  this kind of already work doesn't this  already happen if you have dot when you  were in docker builds you can they can  use a cache where basically if you run  docker build with the same exact input  it'll use the existing cache and use  existing layers instead of having to  build them again but what happens with  pipeline deploys with this kind of  caching mechanism so if you look at kind  of deploying a service there's a build  step there's a deploy step when you want  to build that service again you do it  again build deploy build deploy so let's  talk about doing this in a specific case  where you have the first build is  basically v1 of the service and then the  second one is v2 and 3rd build actually  got triggered but it's the same exact  service in the code hasn't changed this  will work just fine using cache if you  do this in this kind of like single  pipeline kind of way but if you move to  this kind of pipelines thing we did this  to basically make our deploys happen as  quickly as possible we decided we did  not need to wait for the previous  version to deploy before releasing the  next or before starting to build the  next version and so the issue here that  you might see is that we have this V to  deploy happening but it hasn't finished  and so we can't actually use the cash  from that deploy because it actually  hasn't been hasn't finished deploying it  and so what happens here is that even  though there's a v2 that the third  deploy is the exact same version as the  second deploy I won't be able to use a  cache and thus will have to go through  the whole build itself without using a  cache and that will end up with a  different docker digest and the reason  for that if we dive into that a little  bit more  is that there are some issues with  docker reproducibility they never really  kind of intended for docker to be  completely deterministic run commands  are just non-deterministic by nature if  you're doing an app to get for some  packages the repository could have  changed the actual code that you're  actually apt-get installing and so you  cannot actually rely on run to be  deterministic at all the file system  digest also includes M times and so when  it makes the the layer hash it'll take  into account that and also it also  includes a random a random hex string as  identifier and not just the  cryptographic hash of the layer content  and so to actually get around this  there's a few things that you can do one  don't use run instead of using run you  can like basically build a base image  that you you build at like set intervals  or manually for any dependencies that  need to be installed you need to reset N  times across the file system and you  have to manually construct the docker  layer with their own identifier and this  is basically kind of just rewriting  docker with some stuff with some with  some changes and so I started going off  on this route and I realized that  there's actually something that does all  this for you  it's called Basel built by Google and so  using Basel they they do all that stuff  for you in fuse Basel you comes out with  deterministic docker image where the  exact where the docker digests is  exactly the same if you give it the  exact same input so we use it's I'm  sorry this is just some snippet of some  of our configuration scripts like I said  we use go for everything and so we  actually generate these via go but the  interest the thing to point out here is  we use this base image called dis  realists which is a Debian based  bare-bones distro that from whoa  from Google and so these images are  basically like really stripped down they  don't contain a shell they don't contain  a package manager they only really  contain your application and its runtime  dependencies this makes it so you don't  go you don't actually need dependencies  for the most part because they're  compiled in the binary  and so this works pretty well with go  and then but also like me fixes a lot of  security problems and that you don't  have a shell so people can't execute  stuff in your in your container you  don't have a package manager so you  could people you don't have to worry  about like checking shah's and stuff and  so it makes it also has a bunch of the  stuff that you actually need to run  going images started going binaries and  so it works pretty well for going they  also have destroyed images for various  other languages like I think they have  one for Python and Java so you could  take a look at their their images for  using basil of this another thing I like  to do is I like to tell potential  candidates at X hey I'm sorry that we've  been using docker 50 years it's just not  true because doctors only been around  for like 10 years or so but when I  talked about earlier about how you have  to reset the end times in the file  system if you do that then you do with  docker images it prints out all of your  images and it says those built 49 years  ago so that's kind of nifty cool so the  last thing that I want to be talking  about here is basically how you can  minimize your dependency chains so  determinism doesn't actually help with  golang if your code changes like way too  frequently and this could happen because  [Music]  actually before that I want to talk  about what I talked about before so just  kind of coding myself so compelling and  packaging the same code will end up with  the same docker digest I want to kind of  clarify what packaging what the same  code means and the in the world of go  and so if you look at go they have a and  you look at the internal linker they  have a dead code remover but we use  golang 1.1 1.2 Levin right now and 1.11  unused static functions are removed from  the binary but they can still actually  change the digest of the binary also if  reflect is used go on can't ignore  methods on structs going has a bunch  going has this reflection package where  you can base  we pull out a method on the struct by  name and so because of that you can't  actually determine whether or not a  method inside of a struct is actually  used if the program imports reflect or  specific methods of reflected and so if  you use reflect going the going deadhead  remover cannot actually strip out any  methods on your structs and by doing so  even if you don't use any of these  unused functions or you don't use any of  these methods in your code as long as  you use something else in that package  the binary will the binary output will  include information around that package  and so essentially when we're talking  about the code being the same and golang  we're really talking about the package  being the same and so if any part of the  package or its imports changes than the  binary changes this is mostly true and  it's it's a pretty good assumption to  make although it might not be true in  all cases and so based off of this kind  of information you can to make any you  can't make any assumptions about this  your service only includes this function  all you've changes that one function and  your and your program and so sorry if  another function and you're in your  program in your package has changed even  if you don't actually use that function  your binary will still change so that  kind of a makes things a little bit more  difficult because now you have a bunch  of code that you might not even be  looking at or using and those change and  that affects your by affects your binary  and so if you another way to kind of  think about it that I like to use as a  metaphor is for anyone who's read or  watched Enders game they have this  weapon called the little doctor and  essentially what it does is shoots this  giant laser beam and but it only works  if the actual things that it's targeting  are close enough together where it can  cause a chain explosion slash reaction  and so I want you to think of this laser  as your build or CI system and I want  you to think of all those alien ships as  their micro-services and what you don't  want is for your micro services to  explode into a fiery death  and so kind of playing off this metaphor  what you need to do for your services is  you need to keep them far enough apart  where they're not too dependent on any  shared code where it would cause a chain  reaction of changing one thing actually  propagates changes to all of your other  micro services and then even if you're  using determinism like you change one  small helper library and then everything  just starts deploying anyways so there's  a that that was probably the hardest  challenge out of this whole of this  whole project was to make this better  and so we wrote two tools to help with  this there's one called depth stat which  is for a dependency analysis and there's  one called import checker which  disallows and certain imports with  certain rules and I'm currently working  on open sourcing these I'll give you  guys a link to the base repo that is  currently empty but will be pushed there  once it's ready and so I want to talk a  little bit about what this does and how  it works basically it builds a graph of  a all of your services and what they  import and all of their direct and ports  all their child imports and after  building this graph there's a lot of  cool and nifty things that you can do  with that so one of the commands in  depth stat is counts so I run this  command and I can actually see number of  services that are being that are using a  particular package and so in this case  this is a sorted by the least frequently  important we have a bunch of packages  that are only being imported by one  service but we also have a bunch of  packages are being imported by a bunch  of services and if you find a package  that you see that's being imported by  all of your services with this tool you  can dig into that a little bit and you  can run the step set package command  which will you pass in the package and  it'll tell you all of these services  that are dependent on that particular  package in this case we're using it to  kind of look at this like imports of  this legacy system this is kind of one  of our you know everyone has legacy code  and lying around we have a few services  still using that and this is a tool to  help us identify which of those services  are still using that and this legacy  system also does dependency does not use  dependencies very well  for our services we use this thing  called FX 2d dependency injection which  allows us to add in dependencies like  our data dog client our our like log  client and a bunch of other like various  things we might want to inject into  runtime without actually having to call  imports at in the actual code layer and  so one of the things that I worked on  was also helping deprecated services  that use this legacy system we have over  like 200 services so now there's  probably around 20 left so to the pretty  good job there of getting that done  there's this other command and deb stat  which is probably the coolest one it's  called dep stat deploys and it walks  through all the commits and will  basically tell you this commit changed  this particular package which caused  these particular services to deploy and  you can kind of use this to kind of to  get a better idea of how bad your  dependencies are if you see a deploy and  it seemed to trigger all of your  services to change you can find the  commit and find what caused that  what package cause that propagating  deployment and the last thing I want to  talk about is this stuff set command  called Y which so you found that a  service that was deployed and you saw it  was deployed because of the change  inside of another package it's not easy  to walk the import tree to actually  understand why this package is being  imported by our service and so this  tells you about how this actual packages  is being imported so you can see here  that legacy system is imported by this  thing called stat server which is  imported by this thing called Copiah  service router and now it's imported by  this server by the service that we're  looking at so that's def stat and the  other tool I talked about was import  checker so imports are basically gives  you a way to define these rules on  different packages and you can say  essentially that I have this package and  no one can no one can import it and then  you can also provide a whitelist that  kind of overrides that and you can say  well these particular services can't  import it and this is good for basically  helping you  keep people from importing code that  you've identified should not be imported  by everyone cool so you have these tools  but there's also a bunch of code  patterns that you kind of have to do  that you can't that it's hard to write  tooling for but basically you want to  break up the large packages you we have  a giant helpers package you might have  one too that has a bunch of various  helper functions in code so you want to  break that up into smaller packages you  also want to move commonly used configs  constants and types into their own sub  package and also you want to split  frequently change code from the more  static portions so say you have for  example a a configuration object that  lists like the names of your services  and how many of those you want to deploy  at the same time and you have a bunch of  other code that takes that and then like  will generate or control is you have  other code that it's like orchestration  tooling that will use that configuration  to do whatever you're doing the actual  orchestration code itself probably won't  change much like the way you're actually  taking this configuration and deploying  stuff the code itself probably won't  change much but if you're changing the  configuration a lot then that will cause  that particular package to change all  the time and so by splitting up  frequently changed code for the more  from the more static code then that  helps with this kind of dependency  chain-reaction thing and also you want  to vendor your dependencies properly  going has a vendor directory thing and  there's a bunch of various dependency or  package managers and go I think the  official one is now like Vigo but you  want to make sure that you're pulling  your dependencies on a static way either  checking them into vendor or pulling  them based off of a specific version or  hash so that way your vendor libraries  aren't causing a chain reaction of  binaries to change by like doing like  changing something that you might not  even use so it's good to kind of just  bend or vendor your packages and the  more deterministic way and this was kind  of the result of of what happened here  where essentially we this was  for this was after so what we're doing  here is we're basically building all of  our services in the end we're deploying  all of them and so this took about an  hour and a half and then in some cases  on in our previous deploy system and by  doing making this change we were able to  cut down build times by quite a bit and  so at some point we're pretty much  deploying like three times an hour and  when I say deploying I mean deploying  hundreds of different micro services at  the same time and so yeah it was a  pretty successful project and so the  last thing I just want to go over is a  summary of what I talked about here so  the first step to this was making our  going compiles deterministic the second  step was making a docker build  deterministic and then the third step  was reducing these large dependency  graphs that's the end of my talk I'm  gonna save the rest of the time for Q&amp;A  but if you want to reach out to me  I'm github.com /j smj I might say I'm  sorry comm my cat's Instagram handle  again is prints dot of dot meow and that  repo that I told you about where I'll be  pushing the DEP stat code will be in  github comm / samsara HQ / DEP stat and  lastly I put in some things for let's  encrypt for they provided some notes  that they used as a reference for some  of the deterministic golang stuff and  also slides Carnivale comm for these  slide templates cool  any questions what's up  oh maybe I'll look into that yeah we're  still using go vendor I'm not sure if  like Vigo has actually been like is out  of beta and so we're kind of waiting for  that to get out of beta before we move  to that  sorry I'm not following a question  yeah I think I'm not sure how Vigo works  like right now they probably like figure  out which packages you're importing  based off of looking at stuff and you  might like it might only reference likes  it might pull things based off of like  thus function signatures and package  signatures and you might need to like  actually like pin it to a specific  version if you needed to do that yeah  yeah I think there's so Basel also  includes has its own like go rules to  like build go binaries and then also  they I think they have some dependency  management that they can do themselves  as well so I think there might be other  tools for this as well  I am building sorry no no I'm not  building go binaries with basil  does that IV I've used it before does it  kind of solve the similar like similar  problems okay take a look at that - cool  I need anything else  sweet well that's the end of my talk and  I'll stick around for any questions that  anyone might have probably over here so  come find me  also I want to give a shout out to  samsara for sponsoring this event as  well we have a table on the first floor  downstairs so I'll also be hanging out  there as well if you want to come chat  with some of us also Joey right there  it's also at samsara if you want to talk  to her about mobile stuff cool thanks
+
+00:00:09.400 --> 00:00:11.420 align:start position:0%
+everyone today I'll be talking about  deterministic docker images with Bill  microservices as you can tell by the  name of the talk first some fun facts my  name is john san miguel i also go by jsm  I'm on jsm on the slack strange loop  slack if you want to find me after or  talk to me currently working at samsara  and as part of that I'm working on  observability right now part of our core  infrastructure team and also I have a  cat I'd have like no social media  presence at all but my cat does have an  Instagram so if you want to follow my  cat go for it cool so first let's talk  about why this is even like valuable so  in our in our case what we wanted to do  was we want to make deploys as fast as  possible I'd say I'm sorry and there's a  few times there's a few reasons why we  Michael might want to do that there is  um some winds around developer velocity  being able to iterate on features as  quickly as possible and push things out  there's also a bunch of changes that  sometimes need to wait for other changes  to get deployed first before we can  actually roll them out and there's also  bug resolution time for customers just  if you find a bug and fix it it would be  great if we can get it out as quickly as  possible and so both of these things  kind of lead to happy engineers and  happy customers so before I get into it  I just want to talk a little bit about  what we do at samsara um just to get a  better idea of what we're what this is  for so we have a bunch of devices that  gather a bunch of data from a bunch of  various things trucks machinery  industrial plant applications and then  send that to our devices and send that  to our cloud platform where we do a  bunch of different things around like  analytics and stuff for those companies  I like to think of it I was like  basically data dog for the real world  metrics that you might find and so to do  this what we do for our stack is we have  a react react front ends for our mobile  and our website and those talk to our  servers via graph QL  which in turn talked to a bunch of micro  services via G RPC which are all built  in going and we push this all out with  build kite terraform onto ECS and  finally on docker containers and when I  say we use golang at samsara we use  going a lot we use it for services we  use it for our our deploy orchestration  we use it for generating terraform files  we use it for managing our teams and  like configuring our teams via going  struck so everything in our back-end is  go which has actually been pretty great  because everyone knows how to work in  that kind of codebase and it like makes  working and integrating with different  parts of our platform really easy and  when I say we have going micro services  we have a lot of those to go actually we  actually have more micro services and  then engineers right now and I know you  might be thinking our micro service is  really that good I'm not gonna go into  that kind of argument I belong thoughts  if you want to ask me about them but we  can talk about that another time  so instead here's some pictures of my  cat  anyways cool so before we dive into the  kind of pieces let's talk about what  determinism means in this context so  what we're talking about here is byte  for byte determinism where you compile  and package the same exact code and that  should lead to the same exact docker  digest and so the way this helps is for  a few things that strips out time from  having to move these darker layers  across the network from our CI systems  for different servers to new servers  that come up as we auto-scale it also  really helps when we for enabling no op  deploys for unchanged micro services  which saves a lot on basically like  shutdown and startup time of these  services and also there's less downtime  on singleton services that we have where  we can only run one  there's prevent the prevents a lot of  initialization outages like if you have  to talk to ec2 Matt a data service or  talk to a config system or talk to your  secret system once that gets started  then the services won't have to deal  with those kind of issues if you don't  have to take them down for no reason and  so overall you get a lot of speed and  reliability gains from doing this  cool so I want to also want to talk  about what deploying a service looks  like at samsara so basically we compile  go binary we build it into a docker  image and then we ship it to ECS so to  get there I'll be talking about three  different sections for this talk I'll be  talking about how to make go line  compilers deterministic I'll be talking  about how to make docker builds  deterministic and also how to reduce  large dependency graphs and I'll be  using reproducible and deterministic  kind of interchangeably in this talk so  they kind of essentially will mean the  same thing for what I'm talking about  here so the first thing like I said is a  building deterministic going binaries  that's the first thing that we need to  do to get anywhere and there are some  issues with this with going right now  going includes paths of standard  packages used in go route there's it  includes passive libraries using go  paths if you see go for importing  various see dependencies then the host  linker generally includes passive linked  objects into the binary as well and it  also includes an arbitrary build ID and  these binaries which make going right  now not deterministic even though it  doesn't tend to be and there's some  different strategies you can use to  tackle these different issues for the  going paths there's a few kind of very  vague or not well documented things that  you can do one of which is you there's  this go route final environment variable  where you can change the go with path  prefix to a static value there's also a  trim path flag that they added and I  think 1.9 or 10 that allow stripping  paths of libraries in the go path down  to just the import name we don't  actually do either of these at samsara  on what we do instead is we compile all  of our services inside of these kind of  identical build containers that we use  in our CA and CD pipelines so that kind  of strips out these issues for us and  there's also this a host linker thing  where we there's different linkers that  you can use there's a host linker  there's a you can use a go lines  internal linker and if you use going to  internal linker then it  doesn't include the pass of the linked  objects in the binary and also does not  include that build ID and so we use this  flag at samsara with some white listed  services that just don't work with the  internal linker for various reasons and  this gets us most of the way to going  determinism and what I want to talk  about next is kind of just to dive into  like some stuff that has happened with  this so going in 1.7 introduced a new  compiler back-end based on static single  assignment form where basically this is  a design principle of compilers where if  you represent a program in this form  then the it makes a lot of optimizations  it enables some optimizations that can't  exist without it and also makes a lot of  other optimizations a lot better and so  there's a lots of some big improvements  in the compiler and performance speed of  packaged binaries and this also  introduced a regression at some point  where essentially what would happen is  that by using this SSA divide  instructions within within the binary  rule requires values and specific  registers and so if you have two  subsequent divide instructions then the  result of those need to be moved  somewhere else before the second as  issued and so they made a fix to this at  some point or basically and this was  introduced in 1.8 beta where when  allocating registers before kicking out  the existing value they would copy it to  a spare register if there is one and so  as part of this kind of a performance  improvement they added this code and  I'll let you guys take a look at this  for a little bit and see if any anyone  who might be a compiler expert can see  what's wrong with this code essentially  what's happening here is that they have  this list of register copies and they're  going through them and finding if  they're they were never used and then if  they will if they weren't used then they  would basically free that register copy  and this was the code in case anyone  thought of something similar this is the  code that fixed that specific  determinism issue so what's happening  here is essentially that if you delete a  register copy that is unused that  actually might potentially leave another  register whose only use is pointing to  that other register that you just  deleted and so what you might end up  with if you just do this once is another  unused register after you do this clean  up and so what this what they added here  is basically a loop where they just keep  doing this until it gets to this if no  progress break and this progress thing  only happens if they actually execute  that inner block and so they'll  basically just keep going through all  the registered copies until they get to  a point where they happen to leave than  anything  and so this fixed the determinism issue  and 1.8 and so to kind of just let  highlight that a little bit more so you  have a registered copy pointing to  another register copy point to another  register copy you run the script it  deletes one but now you have another one  that's pointing to nothing and then so  what they did is they just kept doing  this where you would do this again and  again does anyone else have does anyone  have an idea what happens when they do  this for the last time you might be  thinking nothing but it's actually  another picture of my cat in a box but  yeah so eventually they get to this  point where they get rid of all these  unused register copies and that's how  they fix that determinism bug and go  cool so before I move on to the next  part about how to make docker build  deterministic I'm just gonna give you  guys old break play picture play video  of my cat  [Music]  alright now we've all been able to  refresh our minds let's talk about  deterministic dr. builds so the next  thing we want to do as part of this is  well make our dogger build for our going  but a binary is deterministic and so you  might be thinking some of you who are  more familiar with docker that doesn't  this kind of already work doesn't this  already happen if you have dot when you  were in docker builds you can they can  use a cache where basically if you run  docker build with the same exact input  it'll use the existing cache and use  existing layers instead of having to  build them again but what happens with  pipeline deploys with this kind of  caching mechanism so if you look at kind  of deploying a service there's a build  step there's a deploy step when you want  to build that service again you do it  again build deploy build deploy so let's  talk about doing this in a specific case  where you have the first build is  basically v1 of the service and then the  second one is v2 and 3rd build actually  got triggered but it's the same exact  service in the code hasn't changed this  will work just fine using cache if you  do this in this kind of like single  pipeline kind of way but if you move to  this kind of pipelines thing we did this  to basically make our deploys happen as  quickly as possible we decided we did  not need to wait for the previous  version to deploy before releasing the  next or before starting to build the  next version and so the issue here that  you might see is that we have this V to  deploy happening but it hasn't finished  and so we can't actually use the cash  from that deploy because it actually  hasn't been hasn't finished deploying it  and so what happens here is that even  though there's a v2 that the third  deploy is the exact same version as the  second deploy I won't be able to use a  cache and thus will have to go through  the whole build itself without using a  cache and that will end up with a  different docker digest and the reason  for that if we dive into that a little  bit more  is that there are some issues with  docker reproducibility they never really  kind of intended for docker to be  completely deterministic run commands  are just non-deterministic by nature if  you're doing an app to get for some  packages the repository could have  changed the actual code that you're  actually apt-get installing and so you  cannot actually rely on run to be  deterministic at all the file system  digest also includes M times and so when  it makes the the layer hash it'll take  into account that and also it also  includes a random a random hex string as  identifier and not just the  cryptographic hash of the layer content  and so to actually get around this  there's a few things that you can do one  don't use run instead of using run you  can like basically build a base image  that you you build at like set intervals  or manually for any dependencies that  need to be installed you need to reset N  times across the file system and you  have to manually construct the docker  layer with their own identifier and this  is basically kind of just rewriting  docker with some stuff with some with  some changes and so I started going off  on this route and I realized that  there's actually something that does all  this for you  it's called Basel built by Google and so  using Basel they they do all that stuff  for you in fuse Basel you comes out with  deterministic docker image where the  exact where the docker digests is  exactly the same if you give it the  exact same input so we use it's I'm  sorry this is just some snippet of some  of our configuration scripts like I said  we use go for everything and so we  actually generate these via go but the  interest the thing to point out here is  we use this base image called dis  realists which is a Debian based  bare-bones distro that from whoa  from Google and so these images are  basically like really stripped down they  don't contain a shell they don't contain  a package manager they only really  contain your application and its runtime  dependencies this makes it so you don't  go you don't actually need dependencies  for the most part because they're  compiled in the binary  and so this works pretty well with go  and then but also like me fixes a lot of  security problems and that you don't  have a shell so people can't execute  stuff in your in your container you  don't have a package manager so you  could people you don't have to worry  about like checking shah's and stuff and  so it makes it also has a bunch of the  stuff that you actually need to run  going images started going binaries and  so it works pretty well for going they  also have destroyed images for various  other languages like I think they have  one for Python and Java so you could  take a look at their their images for  using basil of this another thing I like  to do is I like to tell potential  candidates at X hey I'm sorry that we've  been using docker 50 years it's just not  true because doctors only been around  for like 10 years or so but when I  talked about earlier about how you have  to reset the end times in the file  system if you do that then you do with  docker images it prints out all of your  images and it says those built 49 years  ago so that's kind of nifty cool so the  last thing that I want to be talking  about here is basically how you can  minimize your dependency chains so  determinism doesn't actually help with  golang if your code changes like way too  frequently and this could happen because  [Music]  actually before that I want to talk  about what I talked about before so just  kind of coding myself so compelling and  packaging the same code will end up with  the same docker digest I want to kind of  clarify what packaging what the same  code means and the in the world of go  and so if you look at go they have a and  you look at the internal linker they  have a dead code remover but we use  golang 1.1 1.2 Levin right now and 1.11  unused static functions are removed from  the binary but they can still actually  change the digest of the binary also if  reflect is used go on can't ignore  methods on structs going has a bunch  going has this reflection package where  you can base  we pull out a method on the struct by  name and so because of that you can't  actually determine whether or not a  method inside of a struct is actually  used if the program imports reflect or  specific methods of reflected and so if  you use reflect going the going deadhead  remover cannot actually strip out any  methods on your structs and by doing so  even if you don't use any of these  unused functions or you don't use any of  these methods in your code as long as  you use something else in that package  the binary will the binary output will  include information around that package  and so essentially when we're talking  about the code being the same and golang  we're really talking about the package  being the same and so if any part of the  package or its imports changes than the  binary changes this is mostly true and  it's it's a pretty good assumption to  make although it might not be true in  all cases and so based off of this kind  of information you can to make any you  can't make any assumptions about this  your service only includes this function  all you've changes that one function and  your and your program and so sorry if  another function and you're in your  program in your package has changed even  if you don't actually use that function  your binary will still change so that  kind of a makes things a little bit more  difficult because now you have a bunch  of code that you might not even be  looking at or using and those change and  that affects your by affects your binary  and so if you another way to kind of  think about it that I like to use as a  metaphor is for anyone who's read or  watched Enders game they have this  weapon called the little doctor and  essentially what it does is shoots this  giant laser beam and but it only works  if the actual things that it's targeting  are close enough together where it can  cause a chain explosion slash reaction  and so I want you to think of this laser  as your build or CI system and I want  you to think of all those alien ships as  their micro-services and what you don't  want is for your micro services to  explode into a fiery death  and so kind of playing off this metaphor  what you need to do for your services is  you need to keep them far enough apart  where they're not too dependent on any  shared code where it would cause a chain  reaction of changing one thing actually  propagates changes to all of your other  micro services and then even if you're  using determinism like you change one  small helper library and then everything  just starts deploying anyways so there's  a that that was probably the hardest  challenge out of this whole of this  whole project was to make this better  and so we wrote two tools to help with  this there's one called depth stat which  is for a dependency analysis and there's  one called import checker which  disallows and certain imports with  certain rules and I'm currently working  on open sourcing these I'll give you  guys a link to the base repo that is  currently empty but will be pushed there  once it's ready and so I want to talk a  little bit about what this does and how  it works basically it builds a graph of  a all of your services and what they  import and all of their direct and ports  all their child imports and after  building this graph there's a lot of  cool and nifty things that you can do  with that so one of the commands in  depth stat is counts so I run this  command and I can actually see number of  services that are being that are using a  particular package and so in this case  this is a sorted by the least frequently  important we have a bunch of packages  that are only being imported by one  service but we also have a bunch of  packages are being imported by a bunch  of services and if you find a package  that you see that's being imported by  all of your services with this tool you  can dig into that a little bit and you  can run the step set package command  which will you pass in the package and  it'll tell you all of these services  that are dependent on that particular  package in this case we're using it to  kind of look at this like imports of  this legacy system this is kind of one  of our you know everyone has legacy code  and lying around we have a few services  still using that and this is a tool to  help us identify which of those services  are still using that and this legacy  system also does dependency does not use  dependencies very well  for our services we use this thing  called FX 2d dependency injection which  allows us to add in dependencies like  our data dog client our our like log  client and a bunch of other like various  things we might want to inject into  runtime without actually having to call  imports at in the actual code layer and  so one of the things that I worked on  was also helping deprecated services  that use this legacy system we have over  like 200 services so now there's  probably around 20 left so to the pretty  good job there of getting that done  there's this other command and deb stat  which is probably the coolest one it's  called dep stat deploys and it walks  through all the commits and will  basically tell you this commit changed  this particular package which caused  these particular services to deploy and  you can kind of use this to kind of to  get a better idea of how bad your  dependencies are if you see a deploy and  it seemed to trigger all of your  services to change you can find the  commit and find what caused that  what package cause that propagating  deployment and the last thing I want to  talk about is this stuff set command  called Y which so you found that a  service that was deployed and you saw it  was deployed because of the change  inside of another package it's not easy  to walk the import tree to actually  understand why this package is being  imported by our service and so this  tells you about how this actual packages  is being imported so you can see here  that legacy system is imported by this  thing called stat server which is  imported by this thing called Copiah  service router and now it's imported by  this server by the service that we're  looking at so that's def stat and the  other tool I talked about was import  checker so imports are basically gives  you a way to define these rules on  different packages and you can say  essentially that I have this package and  no one can no one can import it and then  you can also provide a whitelist that  kind of overrides that and you can say  well these particular services can't  import it and this is good for basically  helping you  keep people from importing code that  you've identified should not be imported  by everyone cool so you have these tools  but there's also a bunch of code  patterns that you kind of have to do  that you can't that it's hard to write  tooling for but basically you want to  break up the large packages you we have  a giant helpers package you might have  one too that has a bunch of various  helper functions in code so you want to  break that up into smaller packages you  also want to move commonly used configs  constants and types into their own sub  package and also you want to split  frequently change code from the more  static portions so say you have for  example a a configuration object that  lists like the names of your services  and how many of those you want to deploy  at the same time and you have a bunch of  other code that takes that and then like  will generate or control is you have  other code that it's like orchestration  tooling that will use that configuration  to do whatever you're doing the actual  orchestration code itself probably won't  change much like the way you're actually  taking this configuration and deploying  stuff the code itself probably won't  change much but if you're changing the  configuration a lot then that will cause  that particular package to change all  the time and so by splitting up  frequently changed code for the more  from the more static code then that  helps with this kind of dependency  chain-reaction thing and also you want  to vendor your dependencies properly  going has a vendor directory thing and  there's a bunch of various dependency or  package managers and go I think the  official one is now like Vigo but you  want to make sure that you're pulling  your dependencies on a static way either  checking them into vendor or pulling  them based off of a specific version or  hash so that way your vendor libraries  aren't causing a chain reaction of  binaries to change by like doing like  changing something that you might not  even use so it's good to kind of just  bend or vendor your packages and the  more deterministic way and this was kind  of the result of of what happened here  where essentially we this was  for this was after so what we're doing  here is we're basically building all of  our services in the end we're deploying  all of them and so this took about an  hour and a half and then in some cases  on in our previous deploy system and by  doing making this change we were able to  cut down build times by quite a bit and  so at some point we're pretty much  deploying like three times an hour and  when I say deploying I mean deploying  hundreds of different micro services at  the same time and so yeah it was a  pretty successful project and so the  last thing I just want to go over is a  summary of what I talked about here so  the first step to this was making our  going compiles deterministic the second  step was making a docker build  deterministic and then the third step  was reducing these large dependency  graphs that's the end of my talk I'm  gonna save the rest of the time for Q&amp;A  but if you want to reach out to me  I'm github.com /j smj I might say I'm  sorry comm my cat's Instagram handle  again is prints dot of dot meow and that  repo that I told you about where I'll be  pushing the DEP stat code will be in  github comm / samsara HQ / DEP stat and  lastly I put in some things for let's  encrypt for they provided some notes  that they used as a reference for some  of the deterministic golang stuff and  also slides Carnivale comm for these  slide templates cool  any questions what's up  oh maybe I'll look into that yeah we're  still using go vendor I'm not sure if  like Vigo has actually been like is out  of beta and so we're kind of waiting for  that to get out of beta before we move  to that  sorry I'm not following a question  yeah I think I'm not sure how Vigo works  like right now they probably like figure  out which packages you're importing  based off of looking at stuff and you  might like it might only reference likes  it might pull things based off of like  thus function signatures and package  signatures and you might need to like  actually like pin it to a specific  version if you needed to do that yeah  yeah I think there's so Basel also  includes has its own like go rules to  like build go binaries and then also  they I think they have some dependency  management that they can do themselves  as well so I think there might be other  tools for this as well  I am building sorry no no I'm not  building go binaries with basil  does that IV I've used it before does it  kind of solve the similar like similar  problems okay take a look at that - cool  I need anything else  sweet well that's the end of my talk and  I'll stick around for any questions that  anyone might have probably over here so  come find me  also I want to give a shout out to  samsara for sponsoring this event as  well we have a table on the first floor  downstairs so I'll also be hanging out  there as well if you want to come chat  with some of us also Joey right there  it's also at samsara if you want to talk  to her about mobile stuff cool thanks
+ 
+
+00:00:11.420 --> 00:00:13.190 align:start position:0%
+ 
+ 
+
+00:00:13.190 --> 00:00:21.200 align:start position:0%
+ 
+ 
+
+00:00:21.200 --> 00:00:24.639 align:start position:0%
+ 
+ 
+
+00:00:24.639 --> 00:00:27.740 align:start position:0%
+ 
+ 
+
+00:00:27.740 --> 00:00:29.299 align:start position:0%
+ 
+ 
+
+00:00:29.299 --> 00:00:31.490 align:start position:0%
+ 
+ 
+
+00:00:31.490 --> 00:00:34.430 align:start position:0%
+ 
+ 
+
+00:00:34.430 --> 00:00:36.049 align:start position:0%
+ 
+ 
+
+00:00:36.049 --> 00:00:38.510 align:start position:0%
+ 
+ 
+
+00:00:38.510 --> 00:00:40.340 align:start position:0%
+ 
+ 
+
+00:00:40.340 --> 00:00:43.220 align:start position:0%
+ 
+ 
+
+00:00:43.220 --> 00:00:45.050 align:start position:0%
+ 
+ 
+
+00:00:45.050 --> 00:00:50.360 align:start position:0%
+ 
+ 
+
+00:00:50.360 --> 00:00:54.140 align:start position:0%
+ 
+ 
+
+00:00:54.140 --> 00:00:56.479 align:start position:0%
+ 
+ 
+
+00:00:56.479 --> 00:00:58.069 align:start position:0%
+ 
+ 
+
+00:00:58.069 --> 00:01:00.170 align:start position:0%
+ 
+ 
+
+00:01:00.170 --> 00:01:01.880 align:start position:0%
+ 
+ 
+
+00:01:01.880 --> 00:01:03.650 align:start position:0%
+ 
+ 
+
+00:01:03.650 --> 00:01:06.679 align:start position:0%
+ 
+ 
+
+00:01:06.679 --> 00:01:09.380 align:start position:0%
+ 
+ 
+
+00:01:09.380 --> 00:01:10.910 align:start position:0%
+ 
+ 
+
+00:01:10.910 --> 00:01:12.800 align:start position:0%
+ 
+ 
+
+00:01:12.800 --> 00:01:15.260 align:start position:0%
+ 
+ 
+
+00:01:15.260 --> 00:01:16.879 align:start position:0%
+ 
+ 
+
+00:01:16.879 --> 00:01:19.429 align:start position:0%
+ 
+ 
+
+00:01:19.429 --> 00:01:21.559 align:start position:0%
+ 
+ 
+
+00:01:21.559 --> 00:01:24.410 align:start position:0%
+ 
+ 
+
+00:01:24.410 --> 00:01:25.609 align:start position:0%
+ 
+ 
+
+00:01:25.609 --> 00:01:27.889 align:start position:0%
+ 
+ 
+
+00:01:27.889 --> 00:01:29.719 align:start position:0%
+ 
+ 
+
+00:01:29.719 --> 00:01:34.459 align:start position:0%
+ 
+ 
+
+00:01:34.459 --> 00:01:35.389 align:start position:0%
+ 
+ 
+
+00:01:35.389 --> 00:01:38.120 align:start position:0%
+ 
+ 
+
+00:01:38.120 --> 00:01:40.069 align:start position:0%
+ 
+ 
+
+00:01:40.069 --> 00:01:42.910 align:start position:0%
+ 
+ 
+
+00:01:42.910 --> 00:01:45.830 align:start position:0%
+ 
+ 
+
+00:01:45.830 --> 00:01:48.069 align:start position:0%
+ 
+ 
+
+00:01:48.069 --> 00:01:50.690 align:start position:0%
+ 
+ 
+
+00:01:50.690 --> 00:01:52.550 align:start position:0%
+ 
+ 
+
+00:01:52.550 --> 00:01:54.109 align:start position:0%
+ 
+ 
+
+00:01:54.109 --> 00:01:57.679 align:start position:0%
+ 
+ 
+
+00:01:57.679 --> 00:02:00.349 align:start position:0%
+ 
+ 
+
+00:02:00.349 --> 00:02:01.940 align:start position:0%
+ 
+ 
+
+00:02:01.940 --> 00:02:04.789 align:start position:0%
+ 
+ 
+
+00:02:04.789 --> 00:02:08.600 align:start position:0%
+ 
+ 
+
+00:02:08.600 --> 00:02:10.910 align:start position:0%
+ 
+ 
+
+00:02:10.910 --> 00:02:14.839 align:start position:0%
+ 
+ 
+
+00:02:14.839 --> 00:02:17.990 align:start position:0%
+ 
+ 
+
+00:02:17.990 --> 00:02:19.330 align:start position:0%
+ 
+ 
+
+00:02:19.330 --> 00:02:21.580 align:start position:0%
+ 
+ 
+
+00:02:21.580 --> 00:02:23.680 align:start position:0%
+ 
+ 
+
+00:02:23.680 --> 00:02:26.020 align:start position:0%
+ 
+ 
+
+00:02:26.020 --> 00:02:29.380 align:start position:0%
+ 
+ 
+
+00:02:29.380 --> 00:02:32.290 align:start position:0%
+ 
+ 
+
+00:02:32.290 --> 00:02:35.260 align:start position:0%
+ 
+ 
+
+00:02:35.260 --> 00:02:37.930 align:start position:0%
+ 
+ 
+
+00:02:37.930 --> 00:02:41.050 align:start position:0%
+ 
+ 
+
+00:02:41.050 --> 00:02:43.420 align:start position:0%
+ 
+ 
+
+00:02:43.420 --> 00:02:45.970 align:start position:0%
+ 
+ 
+
+00:02:45.970 --> 00:02:48.070 align:start position:0%
+ 
+ 
+
+00:02:48.070 --> 00:02:50.140 align:start position:0%
+ 
+ 
+
+00:02:50.140 --> 00:02:51.759 align:start position:0%
+ 
+ 
+
+00:02:51.759 --> 00:02:52.900 align:start position:0%
+ 
+ 
+
+00:02:52.900 --> 00:02:55.170 align:start position:0%
+ 
+ 
+
+00:02:55.170 --> 00:02:57.039 align:start position:0%
+ 
+ 
+
+00:02:57.039 --> 00:02:59.009 align:start position:0%
+ 
+ 
+
+00:02:59.009 --> 00:03:01.680 align:start position:0%
+ 
+ 
+
+00:03:01.680 --> 00:03:05.320 align:start position:0%
+ 
+ 
+
+00:03:05.320 --> 00:03:06.699 align:start position:0%
+ 
+ 
+
+00:03:06.699 --> 00:03:09.490 align:start position:0%
+ 
+ 
+
+00:03:09.490 --> 00:03:12.460 align:start position:0%
+ 
+ 
+
+00:03:12.460 --> 00:03:15.789 align:start position:0%
+ 
+ 
+
+00:03:15.789 --> 00:03:17.680 align:start position:0%
+ 
+ 
+
+00:03:17.680 --> 00:03:19.030 align:start position:0%
+ 
+ 
+
+00:03:19.030 --> 00:03:20.289 align:start position:0%
+ 
+ 
+
+00:03:20.289 --> 00:03:22.600 align:start position:0%
+ 
+ 
+
+00:03:22.600 --> 00:03:22.610 align:start position:0%
+ 
+ 
+
+00:03:22.610 --> 00:03:24.780 align:start position:0%
+ 
+
+
+00:03:24.780 --> 00:03:29.259 align:start position:0%
+ 
+ 
+
+00:03:29.259 --> 00:03:30.699 align:start position:0%
+ 
+ 
+
+00:03:30.699 --> 00:03:32.430 align:start position:0%
+ 
+ 
+
+00:03:32.430 --> 00:03:34.690 align:start position:0%
+ 
+ 
+
+00:03:34.690 --> 00:03:37.390 align:start position:0%
+ 
+ 
+
+00:03:37.390 --> 00:03:39.039 align:start position:0%
+ 
+ 
+
+00:03:39.039 --> 00:03:40.780 align:start position:0%
+ 
+ 
+
+00:03:40.780 --> 00:03:46.420 align:start position:0%
+ 
+ 
+
+00:03:46.420 --> 00:03:49.000 align:start position:0%
+ 
+ 
+
+00:03:49.000 --> 00:03:50.440 align:start position:0%
+ 
+ 
+
+00:03:50.440 --> 00:03:52.900 align:start position:0%
+ 
+ 
+
+00:03:52.900 --> 00:03:54.610 align:start position:0%
+ 
+ 
+
+00:03:54.610 --> 00:03:58.059 align:start position:0%
+ 
+ 
+
+00:03:58.059 --> 00:04:00.520 align:start position:0%
+ 
+ 
+
+00:04:00.520 --> 00:04:02.229 align:start position:0%
+ 
+ 
+
+00:04:02.229 --> 00:04:04.449 align:start position:0%
+ 
+ 
+
+00:04:04.449 --> 00:04:05.830 align:start position:0%
+ 
+ 
+
+00:04:05.830 --> 00:04:08.229 align:start position:0%
+ 
+ 
+
+00:04:08.229 --> 00:04:09.910 align:start position:0%
+ 
+ 
+
+00:04:09.910 --> 00:04:10.690 align:start position:0%
+ 
+ 
+
+00:04:10.690 --> 00:04:13.059 align:start position:0%
+ 
+ 
+
+00:04:13.059 --> 00:04:14.650 align:start position:0%
+ 
+ 
+
+00:04:14.650 --> 00:04:17.680 align:start position:0%
+ 
+ 
+
+00:04:17.680 --> 00:04:20.349 align:start position:0%
+ 
+ 
+
+00:04:20.349 --> 00:04:23.260 align:start position:0%
+ 
+ 
+
+00:04:23.260 --> 00:04:25.240 align:start position:0%
+ 
+ 
+
+00:04:25.240 --> 00:04:26.350 align:start position:0%
+ 
+ 
+
+00:04:26.350 --> 00:04:28.510 align:start position:0%
+ 
+ 
+
+00:04:28.510 --> 00:04:30.190 align:start position:0%
+ 
+ 
+
+00:04:30.190 --> 00:04:33.600 align:start position:0%
+ 
+ 
+
+00:04:33.600 --> 00:04:37.150 align:start position:0%
+ 
+ 
+
+00:04:37.150 --> 00:04:38.680 align:start position:0%
+ 
+ 
+
+00:04:38.680 --> 00:04:40.630 align:start position:0%
+ 
+ 
+
+00:04:40.630 --> 00:04:42.670 align:start position:0%
+ 
+ 
+
+00:04:42.670 --> 00:04:47.680 align:start position:0%
+ 
+ 
+
+00:04:47.680 --> 00:04:49.450 align:start position:0%
+ 
+ 
+
+00:04:49.450 --> 00:04:51.790 align:start position:0%
+ 
+ 
+
+00:04:51.790 --> 00:04:52.810 align:start position:0%
+ 
+ 
+
+00:04:52.810 --> 00:04:54.790 align:start position:0%
+ 
+ 
+
+00:04:54.790 --> 00:04:55.990 align:start position:0%
+ 
+ 
+
+00:04:55.990 --> 00:04:57.730 align:start position:0%
+ 
+ 
+
+00:04:57.730 --> 00:05:00.490 align:start position:0%
+ 
+ 
+
+00:05:00.490 --> 00:05:02.620 align:start position:0%
+ 
+ 
+
+00:05:02.620 --> 00:05:04.540 align:start position:0%
+ 
+ 
+
+00:05:04.540 --> 00:05:05.920 align:start position:0%
+ 
+ 
+
+00:05:05.920 --> 00:05:07.810 align:start position:0%
+ 
+ 
+
+00:05:07.810 --> 00:05:12.430 align:start position:0%
+ 
+ 
+
+00:05:12.430 --> 00:05:15.600 align:start position:0%
+ 
+ 
+
+00:05:15.600 --> 00:05:17.320 align:start position:0%
+ 
+ 
+
+00:05:17.320 --> 00:05:20.770 align:start position:0%
+ 
+ 
+
+00:05:20.770 --> 00:05:23.610 align:start position:0%
+ 
+ 
+
+00:05:23.610 --> 00:05:25.780 align:start position:0%
+ 
+ 
+
+00:05:25.780 --> 00:05:29.560 align:start position:0%
+ 
+ 
+
+00:05:29.560 --> 00:05:31.120 align:start position:0%
+ 
+ 
+
+00:05:31.120 --> 00:05:34.240 align:start position:0%
+ 
+ 
+
+00:05:34.240 --> 00:05:36.520 align:start position:0%
+ 
+ 
+
+00:05:36.520 --> 00:05:38.380 align:start position:0%
+ 
+ 
+
+00:05:38.380 --> 00:05:40.510 align:start position:0%
+ 
+ 
+
+00:05:40.510 --> 00:05:42.670 align:start position:0%
+ 
+ 
+
+00:05:42.670 --> 00:05:45.640 align:start position:0%
+ 
+ 
+
+00:05:45.640 --> 00:05:48.340 align:start position:0%
+ 
+ 
+
+00:05:48.340 --> 00:05:50.470 align:start position:0%
+ 
+ 
+
+00:05:50.470 --> 00:05:51.670 align:start position:0%
+ 
+ 
+
+00:05:51.670 --> 00:05:55.390 align:start position:0%
+ 
+ 
+
+00:05:55.390 --> 00:05:58.660 align:start position:0%
+ 
+ 
+
+00:05:58.660 --> 00:06:03.070 align:start position:0%
+ 
+ 
+
+00:06:03.070 --> 00:06:04.660 align:start position:0%
+ 
+ 
+
+00:06:04.660 --> 00:06:06.430 align:start position:0%
+ 
+ 
+
+00:06:06.430 --> 00:06:08.080 align:start position:0%
+ 
+ 
+
+00:06:08.080 --> 00:06:12.100 align:start position:0%
+ 
+ 
+
+00:06:12.100 --> 00:06:14.350 align:start position:0%
+ 
+ 
+
+00:06:14.350 --> 00:06:17.860 align:start position:0%
+ 
+ 
+
+00:06:17.860 --> 00:06:19.330 align:start position:0%
+ 
+ 
+
+00:06:19.330 --> 00:06:21.100 align:start position:0%
+ 
+ 
+
+00:06:21.100 --> 00:06:22.450 align:start position:0%
+ 
+ 
+
+00:06:22.450 --> 00:06:24.640 align:start position:0%
+ 
+ 
+
+00:06:24.640 --> 00:06:26.740 align:start position:0%
+ 
+ 
+
+00:06:26.740 --> 00:06:28.690 align:start position:0%
+ 
+ 
+
+00:06:28.690 --> 00:06:30.400 align:start position:0%
+ 
+ 
+
+00:06:30.400 --> 00:06:33.360 align:start position:0%
+ 
+ 
+
+00:06:33.360 --> 00:06:36.310 align:start position:0%
+ 
+ 
+
+00:06:36.310 --> 00:06:39.850 align:start position:0%
+ 
+ 
+
+00:06:39.850 --> 00:06:40.930 align:start position:0%
+ 
+ 
+
+00:06:40.930 --> 00:06:42.580 align:start position:0%
+ 
+ 
+
+00:06:42.580 --> 00:06:44.560 align:start position:0%
+ 
+ 
+
+00:06:44.560 --> 00:06:45.860 align:start position:0%
+ 
+ 
+
+00:06:45.860 --> 00:06:47.629 align:start position:0%
+ 
+ 
+
+00:06:47.629 --> 00:06:49.159 align:start position:0%
+ 
+ 
+
+00:06:49.159 --> 00:06:51.860 align:start position:0%
+ 
+ 
+
+00:06:51.860 --> 00:06:54.710 align:start position:0%
+ 
+ 
+
+00:06:54.710 --> 00:06:56.390 align:start position:0%
+ 
+ 
+
+00:06:56.390 --> 00:06:58.760 align:start position:0%
+ 
+ 
+
+00:06:58.760 --> 00:07:02.890 align:start position:0%
+ 
+ 
+
+00:07:02.890 --> 00:07:06.500 align:start position:0%
+ 
+ 
+
+00:07:06.500 --> 00:07:07.940 align:start position:0%
+ 
+ 
+
+00:07:07.940 --> 00:07:09.860 align:start position:0%
+ 
+ 
+
+00:07:09.860 --> 00:07:13.490 align:start position:0%
+ 
+ 
+
+00:07:13.490 --> 00:07:16.040 align:start position:0%
+ 
+ 
+
+00:07:16.040 --> 00:07:18.740 align:start position:0%
+ 
+ 
+
+00:07:18.740 --> 00:07:22.610 align:start position:0%
+ 
+ 
+
+00:07:22.610 --> 00:07:24.350 align:start position:0%
+ 
+ 
+
+00:07:24.350 --> 00:07:28.090 align:start position:0%
+ 
+ 
+
+00:07:28.090 --> 00:07:30.620 align:start position:0%
+ 
+ 
+
+00:07:30.620 --> 00:07:31.969 align:start position:0%
+ 
+ 
+
+00:07:31.969 --> 00:07:34.070 align:start position:0%
+ 
+ 
+
+00:07:34.070 --> 00:07:35.870 align:start position:0%
+ 
+ 
+
+00:07:35.870 --> 00:07:38.170 align:start position:0%
+ 
+ 
+
+00:07:38.170 --> 00:07:41.629 align:start position:0%
+ 
+ 
+
+00:07:41.629 --> 00:07:44.750 align:start position:0%
+ 
+ 
+
+00:07:44.750 --> 00:07:47.900 align:start position:0%
+ 
+ 
+
+00:07:47.900 --> 00:07:50.690 align:start position:0%
+ 
+ 
+
+00:07:50.690 --> 00:07:53.750 align:start position:0%
+ 
+ 
+
+00:07:53.750 --> 00:07:56.150 align:start position:0%
+ 
+ 
+
+00:07:56.150 --> 00:07:57.620 align:start position:0%
+ 
+ 
+
+00:07:57.620 --> 00:08:00.230 align:start position:0%
+ 
+ 
+
+00:08:00.230 --> 00:08:01.790 align:start position:0%
+ 
+ 
+
+00:08:01.790 --> 00:08:03.200 align:start position:0%
+ 
+ 
+
+00:08:03.200 --> 00:08:06.110 align:start position:0%
+ 
+ 
+
+00:08:06.110 --> 00:08:09.740 align:start position:0%
+ 
+ 
+
+00:08:09.740 --> 00:08:12.020 align:start position:0%
+ 
+ 
+
+00:08:12.020 --> 00:08:13.940 align:start position:0%
+ 
+ 
+
+00:08:13.940 --> 00:08:15.560 align:start position:0%
+ 
+ 
+
+00:08:15.560 --> 00:08:17.870 align:start position:0%
+ 
+ 
+
+00:08:17.870 --> 00:08:19.610 align:start position:0%
+ 
+ 
+
+00:08:19.610 --> 00:08:23.540 align:start position:0%
+ 
+ 
+
+00:08:23.540 --> 00:08:25.610 align:start position:0%
+ 
+ 
+
+00:08:25.610 --> 00:08:29.090 align:start position:0%
+ 
+ 
+
+00:08:29.090 --> 00:08:31.159 align:start position:0%
+ 
+ 
+
+00:08:31.159 --> 00:08:34.610 align:start position:0%
+ 
+ 
+
+00:08:34.610 --> 00:08:36.640 align:start position:0%
+ 
+ 
+
+00:08:36.640 --> 00:08:40.520 align:start position:0%
+ 
+ 
+
+00:08:40.520 --> 00:08:42.079 align:start position:0%
+ 
+ 
+
+00:08:42.079 --> 00:08:44.510 align:start position:0%
+ 
+ 
+
+00:08:44.510 --> 00:08:46.070 align:start position:0%
+ 
+ 
+
+00:08:46.070 --> 00:08:58.980 align:start position:0%
+ 
+ 
+
+00:08:58.980 --> 00:09:02.420 align:start position:0%
+ 
+ 
+
+00:09:02.420 --> 00:09:05.160 align:start position:0%
+ 
+ 
+
+00:09:05.160 --> 00:09:06.480 align:start position:0%
+ 
+ 
+
+00:09:06.480 --> 00:09:09.690 align:start position:0%
+ 
+ 
+
+00:09:09.690 --> 00:09:14.760 align:start position:0%
+ 
+ 
+
+00:09:14.760 --> 00:09:18.210 align:start position:0%
+ 
+ 
+
+00:09:18.210 --> 00:09:20.370 align:start position:0%
+ 
+ 
+
+00:09:20.370 --> 00:09:23.400 align:start position:0%
+ 
+ 
+
+00:09:23.400 --> 00:09:24.510 align:start position:0%
+ 
+ 
+
+00:09:24.510 --> 00:09:26.520 align:start position:0%
+ 
+ 
+
+00:09:26.520 --> 00:09:28.980 align:start position:0%
+ 
+ 
+
+00:09:28.980 --> 00:09:30.540 align:start position:0%
+ 
+ 
+
+00:09:30.540 --> 00:09:32.520 align:start position:0%
+ 
+ 
+
+00:09:32.520 --> 00:09:34.050 align:start position:0%
+ 
+ 
+
+00:09:34.050 --> 00:09:37.530 align:start position:0%
+ 
+ 
+
+00:09:37.530 --> 00:09:39.570 align:start position:0%
+ 
+ 
+
+00:09:39.570 --> 00:09:41.520 align:start position:0%
+ 
+ 
+
+00:09:41.520 --> 00:09:42.900 align:start position:0%
+ 
+ 
+
+00:09:42.900 --> 00:09:44.070 align:start position:0%
+ 
+ 
+
+00:09:44.070 --> 00:09:48.390 align:start position:0%
+ 
+ 
+
+00:09:48.390 --> 00:09:49.410 align:start position:0%
+ 
+ 
+
+00:09:49.410 --> 00:09:49.420 align:start position:0%
+ 
+ 
+
+00:09:49.420 --> 00:09:49.860 align:start position:0%
+ 
+
+
+00:09:49.860 --> 00:09:52.860 align:start position:0%
+ 
+ 
+
+00:09:52.860 --> 00:09:55.590 align:start position:0%
+ 
+ 
+
+00:09:55.590 --> 00:09:59.130 align:start position:0%
+ 
+ 
+
+00:09:59.130 --> 00:10:00.240 align:start position:0%
+ 
+ 
+
+00:10:00.240 --> 00:10:01.500 align:start position:0%
+ 
+ 
+
+00:10:01.500 --> 00:10:04.800 align:start position:0%
+ 
+ 
+
+00:10:04.800 --> 00:10:06.510 align:start position:0%
+ 
+ 
+
+00:10:06.510 --> 00:10:09.270 align:start position:0%
+ 
+ 
+
+00:10:09.270 --> 00:10:11.280 align:start position:0%
+ 
+ 
+
+00:10:11.280 --> 00:10:12.780 align:start position:0%
+ 
+ 
+
+00:10:12.780 --> 00:10:15.660 align:start position:0%
+ 
+ 
+
+00:10:15.660 --> 00:10:17.340 align:start position:0%
+ 
+ 
+
+00:10:17.340 --> 00:10:21.390 align:start position:0%
+ 
+ 
+
+00:10:21.390 --> 00:10:24.210 align:start position:0%
+ 
+ 
+
+00:10:24.210 --> 00:10:27.300 align:start position:0%
+ 
+ 
+
+00:10:27.300 --> 00:10:29.400 align:start position:0%
+ 
+ 
+
+00:10:29.400 --> 00:10:30.390 align:start position:0%
+ 
+ 
+
+00:10:30.390 --> 00:10:32.820 align:start position:0%
+ 
+ 
+
+00:10:32.820 --> 00:10:36.350 align:start position:0%
+ 
+ 
+
+00:10:36.350 --> 00:10:39.090 align:start position:0%
+ 
+ 
+
+00:10:39.090 --> 00:10:40.920 align:start position:0%
+ 
+ 
+
+00:10:40.920 --> 00:10:44.340 align:start position:0%
+ 
+ 
+
+00:10:44.340 --> 00:10:46.230 align:start position:0%
+ 
+ 
+
+00:10:46.230 --> 00:10:47.090 align:start position:0%
+ 
+ 
+
+00:10:47.090 --> 00:10:47.100 align:start position:0%
+ 
+ 
+
+00:10:47.100 --> 00:11:06.580 align:start position:0%
+ 
+
+
+00:11:06.580 --> 00:11:09.350 align:start position:0%
+ 
+ 
+
+00:11:09.350 --> 00:11:11.410 align:start position:0%
+ 
+ 
+
+00:11:11.410 --> 00:11:14.510 align:start position:0%
+ 
+ 
+
+00:11:14.510 --> 00:11:16.100 align:start position:0%
+ 
+ 
+
+00:11:16.100 --> 00:11:18.170 align:start position:0%
+ 
+ 
+
+00:11:18.170 --> 00:11:22.340 align:start position:0%
+ 
+ 
+
+00:11:22.340 --> 00:11:23.690 align:start position:0%
+ 
+ 
+
+00:11:23.690 --> 00:11:25.790 align:start position:0%
+ 
+ 
+
+00:11:25.790 --> 00:11:27.200 align:start position:0%
+ 
+ 
+
+00:11:27.200 --> 00:11:29.810 align:start position:0%
+ 
+ 
+
+00:11:29.810 --> 00:11:31.490 align:start position:0%
+ 
+ 
+
+00:11:31.490 --> 00:11:33.020 align:start position:0%
+ 
+ 
+
+00:11:33.020 --> 00:11:34.660 align:start position:0%
+ 
+ 
+
+00:11:34.660 --> 00:11:37.460 align:start position:0%
+ 
+ 
+
+00:11:37.460 --> 00:11:38.780 align:start position:0%
+ 
+ 
+
+00:11:38.780 --> 00:11:42.200 align:start position:0%
+ 
+ 
+
+00:11:42.200 --> 00:11:43.880 align:start position:0%
+ 
+ 
+
+00:11:43.880 --> 00:11:47.870 align:start position:0%
+ 
+ 
+
+00:11:47.870 --> 00:11:48.920 align:start position:0%
+ 
+ 
+
+00:11:48.920 --> 00:11:50.690 align:start position:0%
+ 
+ 
+
+00:11:50.690 --> 00:11:52.130 align:start position:0%
+ 
+ 
+
+00:11:52.130 --> 00:11:55.970 align:start position:0%
+ 
+ 
+
+00:11:55.970 --> 00:11:59.180 align:start position:0%
+ 
+ 
+
+00:11:59.180 --> 00:12:01.490 align:start position:0%
+ 
+ 
+
+00:12:01.490 --> 00:12:03.290 align:start position:0%
+ 
+ 
+
+00:12:03.290 --> 00:12:05.420 align:start position:0%
+ 
+ 
+
+00:12:05.420 --> 00:12:07.490 align:start position:0%
+ 
+ 
+
+00:12:07.490 --> 00:12:09.410 align:start position:0%
+ 
+ 
+
+00:12:09.410 --> 00:12:11.030 align:start position:0%
+ 
+ 
+
+00:12:11.030 --> 00:12:12.790 align:start position:0%
+ 
+ 
+
+00:12:12.790 --> 00:12:17.470 align:start position:0%
+ 
+ 
+
+00:12:17.470 --> 00:12:22.580 align:start position:0%
+ 
+ 
+
+00:12:22.580 --> 00:12:24.140 align:start position:0%
+ 
+ 
+
+00:12:24.140 --> 00:12:25.910 align:start position:0%
+ 
+ 
+
+00:12:25.910 --> 00:12:27.560 align:start position:0%
+ 
+ 
+
+00:12:27.560 --> 00:12:30.140 align:start position:0%
+ 
+ 
+
+00:12:30.140 --> 00:12:31.730 align:start position:0%
+ 
+ 
+
+00:12:31.730 --> 00:12:33.920 align:start position:0%
+ 
+ 
+
+00:12:33.920 --> 00:12:36.890 align:start position:0%
+ 
+ 
+
+00:12:36.890 --> 00:12:39.080 align:start position:0%
+ 
+ 
+
+00:12:39.080 --> 00:12:40.850 align:start position:0%
+ 
+ 
+
+00:12:40.850 --> 00:12:42.290 align:start position:0%
+ 
+ 
+
+00:12:42.290 --> 00:12:44.510 align:start position:0%
+ 
+ 
+
+00:12:44.510 --> 00:12:46.040 align:start position:0%
+ 
+ 
+
+00:12:46.040 --> 00:12:47.780 align:start position:0%
+ 
+ 
+
+00:12:47.780 --> 00:12:50.420 align:start position:0%
+ 
+ 
+
+00:12:50.420 --> 00:12:53.360 align:start position:0%
+ 
+ 
+
+00:12:53.360 --> 00:12:54.560 align:start position:0%
+ 
+ 
+
+00:12:54.560 --> 00:12:57.140 align:start position:0%
+ 
+ 
+
+00:12:57.140 --> 00:12:58.880 align:start position:0%
+ 
+ 
+
+00:12:58.880 --> 00:13:02.120 align:start position:0%
+ 
+ 
+
+00:13:02.120 --> 00:13:04.700 align:start position:0%
+ 
+ 
+
+00:13:04.700 --> 00:13:05.220 align:start position:0%
+ 
+ 
+
+00:13:05.220 --> 00:13:06.300 align:start position:0%
+ 
+ 
+
+00:13:06.300 --> 00:13:08.460 align:start position:0%
+ 
+ 
+
+00:13:08.460 --> 00:13:09.810 align:start position:0%
+ 
+ 
+
+00:13:09.810 --> 00:13:12.000 align:start position:0%
+ 
+ 
+
+00:13:12.000 --> 00:13:13.890 align:start position:0%
+ 
+ 
+
+00:13:13.890 --> 00:13:15.240 align:start position:0%
+ 
+ 
+
+00:13:15.240 --> 00:13:17.160 align:start position:0%
+ 
+ 
+
+00:13:17.160 --> 00:13:19.080 align:start position:0%
+ 
+ 
+
+00:13:19.080 --> 00:13:20.370 align:start position:0%
+ 
+ 
+
+00:13:20.370 --> 00:13:22.380 align:start position:0%
+ 
+ 
+
+00:13:22.380 --> 00:13:24.990 align:start position:0%
+ 
+ 
+
+00:13:24.990 --> 00:13:27.990 align:start position:0%
+ 
+ 
+
+00:13:27.990 --> 00:13:31.590 align:start position:0%
+ 
+ 
+
+00:13:31.590 --> 00:13:33.420 align:start position:0%
+ 
+ 
+
+00:13:33.420 --> 00:13:36.390 align:start position:0%
+ 
+ 
+
+00:13:36.390 --> 00:13:38.880 align:start position:0%
+ 
+ 
+
+00:13:38.880 --> 00:13:40.680 align:start position:0%
+ 
+ 
+
+00:13:40.680 --> 00:13:44.040 align:start position:0%
+ 
+ 
+
+00:13:44.040 --> 00:13:47.310 align:start position:0%
+ 
+ 
+
+00:13:47.310 --> 00:13:49.890 align:start position:0%
+ 
+ 
+
+00:13:49.890 --> 00:13:51.660 align:start position:0%
+ 
+ 
+
+00:13:51.660 --> 00:13:55.890 align:start position:0%
+ 
+ 
+
+00:13:55.890 --> 00:13:58.230 align:start position:0%
+ 
+ 
+
+00:13:58.230 --> 00:14:00.960 align:start position:0%
+ 
+ 
+
+00:14:00.960 --> 00:14:02.460 align:start position:0%
+ 
+ 
+
+00:14:02.460 --> 00:14:03.810 align:start position:0%
+ 
+ 
+
+00:14:03.810 --> 00:14:06.000 align:start position:0%
+ 
+ 
+
+00:14:06.000 --> 00:14:07.380 align:start position:0%
+ 
+ 
+
+00:14:07.380 --> 00:14:11.610 align:start position:0%
+ 
+ 
+
+00:14:11.610 --> 00:14:13.110 align:start position:0%
+ 
+ 
+
+00:14:13.110 --> 00:14:15.450 align:start position:0%
+ 
+ 
+
+00:14:15.450 --> 00:14:17.220 align:start position:0%
+ 
+ 
+
+00:14:17.220 --> 00:14:18.540 align:start position:0%
+ 
+ 
+
+00:14:18.540 --> 00:14:22.800 align:start position:0%
+ 
+ 
+
+00:14:22.800 --> 00:14:26.100 align:start position:0%
+ 
+ 
+
+00:14:26.100 --> 00:14:28.020 align:start position:0%
+ 
+ 
+
+00:14:28.020 --> 00:14:29.610 align:start position:0%
+ 
+ 
+
+00:14:29.610 --> 00:14:31.470 align:start position:0%
+ 
+ 
+
+00:14:31.470 --> 00:14:32.790 align:start position:0%
+ 
+ 
+
+00:14:32.790 --> 00:14:37.110 align:start position:0%
+ 
+ 
+
+00:14:37.110 --> 00:14:39.930 align:start position:0%
+ 
+ 
+
+00:14:39.930 --> 00:14:42.390 align:start position:0%
+ 
+ 
+
+00:14:42.390 --> 00:14:43.860 align:start position:0%
+ 
+ 
+
+00:14:43.860 --> 00:14:48.540 align:start position:0%
+ 
+ 
+
+00:14:48.540 --> 00:14:50.190 align:start position:0%
+ 
+ 
+
+00:14:50.190 --> 00:14:52.890 align:start position:0%
+ 
+ 
+
+00:14:52.890 --> 00:14:55.440 align:start position:0%
+ 
+ 
+
+00:14:55.440 --> 00:14:58.350 align:start position:0%
+ 
+ 
+
+00:14:58.350 --> 00:15:02.520 align:start position:0%
+ 
+ 
+
+00:15:02.520 --> 00:15:04.110 align:start position:0%
+ 
+ 
+
+00:15:04.110 --> 00:15:05.730 align:start position:0%
+ 
+ 
+
+00:15:05.730 --> 00:15:09.090 align:start position:0%
+ 
+ 
+
+00:15:09.090 --> 00:15:10.500 align:start position:0%
+ 
+ 
+
+00:15:10.500 --> 00:15:12.780 align:start position:0%
+ 
+ 
+
+00:15:12.780 --> 00:15:15.510 align:start position:0%
+ 
+ 
+
+00:15:15.510 --> 00:15:16.350 align:start position:0%
+ 
+ 
+
+00:15:16.350 --> 00:15:17.250 align:start position:0%
+ 
+ 
+
+00:15:17.250 --> 00:15:19.760 align:start position:0%
+ 
+ 
+
+00:15:19.760 --> 00:15:23.670 align:start position:0%
+ 
+ 
+
+00:15:23.670 --> 00:15:25.380 align:start position:0%
+ 
+ 
+
+00:15:25.380 --> 00:15:26.640 align:start position:0%
+ 
+ 
+
+00:15:26.640 --> 00:15:28.710 align:start position:0%
+ 
+ 
+
+00:15:28.710 --> 00:15:30.660 align:start position:0%
+ 
+ 
+
+00:15:30.660 --> 00:15:31.740 align:start position:0%
+ 
+ 
+
+00:15:31.740 --> 00:15:34.650 align:start position:0%
+ 
+ 
+
+00:15:34.650 --> 00:15:38.190 align:start position:0%
+ 
+ 
+
+00:15:38.190 --> 00:15:39.390 align:start position:0%
+ 
+ 
+
+00:15:39.390 --> 00:15:43.020 align:start position:0%
+ 
+ 
+
+00:15:43.020 --> 00:15:44.910 align:start position:0%
+ 
+ 
+
+00:15:44.910 --> 00:15:46.620 align:start position:0%
+ 
+ 
+
+00:15:46.620 --> 00:15:47.790 align:start position:0%
+ 
+ 
+
+00:15:47.790 --> 00:15:49.860 align:start position:0%
+ 
+ 
+
+00:15:49.860 --> 00:15:51.990 align:start position:0%
+ 
+ 
+
+00:15:51.990 --> 00:15:57.360 align:start position:0%
+ 
+ 
+
+00:15:57.360 --> 00:15:59.520 align:start position:0%
+ 
+ 
+
+00:15:59.520 --> 00:16:02.070 align:start position:0%
+ 
+ 
+
+00:16:02.070 --> 00:16:05.610 align:start position:0%
+ 
+ 
+
+00:16:05.610 --> 00:16:06.990 align:start position:0%
+ 
+ 
+
+00:16:06.990 --> 00:16:09.540 align:start position:0%
+ 
+ 
+
+00:16:09.540 --> 00:16:11.010 align:start position:0%
+ 
+ 
+
+00:16:11.010 --> 00:16:12.300 align:start position:0%
+ 
+ 
+
+00:16:12.300 --> 00:16:14.550 align:start position:0%
+ 
+ 
+
+00:16:14.550 --> 00:16:16.860 align:start position:0%
+ 
+ 
+
+00:16:16.860 --> 00:16:18.600 align:start position:0%
+ 
+ 
+
+00:16:18.600 --> 00:16:26.010 align:start position:0%
+ 
+ 
+
+00:16:26.010 --> 00:16:28.290 align:start position:0%
+ 
+ 
+
+00:16:28.290 --> 00:16:32.010 align:start position:0%
+ 
+ 
+
+00:16:32.010 --> 00:16:34.320 align:start position:0%
+ 
+ 
+
+00:16:34.320 --> 00:16:35.790 align:start position:0%
+ 
+ 
+
+00:16:35.790 --> 00:16:38.460 align:start position:0%
+ 
+ 
+
+00:16:38.460 --> 00:16:41.710 align:start position:0%
+ 
+ 
+
+00:16:41.710 --> 00:16:41.720 align:start position:0%
+ 
+ 
+
+00:16:41.720 --> 00:16:43.460 align:start position:0%
+ 
+
+
+00:16:43.460 --> 00:16:45.390 align:start position:0%
+ 
+ 
+
+00:16:45.390 --> 00:16:46.950 align:start position:0%
+ 
+ 
+
+00:16:46.950 --> 00:16:50.700 align:start position:0%
+ 
+ 
+
+00:16:50.700 --> 00:16:52.530 align:start position:0%
+ 
+ 
+
+00:16:52.530 --> 00:16:55.140 align:start position:0%
+ 
+ 
+
+00:16:55.140 --> 00:16:57.990 align:start position:0%
+ 
+ 
+
+00:16:57.990 --> 00:17:00.200 align:start position:0%
+ 
+ 
+
+00:17:00.200 --> 00:17:06.660 align:start position:0%
+ 
+ 
+
+00:17:06.660 --> 00:17:07.829 align:start position:0%
+ 
+ 
+
+00:17:07.829 --> 00:17:11.040 align:start position:0%
+ 
+ 
+
+00:17:11.040 --> 00:17:14.490 align:start position:0%
+ 
+ 
+
+00:17:14.490 --> 00:17:16.470 align:start position:0%
+ 
+ 
+
+00:17:16.470 --> 00:17:18.300 align:start position:0%
+ 
+ 
+
+00:17:18.300 --> 00:17:22.650 align:start position:0%
+ 
+ 
+
+00:17:22.650 --> 00:17:24.930 align:start position:0%
+ 
+ 
+
+00:17:24.930 --> 00:17:27.569 align:start position:0%
+ 
+ 
+
+00:17:27.569 --> 00:17:30.420 align:start position:0%
+ 
+ 
+
+00:17:30.420 --> 00:17:30.930 align:start position:0%
+ 
+ 
+
+00:17:30.930 --> 00:17:34.260 align:start position:0%
+ 
+ 
+
+00:17:34.260 --> 00:17:36.570 align:start position:0%
+ 
+ 
+
+00:17:36.570 --> 00:17:37.920 align:start position:0%
+ 
+ 
+
+00:17:37.920 --> 00:17:39.690 align:start position:0%
+ 
+ 
+
+00:17:39.690 --> 00:17:42.870 align:start position:0%
+ 
+ 
+
+00:17:42.870 --> 00:17:45.570 align:start position:0%
+ 
+ 
+
+00:17:45.570 --> 00:17:48.210 align:start position:0%
+ 
+ 
+
+00:17:48.210 --> 00:17:51.000 align:start position:0%
+ 
+ 
+
+00:17:51.000 --> 00:17:54.210 align:start position:0%
+ 
+ 
+
+00:17:54.210 --> 00:17:56.250 align:start position:0%
+ 
+ 
+
+00:17:56.250 --> 00:17:58.710 align:start position:0%
+ 
+ 
+
+00:17:58.710 --> 00:18:00.690 align:start position:0%
+ 
+ 
+
+00:18:00.690 --> 00:18:02.310 align:start position:0%
+ 
+ 
+
+00:18:02.310 --> 00:18:05.310 align:start position:0%
+ 
+ 
+
+00:18:05.310 --> 00:18:07.500 align:start position:0%
+ 
+ 
+
+00:18:07.500 --> 00:18:10.710 align:start position:0%
+ 
+ 
+
+00:18:10.710 --> 00:18:12.810 align:start position:0%
+ 
+ 
+
+00:18:12.810 --> 00:18:14.220 align:start position:0%
+ 
+ 
+
+00:18:14.220 --> 00:18:16.620 align:start position:0%
+ 
+ 
+
+00:18:16.620 --> 00:18:18.720 align:start position:0%
+ 
+ 
+
+00:18:18.720 --> 00:18:22.590 align:start position:0%
+ 
+ 
+
+00:18:22.590 --> 00:18:24.120 align:start position:0%
+ 
+ 
+
+00:18:24.120 --> 00:18:25.830 align:start position:0%
+ 
+ 
+
+00:18:25.830 --> 00:18:29.310 align:start position:0%
+ 
+ 
+
+00:18:29.310 --> 00:18:34.020 align:start position:0%
+ 
+ 
+
+00:18:34.020 --> 00:18:35.520 align:start position:0%
+ 
+ 
+
+00:18:35.520 --> 00:18:37.680 align:start position:0%
+ 
+ 
+
+00:18:37.680 --> 00:18:39.450 align:start position:0%
+ 
+ 
+
+00:18:39.450 --> 00:18:43.860 align:start position:0%
+ 
+ 
+
+00:18:43.860 --> 00:18:45.600 align:start position:0%
+ 
+ 
+
+00:18:45.600 --> 00:18:47.430 align:start position:0%
+ 
+ 
+
+00:18:47.430 --> 00:18:49.250 align:start position:0%
+ 
+ 
+
+00:18:49.250 --> 00:18:52.710 align:start position:0%
+ 
+ 
+
+00:18:52.710 --> 00:18:54.540 align:start position:0%
+ 
+ 
+
+00:18:54.540 --> 00:18:56.160 align:start position:0%
+ 
+ 
+
+00:18:56.160 --> 00:18:57.270 align:start position:0%
+ 
+ 
+
+00:18:57.270 --> 00:18:59.400 align:start position:0%
+ 
+ 
+
+00:18:59.400 --> 00:19:01.640 align:start position:0%
+ 
+ 
+
+00:19:01.640 --> 00:19:06.600 align:start position:0%
+ 
+ 
+
+00:19:06.600 --> 00:19:08.460 align:start position:0%
+ 
+ 
+
+00:19:08.460 --> 00:19:10.470 align:start position:0%
+ 
+ 
+
+00:19:10.470 --> 00:19:12.570 align:start position:0%
+ 
+ 
+
+00:19:12.570 --> 00:19:14.910 align:start position:0%
+ 
+ 
+
+00:19:14.910 --> 00:19:17.790 align:start position:0%
+ 
+ 
+
+00:19:17.790 --> 00:19:22.020 align:start position:0%
+ 
+ 
+
+00:19:22.020 --> 00:19:24.480 align:start position:0%
+ 
+ 
+
+00:19:24.480 --> 00:19:26.250 align:start position:0%
+ 
+ 
+
+00:19:26.250 --> 00:19:27.990 align:start position:0%
+ 
+ 
+
+00:19:27.990 --> 00:19:31.380 align:start position:0%
+ 
+ 
+
+00:19:31.380 --> 00:19:34.710 align:start position:0%
+ 
+ 
+
+00:19:34.710 --> 00:19:36.480 align:start position:0%
+ 
+ 
+
+00:19:36.480 --> 00:19:37.890 align:start position:0%
+ 
+ 
+
+00:19:37.890 --> 00:19:40.110 align:start position:0%
+ 
+ 
+
+00:19:40.110 --> 00:19:43.060 align:start position:0%
+ 
+ 
+
+00:19:43.060 --> 00:19:45.910 align:start position:0%
+ 
+ 
+
+00:19:45.910 --> 00:19:47.590 align:start position:0%
+ 
+ 
+
+00:19:47.590 --> 00:19:48.850 align:start position:0%
+ 
+ 
+
+00:19:48.850 --> 00:19:50.680 align:start position:0%
+ 
+ 
+
+00:19:50.680 --> 00:19:53.650 align:start position:0%
+ 
+ 
+
+00:19:53.650 --> 00:19:55.570 align:start position:0%
+ 
+ 
+
+00:19:55.570 --> 00:19:57.280 align:start position:0%
+ 
+ 
+
+00:19:57.280 --> 00:19:59.260 align:start position:0%
+ 
+ 
+
+00:19:59.260 --> 00:20:00.790 align:start position:0%
+ 
+ 
+
+00:20:00.790 --> 00:20:02.650 align:start position:0%
+ 
+ 
+
+00:20:02.650 --> 00:20:05.410 align:start position:0%
+ 
+ 
+
+00:20:05.410 --> 00:20:07.180 align:start position:0%
+ 
+ 
+
+00:20:07.180 --> 00:20:09.070 align:start position:0%
+ 
+ 
+
+00:20:09.070 --> 00:20:12.220 align:start position:0%
+ 
+ 
+
+00:20:12.220 --> 00:20:15.670 align:start position:0%
+ 
+ 
+
+00:20:15.670 --> 00:20:18.280 align:start position:0%
+ 
+ 
+
+00:20:18.280 --> 00:20:20.080 align:start position:0%
+ 
+ 
+
+00:20:20.080 --> 00:20:21.280 align:start position:0%
+ 
+ 
+
+00:20:21.280 --> 00:20:23.950 align:start position:0%
+ 
+ 
+
+00:20:23.950 --> 00:20:26.560 align:start position:0%
+ 
+ 
+
+00:20:26.560 --> 00:20:28.180 align:start position:0%
+ 
+ 
+
+00:20:28.180 --> 00:20:31.330 align:start position:0%
+ 
+ 
+
+00:20:31.330 --> 00:20:33.070 align:start position:0%
+ 
+ 
+
+00:20:33.070 --> 00:20:36.160 align:start position:0%
+ 
+ 
+
+00:20:36.160 --> 00:20:37.660 align:start position:0%
+ 
+ 
+
+00:20:37.660 --> 00:20:41.620 align:start position:0%
+ 
+ 
+
+00:20:41.620 --> 00:20:45.130 align:start position:0%
+ 
+ 
+
+00:20:45.130 --> 00:20:46.750 align:start position:0%
+ 
+ 
+
+00:20:46.750 --> 00:20:49.180 align:start position:0%
+ 
+ 
+
+00:20:49.180 --> 00:20:50.320 align:start position:0%
+ 
+ 
+
+00:20:50.320 --> 00:20:51.640 align:start position:0%
+ 
+ 
+
+00:20:51.640 --> 00:20:54.820 align:start position:0%
+ 
+ 
+
+00:20:54.820 --> 00:20:56.890 align:start position:0%
+ 
+ 
+
+00:20:56.890 --> 00:20:59.590 align:start position:0%
+ 
+ 
+
+00:20:59.590 --> 00:21:02.380 align:start position:0%
+ 
+ 
+
+00:21:02.380 --> 00:21:04.030 align:start position:0%
+ 
+ 
+
+00:21:04.030 --> 00:21:06.970 align:start position:0%
+ 
+ 
+
+00:21:06.970 --> 00:21:08.620 align:start position:0%
+ 
+ 
+
+00:21:08.620 --> 00:21:09.790 align:start position:0%
+ 
+ 
+
+00:21:09.790 --> 00:21:12.370 align:start position:0%
+ 
+ 
+
+00:21:12.370 --> 00:21:13.810 align:start position:0%
+ 
+ 
+
+00:21:13.810 --> 00:21:15.550 align:start position:0%
+ 
+ 
+
+00:21:15.550 --> 00:21:16.990 align:start position:0%
+ 
+ 
+
+00:21:16.990 --> 00:21:18.640 align:start position:0%
+ 
+ 
+
+00:21:18.640 --> 00:21:20.650 align:start position:0%
+ 
+ 
+
+00:21:20.650 --> 00:21:24.790 align:start position:0%
+ 
+ 
+
+00:21:24.790 --> 00:21:26.710 align:start position:0%
+ 
+ 
+
+00:21:26.710 --> 00:21:28.240 align:start position:0%
+ 
+ 
+
+00:21:28.240 --> 00:21:29.320 align:start position:0%
+ 
+ 
+
+00:21:29.320 --> 00:21:33.580 align:start position:0%
+ 
+ 
+
+00:21:33.580 --> 00:21:35.740 align:start position:0%
+ 
+ 
+
+00:21:35.740 --> 00:21:38.290 align:start position:0%
+ 
+ 
+
+00:21:38.290 --> 00:21:40.810 align:start position:0%
+ 
+ 
+
+00:21:40.810 --> 00:21:42.640 align:start position:0%
+ 
+ 
+
+00:21:42.640 --> 00:21:44.650 align:start position:0%
+ 
+ 
+
+00:21:44.650 --> 00:21:47.380 align:start position:0%
+ 
+ 
+
+00:21:47.380 --> 00:21:49.360 align:start position:0%
+ 
+ 
+
+00:21:49.360 --> 00:21:53.410 align:start position:0%
+ 
+ 
+
+00:21:53.410 --> 00:21:55.110 align:start position:0%
+ 
+ 
+
+00:21:55.110 --> 00:21:57.300 align:start position:0%
+ 
+ 
+
+00:21:57.300 --> 00:21:59.280 align:start position:0%
+ 
+ 
+
+00:21:59.280 --> 00:22:01.410 align:start position:0%
+ 
+ 
+
+00:22:01.410 --> 00:22:07.410 align:start position:0%
+ 
+ 
+
+00:22:07.410 --> 00:22:09.690 align:start position:0%
+ 
+ 
+
+00:22:09.690 --> 00:22:10.860 align:start position:0%
+ 
+ 
+
+00:22:10.860 --> 00:22:12.990 align:start position:0%
+ 
+ 
+
+00:22:12.990 --> 00:22:16.410 align:start position:0%
+ 
+ 
+
+00:22:16.410 --> 00:22:18.030 align:start position:0%
+ 
+ 
+
+00:22:18.030 --> 00:22:20.250 align:start position:0%
+ 
+ 
+
+00:22:20.250 --> 00:22:22.620 align:start position:0%
+ 
+ 
+
+00:22:22.620 --> 00:22:23.940 align:start position:0%
+ 
+ 
+
+00:22:23.940 --> 00:22:26.190 align:start position:0%
+ 
+ 
+
+00:22:26.190 --> 00:22:29.120 align:start position:0%
+ 
+ 
+
+00:22:29.120 --> 00:22:31.380 align:start position:0%
+ 
+ 
+
+00:22:31.380 --> 00:22:34.230 align:start position:0%
+ 
+ 
+
+00:22:34.230 --> 00:22:35.700 align:start position:0%
+ 
+ 
+
+00:22:35.700 --> 00:22:37.650 align:start position:0%
+ 
+ 
+
+00:22:37.650 --> 00:22:40.470 align:start position:0%
+ 
+ 
+
+00:22:40.470 --> 00:22:42.120 align:start position:0%
+ 
+ 
+
+00:22:42.120 --> 00:22:44.280 align:start position:0%
+ 
+ 
+
+00:22:44.280 --> 00:22:46.710 align:start position:0%
+ 
+ 
+
+00:22:46.710 --> 00:22:49.260 align:start position:0%
+ 
+ 
+
+00:22:49.260 --> 00:22:51.450 align:start position:0%
+ 
+ 
+
+00:22:51.450 --> 00:22:52.560 align:start position:0%
+ 
+ 
+
+00:22:52.560 --> 00:22:56.010 align:start position:0%
+ 
+ 
+
+00:22:56.010 --> 00:22:58.020 align:start position:0%
+ 
+ 
+
+00:22:58.020 --> 00:23:00.110 align:start position:0%
+ 
+ 
+
+00:23:00.110 --> 00:23:02.940 align:start position:0%
+ 
+ 
+
+00:23:02.940 --> 00:23:05.150 align:start position:0%
+ 
+ 
+
+00:23:05.150 --> 00:23:09.450 align:start position:0%
+ 
+ 
+
+00:23:09.450 --> 00:23:12.390 align:start position:0%
+ 
+ 
+
+00:23:12.390 --> 00:23:13.710 align:start position:0%
+ 
+ 
+
+00:23:13.710 --> 00:23:16.800 align:start position:0%
+ 
+ 
+
+00:23:16.800 --> 00:23:18.690 align:start position:0%
+ 
+ 
+
+00:23:18.690 --> 00:23:20.010 align:start position:0%
+ 
+ 
+
+00:23:20.010 --> 00:23:21.420 align:start position:0%
+ 
+ 
+
+00:23:21.420 --> 00:23:24.120 align:start position:0%
+ 
+ 
+
+00:23:24.120 --> 00:23:26.400 align:start position:0%
+ 
+ 
+
+00:23:26.400 --> 00:23:28.920 align:start position:0%
+ 
+ 
+
+00:23:28.920 --> 00:23:30.060 align:start position:0%
+ 
+ 
+
+00:23:30.060 --> 00:23:31.260 align:start position:0%
+ 
+ 
+
+00:23:31.260 --> 00:23:33.780 align:start position:0%
+ 
+ 
+
+00:23:33.780 --> 00:23:35.130 align:start position:0%
+ 
+ 
+
+00:23:35.130 --> 00:23:39.300 align:start position:0%
+ 
+ 
+
+00:23:39.300 --> 00:23:41.490 align:start position:0%
+ 
+ 
+
+00:23:41.490 --> 00:23:45.900 align:start position:0%
+ 
+ 
+
+00:23:45.900 --> 00:23:47.810 align:start position:0%
+ 
+ 
+
+00:23:47.810 --> 00:23:51.300 align:start position:0%
+ 
+ 
+
+00:23:51.300 --> 00:23:54.240 align:start position:0%
+ 
+ 
+
+00:23:54.240 --> 00:23:57.210 align:start position:0%
+ 
+ 
+
+00:23:57.210 --> 00:23:58.380 align:start position:0%
+ 
+ 
+
+00:23:58.380 --> 00:24:00.000 align:start position:0%
+ 
+ 
+
+00:24:00.000 --> 00:24:01.680 align:start position:0%
+ 
+ 
+
+00:24:01.680 --> 00:24:03.990 align:start position:0%
+ 
+ 
+
+00:24:03.990 --> 00:24:05.910 align:start position:0%
+ 
+ 
+
+00:24:05.910 --> 00:24:07.920 align:start position:0%
+ 
+ 
+
+00:24:07.920 --> 00:24:09.600 align:start position:0%
+ 
+ 
+
+00:24:09.600 --> 00:24:16.680 align:start position:0%
+ 
+ 
+
+00:24:16.680 --> 00:24:17.970 align:start position:0%
+ 
+ 
+
+00:24:17.970 --> 00:24:19.530 align:start position:0%
+ 
+ 
+
+00:24:19.530 --> 00:24:22.620 align:start position:0%
+ 
+ 
+
+00:24:22.620 --> 00:24:25.290 align:start position:0%
+ 
+ 
+
+00:24:25.290 --> 00:24:27.600 align:start position:0%
+ 
+ 
+
+00:24:27.600 --> 00:24:29.430 align:start position:0%
+ 
+ 
+
+00:24:29.430 --> 00:24:31.050 align:start position:0%
+ 
+ 
+
+00:24:31.050 --> 00:24:33.390 align:start position:0%
+ 
+ 
+
+00:24:33.390 --> 00:24:35.130 align:start position:0%
+ 
+ 
+
+00:24:35.130 --> 00:24:37.080 align:start position:0%
+ 
+ 
+
+00:24:37.080 --> 00:24:38.580 align:start position:0%
+ 
+ 
+
+00:24:38.580 --> 00:24:41.220 align:start position:0%
+ 
+ 
+
+00:24:41.220 --> 00:24:42.840 align:start position:0%
+ 
+ 
+
+00:24:42.840 --> 00:24:45.210 align:start position:0%
+ 
+ 
+
+00:24:45.210 --> 00:24:51.780 align:start position:0%
+ 
+ 
+
+00:24:51.780 --> 00:24:54.030 align:start position:0%
+ 
+ 
+
+00:24:54.030 --> 00:24:55.650 align:start position:0%
+ 
+ 
+
+00:24:55.650 --> 00:24:57.900 align:start position:0%
+ 
+ 
+
+00:24:57.900 --> 00:24:59.900 align:start position:0%
+ 
+ 
+
+00:24:59.900 --> 00:25:03.420 align:start position:0%
+ 
+ 
+
+00:25:03.420 --> 00:25:04.920 align:start position:0%
+ 
+ 
+
+00:25:04.920 --> 00:25:07.380 align:start position:0%
+ 
+ 
+
+00:25:07.380 --> 00:25:10.650 align:start position:0%
+ 
+ 
+
+00:25:10.650 --> 00:25:12.450 align:start position:0%
+ 
+ 
+
+00:25:12.450 --> 00:25:13.950 align:start position:0%
+ 
+ 
+
+00:25:13.950 --> 00:25:16.320 align:start position:0%
+ 
+ 
+
+00:25:16.320 --> 00:25:17.820 align:start position:0%
+ 
+ 
+
+00:25:17.820 --> 00:25:19.530 align:start position:0%
+ 
+ 
+
+00:25:19.530 --> 00:25:21.360 align:start position:0%
+ 
+ 
+
+00:25:21.360 --> 00:25:22.950 align:start position:0%
+ 
+ 
+
+00:25:22.950 --> 00:25:25.980 align:start position:0%
+ 
+ 
+
+00:25:25.980 --> 00:25:27.660 align:start position:0%
+ 
+ 
+
+00:25:27.660 --> 00:25:29.400 align:start position:0%
+ 
+ 
+
+00:25:29.400 --> 00:25:31.320 align:start position:0%
+ 
+ 
+
+00:25:31.320 --> 00:25:34.320 align:start position:0%
+ 
+ 
+
+00:25:34.320 --> 00:25:36.620 align:start position:0%
+ 
+ 
+
+00:25:36.620 --> 00:25:38.820 align:start position:0%
+ 
+ 
+
+00:25:38.820 --> 00:25:41.430 align:start position:0%
+ 
+ 
+
+00:25:41.430 --> 00:25:43.190 align:start position:0%
+ 
+ 
+
+00:25:43.190 --> 00:25:46.950 align:start position:0%
+ 
+ 
+
+00:25:46.950 --> 00:25:47.820 align:start position:0%
+ 
+ 
+
+00:25:47.820 --> 00:25:49.740 align:start position:0%
+ 
+ 
+
+00:25:49.740 --> 00:25:51.510 align:start position:0%
+ 
+ 
+
+00:25:51.510 --> 00:25:54.000 align:start position:0%
+ 
+ 
+
+00:25:54.000 --> 00:25:56.730 align:start position:0%
+ 
+ 
+
+00:25:56.730 --> 00:25:58.820 align:start position:0%
+ 
+ 
+
+00:25:58.820 --> 00:26:05.160 align:start position:0%
+ 
+ 
+
+00:26:05.160 --> 00:26:06.270 align:start position:0%
+ 
+ 
+
+00:26:06.270 --> 00:26:07.920 align:start position:0%
+ 
+ 
+
+00:26:07.920 --> 00:26:09.720 align:start position:0%
+ 
+ 
+
+00:26:09.720 --> 00:26:14.760 align:start position:0%
+ 
+ 
+
+00:26:14.760 --> 00:26:18.060 align:start position:0%
+ 
+ 
+
+00:26:18.060 --> 00:26:19.860 align:start position:0%
+ 
+ 
+
+00:26:19.860 --> 00:26:24.270 align:start position:0%
+ 
+ 
+
+00:26:24.270 --> 00:26:26.460 align:start position:0%
+ 
+ 
+
+00:26:26.460 --> 00:26:29.220 align:start position:0%
+ 
+ 
+
+00:26:29.220 --> 00:26:31.770 align:start position:0%
+ 
+ 
+
+00:26:31.770 --> 00:26:34.170 align:start position:0%
+ 
+ 
+
+00:26:34.170 --> 00:26:37.680 align:start position:0%
+ 
+ 
+
+00:26:37.680 --> 00:26:39.240 align:start position:0%
+ 
+ 
+
+00:26:39.240 --> 00:26:41.700 align:start position:0%
+ 
+ 
+
+00:26:41.700 --> 00:26:43.260 align:start position:0%
+ 
+ 
+
+00:26:43.260 --> 00:26:44.940 align:start position:0%
+ 
+ 
+
+00:26:44.940 --> 00:26:46.790 align:start position:0%
+ 
+ 
+
+00:26:46.790 --> 00:26:48.990 align:start position:0%
+ 
+ 
+
+00:26:48.990 --> 00:26:54.810 align:start position:0%
+ 
+ 
+
+00:26:54.810 --> 00:26:59.549 align:start position:0%
+ 
+ 
+
+00:26:59.549 --> 00:27:01.440 align:start position:0%
+ 
+ 
+
+00:27:01.440 --> 00:27:04.799 align:start position:0%
+ 
+ 
+
+00:27:04.799 --> 00:27:06.390 align:start position:0%
+ 
+ 
+
+00:27:06.390 --> 00:27:08.790 align:start position:0%
+ 
+ 
+
+00:27:08.790 --> 00:27:10.049 align:start position:0%
+ 
+ 
+
+00:27:10.049 --> 00:27:11.549 align:start position:0%
+ 
+ 
+
+00:27:11.549 --> 00:27:12.990 align:start position:0%
+ 
+ 
+
+00:27:12.990 --> 00:27:19.799 align:start position:0%
+ 
+ 
+
+00:27:19.799 --> 00:27:21.299 align:start position:0%
+ 
+ 
+
+00:27:21.299 --> 00:27:24.750 align:start position:0%
+ 
+ 
+
+00:27:24.750 --> 00:27:27.450 align:start position:0%
+ 
+ 
+
+00:27:27.450 --> 00:27:29.640 align:start position:0%
+ 
+ 
+
+00:27:29.640 --> 00:27:32.310 align:start position:0%
+ 
+ 
+
+00:27:32.310 --> 00:27:33.870 align:start position:0%
+ 
+ 
+
+00:27:33.870 --> 00:27:36.540 align:start position:0%
+ 
+ 
+
+00:27:36.540 --> 00:27:40.400 align:start position:0%
+ 
+ 
+
+00:27:40.400 --> 00:27:43.890 align:start position:0%
+ 
+ 
+
+00:27:43.890 --> 00:27:46.049 align:start position:0%
+ 
+ 
+
+00:27:46.049 --> 00:27:48.030 align:start position:0%
+ 
+ 
+
+00:27:48.030 --> 00:27:50.400 align:start position:0%
+ 
+ 
+
+00:27:50.400 --> 00:27:51.840 align:start position:0%
+ 
+ 
+
+00:27:51.840 --> 00:27:56.880 align:start position:0%
+ 
+ 
+
+00:27:56.880 --> 00:28:00.610 align:start position:0%
+ 
+ 
+
+00:28:00.610 --> 00:28:16.240 align:start position:0%
+ 
+ 
+
+00:28:16.240 --> 00:28:18.490 align:start position:0%
+ 
+ 
+
+00:28:18.490 --> 00:28:22.120 align:start position:0%
+ 
+ 
+
+00:28:22.120 --> 00:28:23.590 align:start position:0%
+ 
+ 
+
+00:28:23.590 --> 00:28:25.720 align:start position:0%
+ 
+ 
+
+00:28:25.720 --> 00:29:02.030 align:start position:0%
+ 
+ 
+
+00:29:02.030 --> 00:29:28.490 align:start position:0%
+ 
+ 
+
+00:29:28.490 --> 00:29:32.360 align:start position:0%
+ 
+ 
+
+00:29:32.360 --> 00:29:34.759 align:start position:0%
+ 
+ 
+
+00:29:34.759 --> 00:29:36.049 align:start position:0%
+ 
+ 
+
+00:29:36.049 --> 00:29:39.169 align:start position:0%
+ 
+ 
+
+00:29:39.169 --> 00:29:41.539 align:start position:0%
+ 
+ 
+
+00:29:41.539 --> 00:29:43.250 align:start position:0%
+ 
+ 
+
+00:29:43.250 --> 00:29:45.139 align:start position:0%
+ 
+ 
+
+00:29:45.139 --> 00:29:46.430 align:start position:0%
+ 
+ 
+
+00:29:46.430 --> 00:29:47.690 align:start position:0%
+ 
+ 
+
+00:29:47.690 --> 00:29:57.639 align:start position:0%
+ 
+ 
+
+00:29:57.639 --> 00:29:59.930 align:start position:0%
+ 
+ 
+
+00:29:59.930 --> 00:30:03.830 align:start position:0%
+ 
+ 
+
+00:30:03.830 --> 00:30:07.279 align:start position:0%
+ 
+ 
+
+00:30:07.279 --> 00:30:08.659 align:start position:0%
+ 
+ 
+
+00:30:08.659 --> 00:30:09.799 align:start position:0%
+ 
+ 
+
+00:30:09.799 --> 00:30:11.450 align:start position:0%
+ 
+ 
+
+00:30:11.450 --> 00:30:17.860 align:start position:0%
+ 
+ 
+
+00:30:17.860 --> 00:30:22.570 align:start position:0%
+ 
+ 
+
+00:30:22.570 --> 00:30:37.170 align:start position:0%
+ 
+ 
+
+00:30:37.170 --> 00:30:43.950 align:start position:0%
+ 
+ 
+
+00:30:43.950 --> 00:30:45.210 align:start position:0%
+ 
+ 
+
+00:30:45.210 --> 00:30:51.510 align:start position:0%
+ 
+ 
+
+00:30:51.510 --> 00:30:55.490 align:start position:0%
+ 
+ 
+
+00:30:55.490 --> 00:30:58.140 align:start position:0%
+ 
+ 
+
+00:30:58.140 --> 00:30:59.670 align:start position:0%
+ 
+ 
+
+00:30:59.670 --> 00:31:02.880 align:start position:0%
+ 
+ 
+
+00:31:02.880 --> 00:31:03.900 align:start position:0%
+ 
+ 
+
+00:31:03.900 --> 00:31:06.299 align:start position:0%
+ 
+ 
+
+00:31:06.299 --> 00:31:08.220 align:start position:0%
+ 
+ 
+
+00:31:08.220 --> 00:31:10.020 align:start position:0%
+ 
+ 
+
+00:31:10.020 --> 00:31:12.390 align:start position:0%
+ 
+ 
+
+00:31:12.390 --> 00:31:13.530 align:start position:0%
+ 
+ 
+
+00:31:13.530 --> 00:31:15.930 align:start position:0%
+ 
+ 
+
+00:31:15.930 --> 00:31:18.090 align:start position:0%
+ 
+ 
+
+00:31:18.090 --> 00:31:23.700 align:start position:0%
+ 
+ 
+
