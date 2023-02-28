@@ -1,0 +1,3384 @@
+WEBVTT
+Kind: captions
+Language: en
+
+00:00:00.000 --> 00:00:01.910 align:start position:0%
+ 
+what's up guys my name is welcome back  to my Ray tracing Series so last time we  rented multiple spheres we now have  support for rendering multiple spheres  inside our scene which is pretty cool  because we can start to actually build  up something nice that video will be  linked up there of course if you haven't  seen it you can check it out today we're  going to have some fun and we're going  to plan for the future that's always fun  right we're going to take our existing  renderer class and completely  restructure it we're going to make it  work in a way that is very similar to  how a GPU Ray tracing pipeline works so  if you're familiar with Vulcan Ray  tracing or drag text 12 Ray tracing  we're basically going to emulate that to  some degree within our CPU based  renderer why are we doing this well when  I was thinking about what I want to do  with this series I realized that  obviously the end goal is in fact doing  real-time Ray tracing on the GPU using  Vulcan it is going to be quite a big  change if we just go from a full like  CPU optimized Ray Tracer to now a GPU  raytracer I want to kind of strike a  balance between the two and because I I  quite like the way that the ray tracing  pipelines work in Vulcan and DirectX 12  I thought we might as well just  Implement them here whilst it may not be  like the most efficient and optimal way  to write a CPU like a CPU only Ray  Tracer I think it will be fast enough  it's not gonna it's not gonna damage our  performance or our code too much it's  just going to be more or less like a  layout and organization kind of thing  okay so let's dive into the code and  take a look at how this is going to work  now in terms of how Vulcan Ray tracing  works I'm going to save that explanation  for when we start doing that obviously  so don't expect that here today if we go  into our renderer class at the moment  what happens is we call this render  function and then what that does is it  goes through every single Pixel of the  image we're trying to render and casts  out array we then call this Trace Ray  color per pixel which returns a color  value back to us now there's a few  problems with this first of all this is  under the assumption that we want to  really only Trace like a single Ray per  pixel and that every that we Trace is  going to provide us with a color that's  not really correct for a few reasons we  usually want to cast more than one rate  per pixel and like there's a few  different levels to this for one we  might be doing multi-sampling so maybe  we want to gather a few different  samples and form one pixel which will  give us some nice anti-aliasing but also  even if we're not talking about that we  want to bounce Rays around if array is  coming in from the camera and hits the  surface over here we definitely need to  bounce array somewhere not just if this  is actually a reflective surface and  thus we need to draw a reflection here  but if we're just trying to do some  basic like diffuse lighting like some  Global illumination we need to make sure  that we actually sample the light from  various directions that might be hitting  this surface we'll get into Global  elimination and all that stuff later in  this series of course but for now just  know that when the ray actually comes  from the camera and hits this object  here we need to bounce additional Rays  from that hit position another great  example of having to cast more than one  Ray per pixel is if we hit a surface and  we need to determine whether or not it's  in Shadow the way we do that is we might  cast array from the hit position to our  light source so the ray comes from the  camera it hits this point over here we  need to know whether or not that's in  Shadow so we just cast array from that  point into the light like directly to  the light if it's a directional light  then just in the light Direction with  like infinite distance if it's a point  light then just like to the point lines  position if that Ray misses everything  so it doesn't hit anything we know where  not in Shadow we're in light because we  have direct non-occluded Vision to the  light otherwise if it hits another  object in the way then we know that  we're in Shadow we need to be able to  support all of these things and that  requires a little bit of restructuring  so what I want to do is I actually want  to take what we've got over here and  break it up into a few different  functions I want to handle all of the  different cases of what happens to our  Rays such as if we miss all the objects  so we don't hit anything but also the  closest hit object as well I want to  separate that into and actually function  I want to separate this Trace Ray  function so that it's responsible for  just tracing array and then providing us  with some sort of payload depending on  like if it hits an object or if it  misses everything entirely and I also  want to write a per pixel function that  is just simply going to be a function  that's going to be called once for every  iteration of this for Loop so let's go  ahead and get started whilst doing this  I'm also going to draw some parallels  into GPU side Ray tracing so first the  per pixel function now I think I'm going  to call this per pixel but really what  this is is a raygen Shader so in Vulcan  and DirectX 12 this is known as a raygen  Shader this gets invoked for every pixel  we're trying to render and within that  Shader or within this function we can  determine whether or not we want to  potentially cast multiple Rays per pixel  and that's where we actually cast The  Ray so we'll call Trace Ray from within  this function I could call it raygen I'm  not sure if I want to follow those apis  exactly so I think I'll just call it per  pixel because ultimately that makes  sense that makes the most sense to me  now sane and Camera are both objects  that we need access to within like all  of these functions but what I'm going to  do is I'm just going to make the member  variables here instead so that we can  just access them throughout our like  entire pipeline here the way that I want  to do this is by just holding pointers  to our active scene so we'll make this a  const pointer active scene equals null  pointer as well as active camera  and that's obviously going to be a  camera I don't want to make shared  pointers out of this or anything like  that because if you take a look at how  this actually works inside Walnut  app.cpp we at the moment just have these  nice stack allocated objects I don't  want to necessarily Heap allocate them  and then share them into like these  functions and deal with like Atomic  increments and all that stuff it's  completely unnecessary instead what we  can do is just when we actually render  over here we're going to set our active  scene to be the memory address of scene  and then we'll set active camera to be  the memory address of camera now this is  a non-owning like pointer obviously so  in other words if this class dies then  we lose our data but as you can see we  also lose our renderer so the ownership  semantics of this obviously are tied to  this class so there's no way that this  is going to result in like you know us  accidentally frame memory that's in use  or anything like that at least for the  time being okay back to our header file  over here so that way that way our  personal function obviously can have  access to this and then our Trace array  function let's talk about how that's  going to work that's not going to return  a color anymore Instead This is  completely going to be like abstracted  away from the concept of colors Trace  Ray is a function that will shoot array  out into a particular place and from a  particular point so really Ray is the  only thing it will take in and then what  it's actually going to return to us is  some kind of payload now this payload is  just going to be some information about  what happened to our Ray so we traced  array cool but did we hit anything and  if so like what is the hit distance what  is the object that we hit some potential  like attributes about that object as  well all of that is going to be  contained within something called a hit  payload now this is just going to be a  private struct that we have here at  least for now we're going to have a hit  distance inside this struct and then  anything else that you add here is kind  of up to you so we might want to have  like a world normal a world position we  could even have reference to like a  particular sphere that we've hit however  what I think I'll do instead is  potentially have some kind of object  index I'm not initializing any of these  variables and we'll see if we need to  later on so this hit payload is  ultimately what this function will  return for us however the hit payload is  something that we should be able to set  depending on obviously what happens to  the ray so did the ray hit something if  so we need to invoke another function  called closest hit and this represents  the closest hit Shader inside our Ray  tracing pipeline so this will take in  information about the ray as well as  this object index and it will return a  hit payload so this shade is really  going to be responsible this function is  really going to be responsible for  determining the world position and the  world normal now hit distance is also  something that we should probably take  in so I think I'll right float hit  distance this is like ultimately  something that we could package up into  like metadata about the ray itself and  the ray evaluation and we might talk  about that a little bit later but for  now we'll just pass it in like this so  we know that if we hit something we  invoke the closest Head Shadow with the  closest object of the camera that we hit  but what if we've missed everything  completely well what we're going to do  is write another function for that  called Miss and this is going to  represent the Miss Shader inside our Ray  tracing pipeline now it's going to take  in the Ray and that's it there's  obviously no hit distance and there's no  object index so what we can do here is  really anything I mean we could add like  some kind of color to this and return  like our clear color instead what we're  going to do is basically just set here  distance to like negative one or  something like that and that way back in  per pixel where we need to determine a  color we can check to see if Trace Ray  returns a hit payload of a hit distance  of negative one and if so we return our  clear color or some kind of Sky color  something like that okay cool so that is  looking pretty good and that is more  than enough for us to get started now in  the GPU Ray tracing pipeline there are a  few other shaders which we haven't  really implemented here such as the any  head Shader which we might use for like  translucent objects and then also so the  intersection Shader which we would be  using to figure out whether or not we  have hit something but that's kind of  going to be baked into our Trace Ray  function since we are dealing with  spheres in the future with GPU rate  racing will mostly be dealing with  triangles and so we probably wouldn't  even need to use an intersection Shader  however what we're doing here is kind of  rendering these procedural spheres which  would require the use of an intersection  Shader however that's kind of baked into  our Trace array function at the moment  now before we start implementing all  these I want to thank brilliant for  sponsoring this series brilliant is an  amazing website filled with really high  quality courses on various stem topics  such as computer science and math  brilliant have been a really good  sponsor of this series because they're  such a fantastic resource for like all  of the math that you'll need for this  series seriously I can't recommend them  enough I've been using brilliant to  revise heaps of the math that we'll need  for this Theory such as calculus unlike  other potential sources out there the  reason why I love brilliant so much is  because of how Visual and interactive it  is all of their courses have like these  amazing like visual widgets that you can  play with to help you understand what  they're teaching you and they'll also  ask you questions and quiz you to make  sure that you're following along and  actually learning the content this kind  of visual engaging way to learn things  means that you'll actually learn them  and they have a mouth course for like  literally everything calculus algebra  even this new everyday math course which  is great for people who are just getting  into math the best thing about brilliant  is that you can get started for free  just go to brilliant.org the Cherno and  check it out however brilliant have been  nice enough to offer 20 off an annual  membership to the first 200 of my  subscribers who sign up using that link  below so definitely go ahead and check  it out seriously if you're trying to  learn math like you don't know what  you're missing huge thank you to  brilliant as always for sponsoring this  video okay so how do we Implement these  well I'm going to use visual assist by  just right clicking here and going  create method implementations pretty  easy I'm pretty sure Visual Studio can  kind of do the same thing maybe not in  one go Okay cool so we have per pixel we  have Trace Ray I'll just collapse this  for a minute here so that we can think  about how we want to do this a lot of  the functional quality of this random  function we're going to kind of move  into that per pixel function I mean not  not like a lot of it but you can see  that like this is us iterating through  every pixel so ultimately this is where  we want to call per pixel we also have  this kind of Ray and Ray origin being  set here from the camera this obviously  has to do with us calling Trace Ray  which we're going to do from within per  pixel so we'll move that stuff over  there in a minute but per pixel will  return a color so what we need to do is  basically replace this code here with  just per pixel like that and we can  pretty much keep everything else so  redirection and Ray origin  this is the kind of stuff that we  actually need to move into this per  pixel function now the thing is we need  to know which pixel index we're actually  looking at so let's go ahead and move  this and then we'll figure out how we  can do that so inside per pixel this is  what I'm going to write now camera we  know is going to be active camera  so we can change it to be that and we  can do the same thing for our array  directions however X and Y what they're  going to be are the current pixel index  that we're actually looking at now if we  strictly bring this back to like GPU Ray  tracing in Vulcan there's something  called GL underscore launch ID that is  essentially the index of the pixel that  we're currently like processing inside  our rage and Shader and we can use that  as a coordinate to write back into a  texture however we don't really have  that here I don't really feel like  making member variables for that so what  I'm going to do is simply pass in X and  Y into this function here and if we go  back to per pixel we can just type in X  and Y as the parameters over here so  that way we can just pass in X and Y  like that and then we'll have access to  X and Y so that we can for example  calculate our array direction we  obviously don't need X and Y to write  back into the image because that is  something that the per pixel function  doesn't do the pixel function just  returns a color and we actually do that  as part of here might change this in the  future in GPU Ray tracing pipelines you  would be riding into the texture from  your rage and Shader so it would be a  little bit different and when we have to  deal with accumulation and stuff like  that might make more sense to do that  but we will cross that bridge when we  get there I'm kind of enjoying providing  different ways to do this anyway so now  what we can do from per pixel is ideally  call the trace Ray function now it's  changed a little bit what I might do is  I might just change this function to be  our Trace Ray function so let's go ahead  and grab this render a hit payload and  replace the return type here and I'll  delete this other function because this  is what's doing most of the work anyway  okay so last episode we actually  iterated through all of this uh we don't  really need to do this check anyway  because we have a for Loop for that and  we check this anyway although that was a  bit of an early out I guess remember  what we're returning here is the hit  payload not like a particular color so  that that needs to be kind of addressed  let's go ahead and change this to active  scene spheres though and then if the  closest sphere here is null pointer then  we haven't hit anything and if we  haven't hit anything what do we do we  invoke Our Miss Shader so we can return  Miss with that Ray okay and of course  Miss also returns a renderer hit payload  so this part of our kind of Trace Ray  function is really just responsible for  figuring out whether or not we've hit  anything and if so what is the closest  thing that we hit and what is its hit  distance that's all it does so moving on  here do we calculate origin and hit  point and all that stuff well not really  because that's going to be the job of  the closest hit Shader well the closest  hit function I'm really talking about  shaders now so really all we have to do  here is return closest hit and then we  provide Ray we provide the hit distance  and we kind of want to know the index of  the object we've hit now previously this  used to be closest sphere I don't really  want to pass in a sphere pointer into  this function I definitely could but I  would prefer to just pass in like an  index so what I'm I'm going to do is  actually refactor this so that it works  based on an index system instead we're  going to change this so that it's going  to be let's just do active spheres I  here and I'm going to rewrite this so  let's do uh so that it's size t i equals  0i is less than active C dot skills or  size I plus plus now we have an index  and a closer sphere here let's go ahead  and make this an INT so that it can be  negative one I don't think we're going  to exceed the size of an INT here anyway  you could make this like a size t or a  un32t in that case obviously since 0 is  a actually an actually valid index you'd  probably have to set it to like un32 Max  or like you know acid and numeric limits  Max or whatever which is just like FFF  lots of F's and then if closest sphere  is like equal to that you know you  haven't hit anything however we'll just  make use of negative one which is  technically equivalent to ffff if you  make it a unit but anyway uh that's  going to be our closest sphere so it's  now an index instead and then and over  here all we'll do is we'll assign  closest sphere to I like that and we can  cast it into an end just so that we  don't get any warnings back over here if  closest sphere is less than zero so it's  negative we know that we can just return  Miss because we've missed everything  otherwise we can pass in closest here  now and it will in fact be our index so  because we have made it an in so I'm  just going to go back here and change  object index in probably both of these  to just be an INT and null adjusted over  here as well and that's kind of it so  obviously everything under this return  here is going to be part of our closest  hit Shader because we're moving that  code into our closest hit function I  really do keep saying Shader so now we  need to look up what our closest sphere  is and we'll do that by just writing  const sphere and we can actually make  this a reference now instead of a  pointer we'll type in closer sphere and  we'll set this equal to active scene  spheres and then object index like that  and then we're going to have closer  sphere dot position and Dot Albedo but  again this this does not return a color  now this is getting a little bit into  the subjective design of how you want  this to work you can definitely  calculate like materials and colors and  everything inside a closest hit Shader  inside your GPU raytracing pipeline  however that's not the way that I prefer  to do things I prefer to just have  closest hit as a Shader that basically  will give you the required data that you  need from like the vertex buffer and  potentially like some other calculations  for that object that is your closest hit  and then back in the rage and Shader  where you launch those Rays you can then  look at the material and decide what you  want to do how to shade it as well as  whether or not you need to send out  additional rays and how and how many and  all of that stuff so in other words I  prefer to do all of my material stuff  and all of my actual shading inside that  original rage and Shader and just have  closest here return the data I need for  that that's kind of subjective of I  guess that's just my opinion on how I  like to do things you can obviously look  at this head payload in both our Ray  tracing Series code here but also inside  an actual payload you would have inside  your GPU Ray tracing shaders and just  add a color and then just return that  that's totally viable as well but that's  not how we're going to do things here so  instead what we'll do is we'll calculate  like the world position the world normal  and uh object index is just going to be  this and then also hit distance is just  going to be the hit distance so let's  build up a hit payload to return here  this will be our payload we're going to  type in payload.hit distance equals head  distance payload dot object index equals  object index and then we just need to  calculate the world position and the  world normal so the hit point over here  is already our kind of world space  position and this normal is our world  space normal so really we just need to  change this to be our payload World  position and then payload World normal  and then we can go ahead and change this  world normal to the normalized world  position the only thing here that we  need to adjust though for the world  positions remember because we did this  kind of Ray origin minus classic sphere  position we've kind of moved everything  back to the origin we need to make sure  that world position is actually kind of  translated by this sphere's position so  we need to add back that sphere position  over here if we do it earlier then that  will change the way we need to actually  calculate our world normal we'll have to  subtract the two vectors here but this  way since everything is based on the  origin here anyway we can just normalize  that existing World position together  World normal and then actually move the  world position into its correct World  position spot okay that's it that's all  of our payloads kind of set here or  rather all the data within our payload  so now there's just this calculation and  this calculation is the actual lighting  calculation which as I mentioned I like  to do inside this per pixel Shader which  is our rage and Shader  and perpixel function that's what I mean  so let's go ahead and paste that in now  we haven't actually called Trace Ray so  let's go ahead and actually call Trace  Rate with Ray like that that's the ray  that we've built up here and now we're  calling Trace Ray and then what we're  going to get back is this payload so  that's us calling Trace Ray receiving a  payload and now we can do everything we  need to such as figuring out the light  intensity by using the world normal here  and then also seeing what the sphere  color is by asking the payload what the  object index is and that of course is  the  that we've hit so we can just do active  scene  spheres and then object index and that  is in fact our sphere now obviously  before we do this we need to make sure  that we've actually hit something  because Trace Ray may have missed but  we'll do that in a minute so our sphere  color is going to be sphere.l beta like  that and then we can do our calculation  and return an actual color now what  happens if we miss well we know that we  call the Miss function which represents  Our Miss Shader and then really all we  have to do here is just create a payload  where the hit distance is like say  negative one and that's all I'm going to  do I'm not going to bother initializing  any of the other members here we're just  going to set hit distance to -1 and just  return payload and what that's going to  mean is back over here inside perpixel  if payload has a hit distance that's  less than zero then we can just return  whatever our kind of Sky color or clear  color should be so until now we've been  returning black so we're going to go  ahead and do that as well zero zero zero  and one like that and so it's important  here that obviously object index we  don't try and do this this kind of we  don't try and access this spheres array  with this index unless we're sure that  we actually hit something because it  won't be set correctly this only gets  set inside the payload over here now I  will say that we could like technically  change this a little bit so that we take  in like a payload reference here which  already has these two sets by the trace  Ray Shader however that's not exactly  how uh this would work in a GPU  retracing pipeline so I'm going to keep  it like this because this is this is a  lot more similar to that okay cool so  that's it  um we obviously have to return the  payload here though  embarrassing I almost forgot but that's  kind of it so we now clearly see what  happens if we hit a sphere what happens  if we miss a sphere and then finally  back in in per pixel we now have the  ability to sand out really as many Rays  as we want let's go ahead and make sure  this works first and then we'll we'll  test out multiple arrays Okay cool so  this looks exactly the same to me  performance I think is about the same I  must confess I didn't really look at the  performance before I  before I started making these changes  should be roughly the same it wouldn't  surprise me if it's a similar second or  too slower but there you go now let's  try something really really simple to  make use of this new kind of  architecture let's try and make these  spheres reflective I want to see each  sphere in in each other's reflection  before I do this go ahead and try and do  it yourself as a little exercise okay so  what we kind of want to do here is if we  do hit something so in the per pixel  function when we trace this Ray if we do  hit something we just want to trace  another ray but obviously we need to do  all of this code kind of per Ray that we  actually Trace so let's go ahead and  Surround this in a for Loop that's going  to go through this as many bounces as we  want which we're just going to set to  two for now  bounces equals two I've just named it  bounces so it's clear and we're  basically going to do all of this code  we're going to have a final color glm  vect3 color which I'm going to just set  to zero and this is going to be the  color that we return here at the end  once we have that sphere color what I'm  actually going to do is just add it to  our current color now there definitely  needs to be some multiplier on this  because otherwise we're just going to  keep making the image brighter and  brighter what I want to do is have some  kind of multiplier we'll set it to like  one for now we're going to multiply this  sphere color by this multiplier and then  I'm going to like reduce the multiplier  a little bit now this definitely isn't  physically accurate this is just to draw  something nice looking hopefully don't  worry we'll get into like energy  conservation and all that stuff in the  future now we need to do the same thing  with this kind of Sky color as well so  what we're going to do is I mean this is  just black so we don't really need to  add it however we can still kind of  pretend that we are maybe processing a  sky that way if you have an actual sky  color that's not black it will work so  let's just go ahead and set the sky  color here and and we're just going to  write color plus equal Sky color times  that multiplier and then we're just  going to break so that when we don't  keep kind of tracing Rays since there's  nothing to trace from so where is the  bounce because at the moment all we're  doing is running through this exact same  code twice well what needs to happen is  once we actually hit something over here  we've we've determined that we have in  fact hit something we need to go ahead  and actually change this Ray origin  array direction for the next bounce and  we can do that by simply moving the  origin to the hit position the hit  position is going to be inside the  payload so payload Dot World position  but we need to like move it a little bit  forward I'll illustrate why so if we  have a sphere here and we've sent array  in and we've got a hit position now it's  this little hip position in red if we  try and Trace array from this exact  position like we're kind of like inside  the sphere if we try and Trace another  ray we're kind of like within the sphere  that chord depending on like floating  Point Precision all that give us like  incorrect results because we'll be  colliding with ourselves with the sphere  so instead what we need to do is like  move ourselves a little bit forward  right because if we nudge ourselves  forward then we're not going to clutter  with ourselves if we're kind of going to  trace the ray like from this position  instead now obviously that's a huge  distance that we've moved forward by  we're not going to move forward that  much but that's basically like our  little normal bias because we're going  to move along the normal so outward by a  very very small amount and so to do that  we just add on the normal but like a  really really small amount like maybe  0.0001 and that should be enough that's  how new origin and our new direction is  going to be a vector that's reflected by  what we've just hit so if this is the  sphere we've come in like this we've hit  this we want to reflect it by this kind  of blue normal so this is the normal of  the surface we've just hit let's go  ahead and reflect it by this normal this  incoming camera Direction so that we  kind of get this out going to Direction  going that way so let's go ahead and do  that all that requires us to do is call  this reflect function we're going to  reflect the existing array Direction by  the world normal and that's it simple as  that so now we should be shooting out  two rays per pixel well assuming we hit  something and if we take a look at it  okay so we don't see anything here  what's going on we try and move these a  little bit closer I mean honestly it's  really like hard to see what may have  gone wrong here if you don't already  know however I did mention last episode  that we aren't quite evaluating our  closest T correctly because if you  remember what happened is if we actually  moved this back behind the camera it  like came around like this and the  reason that that was happening is  because we're allowing closest T to be  negative so what we need to make sure is  the closest T is greater than zero and  if closest to his lesson hit distance  then we can kind of treat it as the  closest hit if closest T is is negative  then that's kind of we should ignore  that result because that means the  distance from the camera is like  negative that doesn't make sense the  objects behind us so if we try running  it with this code just only processing  closest T if it's greater than zero then  you can see now we have a beautiful  reflection and we can play around with  this obviously we can see this sphere  inside here we can move around it's  still kind of real time you can see it's  a little bit struggling it's about 30  milliseconds for this resolution however  we do have a pretty nice result and if I  move this perhaps a bit down maybe make  it bigger and Center it it's kind of  like we have a little bit of a flaw  going on here now and so there you go so  you can see how cool this is now that we  have the ability to actually structure  our code with this kind of Trace Ray and  closest hit and miss function and that's  going to make it really easy when we  move this into the Vulcan Ray tracing  pipeline in the future thank you guys  for watching hope you enjoyed this video  if you did please don't forget to hit  the like button I think we're getting to  the point where where we can probably  start talking about materials and  lighting a little bit more seriously so  that's probably what we'll explore next  as always don't forget to check out  brilliant using my link in description  below and I will see you guys next time  goodbye  [Music]
+
+00:00:01.910 --> 00:00:04.370 align:start position:0%
+what's up guys my name is welcome back  to my Ray tracing Series so last time we  rented multiple spheres we now have  support for rendering multiple spheres  inside our scene which is pretty cool  because we can start to actually build  up something nice that video will be  linked up there of course if you haven't  seen it you can check it out today we're  going to have some fun and we're going  to plan for the future that's always fun  right we're going to take our existing  renderer class and completely  restructure it we're going to make it  work in a way that is very similar to  how a GPU Ray tracing pipeline works so  if you're familiar with Vulcan Ray  tracing or drag text 12 Ray tracing  we're basically going to emulate that to  some degree within our CPU based  renderer why are we doing this well when  I was thinking about what I want to do  with this series I realized that  obviously the end goal is in fact doing  real-time Ray tracing on the GPU using  Vulcan it is going to be quite a big  change if we just go from a full like  CPU optimized Ray Tracer to now a GPU  raytracer I want to kind of strike a  balance between the two and because I I  quite like the way that the ray tracing  pipelines work in Vulcan and DirectX 12  I thought we might as well just  Implement them here whilst it may not be  like the most efficient and optimal way  to write a CPU like a CPU only Ray  Tracer I think it will be fast enough  it's not gonna it's not gonna damage our  performance or our code too much it's  just going to be more or less like a  layout and organization kind of thing  okay so let's dive into the code and  take a look at how this is going to work  now in terms of how Vulcan Ray tracing  works I'm going to save that explanation  for when we start doing that obviously  so don't expect that here today if we go  into our renderer class at the moment  what happens is we call this render  function and then what that does is it  goes through every single Pixel of the  image we're trying to render and casts  out array we then call this Trace Ray  color per pixel which returns a color  value back to us now there's a few  problems with this first of all this is  under the assumption that we want to  really only Trace like a single Ray per  pixel and that every that we Trace is  going to provide us with a color that's  not really correct for a few reasons we  usually want to cast more than one rate  per pixel and like there's a few  different levels to this for one we  might be doing multi-sampling so maybe  we want to gather a few different  samples and form one pixel which will  give us some nice anti-aliasing but also  even if we're not talking about that we  want to bounce Rays around if array is  coming in from the camera and hits the  surface over here we definitely need to  bounce array somewhere not just if this  is actually a reflective surface and  thus we need to draw a reflection here  but if we're just trying to do some  basic like diffuse lighting like some  Global illumination we need to make sure  that we actually sample the light from  various directions that might be hitting  this surface we'll get into Global  elimination and all that stuff later in  this series of course but for now just  know that when the ray actually comes  from the camera and hits this object  here we need to bounce additional Rays  from that hit position another great  example of having to cast more than one  Ray per pixel is if we hit a surface and  we need to determine whether or not it's  in Shadow the way we do that is we might  cast array from the hit position to our  light source so the ray comes from the  camera it hits this point over here we  need to know whether or not that's in  Shadow so we just cast array from that  point into the light like directly to  the light if it's a directional light  then just in the light Direction with  like infinite distance if it's a point  light then just like to the point lines  position if that Ray misses everything  so it doesn't hit anything we know where  not in Shadow we're in light because we  have direct non-occluded Vision to the  light otherwise if it hits another  object in the way then we know that  we're in Shadow we need to be able to  support all of these things and that  requires a little bit of restructuring  so what I want to do is I actually want  to take what we've got over here and  break it up into a few different  functions I want to handle all of the  different cases of what happens to our  Rays such as if we miss all the objects  so we don't hit anything but also the  closest hit object as well I want to  separate that into and actually function  I want to separate this Trace Ray  function so that it's responsible for  just tracing array and then providing us  with some sort of payload depending on  like if it hits an object or if it  misses everything entirely and I also  want to write a per pixel function that  is just simply going to be a function  that's going to be called once for every  iteration of this for Loop so let's go  ahead and get started whilst doing this  I'm also going to draw some parallels  into GPU side Ray tracing so first the  per pixel function now I think I'm going  to call this per pixel but really what  this is is a raygen Shader so in Vulcan  and DirectX 12 this is known as a raygen  Shader this gets invoked for every pixel  we're trying to render and within that  Shader or within this function we can  determine whether or not we want to  potentially cast multiple Rays per pixel  and that's where we actually cast The  Ray so we'll call Trace Ray from within  this function I could call it raygen I'm  not sure if I want to follow those apis  exactly so I think I'll just call it per  pixel because ultimately that makes  sense that makes the most sense to me  now sane and Camera are both objects  that we need access to within like all  of these functions but what I'm going to  do is I'm just going to make the member  variables here instead so that we can  just access them throughout our like  entire pipeline here the way that I want  to do this is by just holding pointers  to our active scene so we'll make this a  const pointer active scene equals null  pointer as well as active camera  and that's obviously going to be a  camera I don't want to make shared  pointers out of this or anything like  that because if you take a look at how  this actually works inside Walnut  app.cpp we at the moment just have these  nice stack allocated objects I don't  want to necessarily Heap allocate them  and then share them into like these  functions and deal with like Atomic  increments and all that stuff it's  completely unnecessary instead what we  can do is just when we actually render  over here we're going to set our active  scene to be the memory address of scene  and then we'll set active camera to be  the memory address of camera now this is  a non-owning like pointer obviously so  in other words if this class dies then  we lose our data but as you can see we  also lose our renderer so the ownership  semantics of this obviously are tied to  this class so there's no way that this  is going to result in like you know us  accidentally frame memory that's in use  or anything like that at least for the  time being okay back to our header file  over here so that way that way our  personal function obviously can have  access to this and then our Trace array  function let's talk about how that's  going to work that's not going to return  a color anymore Instead This is  completely going to be like abstracted  away from the concept of colors Trace  Ray is a function that will shoot array  out into a particular place and from a  particular point so really Ray is the  only thing it will take in and then what  it's actually going to return to us is  some kind of payload now this payload is  just going to be some information about  what happened to our Ray so we traced  array cool but did we hit anything and  if so like what is the hit distance what  is the object that we hit some potential  like attributes about that object as  well all of that is going to be  contained within something called a hit  payload now this is just going to be a  private struct that we have here at  least for now we're going to have a hit  distance inside this struct and then  anything else that you add here is kind  of up to you so we might want to have  like a world normal a world position we  could even have reference to like a  particular sphere that we've hit however  what I think I'll do instead is  potentially have some kind of object  index I'm not initializing any of these  variables and we'll see if we need to  later on so this hit payload is  ultimately what this function will  return for us however the hit payload is  something that we should be able to set  depending on obviously what happens to  the ray so did the ray hit something if  so we need to invoke another function  called closest hit and this represents  the closest hit Shader inside our Ray  tracing pipeline so this will take in  information about the ray as well as  this object index and it will return a  hit payload so this shade is really  going to be responsible this function is  really going to be responsible for  determining the world position and the  world normal now hit distance is also  something that we should probably take  in so I think I'll right float hit  distance this is like ultimately  something that we could package up into  like metadata about the ray itself and  the ray evaluation and we might talk  about that a little bit later but for  now we'll just pass it in like this so  we know that if we hit something we  invoke the closest Head Shadow with the  closest object of the camera that we hit  but what if we've missed everything  completely well what we're going to do  is write another function for that  called Miss and this is going to  represent the Miss Shader inside our Ray  tracing pipeline now it's going to take  in the Ray and that's it there's  obviously no hit distance and there's no  object index so what we can do here is  really anything I mean we could add like  some kind of color to this and return  like our clear color instead what we're  going to do is basically just set here  distance to like negative one or  something like that and that way back in  per pixel where we need to determine a  color we can check to see if Trace Ray  returns a hit payload of a hit distance  of negative one and if so we return our  clear color or some kind of Sky color  something like that okay cool so that is  looking pretty good and that is more  than enough for us to get started now in  the GPU Ray tracing pipeline there are a  few other shaders which we haven't  really implemented here such as the any  head Shader which we might use for like  translucent objects and then also so the  intersection Shader which we would be  using to figure out whether or not we  have hit something but that's kind of  going to be baked into our Trace Ray  function since we are dealing with  spheres in the future with GPU rate  racing will mostly be dealing with  triangles and so we probably wouldn't  even need to use an intersection Shader  however what we're doing here is kind of  rendering these procedural spheres which  would require the use of an intersection  Shader however that's kind of baked into  our Trace array function at the moment  now before we start implementing all  these I want to thank brilliant for  sponsoring this series brilliant is an  amazing website filled with really high  quality courses on various stem topics  such as computer science and math  brilliant have been a really good  sponsor of this series because they're  such a fantastic resource for like all  of the math that you'll need for this  series seriously I can't recommend them  enough I've been using brilliant to  revise heaps of the math that we'll need  for this Theory such as calculus unlike  other potential sources out there the  reason why I love brilliant so much is  because of how Visual and interactive it  is all of their courses have like these  amazing like visual widgets that you can  play with to help you understand what  they're teaching you and they'll also  ask you questions and quiz you to make  sure that you're following along and  actually learning the content this kind  of visual engaging way to learn things  means that you'll actually learn them  and they have a mouth course for like  literally everything calculus algebra  even this new everyday math course which  is great for people who are just getting  into math the best thing about brilliant  is that you can get started for free  just go to brilliant.org the Cherno and  check it out however brilliant have been  nice enough to offer 20 off an annual  membership to the first 200 of my  subscribers who sign up using that link  below so definitely go ahead and check  it out seriously if you're trying to  learn math like you don't know what  you're missing huge thank you to  brilliant as always for sponsoring this  video okay so how do we Implement these  well I'm going to use visual assist by  just right clicking here and going  create method implementations pretty  easy I'm pretty sure Visual Studio can  kind of do the same thing maybe not in  one go Okay cool so we have per pixel we  have Trace Ray I'll just collapse this  for a minute here so that we can think  about how we want to do this a lot of  the functional quality of this random  function we're going to kind of move  into that per pixel function I mean not  not like a lot of it but you can see  that like this is us iterating through  every pixel so ultimately this is where  we want to call per pixel we also have  this kind of Ray and Ray origin being  set here from the camera this obviously  has to do with us calling Trace Ray  which we're going to do from within per  pixel so we'll move that stuff over  there in a minute but per pixel will  return a color so what we need to do is  basically replace this code here with  just per pixel like that and we can  pretty much keep everything else so  redirection and Ray origin  this is the kind of stuff that we  actually need to move into this per  pixel function now the thing is we need  to know which pixel index we're actually  looking at so let's go ahead and move  this and then we'll figure out how we  can do that so inside per pixel this is  what I'm going to write now camera we  know is going to be active camera  so we can change it to be that and we  can do the same thing for our array  directions however X and Y what they're  going to be are the current pixel index  that we're actually looking at now if we  strictly bring this back to like GPU Ray  tracing in Vulcan there's something  called GL underscore launch ID that is  essentially the index of the pixel that  we're currently like processing inside  our rage and Shader and we can use that  as a coordinate to write back into a  texture however we don't really have  that here I don't really feel like  making member variables for that so what  I'm going to do is simply pass in X and  Y into this function here and if we go  back to per pixel we can just type in X  and Y as the parameters over here so  that way we can just pass in X and Y  like that and then we'll have access to  X and Y so that we can for example  calculate our array direction we  obviously don't need X and Y to write  back into the image because that is  something that the per pixel function  doesn't do the pixel function just  returns a color and we actually do that  as part of here might change this in the  future in GPU Ray tracing pipelines you  would be riding into the texture from  your rage and Shader so it would be a  little bit different and when we have to  deal with accumulation and stuff like  that might make more sense to do that  but we will cross that bridge when we  get there I'm kind of enjoying providing  different ways to do this anyway so now  what we can do from per pixel is ideally  call the trace Ray function now it's  changed a little bit what I might do is  I might just change this function to be  our Trace Ray function so let's go ahead  and grab this render a hit payload and  replace the return type here and I'll  delete this other function because this  is what's doing most of the work anyway  okay so last episode we actually  iterated through all of this uh we don't  really need to do this check anyway  because we have a for Loop for that and  we check this anyway although that was a  bit of an early out I guess remember  what we're returning here is the hit  payload not like a particular color so  that that needs to be kind of addressed  let's go ahead and change this to active  scene spheres though and then if the  closest sphere here is null pointer then  we haven't hit anything and if we  haven't hit anything what do we do we  invoke Our Miss Shader so we can return  Miss with that Ray okay and of course  Miss also returns a renderer hit payload  so this part of our kind of Trace Ray  function is really just responsible for  figuring out whether or not we've hit  anything and if so what is the closest  thing that we hit and what is its hit  distance that's all it does so moving on  here do we calculate origin and hit  point and all that stuff well not really  because that's going to be the job of  the closest hit Shader well the closest  hit function I'm really talking about  shaders now so really all we have to do  here is return closest hit and then we  provide Ray we provide the hit distance  and we kind of want to know the index of  the object we've hit now previously this  used to be closest sphere I don't really  want to pass in a sphere pointer into  this function I definitely could but I  would prefer to just pass in like an  index so what I'm I'm going to do is  actually refactor this so that it works  based on an index system instead we're  going to change this so that it's going  to be let's just do active spheres I  here and I'm going to rewrite this so  let's do uh so that it's size t i equals  0i is less than active C dot skills or  size I plus plus now we have an index  and a closer sphere here let's go ahead  and make this an INT so that it can be  negative one I don't think we're going  to exceed the size of an INT here anyway  you could make this like a size t or a  un32t in that case obviously since 0 is  a actually an actually valid index you'd  probably have to set it to like un32 Max  or like you know acid and numeric limits  Max or whatever which is just like FFF  lots of F's and then if closest sphere  is like equal to that you know you  haven't hit anything however we'll just  make use of negative one which is  technically equivalent to ffff if you  make it a unit but anyway uh that's  going to be our closest sphere so it's  now an index instead and then and over  here all we'll do is we'll assign  closest sphere to I like that and we can  cast it into an end just so that we  don't get any warnings back over here if  closest sphere is less than zero so it's  negative we know that we can just return  Miss because we've missed everything  otherwise we can pass in closest here  now and it will in fact be our index so  because we have made it an in so I'm  just going to go back here and change  object index in probably both of these  to just be an INT and null adjusted over  here as well and that's kind of it so  obviously everything under this return  here is going to be part of our closest  hit Shader because we're moving that  code into our closest hit function I  really do keep saying Shader so now we  need to look up what our closest sphere  is and we'll do that by just writing  const sphere and we can actually make  this a reference now instead of a  pointer we'll type in closer sphere and  we'll set this equal to active scene  spheres and then object index like that  and then we're going to have closer  sphere dot position and Dot Albedo but  again this this does not return a color  now this is getting a little bit into  the subjective design of how you want  this to work you can definitely  calculate like materials and colors and  everything inside a closest hit Shader  inside your GPU raytracing pipeline  however that's not the way that I prefer  to do things I prefer to just have  closest hit as a Shader that basically  will give you the required data that you  need from like the vertex buffer and  potentially like some other calculations  for that object that is your closest hit  and then back in the rage and Shader  where you launch those Rays you can then  look at the material and decide what you  want to do how to shade it as well as  whether or not you need to send out  additional rays and how and how many and  all of that stuff so in other words I  prefer to do all of my material stuff  and all of my actual shading inside that  original rage and Shader and just have  closest here return the data I need for  that that's kind of subjective of I  guess that's just my opinion on how I  like to do things you can obviously look  at this head payload in both our Ray  tracing Series code here but also inside  an actual payload you would have inside  your GPU Ray tracing shaders and just  add a color and then just return that  that's totally viable as well but that's  not how we're going to do things here so  instead what we'll do is we'll calculate  like the world position the world normal  and uh object index is just going to be  this and then also hit distance is just  going to be the hit distance so let's  build up a hit payload to return here  this will be our payload we're going to  type in payload.hit distance equals head  distance payload dot object index equals  object index and then we just need to  calculate the world position and the  world normal so the hit point over here  is already our kind of world space  position and this normal is our world  space normal so really we just need to  change this to be our payload World  position and then payload World normal  and then we can go ahead and change this  world normal to the normalized world  position the only thing here that we  need to adjust though for the world  positions remember because we did this  kind of Ray origin minus classic sphere  position we've kind of moved everything  back to the origin we need to make sure  that world position is actually kind of  translated by this sphere's position so  we need to add back that sphere position  over here if we do it earlier then that  will change the way we need to actually  calculate our world normal we'll have to  subtract the two vectors here but this  way since everything is based on the  origin here anyway we can just normalize  that existing World position together  World normal and then actually move the  world position into its correct World  position spot okay that's it that's all  of our payloads kind of set here or  rather all the data within our payload  so now there's just this calculation and  this calculation is the actual lighting  calculation which as I mentioned I like  to do inside this per pixel Shader which  is our rage and Shader  and perpixel function that's what I mean  so let's go ahead and paste that in now  we haven't actually called Trace Ray so  let's go ahead and actually call Trace  Rate with Ray like that that's the ray  that we've built up here and now we're  calling Trace Ray and then what we're  going to get back is this payload so  that's us calling Trace Ray receiving a  payload and now we can do everything we  need to such as figuring out the light  intensity by using the world normal here  and then also seeing what the sphere  color is by asking the payload what the  object index is and that of course is  the  that we've hit so we can just do active  scene  spheres and then object index and that  is in fact our sphere now obviously  before we do this we need to make sure  that we've actually hit something  because Trace Ray may have missed but  we'll do that in a minute so our sphere  color is going to be sphere.l beta like  that and then we can do our calculation  and return an actual color now what  happens if we miss well we know that we  call the Miss function which represents  Our Miss Shader and then really all we  have to do here is just create a payload  where the hit distance is like say  negative one and that's all I'm going to  do I'm not going to bother initializing  any of the other members here we're just  going to set hit distance to -1 and just  return payload and what that's going to  mean is back over here inside perpixel  if payload has a hit distance that's  less than zero then we can just return  whatever our kind of Sky color or clear  color should be so until now we've been  returning black so we're going to go  ahead and do that as well zero zero zero  and one like that and so it's important  here that obviously object index we  don't try and do this this kind of we  don't try and access this spheres array  with this index unless we're sure that  we actually hit something because it  won't be set correctly this only gets  set inside the payload over here now I  will say that we could like technically  change this a little bit so that we take  in like a payload reference here which  already has these two sets by the trace  Ray Shader however that's not exactly  how uh this would work in a GPU  retracing pipeline so I'm going to keep  it like this because this is this is a  lot more similar to that okay cool so  that's it  um we obviously have to return the  payload here though  embarrassing I almost forgot but that's  kind of it so we now clearly see what  happens if we hit a sphere what happens  if we miss a sphere and then finally  back in in per pixel we now have the  ability to sand out really as many Rays  as we want let's go ahead and make sure  this works first and then we'll we'll  test out multiple arrays Okay cool so  this looks exactly the same to me  performance I think is about the same I  must confess I didn't really look at the  performance before I  before I started making these changes  should be roughly the same it wouldn't  surprise me if it's a similar second or  too slower but there you go now let's  try something really really simple to  make use of this new kind of  architecture let's try and make these  spheres reflective I want to see each  sphere in in each other's reflection  before I do this go ahead and try and do  it yourself as a little exercise okay so  what we kind of want to do here is if we  do hit something so in the per pixel  function when we trace this Ray if we do  hit something we just want to trace  another ray but obviously we need to do  all of this code kind of per Ray that we  actually Trace so let's go ahead and  Surround this in a for Loop that's going  to go through this as many bounces as we  want which we're just going to set to  two for now  bounces equals two I've just named it  bounces so it's clear and we're  basically going to do all of this code  we're going to have a final color glm  vect3 color which I'm going to just set  to zero and this is going to be the  color that we return here at the end  once we have that sphere color what I'm  actually going to do is just add it to  our current color now there definitely  needs to be some multiplier on this  because otherwise we're just going to  keep making the image brighter and  brighter what I want to do is have some  kind of multiplier we'll set it to like  one for now we're going to multiply this  sphere color by this multiplier and then  I'm going to like reduce the multiplier  a little bit now this definitely isn't  physically accurate this is just to draw  something nice looking hopefully don't  worry we'll get into like energy  conservation and all that stuff in the  future now we need to do the same thing  with this kind of Sky color as well so  what we're going to do is I mean this is  just black so we don't really need to  add it however we can still kind of  pretend that we are maybe processing a  sky that way if you have an actual sky  color that's not black it will work so  let's just go ahead and set the sky  color here and and we're just going to  write color plus equal Sky color times  that multiplier and then we're just  going to break so that when we don't  keep kind of tracing Rays since there's  nothing to trace from so where is the  bounce because at the moment all we're  doing is running through this exact same  code twice well what needs to happen is  once we actually hit something over here  we've we've determined that we have in  fact hit something we need to go ahead  and actually change this Ray origin  array direction for the next bounce and  we can do that by simply moving the  origin to the hit position the hit  position is going to be inside the  payload so payload Dot World position  but we need to like move it a little bit  forward I'll illustrate why so if we  have a sphere here and we've sent array  in and we've got a hit position now it's  this little hip position in red if we  try and Trace array from this exact  position like we're kind of like inside  the sphere if we try and Trace another  ray we're kind of like within the sphere  that chord depending on like floating  Point Precision all that give us like  incorrect results because we'll be  colliding with ourselves with the sphere  so instead what we need to do is like  move ourselves a little bit forward  right because if we nudge ourselves  forward then we're not going to clutter  with ourselves if we're kind of going to  trace the ray like from this position  instead now obviously that's a huge  distance that we've moved forward by  we're not going to move forward that  much but that's basically like our  little normal bias because we're going  to move along the normal so outward by a  very very small amount and so to do that  we just add on the normal but like a  really really small amount like maybe  0.0001 and that should be enough that's  how new origin and our new direction is  going to be a vector that's reflected by  what we've just hit so if this is the  sphere we've come in like this we've hit  this we want to reflect it by this kind  of blue normal so this is the normal of  the surface we've just hit let's go  ahead and reflect it by this normal this  incoming camera Direction so that we  kind of get this out going to Direction  going that way so let's go ahead and do  that all that requires us to do is call  this reflect function we're going to  reflect the existing array Direction by  the world normal and that's it simple as  that so now we should be shooting out  two rays per pixel well assuming we hit  something and if we take a look at it  okay so we don't see anything here  what's going on we try and move these a  little bit closer I mean honestly it's  really like hard to see what may have  gone wrong here if you don't already  know however I did mention last episode  that we aren't quite evaluating our  closest T correctly because if you  remember what happened is if we actually  moved this back behind the camera it  like came around like this and the  reason that that was happening is  because we're allowing closest T to be  negative so what we need to make sure is  the closest T is greater than zero and  if closest to his lesson hit distance  then we can kind of treat it as the  closest hit if closest T is is negative  then that's kind of we should ignore  that result because that means the  distance from the camera is like  negative that doesn't make sense the  objects behind us so if we try running  it with this code just only processing  closest T if it's greater than zero then  you can see now we have a beautiful  reflection and we can play around with  this obviously we can see this sphere  inside here we can move around it's  still kind of real time you can see it's  a little bit struggling it's about 30  milliseconds for this resolution however  we do have a pretty nice result and if I  move this perhaps a bit down maybe make  it bigger and Center it it's kind of  like we have a little bit of a flaw  going on here now and so there you go so  you can see how cool this is now that we  have the ability to actually structure  our code with this kind of Trace Ray and  closest hit and miss function and that's  going to make it really easy when we  move this into the Vulcan Ray tracing  pipeline in the future thank you guys  for watching hope you enjoyed this video  if you did please don't forget to hit  the like button I think we're getting to  the point where where we can probably  start talking about materials and  lighting a little bit more seriously so  that's probably what we'll explore next  as always don't forget to check out  brilliant using my link in description  below and I will see you guys next time  goodbye  [Music]
+ 
+
+00:00:04.370 --> 00:00:06.710 align:start position:0%
+ 
+ 
+
+00:00:06.710 --> 00:00:08.450 align:start position:0%
+ 
+ 
+
+00:00:08.450 --> 00:00:10.310 align:start position:0%
+ 
+ 
+
+00:00:10.310 --> 00:00:12.169 align:start position:0%
+ 
+ 
+
+00:00:12.169 --> 00:00:15.049 align:start position:0%
+ 
+ 
+
+00:00:15.049 --> 00:00:16.310 align:start position:0%
+ 
+ 
+
+00:00:16.310 --> 00:00:17.630 align:start position:0%
+ 
+ 
+
+00:00:17.630 --> 00:00:18.650 align:start position:0%
+ 
+ 
+
+00:00:18.650 --> 00:00:20.210 align:start position:0%
+ 
+ 
+
+00:00:20.210 --> 00:00:21.710 align:start position:0%
+ 
+ 
+
+00:00:21.710 --> 00:00:23.689 align:start position:0%
+ 
+ 
+
+00:00:23.689 --> 00:00:25.130 align:start position:0%
+ 
+ 
+
+00:00:25.130 --> 00:00:27.650 align:start position:0%
+ 
+ 
+
+00:00:27.650 --> 00:00:30.769 align:start position:0%
+ 
+ 
+
+00:00:30.769 --> 00:00:32.210 align:start position:0%
+ 
+ 
+
+00:00:32.210 --> 00:00:34.370 align:start position:0%
+ 
+ 
+
+00:00:34.370 --> 00:00:37.250 align:start position:0%
+ 
+ 
+
+00:00:37.250 --> 00:00:39.770 align:start position:0%
+ 
+ 
+
+00:00:39.770 --> 00:00:41.569 align:start position:0%
+ 
+ 
+
+00:00:41.569 --> 00:00:42.709 align:start position:0%
+ 
+ 
+
+00:00:42.709 --> 00:00:44.090 align:start position:0%
+ 
+ 
+
+00:00:44.090 --> 00:00:46.190 align:start position:0%
+ 
+ 
+
+00:00:46.190 --> 00:00:48.590 align:start position:0%
+ 
+ 
+
+00:00:48.590 --> 00:00:51.049 align:start position:0%
+ 
+ 
+
+00:00:51.049 --> 00:00:53.090 align:start position:0%
+ 
+ 
+
+00:00:53.090 --> 00:00:56.270 align:start position:0%
+ 
+ 
+
+00:00:56.270 --> 00:00:58.250 align:start position:0%
+ 
+ 
+
+00:00:58.250 --> 00:01:00.350 align:start position:0%
+ 
+ 
+
+00:01:00.350 --> 00:01:01.970 align:start position:0%
+ 
+ 
+
+00:01:01.970 --> 00:01:04.310 align:start position:0%
+ 
+ 
+
+00:01:04.310 --> 00:01:06.050 align:start position:0%
+ 
+ 
+
+00:01:06.050 --> 00:01:07.789 align:start position:0%
+ 
+ 
+
+00:01:07.789 --> 00:01:09.350 align:start position:0%
+ 
+ 
+
+00:01:09.350 --> 00:01:11.990 align:start position:0%
+ 
+ 
+
+00:01:11.990 --> 00:01:14.030 align:start position:0%
+ 
+ 
+
+00:01:14.030 --> 00:01:16.550 align:start position:0%
+ 
+ 
+
+00:01:16.550 --> 00:01:18.230 align:start position:0%
+ 
+ 
+
+00:01:18.230 --> 00:01:19.429 align:start position:0%
+ 
+ 
+
+00:01:19.429 --> 00:01:21.590 align:start position:0%
+ 
+ 
+
+00:01:21.590 --> 00:01:23.390 align:start position:0%
+ 
+ 
+
+00:01:23.390 --> 00:01:24.950 align:start position:0%
+ 
+ 
+
+00:01:24.950 --> 00:01:27.109 align:start position:0%
+ 
+ 
+
+00:01:27.109 --> 00:01:29.090 align:start position:0%
+ 
+ 
+
+00:01:29.090 --> 00:01:31.249 align:start position:0%
+ 
+ 
+
+00:01:31.249 --> 00:01:33.710 align:start position:0%
+ 
+ 
+
+00:01:33.710 --> 00:01:35.330 align:start position:0%
+ 
+ 
+
+00:01:35.330 --> 00:01:37.550 align:start position:0%
+ 
+ 
+
+00:01:37.550 --> 00:01:40.010 align:start position:0%
+ 
+ 
+
+00:01:40.010 --> 00:01:42.230 align:start position:0%
+ 
+ 
+
+00:01:42.230 --> 00:01:44.569 align:start position:0%
+ 
+ 
+
+00:01:44.569 --> 00:01:47.149 align:start position:0%
+ 
+ 
+
+00:01:47.149 --> 00:01:49.789 align:start position:0%
+ 
+ 
+
+00:01:49.789 --> 00:01:51.950 align:start position:0%
+ 
+ 
+
+00:01:51.950 --> 00:01:54.289 align:start position:0%
+ 
+ 
+
+00:01:54.289 --> 00:01:55.850 align:start position:0%
+ 
+ 
+
+00:01:55.850 --> 00:01:58.670 align:start position:0%
+ 
+ 
+
+00:01:58.670 --> 00:02:01.609 align:start position:0%
+ 
+ 
+
+00:02:01.609 --> 00:02:03.710 align:start position:0%
+ 
+ 
+
+00:02:03.710 --> 00:02:06.109 align:start position:0%
+ 
+ 
+
+00:02:06.109 --> 00:02:07.730 align:start position:0%
+ 
+ 
+
+00:02:07.730 --> 00:02:09.710 align:start position:0%
+ 
+ 
+
+00:02:09.710 --> 00:02:11.750 align:start position:0%
+ 
+ 
+
+00:02:11.750 --> 00:02:13.670 align:start position:0%
+ 
+ 
+
+00:02:13.670 --> 00:02:15.589 align:start position:0%
+ 
+ 
+
+00:02:15.589 --> 00:02:18.229 align:start position:0%
+ 
+ 
+
+00:02:18.229 --> 00:02:20.449 align:start position:0%
+ 
+ 
+
+00:02:20.449 --> 00:02:22.490 align:start position:0%
+ 
+ 
+
+00:02:22.490 --> 00:02:24.530 align:start position:0%
+ 
+ 
+
+00:02:24.530 --> 00:02:26.210 align:start position:0%
+ 
+ 
+
+00:02:26.210 --> 00:02:28.490 align:start position:0%
+ 
+ 
+
+00:02:28.490 --> 00:02:30.949 align:start position:0%
+ 
+ 
+
+00:02:30.949 --> 00:02:32.690 align:start position:0%
+ 
+ 
+
+00:02:32.690 --> 00:02:34.309 align:start position:0%
+ 
+ 
+
+00:02:34.309 --> 00:02:36.110 align:start position:0%
+ 
+ 
+
+00:02:36.110 --> 00:02:37.970 align:start position:0%
+ 
+ 
+
+00:02:37.970 --> 00:02:40.190 align:start position:0%
+ 
+ 
+
+00:02:40.190 --> 00:02:42.650 align:start position:0%
+ 
+ 
+
+00:02:42.650 --> 00:02:44.449 align:start position:0%
+ 
+ 
+
+00:02:44.449 --> 00:02:46.009 align:start position:0%
+ 
+ 
+
+00:02:46.009 --> 00:02:47.509 align:start position:0%
+ 
+ 
+
+00:02:47.509 --> 00:02:49.309 align:start position:0%
+ 
+ 
+
+00:02:49.309 --> 00:02:51.350 align:start position:0%
+ 
+ 
+
+00:02:51.350 --> 00:02:53.089 align:start position:0%
+ 
+ 
+
+00:02:53.089 --> 00:02:56.330 align:start position:0%
+ 
+ 
+
+00:02:56.330 --> 00:02:58.309 align:start position:0%
+ 
+ 
+
+00:02:58.309 --> 00:03:00.530 align:start position:0%
+ 
+ 
+
+00:03:00.530 --> 00:03:02.990 align:start position:0%
+ 
+ 
+
+00:03:02.990 --> 00:03:04.309 align:start position:0%
+ 
+ 
+
+00:03:04.309 --> 00:03:06.710 align:start position:0%
+ 
+ 
+
+00:03:06.710 --> 00:03:09.350 align:start position:0%
+ 
+ 
+
+00:03:09.350 --> 00:03:11.089 align:start position:0%
+ 
+ 
+
+00:03:11.089 --> 00:03:13.250 align:start position:0%
+ 
+ 
+
+00:03:13.250 --> 00:03:14.390 align:start position:0%
+ 
+ 
+
+00:03:14.390 --> 00:03:16.550 align:start position:0%
+ 
+ 
+
+00:03:16.550 --> 00:03:19.369 align:start position:0%
+ 
+ 
+
+00:03:19.369 --> 00:03:20.570 align:start position:0%
+ 
+ 
+
+00:03:20.570 --> 00:03:22.610 align:start position:0%
+ 
+ 
+
+00:03:22.610 --> 00:03:24.710 align:start position:0%
+ 
+ 
+
+00:03:24.710 --> 00:03:26.630 align:start position:0%
+ 
+ 
+
+00:03:26.630 --> 00:03:28.670 align:start position:0%
+ 
+ 
+
+00:03:28.670 --> 00:03:30.649 align:start position:0%
+ 
+ 
+
+00:03:30.649 --> 00:03:32.930 align:start position:0%
+ 
+ 
+
+00:03:32.930 --> 00:03:35.449 align:start position:0%
+ 
+ 
+
+00:03:35.449 --> 00:03:36.770 align:start position:0%
+ 
+ 
+
+00:03:36.770 --> 00:03:38.270 align:start position:0%
+ 
+ 
+
+00:03:38.270 --> 00:03:39.830 align:start position:0%
+ 
+ 
+
+00:03:39.830 --> 00:03:41.509 align:start position:0%
+ 
+ 
+
+00:03:41.509 --> 00:03:43.250 align:start position:0%
+ 
+ 
+
+00:03:43.250 --> 00:03:44.930 align:start position:0%
+ 
+ 
+
+00:03:44.930 --> 00:03:46.670 align:start position:0%
+ 
+ 
+
+00:03:46.670 --> 00:03:48.110 align:start position:0%
+ 
+ 
+
+00:03:48.110 --> 00:03:50.630 align:start position:0%
+ 
+ 
+
+00:03:50.630 --> 00:03:52.789 align:start position:0%
+ 
+ 
+
+00:03:52.789 --> 00:03:54.770 align:start position:0%
+ 
+ 
+
+00:03:54.770 --> 00:03:56.750 align:start position:0%
+ 
+ 
+
+00:03:56.750 --> 00:03:58.550 align:start position:0%
+ 
+ 
+
+00:03:58.550 --> 00:04:00.470 align:start position:0%
+ 
+ 
+
+00:04:00.470 --> 00:04:02.089 align:start position:0%
+ 
+ 
+
+00:04:02.089 --> 00:04:04.009 align:start position:0%
+ 
+ 
+
+00:04:04.009 --> 00:04:06.050 align:start position:0%
+ 
+ 
+
+00:04:06.050 --> 00:04:08.149 align:start position:0%
+ 
+ 
+
+00:04:08.149 --> 00:04:10.009 align:start position:0%
+ 
+ 
+
+00:04:10.009 --> 00:04:12.050 align:start position:0%
+ 
+ 
+
+00:04:12.050 --> 00:04:14.330 align:start position:0%
+ 
+ 
+
+00:04:14.330 --> 00:04:15.890 align:start position:0%
+ 
+ 
+
+00:04:15.890 --> 00:04:18.349 align:start position:0%
+ 
+ 
+
+00:04:18.349 --> 00:04:19.909 align:start position:0%
+ 
+ 
+
+00:04:19.909 --> 00:04:21.770 align:start position:0%
+ 
+ 
+
+00:04:21.770 --> 00:04:23.210 align:start position:0%
+ 
+ 
+
+00:04:23.210 --> 00:04:26.090 align:start position:0%
+ 
+ 
+
+00:04:26.090 --> 00:04:28.610 align:start position:0%
+ 
+ 
+
+00:04:28.610 --> 00:04:30.770 align:start position:0%
+ 
+ 
+
+00:04:30.770 --> 00:04:33.950 align:start position:0%
+ 
+ 
+
+00:04:33.950 --> 00:04:36.110 align:start position:0%
+ 
+ 
+
+00:04:36.110 --> 00:04:38.330 align:start position:0%
+ 
+ 
+
+00:04:38.330 --> 00:04:40.189 align:start position:0%
+ 
+ 
+
+00:04:40.189 --> 00:04:42.590 align:start position:0%
+ 
+ 
+
+00:04:42.590 --> 00:04:43.850 align:start position:0%
+ 
+ 
+
+00:04:43.850 --> 00:04:46.010 align:start position:0%
+ 
+ 
+
+00:04:46.010 --> 00:04:48.110 align:start position:0%
+ 
+ 
+
+00:04:48.110 --> 00:04:50.450 align:start position:0%
+ 
+ 
+
+00:04:50.450 --> 00:04:53.210 align:start position:0%
+ 
+ 
+
+00:04:53.210 --> 00:04:54.830 align:start position:0%
+ 
+ 
+
+00:04:54.830 --> 00:04:56.810 align:start position:0%
+ 
+ 
+
+00:04:56.810 --> 00:04:58.730 align:start position:0%
+ 
+ 
+
+00:04:58.730 --> 00:05:00.650 align:start position:0%
+ 
+ 
+
+00:05:00.650 --> 00:05:03.350 align:start position:0%
+ 
+ 
+
+00:05:03.350 --> 00:05:05.150 align:start position:0%
+ 
+ 
+
+00:05:05.150 --> 00:05:06.950 align:start position:0%
+ 
+ 
+
+00:05:06.950 --> 00:05:08.390 align:start position:0%
+ 
+ 
+
+00:05:08.390 --> 00:05:10.129 align:start position:0%
+ 
+ 
+
+00:05:10.129 --> 00:05:11.629 align:start position:0%
+ 
+ 
+
+00:05:11.629 --> 00:05:13.550 align:start position:0%
+ 
+ 
+
+00:05:13.550 --> 00:05:16.550 align:start position:0%
+ 
+ 
+
+00:05:16.550 --> 00:05:19.850 align:start position:0%
+ 
+ 
+
+00:05:19.850 --> 00:05:22.129 align:start position:0%
+ 
+ 
+
+00:05:22.129 --> 00:05:25.070 align:start position:0%
+ 
+ 
+
+00:05:25.070 --> 00:05:26.450 align:start position:0%
+ 
+ 
+
+00:05:26.450 --> 00:05:28.010 align:start position:0%
+ 
+ 
+
+00:05:28.010 --> 00:05:29.570 align:start position:0%
+ 
+ 
+
+00:05:29.570 --> 00:05:30.890 align:start position:0%
+ 
+ 
+
+00:05:30.890 --> 00:05:32.469 align:start position:0%
+ 
+ 
+
+00:05:32.469 --> 00:05:35.330 align:start position:0%
+ 
+ 
+
+00:05:35.330 --> 00:05:37.310 align:start position:0%
+ 
+ 
+
+00:05:37.310 --> 00:05:39.110 align:start position:0%
+ 
+ 
+
+00:05:39.110 --> 00:05:41.029 align:start position:0%
+ 
+ 
+
+00:05:41.029 --> 00:05:42.590 align:start position:0%
+ 
+ 
+
+00:05:42.590 --> 00:05:44.390 align:start position:0%
+ 
+ 
+
+00:05:44.390 --> 00:05:46.070 align:start position:0%
+ 
+ 
+
+00:05:46.070 --> 00:05:48.409 align:start position:0%
+ 
+ 
+
+00:05:48.409 --> 00:05:51.409 align:start position:0%
+ 
+ 
+
+00:05:51.409 --> 00:05:53.210 align:start position:0%
+ 
+ 
+
+00:05:53.210 --> 00:05:56.150 align:start position:0%
+ 
+ 
+
+00:05:56.150 --> 00:05:58.790 align:start position:0%
+ 
+ 
+
+00:05:58.790 --> 00:06:01.850 align:start position:0%
+ 
+ 
+
+00:06:01.850 --> 00:06:04.370 align:start position:0%
+ 
+ 
+
+00:06:04.370 --> 00:06:06.590 align:start position:0%
+ 
+ 
+
+00:06:06.590 --> 00:06:08.570 align:start position:0%
+ 
+ 
+
+00:06:08.570 --> 00:06:10.430 align:start position:0%
+ 
+ 
+
+00:06:10.430 --> 00:06:12.290 align:start position:0%
+ 
+ 
+
+00:06:12.290 --> 00:06:14.510 align:start position:0%
+ 
+ 
+
+00:06:14.510 --> 00:06:16.430 align:start position:0%
+ 
+ 
+
+00:06:16.430 --> 00:06:17.990 align:start position:0%
+ 
+ 
+
+00:06:17.990 --> 00:06:20.210 align:start position:0%
+ 
+ 
+
+00:06:20.210 --> 00:06:21.890 align:start position:0%
+ 
+ 
+
+00:06:21.890 --> 00:06:23.450 align:start position:0%
+ 
+ 
+
+00:06:23.450 --> 00:06:26.090 align:start position:0%
+ 
+ 
+
+00:06:26.090 --> 00:06:27.290 align:start position:0%
+ 
+ 
+
+00:06:27.290 --> 00:06:28.909 align:start position:0%
+ 
+ 
+
+00:06:28.909 --> 00:06:30.830 align:start position:0%
+ 
+ 
+
+00:06:30.830 --> 00:06:33.409 align:start position:0%
+ 
+ 
+
+00:06:33.409 --> 00:06:35.689 align:start position:0%
+ 
+ 
+
+00:06:35.689 --> 00:06:37.969 align:start position:0%
+ 
+ 
+
+00:06:37.969 --> 00:06:40.969 align:start position:0%
+ 
+ 
+
+00:06:40.969 --> 00:06:42.890 align:start position:0%
+ 
+ 
+
+00:06:42.890 --> 00:06:44.870 align:start position:0%
+ 
+ 
+
+00:06:44.870 --> 00:06:47.689 align:start position:0%
+ 
+ 
+
+00:06:47.689 --> 00:06:50.270 align:start position:0%
+ 
+ 
+
+00:06:50.270 --> 00:06:52.129 align:start position:0%
+ 
+ 
+
+00:06:52.129 --> 00:06:54.350 align:start position:0%
+ 
+ 
+
+00:06:54.350 --> 00:06:57.230 align:start position:0%
+ 
+ 
+
+00:06:57.230 --> 00:06:59.450 align:start position:0%
+ 
+ 
+
+00:06:59.450 --> 00:07:01.370 align:start position:0%
+ 
+ 
+
+00:07:01.370 --> 00:07:03.230 align:start position:0%
+ 
+ 
+
+00:07:03.230 --> 00:07:04.610 align:start position:0%
+ 
+ 
+
+00:07:04.610 --> 00:07:06.529 align:start position:0%
+ 
+ 
+
+00:07:06.529 --> 00:07:08.870 align:start position:0%
+ 
+ 
+
+00:07:08.870 --> 00:07:11.270 align:start position:0%
+ 
+ 
+
+00:07:11.270 --> 00:07:13.909 align:start position:0%
+ 
+ 
+
+00:07:13.909 --> 00:07:16.490 align:start position:0%
+ 
+ 
+
+00:07:16.490 --> 00:07:18.529 align:start position:0%
+ 
+ 
+
+00:07:18.529 --> 00:07:20.270 align:start position:0%
+ 
+ 
+
+00:07:20.270 --> 00:07:24.290 align:start position:0%
+ 
+ 
+
+00:07:24.290 --> 00:07:26.450 align:start position:0%
+ 
+ 
+
+00:07:26.450 --> 00:07:28.850 align:start position:0%
+ 
+ 
+
+00:07:28.850 --> 00:07:31.010 align:start position:0%
+ 
+ 
+
+00:07:31.010 --> 00:07:33.290 align:start position:0%
+ 
+ 
+
+00:07:33.290 --> 00:07:35.270 align:start position:0%
+ 
+ 
+
+00:07:35.270 --> 00:07:36.529 align:start position:0%
+ 
+ 
+
+00:07:36.529 --> 00:07:38.270 align:start position:0%
+ 
+ 
+
+00:07:38.270 --> 00:07:39.830 align:start position:0%
+ 
+ 
+
+00:07:39.830 --> 00:07:42.770 align:start position:0%
+ 
+ 
+
+00:07:42.770 --> 00:07:44.330 align:start position:0%
+ 
+ 
+
+00:07:44.330 --> 00:07:46.189 align:start position:0%
+ 
+ 
+
+00:07:46.189 --> 00:07:49.070 align:start position:0%
+ 
+ 
+
+00:07:49.070 --> 00:07:51.230 align:start position:0%
+ 
+ 
+
+00:07:51.230 --> 00:07:53.510 align:start position:0%
+ 
+ 
+
+00:07:53.510 --> 00:07:55.610 align:start position:0%
+ 
+ 
+
+00:07:55.610 --> 00:07:57.770 align:start position:0%
+ 
+ 
+
+00:07:57.770 --> 00:08:00.350 align:start position:0%
+ 
+ 
+
+00:08:00.350 --> 00:08:03.230 align:start position:0%
+ 
+ 
+
+00:08:03.230 --> 00:08:04.850 align:start position:0%
+ 
+ 
+
+00:08:04.850 --> 00:08:06.770 align:start position:0%
+ 
+ 
+
+00:08:06.770 --> 00:08:08.510 align:start position:0%
+ 
+ 
+
+00:08:08.510 --> 00:08:10.370 align:start position:0%
+ 
+ 
+
+00:08:10.370 --> 00:08:12.230 align:start position:0%
+ 
+ 
+
+00:08:12.230 --> 00:08:13.909 align:start position:0%
+ 
+ 
+
+00:08:13.909 --> 00:08:16.129 align:start position:0%
+ 
+ 
+
+00:08:16.129 --> 00:08:18.050 align:start position:0%
+ 
+ 
+
+00:08:18.050 --> 00:08:19.969 align:start position:0%
+ 
+ 
+
+00:08:19.969 --> 00:08:22.189 align:start position:0%
+ 
+ 
+
+00:08:22.189 --> 00:08:23.869 align:start position:0%
+ 
+ 
+
+00:08:23.869 --> 00:08:25.369 align:start position:0%
+ 
+ 
+
+00:08:25.369 --> 00:08:27.290 align:start position:0%
+ 
+ 
+
+00:08:27.290 --> 00:08:28.909 align:start position:0%
+ 
+ 
+
+00:08:28.909 --> 00:08:30.710 align:start position:0%
+ 
+ 
+
+00:08:30.710 --> 00:08:32.449 align:start position:0%
+ 
+ 
+
+00:08:32.449 --> 00:08:33.529 align:start position:0%
+ 
+ 
+
+00:08:33.529 --> 00:08:35.510 align:start position:0%
+ 
+ 
+
+00:08:35.510 --> 00:08:36.949 align:start position:0%
+ 
+ 
+
+00:08:36.949 --> 00:08:38.810 align:start position:0%
+ 
+ 
+
+00:08:38.810 --> 00:08:40.969 align:start position:0%
+ 
+ 
+
+00:08:40.969 --> 00:08:43.010 align:start position:0%
+ 
+ 
+
+00:08:43.010 --> 00:08:44.930 align:start position:0%
+ 
+ 
+
+00:08:44.930 --> 00:08:47.389 align:start position:0%
+ 
+ 
+
+00:08:47.389 --> 00:08:49.550 align:start position:0%
+ 
+ 
+
+00:08:49.550 --> 00:08:52.190 align:start position:0%
+ 
+ 
+
+00:08:52.190 --> 00:08:53.750 align:start position:0%
+ 
+ 
+
+00:08:53.750 --> 00:08:55.730 align:start position:0%
+ 
+ 
+
+00:08:55.730 --> 00:08:57.110 align:start position:0%
+ 
+ 
+
+00:08:57.110 --> 00:08:59.030 align:start position:0%
+ 
+ 
+
+00:08:59.030 --> 00:09:00.829 align:start position:0%
+ 
+ 
+
+00:09:00.829 --> 00:09:02.509 align:start position:0%
+ 
+ 
+
+00:09:02.509 --> 00:09:04.730 align:start position:0%
+ 
+ 
+
+00:09:04.730 --> 00:09:06.710 align:start position:0%
+ 
+ 
+
+00:09:06.710 --> 00:09:09.470 align:start position:0%
+ 
+ 
+
+00:09:09.470 --> 00:09:11.509 align:start position:0%
+ 
+ 
+
+00:09:11.509 --> 00:09:13.310 align:start position:0%
+ 
+ 
+
+00:09:13.310 --> 00:09:14.990 align:start position:0%
+ 
+ 
+
+00:09:14.990 --> 00:09:16.670 align:start position:0%
+ 
+ 
+
+00:09:16.670 --> 00:09:18.590 align:start position:0%
+ 
+ 
+
+00:09:18.590 --> 00:09:20.030 align:start position:0%
+ 
+ 
+
+00:09:20.030 --> 00:09:21.710 align:start position:0%
+ 
+ 
+
+00:09:21.710 --> 00:09:23.269 align:start position:0%
+ 
+ 
+
+00:09:23.269 --> 00:09:25.730 align:start position:0%
+ 
+ 
+
+00:09:25.730 --> 00:09:27.470 align:start position:0%
+ 
+ 
+
+00:09:27.470 --> 00:09:29.329 align:start position:0%
+ 
+ 
+
+00:09:29.329 --> 00:09:30.889 align:start position:0%
+ 
+ 
+
+00:09:30.889 --> 00:09:32.750 align:start position:0%
+ 
+ 
+
+00:09:32.750 --> 00:09:34.370 align:start position:0%
+ 
+ 
+
+00:09:34.370 --> 00:09:36.470 align:start position:0%
+ 
+ 
+
+00:09:36.470 --> 00:09:38.329 align:start position:0%
+ 
+ 
+
+00:09:38.329 --> 00:09:40.310 align:start position:0%
+ 
+ 
+
+00:09:40.310 --> 00:09:42.050 align:start position:0%
+ 
+ 
+
+00:09:42.050 --> 00:09:43.490 align:start position:0%
+ 
+ 
+
+00:09:43.490 --> 00:09:45.889 align:start position:0%
+ 
+ 
+
+00:09:45.889 --> 00:09:47.269 align:start position:0%
+ 
+ 
+
+00:09:47.269 --> 00:09:48.650 align:start position:0%
+ 
+ 
+
+00:09:48.650 --> 00:09:50.329 align:start position:0%
+ 
+ 
+
+00:09:50.329 --> 00:09:51.650 align:start position:0%
+ 
+ 
+
+00:09:51.650 --> 00:09:53.150 align:start position:0%
+ 
+ 
+
+00:09:53.150 --> 00:09:55.070 align:start position:0%
+ 
+ 
+
+00:09:55.070 --> 00:09:56.990 align:start position:0%
+ 
+ 
+
+00:09:56.990 --> 00:09:59.269 align:start position:0%
+ 
+ 
+
+00:09:59.269 --> 00:10:01.490 align:start position:0%
+ 
+ 
+
+00:10:01.490 --> 00:10:02.630 align:start position:0%
+ 
+ 
+
+00:10:02.630 --> 00:10:04.130 align:start position:0%
+ 
+ 
+
+00:10:04.130 --> 00:10:06.769 align:start position:0%
+ 
+ 
+
+00:10:06.769 --> 00:10:08.570 align:start position:0%
+ 
+ 
+
+00:10:08.570 --> 00:10:10.130 align:start position:0%
+ 
+ 
+
+00:10:10.130 --> 00:10:11.870 align:start position:0%
+ 
+ 
+
+00:10:11.870 --> 00:10:13.850 align:start position:0%
+ 
+ 
+
+00:10:13.850 --> 00:10:15.769 align:start position:0%
+ 
+ 
+
+00:10:15.769 --> 00:10:17.030 align:start position:0%
+ 
+ 
+
+00:10:17.030 --> 00:10:18.590 align:start position:0%
+ 
+ 
+
+00:10:18.590 --> 00:10:21.230 align:start position:0%
+ 
+ 
+
+00:10:21.230 --> 00:10:23.389 align:start position:0%
+ 
+ 
+
+00:10:23.389 --> 00:10:25.910 align:start position:0%
+ 
+ 
+
+00:10:25.910 --> 00:10:28.070 align:start position:0%
+ 
+ 
+
+00:10:28.070 --> 00:10:29.570 align:start position:0%
+ 
+ 
+
+00:10:29.570 --> 00:10:31.370 align:start position:0%
+ 
+ 
+
+00:10:31.370 --> 00:10:32.630 align:start position:0%
+ 
+ 
+
+00:10:32.630 --> 00:10:34.310 align:start position:0%
+ 
+ 
+
+00:10:34.310 --> 00:10:36.350 align:start position:0%
+ 
+ 
+
+00:10:36.350 --> 00:10:38.269 align:start position:0%
+ 
+ 
+
+00:10:38.269 --> 00:10:40.130 align:start position:0%
+ 
+ 
+
+00:10:40.130 --> 00:10:42.710 align:start position:0%
+ 
+ 
+
+00:10:42.710 --> 00:10:44.750 align:start position:0%
+ 
+ 
+
+00:10:44.750 --> 00:10:46.370 align:start position:0%
+ 
+ 
+
+00:10:46.370 --> 00:10:48.230 align:start position:0%
+ 
+ 
+
+00:10:48.230 --> 00:10:49.730 align:start position:0%
+ 
+ 
+
+00:10:49.730 --> 00:10:52.009 align:start position:0%
+ 
+ 
+
+00:10:52.009 --> 00:10:53.569 align:start position:0%
+ 
+ 
+
+00:10:53.569 --> 00:10:55.730 align:start position:0%
+ 
+ 
+
+00:10:55.730 --> 00:10:57.290 align:start position:0%
+ 
+ 
+
+00:10:57.290 --> 00:10:59.269 align:start position:0%
+ 
+ 
+
+00:10:59.269 --> 00:11:01.190 align:start position:0%
+ 
+ 
+
+00:11:01.190 --> 00:11:02.569 align:start position:0%
+ 
+ 
+
+00:11:02.569 --> 00:11:04.009 align:start position:0%
+ 
+ 
+
+00:11:04.009 --> 00:11:05.090 align:start position:0%
+ 
+ 
+
+00:11:05.090 --> 00:11:07.190 align:start position:0%
+ 
+ 
+
+00:11:07.190 --> 00:11:08.750 align:start position:0%
+ 
+ 
+
+00:11:08.750 --> 00:11:10.490 align:start position:0%
+ 
+ 
+
+00:11:10.490 --> 00:11:11.750 align:start position:0%
+ 
+ 
+
+00:11:11.750 --> 00:11:14.269 align:start position:0%
+ 
+ 
+
+00:11:14.269 --> 00:11:16.190 align:start position:0%
+ 
+ 
+
+00:11:16.190 --> 00:11:17.750 align:start position:0%
+ 
+ 
+
+00:11:17.750 --> 00:11:19.970 align:start position:0%
+ 
+ 
+
+00:11:19.970 --> 00:11:21.710 align:start position:0%
+ 
+ 
+
+00:11:21.710 --> 00:11:23.090 align:start position:0%
+ 
+ 
+
+00:11:23.090 --> 00:11:24.470 align:start position:0%
+ 
+ 
+
+00:11:24.470 --> 00:11:25.670 align:start position:0%
+ 
+ 
+
+00:11:25.670 --> 00:11:26.569 align:start position:0%
+ 
+ 
+
+00:11:26.569 --> 00:11:28.250 align:start position:0%
+ 
+ 
+
+00:11:28.250 --> 00:11:29.930 align:start position:0%
+ 
+ 
+
+00:11:29.930 --> 00:11:32.210 align:start position:0%
+ 
+ 
+
+00:11:32.210 --> 00:11:35.090 align:start position:0%
+ 
+ 
+
+00:11:35.090 --> 00:11:37.310 align:start position:0%
+ 
+ 
+
+00:11:37.310 --> 00:11:39.410 align:start position:0%
+ 
+ 
+
+00:11:39.410 --> 00:11:41.690 align:start position:0%
+ 
+ 
+
+00:11:41.690 --> 00:11:44.030 align:start position:0%
+ 
+ 
+
+00:11:44.030 --> 00:11:45.290 align:start position:0%
+ 
+ 
+
+00:11:45.290 --> 00:11:46.910 align:start position:0%
+ 
+ 
+
+00:11:46.910 --> 00:11:48.829 align:start position:0%
+ 
+ 
+
+00:11:48.829 --> 00:11:51.710 align:start position:0%
+ 
+ 
+
+00:11:51.710 --> 00:11:54.470 align:start position:0%
+ 
+ 
+
+00:11:54.470 --> 00:11:57.590 align:start position:0%
+ 
+ 
+
+00:11:57.590 --> 00:11:59.449 align:start position:0%
+ 
+ 
+
+00:11:59.449 --> 00:12:02.030 align:start position:0%
+ 
+ 
+
+00:12:02.030 --> 00:12:04.310 align:start position:0%
+ 
+ 
+
+00:12:04.310 --> 00:12:06.110 align:start position:0%
+ 
+ 
+
+00:12:06.110 --> 00:12:08.090 align:start position:0%
+ 
+ 
+
+00:12:08.090 --> 00:12:10.610 align:start position:0%
+ 
+ 
+
+00:12:10.610 --> 00:12:12.350 align:start position:0%
+ 
+ 
+
+00:12:12.350 --> 00:12:13.610 align:start position:0%
+ 
+ 
+
+00:12:13.610 --> 00:12:15.590 align:start position:0%
+ 
+ 
+
+00:12:15.590 --> 00:12:18.170 align:start position:0%
+ 
+ 
+
+00:12:18.170 --> 00:12:20.930 align:start position:0%
+ 
+ 
+
+00:12:20.930 --> 00:12:22.910 align:start position:0%
+ 
+ 
+
+00:12:22.910 --> 00:12:24.470 align:start position:0%
+ 
+ 
+
+00:12:24.470 --> 00:12:27.170 align:start position:0%
+ 
+ 
+
+00:12:27.170 --> 00:12:29.389 align:start position:0%
+ 
+ 
+
+00:12:29.389 --> 00:12:30.889 align:start position:0%
+ 
+ 
+
+00:12:30.889 --> 00:12:33.050 align:start position:0%
+ 
+ 
+
+00:12:33.050 --> 00:12:34.670 align:start position:0%
+ 
+ 
+
+00:12:34.670 --> 00:12:37.250 align:start position:0%
+ 
+ 
+
+00:12:37.250 --> 00:12:39.650 align:start position:0%
+ 
+ 
+
+00:12:39.650 --> 00:12:41.329 align:start position:0%
+ 
+ 
+
+00:12:41.329 --> 00:12:43.670 align:start position:0%
+ 
+ 
+
+00:12:43.670 --> 00:12:46.490 align:start position:0%
+ 
+ 
+
+00:12:46.490 --> 00:12:48.350 align:start position:0%
+ 
+ 
+
+00:12:48.350 --> 00:12:50.269 align:start position:0%
+ 
+ 
+
+00:12:50.269 --> 00:12:52.790 align:start position:0%
+ 
+ 
+
+00:12:52.790 --> 00:12:55.069 align:start position:0%
+ 
+ 
+
+00:12:55.069 --> 00:12:58.069 align:start position:0%
+ 
+ 
+
+00:12:58.069 --> 00:13:01.490 align:start position:0%
+ 
+ 
+
+00:13:01.490 --> 00:13:04.190 align:start position:0%
+ 
+ 
+
+00:13:04.190 --> 00:13:07.250 align:start position:0%
+ 
+ 
+
+00:13:07.250 --> 00:13:09.050 align:start position:0%
+ 
+ 
+
+00:13:09.050 --> 00:13:10.670 align:start position:0%
+ 
+ 
+
+00:13:10.670 --> 00:13:12.650 align:start position:0%
+ 
+ 
+
+00:13:12.650 --> 00:13:14.090 align:start position:0%
+ 
+ 
+
+00:13:14.090 --> 00:13:15.530 align:start position:0%
+ 
+ 
+
+00:13:15.530 --> 00:13:17.090 align:start position:0%
+ 
+ 
+
+00:13:17.090 --> 00:13:18.530 align:start position:0%
+ 
+ 
+
+00:13:18.530 --> 00:13:20.030 align:start position:0%
+ 
+ 
+
+00:13:20.030 --> 00:13:22.370 align:start position:0%
+ 
+ 
+
+00:13:22.370 --> 00:13:24.350 align:start position:0%
+ 
+ 
+
+00:13:24.350 --> 00:13:26.210 align:start position:0%
+ 
+ 
+
+00:13:26.210 --> 00:13:27.889 align:start position:0%
+ 
+ 
+
+00:13:27.889 --> 00:13:28.910 align:start position:0%
+ 
+ 
+
+00:13:28.910 --> 00:13:30.290 align:start position:0%
+ 
+ 
+
+00:13:30.290 --> 00:13:32.449 align:start position:0%
+ 
+ 
+
+00:13:32.449 --> 00:13:34.069 align:start position:0%
+ 
+ 
+
+00:13:34.069 --> 00:13:35.750 align:start position:0%
+ 
+ 
+
+00:13:35.750 --> 00:13:37.910 align:start position:0%
+ 
+ 
+
+00:13:37.910 --> 00:13:40.730 align:start position:0%
+ 
+ 
+
+00:13:40.730 --> 00:13:42.470 align:start position:0%
+ 
+ 
+
+00:13:42.470 --> 00:13:45.170 align:start position:0%
+ 
+ 
+
+00:13:45.170 --> 00:13:48.949 align:start position:0%
+ 
+ 
+
+00:13:48.949 --> 00:13:50.629 align:start position:0%
+ 
+ 
+
+00:13:50.629 --> 00:13:53.629 align:start position:0%
+ 
+ 
+
+00:13:53.629 --> 00:13:55.910 align:start position:0%
+ 
+ 
+
+00:13:55.910 --> 00:13:57.350 align:start position:0%
+ 
+ 
+
+00:13:57.350 --> 00:13:58.670 align:start position:0%
+ 
+ 
+
+00:13:58.670 --> 00:14:00.350 align:start position:0%
+ 
+ 
+
+00:14:00.350 --> 00:14:02.509 align:start position:0%
+ 
+ 
+
+00:14:02.509 --> 00:14:03.710 align:start position:0%
+ 
+ 
+
+00:14:03.710 --> 00:14:05.329 align:start position:0%
+ 
+ 
+
+00:14:05.329 --> 00:14:07.730 align:start position:0%
+ 
+ 
+
+00:14:07.730 --> 00:14:09.650 align:start position:0%
+ 
+ 
+
+00:14:09.650 --> 00:14:11.150 align:start position:0%
+ 
+ 
+
+00:14:11.150 --> 00:14:13.970 align:start position:0%
+ 
+ 
+
+00:14:13.970 --> 00:14:16.310 align:start position:0%
+ 
+ 
+
+00:14:16.310 --> 00:14:18.050 align:start position:0%
+ 
+ 
+
+00:14:18.050 --> 00:14:20.629 align:start position:0%
+ 
+ 
+
+00:14:20.629 --> 00:14:23.449 align:start position:0%
+ 
+ 
+
+00:14:23.449 --> 00:14:25.129 align:start position:0%
+ 
+ 
+
+00:14:25.129 --> 00:14:27.290 align:start position:0%
+ 
+ 
+
+00:14:27.290 --> 00:14:29.509 align:start position:0%
+ 
+ 
+
+00:14:29.509 --> 00:14:32.449 align:start position:0%
+ 
+ 
+
+00:14:32.449 --> 00:14:35.269 align:start position:0%
+ 
+ 
+
+00:14:35.269 --> 00:14:38.150 align:start position:0%
+ 
+ 
+
+00:14:38.150 --> 00:14:40.670 align:start position:0%
+ 
+ 
+
+00:14:40.670 --> 00:14:43.189 align:start position:0%
+ 
+ 
+
+00:14:43.189 --> 00:14:45.290 align:start position:0%
+ 
+ 
+
+00:14:45.290 --> 00:14:47.090 align:start position:0%
+ 
+ 
+
+00:14:47.090 --> 00:14:49.610 align:start position:0%
+ 
+ 
+
+00:14:49.610 --> 00:14:52.189 align:start position:0%
+ 
+ 
+
+00:14:52.189 --> 00:14:54.050 align:start position:0%
+ 
+ 
+
+00:14:54.050 --> 00:14:56.329 align:start position:0%
+ 
+ 
+
+00:14:56.329 --> 00:14:58.550 align:start position:0%
+ 
+ 
+
+00:14:58.550 --> 00:14:59.629 align:start position:0%
+ 
+ 
+
+00:14:59.629 --> 00:15:01.970 align:start position:0%
+ 
+ 
+
+00:15:01.970 --> 00:15:04.189 align:start position:0%
+ 
+ 
+
+00:15:04.189 --> 00:15:06.250 align:start position:0%
+ 
+ 
+
+00:15:06.250 --> 00:15:09.230 align:start position:0%
+ 
+ 
+
+00:15:09.230 --> 00:15:11.329 align:start position:0%
+ 
+ 
+
+00:15:11.329 --> 00:15:13.129 align:start position:0%
+ 
+ 
+
+00:15:13.129 --> 00:15:15.710 align:start position:0%
+ 
+ 
+
+00:15:15.710 --> 00:15:18.410 align:start position:0%
+ 
+ 
+
+00:15:18.410 --> 00:15:20.090 align:start position:0%
+ 
+ 
+
+00:15:20.090 --> 00:15:21.889 align:start position:0%
+ 
+ 
+
+00:15:21.889 --> 00:15:23.870 align:start position:0%
+ 
+ 
+
+00:15:23.870 --> 00:15:25.850 align:start position:0%
+ 
+ 
+
+00:15:25.850 --> 00:15:27.350 align:start position:0%
+ 
+ 
+
+00:15:27.350 --> 00:15:29.990 align:start position:0%
+ 
+ 
+
+00:15:29.990 --> 00:15:32.329 align:start position:0%
+ 
+ 
+
+00:15:32.329 --> 00:15:34.730 align:start position:0%
+ 
+ 
+
+00:15:34.730 --> 00:15:37.430 align:start position:0%
+ 
+ 
+
+00:15:37.430 --> 00:15:39.410 align:start position:0%
+ 
+ 
+
+00:15:39.410 --> 00:15:41.810 align:start position:0%
+ 
+ 
+
+00:15:41.810 --> 00:15:44.090 align:start position:0%
+ 
+ 
+
+00:15:44.090 --> 00:15:46.009 align:start position:0%
+ 
+ 
+
+00:15:46.009 --> 00:15:47.629 align:start position:0%
+ 
+ 
+
+00:15:47.629 --> 00:15:49.730 align:start position:0%
+ 
+ 
+
+00:15:49.730 --> 00:15:53.090 align:start position:0%
+ 
+ 
+
+00:15:53.090 --> 00:15:55.790 align:start position:0%
+ 
+ 
+
+00:15:55.790 --> 00:15:57.829 align:start position:0%
+ 
+ 
+
+00:15:57.829 --> 00:16:00.350 align:start position:0%
+ 
+ 
+
+00:16:00.350 --> 00:16:02.590 align:start position:0%
+ 
+ 
+
+00:16:02.590 --> 00:16:05.030 align:start position:0%
+ 
+ 
+
+00:16:05.030 --> 00:16:06.290 align:start position:0%
+ 
+ 
+
+00:16:06.290 --> 00:16:08.569 align:start position:0%
+ 
+ 
+
+00:16:08.569 --> 00:16:10.910 align:start position:0%
+ 
+ 
+
+00:16:10.910 --> 00:16:14.629 align:start position:0%
+ 
+ 
+
+00:16:14.629 --> 00:16:16.910 align:start position:0%
+ 
+ 
+
+00:16:16.910 --> 00:16:19.370 align:start position:0%
+ 
+ 
+
+00:16:19.370 --> 00:16:21.410 align:start position:0%
+ 
+ 
+
+00:16:21.410 --> 00:16:22.910 align:start position:0%
+ 
+ 
+
+00:16:22.910 --> 00:16:26.090 align:start position:0%
+ 
+ 
+
+00:16:26.090 --> 00:16:27.710 align:start position:0%
+ 
+ 
+
+00:16:27.710 --> 00:16:29.689 align:start position:0%
+ 
+ 
+
+00:16:29.689 --> 00:16:32.509 align:start position:0%
+ 
+ 
+
+00:16:32.509 --> 00:16:34.370 align:start position:0%
+ 
+ 
+
+00:16:34.370 --> 00:16:35.629 align:start position:0%
+ 
+ 
+
+00:16:35.629 --> 00:16:38.389 align:start position:0%
+ 
+ 
+
+00:16:38.389 --> 00:16:41.329 align:start position:0%
+ 
+ 
+
+00:16:41.329 --> 00:16:43.189 align:start position:0%
+ 
+ 
+
+00:16:43.189 --> 00:16:44.689 align:start position:0%
+ 
+ 
+
+00:16:44.689 --> 00:16:47.210 align:start position:0%
+ 
+ 
+
+00:16:47.210 --> 00:16:49.069 align:start position:0%
+ 
+ 
+
+00:16:49.069 --> 00:16:50.870 align:start position:0%
+ 
+ 
+
+00:16:50.870 --> 00:16:52.610 align:start position:0%
+ 
+ 
+
+00:16:52.610 --> 00:16:54.470 align:start position:0%
+ 
+ 
+
+00:16:54.470 --> 00:16:56.090 align:start position:0%
+ 
+ 
+
+00:16:56.090 --> 00:16:58.310 align:start position:0%
+ 
+ 
+
+00:16:58.310 --> 00:17:00.230 align:start position:0%
+ 
+ 
+
+00:17:00.230 --> 00:17:02.150 align:start position:0%
+ 
+ 
+
+00:17:02.150 --> 00:17:04.010 align:start position:0%
+ 
+ 
+
+00:17:04.010 --> 00:17:05.929 align:start position:0%
+ 
+ 
+
+00:17:05.929 --> 00:17:07.610 align:start position:0%
+ 
+ 
+
+00:17:07.610 --> 00:17:09.470 align:start position:0%
+ 
+ 
+
+00:17:09.470 --> 00:17:11.470 align:start position:0%
+ 
+ 
+
+00:17:11.470 --> 00:17:14.809 align:start position:0%
+ 
+ 
+
+00:17:14.809 --> 00:17:16.850 align:start position:0%
+ 
+ 
+
+00:17:16.850 --> 00:17:20.030 align:start position:0%
+ 
+ 
+
+00:17:20.030 --> 00:17:22.669 align:start position:0%
+ 
+ 
+
+00:17:22.669 --> 00:17:25.370 align:start position:0%
+ 
+ 
+
+00:17:25.370 --> 00:17:28.309 align:start position:0%
+ 
+ 
+
+00:17:28.309 --> 00:17:30.710 align:start position:0%
+ 
+ 
+
+00:17:30.710 --> 00:17:33.409 align:start position:0%
+ 
+ 
+
+00:17:33.409 --> 00:17:35.450 align:start position:0%
+ 
+ 
+
+00:17:35.450 --> 00:17:37.430 align:start position:0%
+ 
+ 
+
+00:17:37.430 --> 00:17:38.930 align:start position:0%
+ 
+ 
+
+00:17:38.930 --> 00:17:40.669 align:start position:0%
+ 
+ 
+
+00:17:40.669 --> 00:17:43.430 align:start position:0%
+ 
+ 
+
+00:17:43.430 --> 00:17:46.250 align:start position:0%
+ 
+ 
+
+00:17:46.250 --> 00:17:49.190 align:start position:0%
+ 
+ 
+
+00:17:49.190 --> 00:17:51.350 align:start position:0%
+ 
+ 
+
+00:17:51.350 --> 00:17:54.770 align:start position:0%
+ 
+ 
+
+00:17:54.770 --> 00:17:57.169 align:start position:0%
+ 
+ 
+
+00:17:57.169 --> 00:17:59.450 align:start position:0%
+ 
+ 
+
+00:17:59.450 --> 00:18:01.909 align:start position:0%
+ 
+ 
+
+00:18:01.909 --> 00:18:04.250 align:start position:0%
+ 
+ 
+
+00:18:04.250 --> 00:18:06.049 align:start position:0%
+ 
+ 
+
+00:18:06.049 --> 00:18:09.770 align:start position:0%
+ 
+ 
+
+00:18:09.770 --> 00:18:11.570 align:start position:0%
+ 
+ 
+
+00:18:11.570 --> 00:18:13.250 align:start position:0%
+ 
+ 
+
+00:18:13.250 --> 00:18:15.409 align:start position:0%
+ 
+ 
+
+00:18:15.409 --> 00:18:17.390 align:start position:0%
+ 
+ 
+
+00:18:17.390 --> 00:18:19.610 align:start position:0%
+ 
+ 
+
+00:18:19.610 --> 00:18:21.529 align:start position:0%
+ 
+ 
+
+00:18:21.529 --> 00:18:23.270 align:start position:0%
+ 
+ 
+
+00:18:23.270 --> 00:18:25.430 align:start position:0%
+ 
+ 
+
+00:18:25.430 --> 00:18:27.650 align:start position:0%
+ 
+ 
+
+00:18:27.650 --> 00:18:30.169 align:start position:0%
+ 
+ 
+
+00:18:30.169 --> 00:18:32.390 align:start position:0%
+ 
+ 
+
+00:18:32.390 --> 00:18:34.669 align:start position:0%
+ 
+ 
+
+00:18:34.669 --> 00:18:36.110 align:start position:0%
+ 
+ 
+
+00:18:36.110 --> 00:18:38.510 align:start position:0%
+ 
+ 
+
+00:18:38.510 --> 00:18:39.890 align:start position:0%
+ 
+ 
+
+00:18:39.890 --> 00:18:41.510 align:start position:0%
+ 
+ 
+
+00:18:41.510 --> 00:18:43.549 align:start position:0%
+ 
+ 
+
+00:18:43.549 --> 00:18:47.150 align:start position:0%
+ 
+ 
+
+00:18:47.150 --> 00:18:50.090 align:start position:0%
+ 
+ 
+
+00:18:50.090 --> 00:18:51.830 align:start position:0%
+ 
+ 
+
+00:18:51.830 --> 00:18:54.950 align:start position:0%
+ 
+ 
+
+00:18:54.950 --> 00:18:56.450 align:start position:0%
+ 
+ 
+
+00:18:56.450 --> 00:18:58.549 align:start position:0%
+ 
+ 
+
+00:18:58.549 --> 00:19:02.150 align:start position:0%
+ 
+ 
+
+00:19:02.150 --> 00:19:04.549 align:start position:0%
+ 
+ 
+
+00:19:04.549 --> 00:19:06.890 align:start position:0%
+ 
+ 
+
+00:19:06.890 --> 00:19:09.049 align:start position:0%
+ 
+ 
+
+00:19:09.049 --> 00:19:11.870 align:start position:0%
+ 
+ 
+
+00:19:11.870 --> 00:19:14.870 align:start position:0%
+ 
+ 
+
+00:19:14.870 --> 00:19:17.150 align:start position:0%
+ 
+ 
+
+00:19:17.150 --> 00:19:19.850 align:start position:0%
+ 
+ 
+
+00:19:19.850 --> 00:19:22.610 align:start position:0%
+ 
+ 
+
+00:19:22.610 --> 00:19:25.250 align:start position:0%
+ 
+ 
+
+00:19:25.250 --> 00:19:26.630 align:start position:0%
+ 
+ 
+
+00:19:26.630 --> 00:19:28.549 align:start position:0%
+ 
+ 
+
+00:19:28.549 --> 00:19:29.750 align:start position:0%
+ 
+ 
+
+00:19:29.750 --> 00:19:31.549 align:start position:0%
+ 
+ 
+
+00:19:31.549 --> 00:19:33.830 align:start position:0%
+ 
+ 
+
+00:19:33.830 --> 00:19:35.090 align:start position:0%
+ 
+ 
+
+00:19:35.090 --> 00:19:37.370 align:start position:0%
+ 
+ 
+
+00:19:37.370 --> 00:19:40.130 align:start position:0%
+ 
+ 
+
+00:19:40.130 --> 00:19:42.890 align:start position:0%
+ 
+ 
+
+00:19:42.890 --> 00:19:44.570 align:start position:0%
+ 
+ 
+
+00:19:44.570 --> 00:19:47.150 align:start position:0%
+ 
+ 
+
+00:19:47.150 --> 00:19:48.950 align:start position:0%
+ 
+ 
+
+00:19:48.950 --> 00:19:50.930 align:start position:0%
+ 
+ 
+
+00:19:50.930 --> 00:19:52.610 align:start position:0%
+ 
+ 
+
+00:19:52.610 --> 00:19:53.870 align:start position:0%
+ 
+ 
+
+00:19:53.870 --> 00:19:56.630 align:start position:0%
+ 
+ 
+
+00:19:56.630 --> 00:19:58.010 align:start position:0%
+ 
+ 
+
+00:19:58.010 --> 00:20:00.350 align:start position:0%
+ 
+ 
+
+00:20:00.350 --> 00:20:02.330 align:start position:0%
+ 
+ 
+
+00:20:02.330 --> 00:20:04.430 align:start position:0%
+ 
+ 
+
+00:20:04.430 --> 00:20:06.289 align:start position:0%
+ 
+ 
+
+00:20:06.289 --> 00:20:07.850 align:start position:0%
+ 
+ 
+
+00:20:07.850 --> 00:20:09.710 align:start position:0%
+ 
+ 
+
+00:20:09.710 --> 00:20:11.570 align:start position:0%
+ 
+ 
+
+00:20:11.570 --> 00:20:13.549 align:start position:0%
+ 
+ 
+
+00:20:13.549 --> 00:20:16.789 align:start position:0%
+ 
+ 
+
+00:20:16.789 --> 00:20:18.409 align:start position:0%
+ 
+ 
+
+00:20:18.409 --> 00:20:20.029 align:start position:0%
+ 
+ 
+
+00:20:20.029 --> 00:20:21.590 align:start position:0%
+ 
+ 
+
+00:20:21.590 --> 00:20:23.870 align:start position:0%
+ 
+ 
+
+00:20:23.870 --> 00:20:25.669 align:start position:0%
+ 
+ 
+
+00:20:25.669 --> 00:20:29.450 align:start position:0%
+ 
+ 
+
+00:20:29.450 --> 00:20:31.010 align:start position:0%
+ 
+ 
+
+00:20:31.010 --> 00:20:32.510 align:start position:0%
+ 
+ 
+
+00:20:32.510 --> 00:20:35.630 align:start position:0%
+ 
+ 
+
+00:20:35.630 --> 00:20:37.789 align:start position:0%
+ 
+ 
+
+00:20:37.789 --> 00:20:39.950 align:start position:0%
+ 
+ 
+
+00:20:39.950 --> 00:20:42.470 align:start position:0%
+ 
+ 
+
+00:20:42.470 --> 00:20:44.930 align:start position:0%
+ 
+ 
+
+00:20:44.930 --> 00:20:47.270 align:start position:0%
+ 
+ 
+
+00:20:47.270 --> 00:20:50.330 align:start position:0%
+ 
+ 
+
+00:20:50.330 --> 00:20:52.909 align:start position:0%
+ 
+ 
+
+00:20:52.909 --> 00:20:52.919 align:start position:0%
+ 
+ 
+
+00:20:52.919 --> 00:20:53.810 align:start position:0%
+ 
+
+
+00:20:53.810 --> 00:20:56.690 align:start position:0%
+ 
+ 
+
+00:20:56.690 --> 00:20:56.700 align:start position:0%
+ 
+ 
+
+00:20:56.700 --> 00:20:57.770 align:start position:0%
+ 
+
+
+00:20:57.770 --> 00:21:00.710 align:start position:0%
+ 
+ 
+
+00:21:00.710 --> 00:21:02.870 align:start position:0%
+ 
+ 
+
+00:21:02.870 --> 00:21:04.250 align:start position:0%
+ 
+ 
+
+00:21:04.250 --> 00:21:05.630 align:start position:0%
+ 
+ 
+
+00:21:05.630 --> 00:21:08.510 align:start position:0%
+ 
+ 
+
+00:21:08.510 --> 00:21:10.789 align:start position:0%
+ 
+ 
+
+00:21:10.789 --> 00:21:13.310 align:start position:0%
+ 
+ 
+
+00:21:13.310 --> 00:21:14.870 align:start position:0%
+ 
+ 
+
+00:21:14.870 --> 00:21:17.029 align:start position:0%
+ 
+ 
+
+00:21:17.029 --> 00:21:19.610 align:start position:0%
+ 
+ 
+
+00:21:19.610 --> 00:21:22.669 align:start position:0%
+ 
+ 
+
+00:21:22.669 --> 00:21:25.250 align:start position:0%
+ 
+ 
+
+00:21:25.250 --> 00:21:27.650 align:start position:0%
+ 
+ 
+
+00:21:27.650 --> 00:21:31.010 align:start position:0%
+ 
+ 
+
+00:21:31.010 --> 00:21:33.169 align:start position:0%
+ 
+ 
+
+00:21:33.169 --> 00:21:34.370 align:start position:0%
+ 
+ 
+
+00:21:34.370 --> 00:21:36.289 align:start position:0%
+ 
+ 
+
+00:21:36.289 --> 00:21:38.750 align:start position:0%
+ 
+ 
+
+00:21:38.750 --> 00:21:40.730 align:start position:0%
+ 
+ 
+
+00:21:40.730 --> 00:21:43.190 align:start position:0%
+ 
+ 
+
+00:21:43.190 --> 00:21:48.049 align:start position:0%
+ 
+ 
+
+00:21:48.049 --> 00:21:50.690 align:start position:0%
+ 
+ 
+
+00:21:50.690 --> 00:21:53.330 align:start position:0%
+ 
+ 
+
+00:21:53.330 --> 00:21:55.789 align:start position:0%
+ 
+ 
+
+00:21:55.789 --> 00:21:57.230 align:start position:0%
+ 
+ 
+
+00:21:57.230 --> 00:22:00.409 align:start position:0%
+ 
+ 
+
+00:22:00.409 --> 00:22:02.330 align:start position:0%
+ 
+ 
+
+00:22:02.330 --> 00:22:04.310 align:start position:0%
+ 
+ 
+
+00:22:04.310 --> 00:22:06.590 align:start position:0%
+ 
+ 
+
+00:22:06.590 --> 00:22:08.390 align:start position:0%
+ 
+ 
+
+00:22:08.390 --> 00:22:10.250 align:start position:0%
+ 
+ 
+
+00:22:10.250 --> 00:22:11.630 align:start position:0%
+ 
+ 
+
+00:22:11.630 --> 00:22:13.970 align:start position:0%
+ 
+ 
+
+00:22:13.970 --> 00:22:16.250 align:start position:0%
+ 
+ 
+
+00:22:16.250 --> 00:22:18.770 align:start position:0%
+ 
+ 
+
+00:22:18.770 --> 00:22:20.810 align:start position:0%
+ 
+ 
+
+00:22:20.810 --> 00:22:23.029 align:start position:0%
+ 
+ 
+
+00:22:23.029 --> 00:22:25.250 align:start position:0%
+ 
+ 
+
+00:22:25.250 --> 00:22:27.409 align:start position:0%
+ 
+ 
+
+00:22:27.409 --> 00:22:29.570 align:start position:0%
+ 
+ 
+
+00:22:29.570 --> 00:22:30.890 align:start position:0%
+ 
+ 
+
+00:22:30.890 --> 00:22:32.810 align:start position:0%
+ 
+ 
+
+00:22:32.810 --> 00:22:35.149 align:start position:0%
+ 
+ 
+
+00:22:35.149 --> 00:22:36.770 align:start position:0%
+ 
+ 
+
+00:22:36.770 --> 00:22:37.909 align:start position:0%
+ 
+ 
+
+00:22:37.909 --> 00:22:39.409 align:start position:0%
+ 
+ 
+
+00:22:39.409 --> 00:22:41.270 align:start position:0%
+ 
+ 
+
+00:22:41.270 --> 00:22:43.130 align:start position:0%
+ 
+ 
+
+00:22:43.130 --> 00:22:44.870 align:start position:0%
+ 
+ 
+
+00:22:44.870 --> 00:22:46.789 align:start position:0%
+ 
+ 
+
+00:22:46.789 --> 00:22:49.669 align:start position:0%
+ 
+ 
+
+00:22:49.669 --> 00:22:52.370 align:start position:0%
+ 
+ 
+
+00:22:52.370 --> 00:22:54.169 align:start position:0%
+ 
+ 
+
+00:22:54.169 --> 00:22:56.090 align:start position:0%
+ 
+ 
+
+00:22:56.090 --> 00:22:58.370 align:start position:0%
+ 
+ 
+
+00:22:58.370 --> 00:22:59.750 align:start position:0%
+ 
+ 
+
+00:22:59.750 --> 00:23:01.549 align:start position:0%
+ 
+ 
+
+00:23:01.549 --> 00:23:02.990 align:start position:0%
+ 
+ 
+
+00:23:02.990 --> 00:23:04.549 align:start position:0%
+ 
+ 
+
+00:23:04.549 --> 00:23:06.409 align:start position:0%
+ 
+ 
+
+00:23:06.409 --> 00:23:07.850 align:start position:0%
+ 
+ 
+
+00:23:07.850 --> 00:23:09.230 align:start position:0%
+ 
+ 
+
+00:23:09.230 --> 00:23:10.970 align:start position:0%
+ 
+ 
+
+00:23:10.970 --> 00:23:12.770 align:start position:0%
+ 
+ 
+
+00:23:12.770 --> 00:23:13.909 align:start position:0%
+ 
+ 
+
+00:23:13.909 --> 00:23:15.890 align:start position:0%
+ 
+ 
+
+00:23:15.890 --> 00:23:18.169 align:start position:0%
+ 
+ 
+
+00:23:18.169 --> 00:23:20.210 align:start position:0%
+ 
+ 
+
+00:23:20.210 --> 00:23:22.010 align:start position:0%
+ 
+ 
+
+00:23:22.010 --> 00:23:24.230 align:start position:0%
+ 
+ 
+
+00:23:24.230 --> 00:23:26.450 align:start position:0%
+ 
+ 
+
+00:23:26.450 --> 00:23:28.490 align:start position:0%
+ 
+ 
+
+00:23:28.490 --> 00:23:30.649 align:start position:0%
+ 
+ 
+
+00:23:30.649 --> 00:23:32.570 align:start position:0%
+ 
+ 
+
+00:23:32.570 --> 00:23:34.610 align:start position:0%
+ 
+ 
+
+00:23:34.610 --> 00:23:37.250 align:start position:0%
+ 
+ 
+
+00:23:37.250 --> 00:23:39.169 align:start position:0%
+ 
+ 
+
+00:23:39.169 --> 00:23:41.210 align:start position:0%
+ 
+ 
+
+00:23:41.210 --> 00:23:44.149 align:start position:0%
+ 
+ 
+
+00:23:44.149 --> 00:23:45.590 align:start position:0%
+ 
+ 
+
+00:23:45.590 --> 00:23:46.789 align:start position:0%
+ 
+ 
+
+00:23:46.789 --> 00:23:49.370 align:start position:0%
+ 
+ 
+
+00:23:49.370 --> 00:23:51.230 align:start position:0%
+ 
+ 
+
+00:23:51.230 --> 00:23:54.289 align:start position:0%
+ 
+ 
+
+00:23:54.289 --> 00:23:57.049 align:start position:0%
+ 
+ 
+
+00:23:57.049 --> 00:24:00.169 align:start position:0%
+ 
+ 
+
+00:24:00.169 --> 00:24:02.510 align:start position:0%
+ 
+ 
+
+00:24:02.510 --> 00:24:04.190 align:start position:0%
+ 
+ 
+
+00:24:04.190 --> 00:24:06.230 align:start position:0%
+ 
+ 
+
+00:24:06.230 --> 00:24:08.630 align:start position:0%
+ 
+ 
+
+00:24:08.630 --> 00:24:10.490 align:start position:0%
+ 
+ 
+
+00:24:10.490 --> 00:24:12.710 align:start position:0%
+ 
+ 
+
+00:24:12.710 --> 00:24:14.029 align:start position:0%
+ 
+ 
+
+00:24:14.029 --> 00:24:15.710 align:start position:0%
+ 
+ 
+
+00:24:15.710 --> 00:24:18.590 align:start position:0%
+ 
+ 
+
+00:24:18.590 --> 00:24:20.630 align:start position:0%
+ 
+ 
+
+00:24:20.630 --> 00:24:23.510 align:start position:0%
+ 
+ 
+
+00:24:23.510 --> 00:24:25.970 align:start position:0%
+ 
+ 
+
+00:24:25.970 --> 00:24:29.029 align:start position:0%
+ 
+ 
+
+00:24:29.029 --> 00:24:31.370 align:start position:0%
+ 
+ 
+
+00:24:31.370 --> 00:24:33.649 align:start position:0%
+ 
+ 
+
+00:24:33.649 --> 00:24:35.390 align:start position:0%
+ 
+ 
+
+00:24:35.390 --> 00:24:36.529 align:start position:0%
+ 
+ 
+
+00:24:36.529 --> 00:24:38.270 align:start position:0%
+ 
+ 
+
+00:24:38.270 --> 00:24:39.529 align:start position:0%
+ 
+ 
+
+00:24:39.529 --> 00:24:41.630 align:start position:0%
+ 
+ 
+
+00:24:41.630 --> 00:24:42.950 align:start position:0%
+ 
+ 
+
+00:24:42.950 --> 00:24:44.510 align:start position:0%
+ 
+ 
+
+00:24:44.510 --> 00:24:46.370 align:start position:0%
+ 
+ 
+
+00:24:46.370 --> 00:24:48.590 align:start position:0%
+ 
+ 
+
+00:24:48.590 --> 00:24:50.270 align:start position:0%
+ 
+ 
+
+00:24:50.270 --> 00:24:52.190 align:start position:0%
+ 
+ 
+
+00:24:52.190 --> 00:24:53.450 align:start position:0%
+ 
+ 
+
+00:24:53.450 --> 00:24:55.370 align:start position:0%
+ 
+ 
+
+00:24:55.370 --> 00:24:58.190 align:start position:0%
+ 
+ 
+
+00:24:58.190 --> 00:25:00.049 align:start position:0%
+ 
+ 
+
+00:25:00.049 --> 00:25:01.669 align:start position:0%
+ 
+ 
+
+00:25:01.669 --> 00:25:03.590 align:start position:0%
+ 
+ 
+
+00:25:03.590 --> 00:25:05.450 align:start position:0%
+ 
+ 
+
+00:25:05.450 --> 00:25:06.830 align:start position:0%
+ 
+ 
+
+00:25:06.830 --> 00:25:08.210 align:start position:0%
+ 
+ 
+
+00:25:08.210 --> 00:25:10.130 align:start position:0%
+ 
+ 
+
+00:25:10.130 --> 00:25:12.110 align:start position:0%
+ 
+ 
+
+00:25:12.110 --> 00:25:13.789 align:start position:0%
+ 
+ 
+
+00:25:13.789 --> 00:25:15.890 align:start position:0%
+ 
+ 
+
+00:25:15.890 --> 00:25:18.710 align:start position:0%
+ 
+ 
+
+00:25:18.710 --> 00:25:21.409 align:start position:0%
+ 
+ 
+
+00:25:21.409 --> 00:25:23.810 align:start position:0%
+ 
+ 
+
+00:25:23.810 --> 00:25:26.570 align:start position:0%
+ 
+ 
+
+00:25:26.570 --> 00:25:28.070 align:start position:0%
+ 
+ 
+
+00:25:28.070 --> 00:25:30.529 align:start position:0%
+ 
+ 
+
+00:25:30.529 --> 00:25:33.110 align:start position:0%
+ 
+ 
+
+00:25:33.110 --> 00:25:35.269 align:start position:0%
+ 
+ 
+
+00:25:35.269 --> 00:25:37.250 align:start position:0%
+ 
+ 
+
+00:25:37.250 --> 00:25:39.950 align:start position:0%
+ 
+ 
+
+00:25:39.950 --> 00:25:42.590 align:start position:0%
+ 
+ 
+
+00:25:42.590 --> 00:25:44.690 align:start position:0%
+ 
+ 
+
+00:25:44.690 --> 00:25:47.750 align:start position:0%
+ 
+ 
+
+00:25:47.750 --> 00:25:49.730 align:start position:0%
+ 
+ 
+
+00:25:49.730 --> 00:25:52.070 align:start position:0%
+ 
+ 
+
+00:25:52.070 --> 00:25:54.169 align:start position:0%
+ 
+ 
+
+00:25:54.169 --> 00:25:56.269 align:start position:0%
+ 
+ 
+
+00:25:56.269 --> 00:25:57.769 align:start position:0%
+ 
+ 
+
+00:25:57.769 --> 00:25:59.390 align:start position:0%
+ 
+ 
+
+00:25:59.390 --> 00:26:01.430 align:start position:0%
+ 
+ 
+
+00:26:01.430 --> 00:26:03.590 align:start position:0%
+ 
+ 
+
+00:26:03.590 --> 00:26:05.090 align:start position:0%
+ 
+ 
+
+00:26:05.090 --> 00:26:07.190 align:start position:0%
+ 
+ 
+
+00:26:07.190 --> 00:26:08.930 align:start position:0%
+ 
+ 
+
+00:26:08.930 --> 00:26:10.549 align:start position:0%
+ 
+ 
+
+00:26:10.549 --> 00:26:12.710 align:start position:0%
+ 
+ 
+
+00:26:12.710 --> 00:26:13.850 align:start position:0%
+ 
+ 
+
+00:26:13.850 --> 00:26:14.750 align:start position:0%
+ 
+ 
+
+00:26:14.750 --> 00:26:16.610 align:start position:0%
+ 
+ 
+
+00:26:16.610 --> 00:26:18.230 align:start position:0%
+ 
+ 
+
+00:26:18.230 --> 00:26:21.649 align:start position:0%
+ 
+ 
+
+00:26:21.649 --> 00:26:23.510 align:start position:0%
+ 
+ 
+
+00:26:23.510 --> 00:26:27.470 align:start position:0%
+ 
+ 
+
+00:26:27.470 --> 00:26:29.350 align:start position:0%
+ 
+ 
+
+00:26:29.350 --> 00:26:31.669 align:start position:0%
+ 
+ 
+
+00:26:31.669 --> 00:26:34.549 align:start position:0%
+ 
+ 
+
+00:26:34.549 --> 00:26:36.830 align:start position:0%
+ 
+ 
+
+00:26:36.830 --> 00:26:38.690 align:start position:0%
+ 
+ 
+
+00:26:38.690 --> 00:26:40.909 align:start position:0%
+ 
+ 
+
+00:26:40.909 --> 00:26:44.750 align:start position:0%
+ 
+ 
+
+00:26:44.750 --> 00:26:46.789 align:start position:0%
+ 
+ 
+
+00:26:46.789 --> 00:26:48.590 align:start position:0%
+ 
+ 
+
+00:26:48.590 --> 00:26:50.750 align:start position:0%
+ 
+ 
+
+00:26:50.750 --> 00:26:52.909 align:start position:0%
+ 
+ 
+
+00:26:52.909 --> 00:26:54.529 align:start position:0%
+ 
+ 
+
+00:26:54.529 --> 00:26:56.930 align:start position:0%
+ 
+ 
+
+00:26:56.930 --> 00:26:58.850 align:start position:0%
+ 
+ 
+
+00:26:58.850 --> 00:27:00.710 align:start position:0%
+ 
+ 
+
+00:27:00.710 --> 00:27:04.090 align:start position:0%
+ 
+ 
+
+00:27:04.090 --> 00:27:07.669 align:start position:0%
+ 
+ 
+
+00:27:07.669 --> 00:27:09.529 align:start position:0%
+ 
+ 
+
+00:27:09.529 --> 00:27:12.350 align:start position:0%
+ 
+ 
+
+00:27:12.350 --> 00:27:13.850 align:start position:0%
+ 
+ 
+
+00:27:13.850 --> 00:27:16.549 align:start position:0%
+ 
+ 
+
+00:27:16.549 --> 00:27:19.310 align:start position:0%
+ 
+ 
+
+00:27:19.310 --> 00:27:21.710 align:start position:0%
+ 
+ 
+
+00:27:21.710 --> 00:27:23.990 align:start position:0%
+ 
+ 
+
+00:27:23.990 --> 00:27:25.549 align:start position:0%
+ 
+ 
+
+00:27:25.549 --> 00:27:28.310 align:start position:0%
+ 
+ 
+
+00:27:28.310 --> 00:27:30.710 align:start position:0%
+ 
+ 
+
+00:27:30.710 --> 00:27:32.510 align:start position:0%
+ 
+ 
+
+00:27:32.510 --> 00:27:33.890 align:start position:0%
+ 
+ 
+
+00:27:33.890 --> 00:27:36.950 align:start position:0%
+ 
+ 
+
+00:27:36.950 --> 00:27:40.010 align:start position:0%
+ 
+ 
+
+00:27:40.010 --> 00:27:41.630 align:start position:0%
+ 
+ 
+
+00:27:41.630 --> 00:27:43.430 align:start position:0%
+ 
+ 
+
+00:27:43.430 --> 00:27:45.710 align:start position:0%
+ 
+ 
+
+00:27:45.710 --> 00:27:49.070 align:start position:0%
+ 
+ 
+
+00:27:49.070 --> 00:27:50.690 align:start position:0%
+ 
+ 
+
+00:27:50.690 --> 00:27:52.490 align:start position:0%
+ 
+ 
+
+00:27:52.490 --> 00:27:55.610 align:start position:0%
+ 
+ 
+
+00:27:55.610 --> 00:27:57.950 align:start position:0%
+ 
+ 
+
+00:27:57.950 --> 00:27:59.390 align:start position:0%
+ 
+ 
+
+00:27:59.390 --> 00:28:00.830 align:start position:0%
+ 
+ 
+
+00:28:00.830 --> 00:28:02.570 align:start position:0%
+ 
+ 
+
+00:28:02.570 --> 00:28:04.610 align:start position:0%
+ 
+ 
+
+00:28:04.610 --> 00:28:07.190 align:start position:0%
+ 
+ 
+
+00:28:07.190 --> 00:28:09.769 align:start position:0%
+ 
+ 
+
+00:28:09.769 --> 00:28:11.750 align:start position:0%
+ 
+ 
+
+00:28:11.750 --> 00:28:13.490 align:start position:0%
+ 
+ 
+
+00:28:13.490 --> 00:28:15.289 align:start position:0%
+ 
+ 
+
+00:28:15.289 --> 00:28:17.269 align:start position:0%
+ 
+ 
+
+00:28:17.269 --> 00:28:18.649 align:start position:0%
+ 
+ 
+
+00:28:18.649 --> 00:28:20.330 align:start position:0%
+ 
+ 
+
+00:28:20.330 --> 00:28:22.789 align:start position:0%
+ 
+ 
+
+00:28:22.789 --> 00:28:25.250 align:start position:0%
+ 
+ 
+
+00:28:25.250 --> 00:28:28.190 align:start position:0%
+ 
+ 
+
+00:28:28.190 --> 00:28:30.289 align:start position:0%
+ 
+ 
+
+00:28:30.289 --> 00:28:31.909 align:start position:0%
+ 
+ 
+
+00:28:31.909 --> 00:28:34.789 align:start position:0%
+ 
+ 
+
+00:28:34.789 --> 00:28:37.130 align:start position:0%
+ 
+ 
+
+00:28:37.130 --> 00:28:38.750 align:start position:0%
+ 
+ 
+
+00:28:38.750 --> 00:28:41.990 align:start position:0%
+ 
+ 
+
+00:28:41.990 --> 00:28:44.269 align:start position:0%
+ 
+ 
+
+00:28:44.269 --> 00:28:45.950 align:start position:0%
+ 
+ 
+
+00:28:45.950 --> 00:28:48.169 align:start position:0%
+ 
+ 
+
+00:28:48.169 --> 00:28:49.669 align:start position:0%
+ 
+ 
+
+00:28:49.669 --> 00:28:50.930 align:start position:0%
+ 
+ 
+
+00:28:50.930 --> 00:28:52.130 align:start position:0%
+ 
+ 
+
+00:28:52.130 --> 00:28:53.690 align:start position:0%
+ 
+ 
+
+00:28:53.690 --> 00:28:55.310 align:start position:0%
+ 
+ 
+
+00:28:55.310 --> 00:28:57.529 align:start position:0%
+ 
+ 
+
+00:28:57.529 --> 00:28:59.210 align:start position:0%
+ 
+ 
+
+00:28:59.210 --> 00:29:00.470 align:start position:0%
+ 
+ 
+
+00:29:00.470 --> 00:29:02.029 align:start position:0%
+ 
+ 
+
+00:29:02.029 --> 00:29:03.649 align:start position:0%
+ 
+ 
+
+00:29:03.649 --> 00:29:05.330 align:start position:0%
+ 
+ 
+
+00:29:05.330 --> 00:29:05.340 align:start position:0%
+ 
+ 
+
+00:29:05.340 --> 00:29:09.870 align:start position:0%
+ 
+
+
+00:29:09.870 --> 00:29:09.880 align:start position:0%
+ 
+ 
+
+00:29:09.880 --> 00:29:21.840 align:start position:0%
+ 
+
+
