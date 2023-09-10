@@ -38,6 +38,7 @@ This is an open data project, feel free to fork this repository, download, share
 
 ## TODO 
 - **Cleaning-up transcripts :** removing fillers (hum, ah, etc) and repetitions.
+- **Re-aligning transcripts :** re-aligning transcripts and fixing overlapping timecodes.
 - **Topic modeling :** automatically discovering the abstract "topics" that occur in a each transcript.
 - **Speaker identification :** who spoken when ? and for how long ?
 - **Creating a search engine :** exploring subjects by speaker, topic, channel, etc.
